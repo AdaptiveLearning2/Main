@@ -1,0 +1,72 @@
+[
+    {
+        "Question" :{
+            "QuestionNumber": 1,
+            "QuestionSubject": "English",
+            "QuestionText": "What is the synonym of 'happy'?",
+            "Options": [
+                "Annoyed",
+                "Angry",
+                "Overjoyed",
+                "Depressed"
+            ],
+            "Answer": "Overjoyed"
+            }
+    },
+    {
+        "Question": {
+            "QuestionNumber": 2,
+            "QuestionSubject": "Spanish",
+            "QuestionText": "What is the Spanish word for 'cat'?",
+            "Options": [
+                "Gato",
+                "Perro",
+                "Pájaro",
+                "Cabra"
+            ],
+            "Answer": "Gato"
+            }
+    },
+    {
+        "Question": {
+            "QuestionNumber": 3,
+            "QuestionSubject": "French",
+            "QuestionText": "What is the French word for 'cat'?",
+            "Options": [
+                "Chat",
+                "Chien",
+                "Oiseau",
+                "Chevre"
+            ],
+            "Answer": "Chat"
+            }
+    },
+    {
+        "Question": {
+            "QuestionNumber": 4,
+            "QuestionSubject": "Math",
+            "QuestionText": "What is 2 + 2?",
+            "Options": [
+                "4",
+                "5",
+                "6",
+                "8"
+            ],
+            "Answer": "4"
+        }
+    },
+        {
+        "Question": {
+            "QuestionNumber": 5,
+            "QuestionSubject": "History",
+            "QuestionText": "In which year did World War II end?",
+            "Options": [
+                "1943",
+                "1944",
+                "1945",
+                "1946"
+            ],
+            "Answer": "1945"
+        }
+    }
+]

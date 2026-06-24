@@ -1,0 +1,58 @@
+cmake_minimum_required(VERSION 3.21)
+project(muse_native_bridge LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(ENABLE_LIBMUSE "Enable libMuse SDK integration" OFF)
+
+add_executable(muse_native_bridge
+    src/main.cpp
+    src/bridge_tcp_server.cpp
+    src/muse_bridge_service.cpp
+)
+
+target_include_directories(muse_native_bridge PRIVATE src)
+
+if(MSVC)
+    target_compile_options(muse_native_bridge PRIVATE /W4 /EHsc)
+endif()
+
+target_link_libraries(muse_native_bridge PRIVATE Ws2_32)
+
+if(ENABLE_LIBMUSE)
+    set(LIBMUSE_SDK_DIR "" CACHE PATH "Path to libmuse_windows_8.0.5 directory")
+    if(NOT LIBMUSE_SDK_DIR)
+        message(FATAL_ERROR "ENABLE_LIBMUSE=ON requires LIBMUSE_SDK_DIR")
+    endif()
+    target_compile_definitions(muse_native_bridge PRIVATE ENABLE_LIBMUSE=1)
+    target_include_directories(muse_native_bridge PRIVATE "${LIBMUSE_SDK_DIR}/examples/include")
+
+    # libMuse ships import libraries under examples/lib/{debug,release}/{Win32,x64}
+    # Match the common VS sample layout used by GettingData32.
+    if(CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")
+        set(_libmuse_arch "Win32")
+    else()
+        # Default VS generator platform is x64 for this project.
+        set(_libmuse_arch "x64")
+    endif()
+
+    set(_libmuse_debug_lib "${LIBMUSE_SDK_DIR}/examples/lib/debug/${_libmuse_arch}/libmuse-wrt.lib")
+    set(_libmuse_release_lib "${LIBMUSE_SDK_DIR}/examples/lib/release/${_libmuse_arch}/libmuse-wrt.lib")
+
+    if(NOT EXISTS "${_libmuse_debug_lib}")
+        message(FATAL_ERROR "Missing libMuse import library (Debug): ${_libmuse_debug_lib}")
+    endif()
+    if(NOT EXISTS "${_libmuse_release_lib}")
+        message(FATAL_ERROR "Missing libMuse import library (Release): ${_libmuse_release_lib}")
+    endif()
+
+    target_link_libraries(
+        muse_native_bridge PRIVATE
+        "$<$<CONFIG:Debug>:${_libmuse_debug_lib}>"
+        "$<$<NOT:$<CONFIG:Debug>>:${_libmuse_release_lib}>"
+    )
+
+    message(STATUS "libMuse link (Debug): ${_libmuse_debug_lib}")
+    message(STATUS "libMuse link (non-Debug): ${_libmuse_release_lib}")
+endif()

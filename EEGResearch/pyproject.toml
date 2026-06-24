@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eeg-learning-platform"
+version = "0.1.0"
+description = "Secure real-time EEG-driven adaptive learning platform."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "starlette>=1.0.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "python-dotenv>=1.0.1",
+  "numpy>=2.0.0",
+  "scipy>=1.14.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.3",
+  "httpx>=0.27.0",
+  "pip-tools>=7.5.0"
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+include = ["src*"]

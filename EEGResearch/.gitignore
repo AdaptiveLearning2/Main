@@ -1,0 +1,41 @@
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test and tooling artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# IDE / OS files
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Local data and logs
+data/
+logs/
+*.log
+
+# Vendor SDK (excluded from repository)
+libmuse_windows_8.0.5/

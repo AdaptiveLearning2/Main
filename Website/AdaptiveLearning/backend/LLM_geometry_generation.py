@@ -1,4 +1,4 @@
-#area, perimeter - circle, triangle, rectangle. (possibly add rhombus, trapezoid, parallelogram)
+﻿#area, perimeter - circle, triangle, rectangle. (possibly add rhombus, trapezoid, parallelogram)
 #volume - cylinder, sphere, rectangle, cube, pyramid
 
 #need to specify questions do not involve angles 
@@ -479,7 +479,7 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -583,7 +583,7 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

@@ -1,4 +1,4 @@
-#used to generate ordering related questions through LLM and calculate result. 
+﻿#used to generate ordering related questions through LLM and calculate result. 
 import os
 import re
 import ast
@@ -18,7 +18,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 ) #treat 2x as 2*x for sympy parsing
 
-# Enable implicit multiplication (2x → 2*x)
+# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 def to_native(value): 
     if isinstance(value, Integer): 
@@ -143,7 +143,7 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -206,7 +206,7 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

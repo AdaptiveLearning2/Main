@@ -48,6 +48,28 @@ def get_state(timeout: float = 2.0) -> Optional[dict]:
         return None
 
 
+def muse_refresh() -> dict:
+    """Tell the native bridge to scan for nearby Muse headbands."""
+    r = requests.post(f"{EEG_API_URL}/api/v1/muse/refresh", headers=_ADMIN, timeout=5)
+    r.raise_for_status()
+    return r.json()
+
+
+def muse_disconnect() -> dict:
+    """Tell the native bridge to disconnect from the current headband."""
+    r = requests.post(f"{EEG_API_URL}/api/v1/muse/disconnect", headers=_ADMIN, timeout=5)
+    r.raise_for_status()
+    return r.json()
+
+
+def muse_connect(name: str) -> dict:
+    """Tell the native bridge to connect to a specific headband by name."""
+    r = requests.post(f"{EEG_API_URL}/api/v1/muse/connect", headers=_ADMIN,
+                      json={"name": name}, timeout=5)
+    r.raise_for_status()
+    return r.json()
+
+
 def get_muse_status() -> dict:
     try:
         r = requests.get(f"{EEG_API_URL}/api/v1/muse/status", headers=_LEARNER, timeout=2)

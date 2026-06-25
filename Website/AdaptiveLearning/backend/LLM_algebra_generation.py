@@ -1,4 +1,4 @@
-# 1. Get question from LLM. Response should include question text, topic, variables, operations.
+﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
 # 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
 # 3. Generate 4 unique answer options, including correct answer, using LLM.
 # 4. Send question and answer options to frontend to display to user.
@@ -37,7 +37,7 @@ from sympy.parsing.sympy_parser import (
 ) #treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 
-# Enable implicit multiplication (2x → 2*x)
+# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def to_native(value): 
@@ -142,7 +142,7 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -213,7 +213,7 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

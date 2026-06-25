@@ -137,8 +137,8 @@ def calculate_topic_and_difficulty(user_id, grade):
 
 def parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt):
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        topic_future = executor.submit(generate, model="llama3.1:8b", prompt=topic_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
-        difficulty_future = executor.submit(generate, model="llama3.1:8b", prompt=difficulty_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
+        topic_future = executor.submit(generate, model="llama3.2:3b", prompt=topic_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
+        difficulty_future = executor.submit(generate, model="llama3.2:3b", prompt=difficulty_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
 
         topic_response = topic_future.result()
         difficulty_response = difficulty_future.result()
@@ -258,7 +258,9 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
 
 
 
-    for attempt in range(2): 
+    topic_data = None
+    difficulty_data = None
+    for attempt in range(2):
         topic_response, difficulty_response = parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt)
 
         raw_topic = extract_json(topic_response.response)
@@ -268,7 +270,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
             print(topic_response.response)
             print(difficulty_response.response)
             continue
-        
 
         try:
             topic_data = json.loads(raw_topic)
@@ -277,6 +278,8 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
                 print(f"[Attempt {attempt+1}] JSON parse failed:", e)
                 print(topic_response.response)
                 print(difficulty_response.response)
+                topic_data = None
+                difficulty_data = None
                 continue
 
         # Validate required keys
@@ -284,16 +287,18 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
         difficulty_required_keys = ["difficulty"]
         if not all(k in topic_data for k in topic_required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", topic_data)
+            topic_data = None
             continue
 
         if not all(k in difficulty_data for k in difficulty_required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", difficulty_data)
+            difficulty_data = None
             continue
 
         # If we reach here → SUCCESS
         break
 
-    if (topic_data):
+    if topic_data and difficulty_data:
         #WILL add check later to default to randomized selection if LLM topic selection fails. 
         topic = topic_data["topic"]
         difficulty = difficulty_data["difficulty"]
@@ -471,32 +476,34 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade):
         }}
         """
     
+    topic_data = None
     for attempt in range(3):
         response = generate(model="llama3.1:8b", prompt=prompt,
             options={"temperature": 1.1, "top_p": 0.95, "top_k": 100})
-    
+
         raw = extract_json(response.response)
         if not raw:
             print(f"[Attempt {attempt+1}] No JSON found")
             print(response.response)
             continue
-    
+
         try:
             topic_data = json.loads(raw)
         except Exception as e:
                 print(f"[Attempt {attempt+1}] JSON parse failed:", e)
                 print(response.response)
                 continue
-    
+
         # Validate required keys
         required_keys = ["topic", "difficulty"]
         if not all(k in topic_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", topic_data)
+            topic_data = None
             continue
         # If we reach here → SUCCESS
         break
 
-    if (topic_data):
+    if topic_data:
         topic = topic_data["topic"]
         difficulty = topic_data["difficulty"]
     else: #backup if generation failed. 

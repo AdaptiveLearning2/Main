@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import random
 from supabase import create_client, Client #pip install supabase
@@ -17,7 +17,7 @@ from sympy.parsing.sympy_parser import (
 )
 import incorrect_solution_generation as inc_gen
  
-# Enable implicit multiplication (2x → 2*x)
+# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def extract_json(text):
@@ -41,7 +41,7 @@ def normalize_solution(sol):
     if isinstance(sol, list):
         sol = sol[0]
 
-    # sympy types → python scalar
+    # sympy types â†’ python scalar
     if isinstance(sol, (sp.Integer, sp.Float)):
         return float(sol)
 
@@ -91,50 +91,50 @@ The Question Text, Question Topic, Scenario, and Variables will be displayed. Th
 There will be four possible scenarios to select from. You must select only ONE scenario to generate a question and corresponding JSON response for.
 
 Scenario 1: complementary
-"Two angles are complementary. One angle is 35°. What is the other angle?"
+"Two angles are complementary. One angle is 35Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
 {{
-  "question_text": "Two angles are complementary. One angle is 35°. What is the other angle?",
+  "question_text": "Two angles are complementary. One angle is 35Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "complementary",
   "variables": ["35"]
 }}
 
 Scenario 2: supplementary
-"Two angles are supplementary. One angle is 135°. What is the other angle?"
+"Two angles are supplementary. One angle is 135Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
 {{
-  "question_text": "Two angles are supplementary. One angle is 135°. What is the other angle?",
+  "question_text": "Two angles are supplementary. One angle is 135Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "supplementary",
   "variables": ["135"]
 }}
 
 Scenario 3: linear_pair
-"Two angles form a straight line. One angle is 140°. What is the other angle?"
+"Two angles form a straight line. One angle is 140Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
 {{
-  "question_text": "Two angles form a straight line. One angle is 140°. What is the other angle?",
+  "question_text": "Two angles form a straight line. One angle is 140Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "linear_pair",
   "variables": ["140"]
 }}
 
 Scenario 4: triangle_sum
-"A triangle has angles 50° and 60°. What is the third angle?"
+"A triangle has angles 50Â° and 60Â°. What is the third angle?"
 JSON for this scenario must follow this exact structure:
 {{
-  "question_text": "A triangle has angles 50° and 60°. What is the third angle?",
+  "question_text": "A triangle has angles 50Â° and 60Â°. What is the third angle?",
   "question_topic": "angle_relationships",
   "scenario": "triangle_sum",
   "variables": ["50", "60"]
 }}
 
 Scenario 5: algebra_complementary
-"Two angles are complementary: (x + 10)° and (2x − 20)°. Find x."
+"Two angles are complementary: (x + 10)Â° and (2x âˆ’ 20)Â°. Find x."
 JSON for this scenario must follow this exact structure:
 {{
-  "question_text": "Two angles are complementary: (x + 10)° and (2x − 20)°. Find x.",
+  "question_text": "Two angles are complementary: (x + 10)Â° and (2x âˆ’ 20)Â°. Find x.",
   "question_topic": "angle_relationships",
   "scenario": "algebra_complementary",
   "variables": ["x + 10", "2x - 20"]
@@ -215,7 +215,7 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -292,7 +292,7 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

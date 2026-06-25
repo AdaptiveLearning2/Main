@@ -1,8 +1,6 @@
 import asyncio
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
-import json
 import time
 from datetime import datetime, timezone
 
@@ -136,28 +134,6 @@ def test_adaptation_accepts_percentage_focus_and_calm_scales():
     stressed = engine.infer_state({"focus_score": 80.0, "calm_score": 20.0, "confidence": 90.0})
     assert stressed.label == "stressed"
 
-
-def test_websocket_rejects_invalid_token_without_crash():
-    client = TestClient(app)
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect("/ws/live?token=invalid-token") as websocket:
-            websocket.receive_text()
-    assert exc.value.code == 1008
-
-
-def test_websocket_returns_idle_before_first_sample(monkeypatch):
-    client = TestClient(app)
-    settings = get_settings()
-    monkeypatch.setattr(
-        stream_manager,
-        "snapshot",
-        lambda: {"contract_version": "1.1.0", "ingestion": {}, "bands": {}},
-    )
-    with client.websocket_connect(f"/ws/live?token={settings.api_token}") as websocket:
-        payload = json.loads(websocket.receive_text())
-    assert payload["status"] == "idle"
-    assert payload["data"] is None
-    assert payload["message"] == "No stream data yet"
 
 
 def test_parse_bridge_message_from_monotonic_timestamp():

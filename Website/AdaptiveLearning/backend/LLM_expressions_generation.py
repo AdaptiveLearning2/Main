@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import random
 from supabase import create_client, Client #pip install supabase
@@ -17,7 +17,7 @@ from sympy.parsing.sympy_parser import (
 ) #treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 
-# Enable implicit multiplication (2x → 2*x)
+# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def is_numeric(expr):   
@@ -165,7 +165,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -174,7 +174,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
     
     parts = question_data['variables']
     equation_stra = "".join(parts) #turn individual variables/operations into a single string to be parsed by sympy
-    equation_stra = equation_stra.replace("−", "-")
+    equation_stra = equation_stra.replace("âˆ’", "-")
     expr = parse_expr(equation_stra, transformations=transformations)
 
     scenario = question_data["scenario"]
@@ -245,7 +245,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

@@ -1,4 +1,4 @@
-# 1. Get question from LLM. Response should include question text, topic, variables, operations.
+﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
 # 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
 # 3. Generate 4 unique answer options, including correct answer, using LLM.
 # 4. Send question and answer options to frontend to display to user.
@@ -132,7 +132,7 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # If we reach here → SUCCESS
+        # If we reach here â†’ SUCCESS
         break
 
     else:
@@ -195,7 +195,7 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
     #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
     #         continue
 
-    #     # If we reach here → SUCCESS
+    #     # If we reach here â†’ SUCCESS
     #     break
 
     # else:

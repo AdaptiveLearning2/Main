@@ -206,17 +206,33 @@ class TcpMuseBridgeAdapter:
                 continue
             self._eeg_queue.put(sample)
 
+    def _try_connect(self) -> bool:
+        """Attempt one TCP connection. Returns True on success, False if bridge not up yet."""
+        try:
+            sock = socket.create_connection((self.host, self.port), timeout=self.timeout_seconds)
+        except OSError:
+            return False
+        self._reader_stop.clear()
+        self._socket = sock
+        self._stream = sock.makefile("r", encoding="utf-8")
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, name="muse-bridge-reader", daemon=True
+        )
+        self._reader_thread.start()
+        print(f"[bridge] Connected to {self.host}:{self.port}", flush=True)
+        return True
+
     def connect(self) -> None:
+        """Connect to the native bridge. If bridge is not up yet, returns without raising —
+        read_sample() will retry on every poll cycle until it becomes available."""
         if self._socket:
             return
-        self._reader_stop.clear()
-        self._socket = socket.create_connection(
-            (self.host, self.port),
-            timeout=self.timeout_seconds,
-        )
-        self._stream = self._socket.makefile("r", encoding="utf-8")
-        self._reader_thread = threading.Thread(target=self._reader_loop, name="muse-bridge-reader", daemon=True)
-        self._reader_thread.start()
+        if not self._try_connect():
+            print(
+                f"[bridge] Native bridge not available on {self.host}:{self.port} — "
+                "will retry each poll cycle. Start muse_native_bridge.exe to begin streaming.",
+                flush=True,
+            )
 
     def send_bridge_command(self, payload: dict[str, Any]) -> None:
         """Send one JSON line to muse_native_bridge (refresh / connect / disconnect)."""
@@ -251,14 +267,21 @@ class TcpMuseBridgeAdapter:
         self._reader_stop.clear()
 
     def read_sample(self) -> EegSample:
+        # If not connected, try to connect now (bridge may have started since last attempt).
         if not self._reader_thread:
-            raise RuntimeError("TCP bridge adapter not connected")
+            if not self._try_connect():
+                raise RuntimeError(
+                    f"Native bridge not available on {self.host}:{self.port}"
+                )
         # Never block forever waiting for EEG data. If the bridge stalls/disconnects,
         # surface a recoverable error so the stream loop can keep running.
         timeout_s = max(0.1, float(self.timeout_seconds))
         try:
             return self._eeg_queue.get(timeout=timeout_s)
         except queue.Empty as e:
+            # Reader thread died (bridge disconnected) — reset so next call retries.
+            if self._reader_thread and not self._reader_thread.is_alive():
+                self.disconnect()
             raise RuntimeError(f"No EEG sample received from bridge within {timeout_s:.1f}s") from e
 
     def get_ingestion_meta(self) -> dict[str, Any]:

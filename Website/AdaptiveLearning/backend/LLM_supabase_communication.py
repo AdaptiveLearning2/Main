@@ -1,4 +1,4 @@
-import os
+﻿import os
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 from ollama import chat, generate

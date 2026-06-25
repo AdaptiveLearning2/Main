@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <thread>
 
 #if defined(ENABLE_LIBMUSE)
@@ -172,6 +173,9 @@ bool MuseBridgeService::connect_named(const std::string& name) {
 
     manager_->stop_listening();
     chosen->register_connection_listener(connection_listener_);
+    // EEG: raw 4-channel samples at 220Hz (PRESET_21).
+    // Band absolutes: libMuse computes these from the raw EEG and fires them as
+    // separate packet types. All registered before run_asynchronously().
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE);
@@ -359,15 +363,13 @@ void MuseBridgeService::rebuild_muse_name_list() {
 }
 
 void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionState state) {
+    // Do NOT call any libMuse API (e.g. get_muse_version) here.
+    // libMuse holds an internal lock during callbacks; re-entering the SDK deadlocks.
+    // GettingData32 avoids this by posting to the UI thread first.
     std::lock_guard<std::mutex> lock(queue_mutex_);
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);
-    if (state == interaxon::bridge::ConnectionState::CONNECTED && active_muse_) {
-        const auto ver = active_muse_->get_muse_version();
-        if (ver) {
-            firmware_version_ = ver->get_firmware_version();
-        }
-    } else if (state != interaxon::bridge::ConnectionState::CONNECTED) {
+    if (state != interaxon::bridge::ConnectionState::CONNECTED) {
         firmware_version_.clear();
     }
 }

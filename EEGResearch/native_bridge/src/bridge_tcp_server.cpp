@@ -104,7 +104,11 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
     const std::string body = payload + "\n";
     const int sent = send(client_socket_, body.c_str(), static_cast<int>(body.size()), 0);
     if (sent == SOCKET_ERROR) {
-        close_client();
+        const int err = WSAGetLastError();
+        if (err != WSAEWOULDBLOCK) {
+            close_client();
+        }
+        // WSAEWOULDBLOCK: buffer temporarily full, drop this frame rather than disconnect.
     }
 }
 

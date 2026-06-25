@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus } from '../../lib/signals'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
+
+const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -42,7 +44,17 @@ export default function Adaptive() {
   // EEG headband state
   const [recorder, setRecorder]   = useState(null)
   const [sessionId, setSessionId] = useState(null)
-  const [headband, setHeadband]   = useState({ available: false, connected: false, samples: 0, lastTs: null })
+  const [headband, setHeadband]   = useState({
+    available: false, connected: false, samples: 0, lastTs: null,
+    phase: 'idle', // idle | starting | scanning | connecting | connected
+    deviceName: null,
+  })
+
+  // Dev-only EEG debug panel
+  const [eegDebug, setEegDebug]       = useState(null)
+  const [debugOpen, setDebugOpen]     = useState(true)
+  const debugTimer  = useRef(null)
+  const phaseTimer  = useRef(null)
 
   // load profile default grade + classes
   useEffect(() => {
@@ -54,7 +66,21 @@ export default function Adaptive() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // start a session + check EEG service
+  // Check EEG health independently so the button isn't stuck unavailable if session start fails
+  useEffect(() => {
+    let alive = true
+    const checkHealth = async () => {
+      try {
+        const h = await eegHealth()
+        if (alive) setHeadband(s => ({ ...s, available: !!h.available }))
+      } catch { if (alive) setHeadband(s => ({ ...s, available: false })) }
+    }
+    checkHealth()
+    const id = setInterval(checkHealth, 5000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
+  // start a session
   useEffect(() => {
     let r
     ;(async () => {
@@ -64,8 +90,6 @@ export default function Adaptive() {
         r = createSignalRecorder({ sessionId: session.id })
         setRecorder(r)
         window.AL_currentSessionId = session.id
-        const h = await eegHealth()
-        setHeadband(s => ({ ...s, available: !!h.available }))
       } catch {}
     })()
     return () => { r?.stop() }
@@ -91,6 +115,20 @@ export default function Adaptive() {
     return () => { killed = true; clearInterval(id) }
   }, [sessionId])
 
+  // Poll EEG debug snapshot (dev only)
+  useEffect(() => {
+    if (!EEG_DEBUG) return
+    const poll = async () => {
+      try {
+        const d = await apiFetch('/api/eeg/debug')
+        setEegDebug(d)
+      } catch { setEegDebug(null) }
+    }
+    poll()
+    debugTimer.current = setInterval(poll, 1500)
+    return () => clearInterval(debugTimer.current)
+  }, [])
+
   useEffect(() => {
     if (!user?.id) return
     localStorage.setItem(`accuracyStats_${user.id}`, JSON.stringify(accuracyStats))
@@ -99,25 +137,90 @@ export default function Adaptive() {
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
   const toggleHeadband = async () => {
-    console.log('[headband] toggle clicked', { recorder: !!recorder, sessionId, headband })
-    if (!recorder) {
-      alert('No recorder yet — sessionId might still be loading. Wait 2s and retry.')
+    if (!recorder || !sessionId) {
+      alert('Session not ready yet — wait 2 seconds and try again.')
       return
     }
-    if (!sessionId) {
-      alert('No sessionId — the practice session never started. Refresh the page.')
-      return
-    }
+
+    // — Disconnect —
     if (headband.connected) {
-      console.log('[headband] stopping')
+      clearTimeout(phaseTimer.current)
       await recorder.stop()
-      setHeadband(s => ({ ...s, connected: false }))
-    } else {
-      console.log('[headband] starting…')
+      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null }))
+      return
+    }
+
+    // Safety: if something goes wrong and we never reach catch, reset after 30s
+    clearTimeout(phaseTimer.current)
+    phaseTimer.current = setTimeout(() => {
+      setHeadband(s => s.phase !== 'idle' && s.phase !== 'connected'
+        ? { ...s, phase: 'idle', deviceName: null }
+        : s)
+    }, 30000)
+
+    try {
+      // 1. Start the backend EEG poller
+      setHeadband(s => ({ ...s, phase: 'starting' }))
       const res = await recorder.start()
-      console.log('[headband] start result:', res)
-      if (res?.running) setHeadband(s => ({ ...s, connected: true }))
-      else alert('Could not start headband: ' + JSON.stringify(res))
+      if (!res?.ok && !res?.running) throw new Error('Could not start EEG session')
+
+      // 2. Disconnect any previous session so the headband isn't stuck in streaming state
+      //    (causes BadStateError on the next connect if skipped)
+      await apiFetch('/api/eeg/muse/disconnect', { method: 'POST' }).catch(() => {})
+      await new Promise(r => setTimeout(r, 1500))
+
+      // 3. Tell the native bridge to scan for nearby headbands
+      setHeadband(s => ({ ...s, phase: 'scanning' }))
+      await apiFetch('/api/eeg/muse/refresh', { method: 'POST' })
+
+      // 4. Poll up to 12 s for at least one device to appear
+      let devices = []
+      for (let i = 0; i < 12; i++) {
+        await new Promise(r => setTimeout(r, 1000))
+        const s = await eegStatus()
+        devices = s?.muse?.ingestion?.muse_devices || []
+        if (devices.length > 0) break
+      }
+
+      if (devices.length === 0) {
+        setHeadband(s => ({ ...s, phase: 'idle' }))
+        alert('No Muse headband found after 12 s.\n\n• Make sure the headband is turned on\n• Keep it within 1 m of your computer\n• Bluetooth must be enabled on your PC')
+        return
+      }
+
+      // 5. Connect to first discovered device (usually there's only one)
+      const target = devices[0]
+      setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
+      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target } })
+
+      // 6. Poll for actual BLE connection — bridge connects asynchronously.
+      //    If we get BadStateError the headband is still streaming from a prior session;
+      //    the user must power-cycle the headband in that case.
+      let muse_ok = false
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1000))
+        const s = await eegStatus()
+        if (s?.muse?.ingestion?.muse_connected) { muse_ok = true; break }
+      }
+
+      if (!muse_ok) {
+        setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
+        alert(
+          'Headband found but connection failed (BadStateError).\n\n' +
+          'The headband firmware is stuck in streaming mode.\n\n' +
+          'Fix: hold the power button until it powers OFF (descending beeps), ' +
+          'wait 10 seconds, power back ON, then click Connect Headband again.'
+        )
+        return
+      }
+
+      setHeadband(s => ({ ...s, connected: true, phase: 'connected' }))
+
+    } catch (e) {
+      console.error('[headband]', e)
+      clearTimeout(phaseTimer.current)
+      setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
+      alert('Headband connection failed: ' + (e.message || String(e)))
     }
   }
 
@@ -143,11 +246,9 @@ export default function Adaptive() {
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
       else                              params.set('grade', grade)
+      if (sessionId) params.set('session_id', sessionId)
 
-      const res  = await fetch(`http://localhost:8000/api/generate-question?${params.toString()}`, {
-        headers: { 'Authorization': `Bearer ${user.access_token}` }
-      })
-      const json = await res.json()
+      const json = await apiFetch(`/api/generate-question?${params.toString()}`)
       if (!json?.question_text) throw new Error('Invalid response')
       setData(json)
       setActiveButton(null); setSelectedAnswer(null)
@@ -214,19 +315,29 @@ export default function Adaptive() {
             {!headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
-            {headband.connected
-              ? `${headband.samples} samples sent · teacher can see your focus & stress live`
-              : headband.available
-                ? 'EEG service detected on port 8001. Click connect to share live focus & stress with your teacher.'
-                : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'}
+            {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
+            {headband.phase === 'connecting' && `🔗 Connecting to ${headband.deviceName || 'headband'}...`}
+            {headband.phase === 'starting'   && 'Starting EEG session...'}
+            {headband.phase === 'connected'  && `${headband.samples} samples sent · teacher can see your focus & stress live`}
+            {headband.phase === 'idle' && (
+              headband.connected
+                ? `${headband.samples} samples sent · teacher can see your focus & stress live`
+                : headband.available
+                  ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
+                  : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'
+            )}
           </p>
         </div>
         <button onClick={toggleHeadband}
-          disabled={!headband.available || !sessionId}
+          disabled={!headband.available || !sessionId || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
             headband.connected ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}>
-          {headband.connected ? 'Disconnect' : 'Connect Headband'}
+          { headband.phase === 'starting'   ? 'Starting...'
+          : headband.phase === 'scanning'   ? 'Scanning...'
+          : headband.phase === 'connecting' ? 'Connecting...'
+          : headband.connected              ? 'Disconnect'
+          :                                   'Connect Headband' }
         </button>
       </motion.div>
 
@@ -367,6 +478,16 @@ export default function Adaptive() {
                       <Brain size={11} /> Live EEG
                     </span>
                   )}
+                  {data.eeg_adjusted && data.eeg_label === 'stressed' && (
+                    <span className="text-xs font-bold px-2.5 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">
+                      😰 EEG: eased difficulty
+                    </span>
+                  )}
+                  {data.eeg_adjusted && data.eeg_label === 'focused' && (
+                    <span className="text-xs font-bold px-2.5 py-1 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 rounded-full">
+                      ⚡ EEG: raised difficulty
+                    </span>
+                  )}
                 </div>
 
                 <p className="text-lg font-semibold text-gray-900 dark:text-white mb-6 leading-relaxed">{data.question_text}</p>
@@ -477,6 +598,138 @@ export default function Adaptive() {
           )}
         </div>
       </div>
+
+      {/* ── DEV-ONLY EEG DEBUG PANEL ───────────────────────────────────── */}
+      {EEG_DEBUG && (
+        <div className="mt-6 border border-dashed border-indigo-300 dark:border-indigo-700 rounded-2xl overflow-hidden text-xs font-mono">
+          <button
+            onClick={() => setDebugOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-2 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 font-bold text-[11px]">
+            <span>🛠 EEG Debug Panel (dev only — set VITE_EEG_DEBUG=false to hide)</span>
+            <span>{debugOpen ? '▲' : '▼'}</span>
+          </button>
+
+          {debugOpen && (
+            <div className="p-4 bg-gray-950 text-green-400 space-y-3">
+              {!eegDebug || !eegDebug.available ? (
+                <p className="text-red-400">⚠ EEGResearch not reachable on port 8001. Start it with: <span className="text-yellow-300">uvicorn src.app.main:app --port 8001</span></p>
+              ) : (() => {
+                const snap    = eegDebug.snapshot
+                const muse    = eegDebug.muse    || {}
+                const state   = snap?.state      || {}
+                const feat    = snap?.features   || {}
+                const bands   = snap?.bands      || {}
+                const policy  = snap?.question_policy || {}
+                const ing     = muse?.ingestion  || snap?.ingestion || {}
+                const museSvcRunning = muse?.running
+
+                const pct = v => v == null ? '—' : `${Math.round(typeof v === 'number' && v > 1 ? v : v * 100)}%`
+                const bar = (v, color) => {
+                  const w = v == null ? 0 : Math.round(typeof v === 'number' && v > 1 ? v : v * 100)
+                  return (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${color}`} style={{ width: `${w}%` }} />
+                      </div>
+                      <span className="w-8 text-right">{pct(v)}</span>
+                    </div>
+                  )
+                }
+
+                const stateColor = { focused: 'text-green-400', stressed: 'text-red-400', neutral: 'text-yellow-400', insufficient_signal: 'text-gray-500' }
+                const actionColor = { increase_difficulty: 'text-green-400', decrease_difficulty: 'text-red-400', reinforce_topic: 'text-yellow-400', fallback_default: 'text-gray-500' }
+
+                return (
+                  <>
+                    {/* Row 0 — pipeline status */}
+                    <div className="border border-gray-700 rounded p-2 space-y-1">
+                      <p className="text-gray-500 text-[10px] uppercase tracking-widest mb-1">Pipeline</p>
+                      <div className="flex flex-wrap gap-x-6 gap-y-1">
+                        <span><span className="text-green-400">✓</span> EEGResearch :8001</span>
+                        <span className={museSvcRunning ? 'text-green-400' : 'text-yellow-400'}>
+                          {museSvcRunning ? '✓' : '○'} Session{museSvcRunning ? ' running' : ' not started — click Connect Headband'}
+                        </span>
+                        <span className={ing.muse_connected ? 'text-green-400' : 'text-red-400'}>
+                          {ing.muse_connected ? '✓' : '✗'} Native bridge :8765{!ing.muse_connected ? ' — run muse_native_bridge.exe' : ''}
+                        </span>
+                        <span className={ing.muse_connected ? 'text-green-400' : 'text-red-400'}>
+                          {ing.muse_connected ? '✓' : '✗'} Headband BT{ing.muse_connected ? ` (${ing.active_muse_name || 'connected'})` : ' — not paired'}
+                        </span>
+                        <span className={snap ? 'text-green-400' : 'text-gray-500'}>
+                          {snap ? '✓' : '○'} EEG samples flowing
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Row 1 — connection */}
+                    <div className="flex flex-wrap gap-4">
+                      <div>
+                        <p className="text-gray-500 mb-1">EEG Source</p>
+                        <p className="text-white">{ing.eeg_source || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Bridge Mode</p>
+                        <p className="text-white">{ing.bridge_mode || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Signal Quality</p>
+                        <p className={{ good: 'text-green-400', degraded: 'text-yellow-400', poor: 'text-red-400' }[feat.signal_quality] || 'text-gray-400'}>
+                          {feat.signal_quality || (snap ? 'no data' : museSvcRunning ? 'waiting for bridge' : 'no session')}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Learner State</p>
+                        <p className={stateColor[state.label] || 'text-gray-400'}>{state.label || '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Next Question</p>
+                        <p className={actionColor[policy.action] || 'text-gray-400'}>{policy.action || '—'} {policy.difficulty != null ? `(lvl ${policy.difficulty})` : ''}</p>
+                      </div>
+                    </div>
+
+                    {/* Row 2 — scores */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{pct(feat.focus_score)}</span></p>
+                        {bar(feat.focus_score, 'bg-blue-500')}
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{pct(feat.calm_score)}</span></p>
+                        {bar(feat.calm_score, 'bg-emerald-500')}
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{pct(feat.confidence)}</span></p>
+                        {bar(feat.confidence, 'bg-violet-500')}
+                      </div>
+                      <div>
+                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
+                        {bar(feat.calm_score != null ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
+                      </div>
+                    </div>
+
+                    {/* Row 3 — bands */}
+                    {Object.keys(bands).length > 0 && (
+                      <div>
+                        <p className="text-gray-500 mb-1">EEG Bands</p>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                          {['delta','theta','alpha','beta','gamma'].map(b => (
+                            <span key={b} className="text-white">{b}: <span className="text-yellow-300">{bands[b] != null ? bands[b].toFixed(3) : '—'}</span></span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Row 4 — raw state reason */}
+                    {state.reason && (
+                      <p className="text-gray-500">Reason: <span className="text-white">{state.reason}</span></p>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

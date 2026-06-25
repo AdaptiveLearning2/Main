@@ -6,7 +6,8 @@ param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$Generator = "Visual Studio 18 2026",
-    [string]$Architecture = "x64"
+    [string]$Architecture = "x64",
+    [switch]$BuildOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,6 +132,11 @@ Invoke-CheckedCommand -FilePath $cmakeExe -Arguments @("--build", $buildDir, "--
 $exePath = Join-Path $buildDir "$Configuration\muse_native_bridge.exe"
 if (!(Test-Path $exePath)) {
     throw "Expected binary not found: $exePath"
+}
+
+if ($BuildOnly) {
+    Write-Host "Build complete: $exePath"
+    return
 }
 
 Write-Host "Starting native bridge: $exePath"

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os, requests, random, string
+import os, requests, random, string, threading
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from supabase import create_client
@@ -66,6 +66,76 @@ def _shift_difficulty(current: str | None, bias: int) -> str:
     idx = max(0, min(len(DIFFS) - 1, DIFFS.index(current) + (bias or 0)))
     return DIFFS[idx]
 
+def _eeg_bias(manual_bias: int) -> tuple[int, str]:
+    """
+    Ask the EEGResearch sidecar for the current learner state and map it to
+    a difficulty bias.  Returns (effective_bias, eeg_label).
+
+    Rules:
+    - stressed  → always ease off (-1), overrides manual choice
+    - focused   → push harder (+1) only when student left difficulty on Auto
+    - everything else → honour the manual bias unchanged
+    """
+    try:
+        snapshot = eeg_client.get_state(timeout=0.5)
+        if not snapshot:
+            return manual_bias, "no_eeg"
+        state  = snapshot.get("state")  or {}
+        policy = snapshot.get("question_policy") or {}
+        label  = state.get("label", "neutral")
+        action = policy.get("action", "")
+        if action == "decrease_difficulty":
+            return -1, label          # student is stressed → easier
+        if action == "increase_difficulty" and manual_bias == 0:
+            return 1, label           # student is focused + auto mode → harder
+        return manual_bias, label
+    except Exception as e:
+        print(f"[eeg_bias] {e}")
+        return manual_bias, "no_eeg"
+
+# ─── question prefetch cache ──────────────────────────────────────────────
+# Maintains a queue of up to QUEUE_SIZE pre-generated questions per user.
+QUEUE_SIZE = 2
+_prefetch_cache: dict[str, list] = {}   # user_id → list of questions
+_prefetch_lock = threading.Lock()
+_prefetch_active: set[str] = set()      # track in-flight workers per user
+
+def _prefetch_worker(user_id: str, grade: str, bias: int):
+    try:
+        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(user_id, grade)
+        if question and bias != 0:
+            cur_diff    = question.get("difficulty") or "medium"
+            target_diff = _shift_difficulty(cur_diff, bias)
+            if target_diff != cur_diff:
+                try:
+                    question = LLM_topic_decider.question_generation(
+                        question.get("question_topic"), target_diff, user_id, grade
+                    )
+                    question["difficulty"] = target_diff
+                except Exception:
+                    pass
+        if question:
+            with _prefetch_lock:
+                _prefetch_cache.setdefault(user_id, []).append(question)
+                _prefetch_active.discard(user_id)
+    except Exception as e:
+        print(f"[prefetch] failed for {user_id[:8]}: {e}")
+        with _prefetch_lock:
+            _prefetch_active.discard(user_id)
+
+def _ensure_queue(user_id: str, grade: str, bias: int):
+    """Spawn workers until the queue + in-flight workers reach QUEUE_SIZE."""
+    with _prefetch_lock:
+        queued   = len(_prefetch_cache.get(user_id, []))
+        inflight = 1 if user_id in _prefetch_active else 0
+        needed   = QUEUE_SIZE - queued - inflight
+        if needed <= 0:
+            return
+        _prefetch_active.add(user_id)
+    for _ in range(needed):
+        threading.Thread(
+            target=_prefetch_worker, args=(user_id, grade, bias), daemon=True
+        ).start()
 
 # ─── models ──────────────────────────────────────────────────────────────
 
@@ -151,27 +221,49 @@ def generate_question(
         if cls.data and cls.data.get("grade_level"):
             effective_grade = cls.data["grade_level"]
 
-    bias = max(-1, min(1, int(bias or 0)))
+    manual_bias = max(-1, min(1, int(bias or 0)))
 
-    question = LLM_topic_decider.LLM_topic_and_difficulty_separate_decider(user_id, effective_grade)
+    # Override difficulty with live EEG state when headband is streaming
+    effective_bias, eeg_label = _eeg_bias(manual_bias)
+    eeg_adjusted = (effective_bias != manual_bias)
+    if eeg_adjusted:
+        direction = "easier" if effective_bias < manual_bias else "harder"
+        print(f"[generate] EEG({eeg_label}) adjusted bias {manual_bias}→{effective_bias} ({direction})")
+
+    # Serve from prefetch queue if available
+    with _prefetch_lock:
+        queue    = _prefetch_cache.get(user_id, [])
+        question = queue.pop(0) if queue else None
+
     if not question:
-        raise HTTPException(500, "Failed to generate question")
+        print(f"[generate] cache miss for {user_id[:8]} — generating inline")
+        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(user_id, effective_grade)
+        if not question:
+            raise HTTPException(500, "Failed to generate question")
 
-    if bias != 0:
-        topic       = question.get("question_topic")
-        cur_diff    = question.get("difficulty") or "medium"
-        target_diff = _shift_difficulty(cur_diff, bias)
-        if topic and target_diff != cur_diff:
-            try:
-                question = LLM_topic_decider.question_generation(
-                    topic, target_diff, user_id, effective_grade
-                )
-                question["difficulty"] = target_diff
-            except Exception as e:
-                print("bias regeneration failed, returning original:", e)
+        if effective_bias != 0:
+            topic       = question.get("question_topic")
+            cur_diff    = question.get("difficulty") or "medium"
+            target_diff = _shift_difficulty(cur_diff, effective_bias)
+            if topic and target_diff != cur_diff:
+                try:
+                    question = LLM_topic_decider.question_generation(
+                        topic, target_diff, user_id, effective_grade
+                    )
+                    question["difficulty"] = target_diff
+                except Exception as e:
+                    print("bias regeneration failed, returning original:", e)
+    else:
+        print(f"[generate] cache hit for {user_id[:8]} — instant serve")
 
     question["effective_grade"] = effective_grade
-    question["bias"] = bias
+    question["bias"]            = manual_bias
+    question["eeg_label"]       = eeg_label       # "focused" | "stressed" | "neutral" | "no_eeg"
+    question["eeg_adjusted"]    = eeg_adjusted     # True when EEG overrode the manual bias
+
+    # Refill queue in background
+    _ensure_queue(user_id, effective_grade, effective_bias)
+
     return question
 
 
@@ -188,6 +280,12 @@ def start_session(payload: StartSessionRequest, request: Request):
         "correct_answers":    0,
     }
     res = supabase.table("sessions").insert(obj).execute()
+
+    # Pre-warm question queue in background while student sees the setup screen
+    profile = _profile(user["id"])
+    grade   = profile.get("grade_level") or "5th Grade"
+    _ensure_queue(user["id"], grade, 0)
+
     return res.data[0]
 
 @app.post("/api/sessions/{session_id}/answer")
@@ -542,6 +640,53 @@ def class_live(class_id: str, request: Request):
 
 
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
+
+@app.post("/api/eeg/muse/refresh")
+def eeg_muse_refresh(request: Request):
+    """Trigger a Bluetooth scan for nearby Muse headbands."""
+    get_user(request)
+    if not eeg_client.is_alive():
+        raise HTTPException(503, "EEG service not running on port 8001")
+    try:
+        return eeg_client.muse_refresh()
+    except Exception as e:
+        raise HTTPException(502, f"Bridge error: {e}")
+
+@app.post("/api/eeg/muse/connect")
+def eeg_muse_connect(request: Request, body: dict = Body(...)):
+    """Connect to a specific Muse headband by name."""
+    get_user(request)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Device name required")
+    if not eeg_client.is_alive():
+        raise HTTPException(503, "EEG service not running on port 8001")
+    try:
+        return eeg_client.muse_connect(name)
+    except Exception as e:
+        raise HTTPException(502, f"Bridge error: {e}")
+
+@app.post("/api/eeg/muse/disconnect")
+def eeg_muse_disconnect(request: Request):
+    """Tell the native bridge to disconnect from the current headband."""
+    get_user(request)
+    if not eeg_client.is_alive():
+        raise HTTPException(503, "EEG service not running on port 8001")
+    try:
+        return eeg_client.muse_disconnect()
+    except Exception as e:
+        raise HTTPException(502, f"Bridge error: {e}")
+
+@app.get("/api/eeg/debug")
+def eeg_debug(request: Request):
+    """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
+    get_user(request)
+    if not eeg_client.is_alive():
+        return {"available": False}
+    snapshot = eeg_client.get_state(timeout=1.5)
+    muse     = eeg_client.get_muse_status()
+    return {"available": True, "snapshot": snapshot, "muse": muse}
+
 
 @app.get("/api/eeg/health")
 def eeg_health():

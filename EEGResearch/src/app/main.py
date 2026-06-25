@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from pathlib import Path
 from time import perf_counter
 
-from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketException, status
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from src.app.config import get_settings
 from src.app.schemas import Envelope
@@ -87,18 +82,12 @@ async def get_state(_: str = Depends(require_learner_token)) -> JSONResponse:
     )
 
 
-@app.get("/api/v1/metrics")
-async def get_metrics(_: str = Depends(require_admin_token)) -> JSONResponse:
-    return JSONResponse({"status": "ok", "data": stream_manager.metrics()})
-
-
 class MuseConnectBody(BaseModel):
     name: str = Field(..., min_length=1)
 
 
 @app.get("/api/v1/muse/status")
 async def muse_status(_: str = Depends(require_learner_token)) -> JSONResponse:
-    """Latest native-bridge device metadata (works before first EEG frame)."""
     snapshot = stream_manager.snapshot()
     channels = snapshot.get("channels") if isinstance(snapshot, dict) else None
     bands = snapshot.get("bands") if isinstance(snapshot, dict) else None
@@ -131,36 +120,3 @@ async def muse_connect(body: MuseConnectBody, _: str = Depends(require_admin_tok
 async def muse_disconnect(_: str = Depends(require_admin_token)) -> JSONResponse:
     out = stream_manager.send_muse_bridge_command("disconnect")
     return JSONResponse({"status": "ok", "data": out})
-
-
-@app.websocket("/ws/live")
-async def live_stream(websocket: WebSocket):
-    token = websocket.query_params.get("token")
-    if token != settings.api_token:
-        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-    await websocket.accept()
-    try:
-        while True:
-            payload = stream_manager.snapshot()
-            if payload and "timestamp" in payload:
-                message = Envelope(status="ok", data=payload, message="Live interpreted EEG state")
-            else:
-                message = Envelope(status="idle", data=None, message="No stream data yet")
-            await websocket.send_text(json.dumps(message.model_dump()))
-            await asyncio.sleep(max(1, settings.ws_heartbeat_seconds))
-    except WebSocketDisconnect:
-        return
-    except RuntimeError:
-        return
-    finally:
-        if websocket.application_state == WebSocketState.CONNECTED:
-            await websocket.close()
-
-
-_static = (settings.static_site_dir or "").strip()
-if _static:
-    root = Path(_static)
-    if root.is_dir():
-        app.mount("/", StaticFiles(directory=str(root.resolve()), html=True), name="static")
-    else:
-        logger.warning("STATIC_SITE_DIR is set but not a directory: %s", _static)

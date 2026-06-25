@@ -1,0 +1,404 @@
+UBFC Model Comparison Report
+
+All differences are described relative to the ground truth.
+
+Overall model comparison
+Each summary below is averaged over the subjects that had both ground truth and the model output file.
+- PhysMamba.rlap: across 18 subjects, heart-rate error averaged 3.8970 BPM, heart-rate accuracy averaged 95.72%, trace match averaged 34.17%, and overall match averaged 64.94%.
+- RhythmMamba.rlap: across 18 subjects, heart-rate error averaged 4.4924 BPM, heart-rate accuracy averaged 95.02%, trace match averaged 34.69%, and overall match averaged 64.86%.
+- ME-chunk.pure: across 18 subjects, heart-rate error averaged 4.0192 BPM, heart-rate accuracy averaged 95.48%, trace match averaged 33.54%, and overall match averaged 64.51%.
+- ME-chunk.rlap: across 18 subjects, heart-rate error averaged 3.6302 BPM, heart-rate accuracy averaged 96.08%, trace match averaged 32.81%, and overall match averaged 64.44%.
+- PhysNet.rlap: across 18 subjects, heart-rate error averaged 3.7283 BPM, heart-rate accuracy averaged 95.95%, trace match averaged 32.76%, and overall match averaged 64.35%.
+- PhysNet: across 18 subjects, heart-rate error averaged 3.7283 BPM, heart-rate accuracy averaged 95.95%, trace match averaged 32.76%, and overall match averaged 64.35%.
+- PhysFormer.pure: across 18 subjects, heart-rate error averaged 3.8704 BPM, heart-rate accuracy averaged 95.84%, trace match averaged 32.76%, and overall match averaged 64.30%.
+- PhysFormer.rlap: across 18 subjects, heart-rate error averaged 3.6622 BPM, heart-rate accuracy averaged 96.04%, trace match averaged 32.22%, and overall match averaged 64.13%.
+- FacePhys.rlap: across 18 subjects, heart-rate error averaged 3.6274 BPM, heart-rate accuracy averaged 96.08%, trace match averaged 31.89%, and overall match averaged 63.98%.
+- PhysNet.pure: across 18 subjects, heart-rate error averaged 4.0338 BPM, heart-rate accuracy averaged 95.66%, trace match averaged 30.47%, and overall match averaged 63.06%.
+- ME-flow.rlap: across 18 subjects, heart-rate error averaged 3.6443 BPM, heart-rate accuracy averaged 96.05%, trace match averaged 29.64%, and overall match averaged 62.85%.
+- ME-flow.pure: across 18 subjects, heart-rate error averaged 4.9958 BPM, heart-rate accuracy averaged 94.52%, trace match averaged 28.94%, and overall match averaged 61.73%.
+- EfficientPhys.rlap: across 18 subjects, heart-rate error averaged 4.3755 BPM, heart-rate accuracy averaged 95.30%, trace match averaged 28.14%, and overall match averaged 61.72%.
+- RhythmMamba.pure: across 18 subjects, heart-rate error averaged 4.7864 BPM, heart-rate accuracy averaged 94.80%, trace match averaged 28.06%, and overall match averaged 61.43%.
+- TSCAN.rlap: across 18 subjects, heart-rate error averaged 4.6399 BPM, heart-rate accuracy averaged 94.95%, trace match averaged 25.85%, and overall match averaged 60.40%.
+- PhysMamba.pure: across 18 subjects, heart-rate error averaged 5.9501 BPM, heart-rate accuracy averaged 93.77%, trace match averaged 26.55%, and overall match averaged 60.16%.
+- TSCAN.pure: across 18 subjects, heart-rate error averaged 7.4455 BPM, heart-rate accuracy averaged 92.17%, trace match averaged 25.10%, and overall match averaged 58.63%.
+- EfficientPhys.pure: across 18 subjects, heart-rate error averaged 8.7343 BPM, heart-rate accuracy averaged 90.73%, trace match averaged 19.22%, and overall match averaged 54.97%.
+
+Per-subject comparison
+
+Subject subject22
+Ground truth is the reference for every comparison in this section.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 2.3908 BPM, heart-rate accuracy was 97.66%, trace match was 62.96%, and overall match was 80.31%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 2.4521 BPM, heart-rate accuracy was 97.60%, trace match was 62.42%, and overall match was 80.01%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 2.5759 BPM, heart-rate accuracy was 97.47%, trace match was 62.27%, and overall match was 79.87%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 2.6455 BPM, heart-rate accuracy was 97.42%, trace match was 60.79%, and overall match was 79.10%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 2.4082 BPM, heart-rate accuracy was 97.65%, trace match was 59.25%, and overall match was 78.45%.
+- PhysNet: compared with ground truth, heart-rate error was 2.4082 BPM, heart-rate accuracy was 97.65%, trace match was 59.25%, and overall match was 78.45%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 2.6211 BPM, heart-rate accuracy was 97.43%, trace match was 57.71%, and overall match was 77.57%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.7020 BPM, heart-rate accuracy was 96.45%, trace match was 58.38%, and overall match was 77.41%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 2.4066 BPM, heart-rate accuracy was 97.64%, trace match was 56.64%, and overall match was 77.14%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 2.4684 BPM, heart-rate accuracy was 97.59%, trace match was 55.20%, and overall match was 76.40%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.8159 BPM, heart-rate accuracy was 96.31%, trace match was 52.36%, and overall match was 74.33%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 2.5223 BPM, heart-rate accuracy was 97.54%, trace match was 49.86%, and overall match was 73.70%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 3.3301 BPM, heart-rate accuracy was 96.80%, trace match was 44.89%, and overall match was 70.84%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.2019 BPM, heart-rate accuracy was 95.97%, trace match was 44.85%, and overall match was 70.41%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 4.0777 BPM, heart-rate accuracy was 96.11%, trace match was 44.68%, and overall match was 70.39%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 9.8981 BPM, heart-rate accuracy was 90.42%, trace match was 41.98%, and overall match was 66.20%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 14.9940 BPM, heart-rate accuracy was 85.68%, trace match was 32.34%, and overall match was 59.01%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 13.9059 BPM, heart-rate accuracy was 86.76%, trace match was 31.04%, and overall match was 58.90%.
+
+Subject subject23
+Ground truth is the reference for every comparison in this section.
+- TSCAN.pure: compared with ground truth, heart-rate error was 3.4742 BPM, heart-rate accuracy was 94.53%, trace match was 11.07%, and overall match was 52.80%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 3.4520 BPM, heart-rate accuracy was 94.56%, trace match was 8.94%, and overall match was 51.75%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.5204 BPM, heart-rate accuracy was 94.46%, trace match was 8.62%, and overall match was 51.54%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.5486 BPM, heart-rate accuracy was 94.42%, trace match was 7.86%, and overall match was 51.14%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.5706 BPM, heart-rate accuracy was 94.39%, trace match was 7.68%, and overall match was 51.03%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 3.5669 BPM, heart-rate accuracy was 94.39%, trace match was 7.22%, and overall match was 50.80%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 3.4967 BPM, heart-rate accuracy was 94.50%, trace match was 7.06%, and overall match was 50.78%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.5710 BPM, heart-rate accuracy was 94.38%, trace match was 7.01%, and overall match was 50.70%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.4007 BPM, heart-rate accuracy was 94.63%, trace match was 6.32%, and overall match was 50.48%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 3.4796 BPM, heart-rate accuracy was 94.51%, trace match was 6.41%, and overall match was 50.46%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 3.5786 BPM, heart-rate accuracy was 94.36%, trace match was 6.24%, and overall match was 50.30%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.5388 BPM, heart-rate accuracy was 94.43%, trace match was 6.17%, and overall match was 50.30%.
+- PhysNet: compared with ground truth, heart-rate error was 3.5388 BPM, heart-rate accuracy was 94.43%, trace match was 6.17%, and overall match was 50.30%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 3.4296 BPM, heart-rate accuracy was 94.59%, trace match was 5.99%, and overall match was 50.29%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 3.5818 BPM, heart-rate accuracy was 94.37%, trace match was 4.94%, and overall match was 49.65%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 3.5199 BPM, heart-rate accuracy was 94.45%, trace match was 3.08%, and overall match was 48.76%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 3.5316 BPM, heart-rate accuracy was 94.46%, trace match was 0.26%, and overall match was 47.36%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.9904 BPM, heart-rate accuracy was 92.26%, trace match was 1.01%, and overall match was 46.64%.
+
+Subject subject25
+Ground truth is the reference for every comparison in this section.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 2.9269 BPM, heart-rate accuracy was 96.84%, trace match was 0.00%, and overall match was 48.42%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 2.9805 BPM, heart-rate accuracy was 96.78%, trace match was 0.00%, and overall match was 48.39%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 2.9803 BPM, heart-rate accuracy was 96.78%, trace match was 0.00%, and overall match was 48.39%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 2.9859 BPM, heart-rate accuracy was 96.77%, trace match was 0.00%, and overall match was 48.39%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 3.0218 BPM, heart-rate accuracy was 96.74%, trace match was 0.00%, and overall match was 48.37%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.0677 BPM, heart-rate accuracy was 96.68%, trace match was 0.00%, and overall match was 48.34%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.0715 BPM, heart-rate accuracy was 96.68%, trace match was 0.00%, and overall match was 48.34%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.1547 BPM, heart-rate accuracy was 96.59%, trace match was 0.00%, and overall match was 48.29%.
+- PhysNet: compared with ground truth, heart-rate error was 3.1547 BPM, heart-rate accuracy was 96.59%, trace match was 0.00%, and overall match was 48.29%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.2935 BPM, heart-rate accuracy was 96.44%, trace match was 0.00%, and overall match was 48.22%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 3.5113 BPM, heart-rate accuracy was 96.20%, trace match was 0.00%, and overall match was 48.10%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 3.7753 BPM, heart-rate accuracy was 95.89%, trace match was 0.00%, and overall match was 47.94%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 4.1471 BPM, heart-rate accuracy was 95.49%, trace match was 0.00%, and overall match was 47.74%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 4.5316 BPM, heart-rate accuracy was 95.06%, trace match was 0.00%, and overall match was 47.53%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 4.9034 BPM, heart-rate accuracy was 94.65%, trace match was 0.00%, and overall match was 47.32%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 5.2709 BPM, heart-rate accuracy was 94.21%, trace match was 0.00%, and overall match was 47.11%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 5.6110 BPM, heart-rate accuracy was 93.84%, trace match was 0.00%, and overall match was 46.92%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 6.6418 BPM, heart-rate accuracy was 92.78%, trace match was 0.00%, and overall match was 46.39%.
+
+Subject subject27
+Ground truth is the reference for every comparison in this section.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 5.3930 BPM, heart-rate accuracy was 93.95%, trace match was 40.37%, and overall match was 67.16%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 5.3558 BPM, heart-rate accuracy was 94.01%, trace match was 34.04%, and overall match was 64.03%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 5.4348 BPM, heart-rate accuracy was 93.91%, trace match was 28.98%, and overall match was 61.45%.
+- PhysNet: compared with ground truth, heart-rate error was 5.4348 BPM, heart-rate accuracy was 93.91%, trace match was 28.98%, and overall match was 61.45%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 5.4041 BPM, heart-rate accuracy was 93.95%, trace match was 25.70%, and overall match was 59.83%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 6.5741 BPM, heart-rate accuracy was 92.75%, trace match was 26.52%, and overall match was 59.64%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 5.4599 BPM, heart-rate accuracy was 93.81%, trace match was 24.35%, and overall match was 59.08%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 5.3464 BPM, heart-rate accuracy was 94.00%, trace match was 22.27%, and overall match was 58.14%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 7.4601 BPM, heart-rate accuracy was 91.65%, trace match was 19.81%, and overall match was 55.73%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 5.2742 BPM, heart-rate accuracy was 94.09%, trace match was 15.96%, and overall match was 55.02%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 8.7204 BPM, heart-rate accuracy was 89.98%, trace match was 19.04%, and overall match was 54.51%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 8.2130 BPM, heart-rate accuracy was 90.91%, trace match was 16.00%, and overall match was 53.45%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 9.2984 BPM, heart-rate accuracy was 89.96%, trace match was 16.15%, and overall match was 53.05%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 5.4398 BPM, heart-rate accuracy was 93.89%, trace match was 11.35%, and overall match was 52.62%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 6.1835 BPM, heart-rate accuracy was 93.13%, trace match was 8.44%, and overall match was 50.78%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 6.0736 BPM, heart-rate accuracy was 93.29%, trace match was 5.24%, and overall match was 49.27%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 17.3154 BPM, heart-rate accuracy was 80.70%, trace match was 17.09%, and overall match was 48.89%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 9.8678 BPM, heart-rate accuracy was 89.08%, trace match was 0.00%, and overall match was 44.54%.
+
+Subject subject32
+Ground truth is the reference for every comparison in this section.
+- PhysNet.pure: compared with ground truth, heart-rate error was 4.2020 BPM, heart-rate accuracy was 96.00%, trace match was 41.69%, and overall match was 68.85%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 6.1553 BPM, heart-rate accuracy was 94.01%, trace match was 43.07%, and overall match was 68.54%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 4.5529 BPM, heart-rate accuracy was 95.65%, trace match was 37.17%, and overall match was 66.41%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 4.0686 BPM, heart-rate accuracy was 96.14%, trace match was 36.61%, and overall match was 66.37%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 5.0863 BPM, heart-rate accuracy was 95.12%, trace match was 37.55%, and overall match was 66.33%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 4.2951 BPM, heart-rate accuracy was 95.92%, trace match was 36.26%, and overall match was 66.09%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 5.6742 BPM, heart-rate accuracy was 94.41%, trace match was 35.38%, and overall match was 64.89%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 4.3075 BPM, heart-rate accuracy was 95.89%, trace match was 29.92%, and overall match was 62.90%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 4.7159 BPM, heart-rate accuracy was 95.50%, trace match was 30.28%, and overall match was 62.89%.
+- PhysNet: compared with ground truth, heart-rate error was 4.7159 BPM, heart-rate accuracy was 95.50%, trace match was 30.28%, and overall match was 62.89%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.4629 BPM, heart-rate accuracy was 95.75%, trace match was 25.97%, and overall match was 60.86%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 4.9792 BPM, heart-rate accuracy was 95.11%, trace match was 25.85%, and overall match was 60.48%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 9.5857 BPM, heart-rate accuracy was 90.78%, trace match was 29.37%, and overall match was 60.08%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 8.6295 BPM, heart-rate accuracy was 91.64%, trace match was 25.09%, and overall match was 58.37%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.9713 BPM, heart-rate accuracy was 95.20%, trace match was 17.73%, and overall match was 56.46%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 4.3610 BPM, heart-rate accuracy was 95.83%, trace match was 14.51%, and overall match was 55.17%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 5.1923 BPM, heart-rate accuracy was 94.94%, trace match was 14.22%, and overall match was 54.58%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 5.4571 BPM, heart-rate accuracy was 94.66%, trace match was 7.29%, and overall match was 50.98%.
+
+Subject subject33
+Ground truth is the reference for every comparison in this section.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 2.8871 BPM, heart-rate accuracy was 97.55%, trace match was 0.00%, and overall match was 48.77%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 2.9133 BPM, heart-rate accuracy was 97.53%, trace match was 0.00%, and overall match was 48.76%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 2.9798 BPM, heart-rate accuracy was 97.47%, trace match was 0.00%, and overall match was 48.74%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 3.0406 BPM, heart-rate accuracy was 97.42%, trace match was 0.00%, and overall match was 48.71%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 3.2236 BPM, heart-rate accuracy was 97.26%, trace match was 0.00%, and overall match was 48.63%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 3.4571 BPM, heart-rate accuracy was 97.05%, trace match was 0.00%, and overall match was 48.53%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.5874 BPM, heart-rate accuracy was 96.95%, trace match was 0.00%, and overall match was 48.47%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.7234 BPM, heart-rate accuracy was 96.83%, trace match was 0.00%, and overall match was 48.41%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.7352 BPM, heart-rate accuracy was 96.82%, trace match was 0.00%, and overall match was 48.41%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.7599 BPM, heart-rate accuracy was 96.80%, trace match was 0.00%, and overall match was 48.40%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 3.7644 BPM, heart-rate accuracy was 96.79%, trace match was 0.00%, and overall match was 48.40%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.7773 BPM, heart-rate accuracy was 96.78%, trace match was 0.00%, and overall match was 48.39%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 3.7955 BPM, heart-rate accuracy was 96.77%, trace match was 0.00%, and overall match was 48.38%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 3.8083 BPM, heart-rate accuracy was 96.76%, trace match was 0.00%, and overall match was 48.38%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.8161 BPM, heart-rate accuracy was 96.75%, trace match was 0.00%, and overall match was 48.38%.
+- PhysNet: compared with ground truth, heart-rate error was 3.8161 BPM, heart-rate accuracy was 96.75%, trace match was 0.00%, and overall match was 48.38%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 3.8607 BPM, heart-rate accuracy was 96.71%, trace match was 0.00%, and overall match was 48.36%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 3.8944 BPM, heart-rate accuracy was 96.68%, trace match was 0.00%, and overall match was 48.34%.
+
+Subject subject36
+Ground truth is the reference for every comparison in this section.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 2.5287 BPM, heart-rate accuracy was 97.77%, trace match was 64.36%, and overall match was 81.06%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 2.5521 BPM, heart-rate accuracy was 97.76%, trace match was 57.88%, and overall match was 77.82%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 2.3740 BPM, heart-rate accuracy was 97.92%, trace match was 57.51%, and overall match was 77.72%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 2.5016 BPM, heart-rate accuracy was 97.80%, trace match was 57.00%, and overall match was 77.40%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 2.7384 BPM, heart-rate accuracy was 97.60%, trace match was 56.26%, and overall match was 76.93%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 2.5984 BPM, heart-rate accuracy was 97.71%, trace match was 51.42%, and overall match was 74.56%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 2.6515 BPM, heart-rate accuracy was 97.66%, trace match was 50.10%, and overall match was 73.88%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 2.6094 BPM, heart-rate accuracy was 97.70%, trace match was 49.67%, and overall match was 73.69%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 2.6215 BPM, heart-rate accuracy was 97.69%, trace match was 49.61%, and overall match was 73.65%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 2.6276 BPM, heart-rate accuracy was 97.68%, trace match was 47.74%, and overall match was 72.71%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 2.7262 BPM, heart-rate accuracy was 97.61%, trace match was 47.63%, and overall match was 72.62%.
+- PhysNet: compared with ground truth, heart-rate error was 2.7262 BPM, heart-rate accuracy was 97.61%, trace match was 47.63%, and overall match was 72.62%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 4.7686 BPM, heart-rate accuracy was 95.97%, trace match was 43.50%, and overall match was 69.73%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 2.6557 BPM, heart-rate accuracy was 97.67%, trace match was 40.08%, and overall match was 68.87%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 2.5867 BPM, heart-rate accuracy was 97.72%, trace match was 35.42%, and overall match was 66.57%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 2.6726 BPM, heart-rate accuracy was 97.65%, trace match was 31.97%, and overall match was 64.81%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 2.7133 BPM, heart-rate accuracy was 97.61%, trace match was 30.13%, and overall match was 63.87%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 15.0941 BPM, heart-rate accuracy was 87.63%, trace match was 26.93%, and overall match was 57.28%.
+
+Subject subject37
+Ground truth is the reference for every comparison in this section.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 5.7266 BPM, heart-rate accuracy was 91.04%, trace match was 70.39%, and overall match was 80.72%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 5.5611 BPM, heart-rate accuracy was 91.33%, trace match was 66.25%, and overall match was 78.79%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 5.7260 BPM, heart-rate accuracy was 91.07%, trace match was 66.17%, and overall match was 78.62%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 5.6983 BPM, heart-rate accuracy was 91.10%, trace match was 58.30%, and overall match was 74.70%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 6.0104 BPM, heart-rate accuracy was 90.54%, trace match was 57.20%, and overall match was 73.87%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 7.1954 BPM, heart-rate accuracy was 88.81%, trace match was 54.93%, and overall match was 71.87%.
+- PhysNet: compared with ground truth, heart-rate error was 7.1954 BPM, heart-rate accuracy was 88.81%, trace match was 54.93%, and overall match was 71.87%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 6.0498 BPM, heart-rate accuracy was 90.48%, trace match was 52.13%, and overall match was 71.31%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 6.0919 BPM, heart-rate accuracy was 90.42%, trace match was 50.44%, and overall match was 70.43%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 8.2897 BPM, heart-rate accuracy was 86.69%, trace match was 53.10%, and overall match was 69.90%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 8.7251 BPM, heart-rate accuracy was 86.42%, trace match was 52.14%, and overall match was 69.28%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 10.3463 BPM, heart-rate accuracy was 82.96%, trace match was 54.17%, and overall match was 68.56%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 7.7264 BPM, heart-rate accuracy was 87.55%, trace match was 48.17%, and overall match was 67.86%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 10.4780 BPM, heart-rate accuracy was 82.76%, trace match was 50.76%, and overall match was 66.76%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 7.9582 BPM, heart-rate accuracy was 87.58%, trace match was 41.12%, and overall match was 64.35%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 7.4590 BPM, heart-rate accuracy was 88.26%, trace match was 40.17%, and overall match was 64.21%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 5.6691 BPM, heart-rate accuracy was 91.15%, trace match was 33.72%, and overall match was 62.44%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 11.7110 BPM, heart-rate accuracy was 81.44%, trace match was 18.96%, and overall match was 50.20%.
+
+Subject subject38
+Ground truth is the reference for every comparison in this section.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 1.3888 BPM, heart-rate accuracy was 98.74%, trace match was 79.64%, and overall match was 89.19%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 1.3956 BPM, heart-rate accuracy was 98.73%, trace match was 78.84%, and overall match was 88.79%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 1.5231 BPM, heart-rate accuracy was 98.61%, trace match was 77.99%, and overall match was 88.30%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 1.5000 BPM, heart-rate accuracy was 98.64%, trace match was 77.13%, and overall match was 87.88%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 1.5526 BPM, heart-rate accuracy was 98.59%, trace match was 75.92%, and overall match was 87.26%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 1.5450 BPM, heart-rate accuracy was 98.59%, trace match was 74.31%, and overall match was 86.45%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 1.5558 BPM, heart-rate accuracy was 98.58%, trace match was 74.30%, and overall match was 86.44%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 1.3888 BPM, heart-rate accuracy was 98.74%, trace match was 74.12%, and overall match was 86.43%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 1.4154 BPM, heart-rate accuracy was 98.71%, trace match was 73.57%, and overall match was 86.14%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 1.5172 BPM, heart-rate accuracy was 98.62%, trace match was 73.37%, and overall match was 85.99%.
+- PhysNet: compared with ground truth, heart-rate error was 1.5172 BPM, heart-rate accuracy was 98.62%, trace match was 73.37%, and overall match was 85.99%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 1.5272 BPM, heart-rate accuracy was 98.61%, trace match was 70.49%, and overall match was 84.55%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 1.4655 BPM, heart-rate accuracy was 98.67%, trace match was 68.72%, and overall match was 83.69%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 2.0871 BPM, heart-rate accuracy was 98.12%, trace match was 69.17%, and overall match was 83.64%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 1.5943 BPM, heart-rate accuracy was 98.55%, trace match was 68.05%, and overall match was 83.30%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 1.6174 BPM, heart-rate accuracy was 98.53%, trace match was 57.38%, and overall match was 77.95%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 5.2578 BPM, heart-rate accuracy was 95.29%, trace match was 43.80%, and overall match was 69.55%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 9.3952 BPM, heart-rate accuracy was 91.52%, trace match was 38.83%, and overall match was 65.17%.
+
+Subject subject41
+Ground truth is the reference for every comparison in this section.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 3.2451 BPM, heart-rate accuracy was 96.76%, trace match was 52.37%, and overall match was 74.57%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.4223 BPM, heart-rate accuracy was 96.58%, trace match was 48.04%, and overall match was 72.31%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.1884 BPM, heart-rate accuracy was 95.80%, trace match was 48.15%, and overall match was 71.98%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.0001 BPM, heart-rate accuracy was 95.99%, trace match was 47.19%, and overall match was 71.59%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.1434 BPM, heart-rate accuracy was 96.86%, trace match was 44.67%, and overall match was 70.76%.
+- PhysNet: compared with ground truth, heart-rate error was 3.1434 BPM, heart-rate accuracy was 96.86%, trace match was 44.67%, and overall match was 70.76%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 5.1660 BPM, heart-rate accuracy was 94.81%, trace match was 41.56%, and overall match was 68.19%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 9.6156 BPM, heart-rate accuracy was 90.46%, trace match was 43.33%, and overall match was 66.90%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 4.7068 BPM, heart-rate accuracy was 95.31%, trace match was 37.56%, and overall match was 66.44%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 4.3046 BPM, heart-rate accuracy was 95.69%, trace match was 36.51%, and overall match was 66.10%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 4.3840 BPM, heart-rate accuracy was 95.68%, trace match was 34.58%, and overall match was 65.13%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 10.4651 BPM, heart-rate accuracy was 89.49%, trace match was 36.47%, and overall match was 62.98%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 8.2204 BPM, heart-rate accuracy was 91.73%, trace match was 33.82%, and overall match was 62.77%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.8562 BPM, heart-rate accuracy was 96.17%, trace match was 23.18%, and overall match was 59.68%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 10.0136 BPM, heart-rate accuracy was 90.19%, trace match was 28.82%, and overall match was 59.51%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 9.3951 BPM, heart-rate accuracy was 90.50%, trace match was 28.35%, and overall match was 59.43%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 13.9798 BPM, heart-rate accuracy was 86.03%, trace match was 32.09%, and overall match was 59.06%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 25.7506 BPM, heart-rate accuracy was 74.36%, trace match was 21.04%, and overall match was 47.70%.
+
+Subject subject43
+Ground truth is the reference for every comparison in this section.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 3.3963 BPM, heart-rate accuracy was 96.49%, trace match was 10.66%, and overall match was 53.57%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.5471 BPM, heart-rate accuracy was 96.33%, trace match was 9.89%, and overall match was 53.11%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.4129 BPM, heart-rate accuracy was 96.47%, trace match was 9.15%, and overall match was 52.81%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.4482 BPM, heart-rate accuracy was 96.43%, trace match was 8.67%, and overall match was 52.55%.
+- PhysNet: compared with ground truth, heart-rate error was 3.4482 BPM, heart-rate accuracy was 96.43%, trace match was 8.67%, and overall match was 52.55%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.4824 BPM, heart-rate accuracy was 96.40%, trace match was 8.47%, and overall match was 52.43%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 3.6289 BPM, heart-rate accuracy was 96.24%, trace match was 8.52%, and overall match was 52.38%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 3.4759 BPM, heart-rate accuracy was 96.40%, trace match was 7.93%, and overall match was 52.17%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 3.3240 BPM, heart-rate accuracy was 96.56%, trace match was 7.22%, and overall match was 51.89%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 3.5740 BPM, heart-rate accuracy was 96.30%, trace match was 7.27%, and overall match was 51.79%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 3.3598 BPM, heart-rate accuracy was 96.52%, trace match was 5.76%, and overall match was 51.14%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 3.3299 BPM, heart-rate accuracy was 96.55%, trace match was 5.40%, and overall match was 50.97%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 3.4746 BPM, heart-rate accuracy was 96.41%, trace match was 5.20%, and overall match was 50.80%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.4737 BPM, heart-rate accuracy was 96.41%, trace match was 4.76%, and overall match was 50.59%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 3.5292 BPM, heart-rate accuracy was 96.35%, trace match was 4.71%, and overall match was 50.53%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.3231 BPM, heart-rate accuracy was 96.56%, trace match was 4.45%, and overall match was 50.50%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 3.8746 BPM, heart-rate accuracy was 95.97%, trace match was 0.85%, and overall match was 48.41%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.1697 BPM, heart-rate accuracy was 95.67%, trace match was 0.00%, and overall match was 47.84%.
+
+Subject subject44
+Ground truth is the reference for every comparison in this section.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 5.1207 BPM, heart-rate accuracy was 93.76%, trace match was 73.66%, and overall match was 83.71%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 5.2672 BPM, heart-rate accuracy was 93.58%, trace match was 72.25%, and overall match was 82.92%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 5.1251 BPM, heart-rate accuracy was 93.75%, trace match was 68.85%, and overall match was 81.30%.
+- PhysNet: compared with ground truth, heart-rate error was 5.1251 BPM, heart-rate accuracy was 93.75%, trace match was 68.85%, and overall match was 81.30%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 5.3776 BPM, heart-rate accuracy was 93.44%, trace match was 68.62%, and overall match was 81.03%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 5.1448 BPM, heart-rate accuracy was 93.73%, trace match was 67.78%, and overall match was 80.76%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 5.1027 BPM, heart-rate accuracy was 93.78%, trace match was 67.65%, and overall match was 80.72%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 5.3431 BPM, heart-rate accuracy was 93.49%, trace match was 67.77%, and overall match was 80.63%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 5.2025 BPM, heart-rate accuracy was 93.66%, trace match was 62.64%, and overall match was 78.15%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 5.4470 BPM, heart-rate accuracy was 93.40%, trace match was 60.98%, and overall match was 77.19%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 5.2029 BPM, heart-rate accuracy was 93.67%, trace match was 59.27%, and overall match was 76.47%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 5.3229 BPM, heart-rate accuracy was 93.52%, trace match was 58.86%, and overall match was 76.19%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 9.2195 BPM, heart-rate accuracy was 88.94%, trace match was 61.09%, and overall match was 75.02%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 7.6228 BPM, heart-rate accuracy was 90.75%, trace match was 59.17%, and overall match was 74.96%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 4.8835 BPM, heart-rate accuracy was 94.05%, trace match was 55.14%, and overall match was 74.60%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 6.7923 BPM, heart-rate accuracy was 91.79%, trace match was 55.54%, and overall match was 73.67%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 5.0766 BPM, heart-rate accuracy was 93.82%, trace match was 51.50%, and overall match was 72.66%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 6.3054 BPM, heart-rate accuracy was 92.41%, trace match was 41.75%, and overall match was 67.08%.
+
+Subject subject45
+Ground truth is the reference for every comparison in this section.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 4.0517 BPM, heart-rate accuracy was 96.29%, trace match was 67.30%, and overall match was 81.80%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 4.1454 BPM, heart-rate accuracy was 96.22%, trace match was 65.79%, and overall match was 81.01%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 4.0341 BPM, heart-rate accuracy was 96.30%, trace match was 64.60%, and overall match was 80.45%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.1734 BPM, heart-rate accuracy was 96.20%, trace match was 61.14%, and overall match was 78.67%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 4.0745 BPM, heart-rate accuracy was 96.29%, trace match was 60.95%, and overall match was 78.62%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 3.8834 BPM, heart-rate accuracy was 96.45%, trace match was 58.55%, and overall match was 77.50%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 4.2567 BPM, heart-rate accuracy was 96.11%, trace match was 58.50%, and overall match was 77.31%.
+- PhysNet: compared with ground truth, heart-rate error was 4.2567 BPM, heart-rate accuracy was 96.11%, trace match was 58.50%, and overall match was 77.31%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.1456 BPM, heart-rate accuracy was 96.22%, trace match was 58.11%, and overall match was 77.16%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 5.0700 BPM, heart-rate accuracy was 95.40%, trace match was 56.61%, and overall match was 76.01%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 4.2259 BPM, heart-rate accuracy was 96.15%, trace match was 55.69%, and overall match was 75.92%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 4.4332 BPM, heart-rate accuracy was 95.96%, trace match was 54.64%, and overall match was 75.30%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 4.5584 BPM, heart-rate accuracy was 95.85%, trace match was 54.71%, and overall match was 75.28%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.3436 BPM, heart-rate accuracy was 96.03%, trace match was 51.48%, and overall match was 73.75%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 4.7214 BPM, heart-rate accuracy was 95.70%, trace match was 50.27%, and overall match was 72.99%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 4.1075 BPM, heart-rate accuracy was 96.24%, trace match was 42.03%, and overall match was 69.14%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 3.8375 BPM, heart-rate accuracy was 96.49%, trace match was 41.05%, and overall match was 68.77%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 4.4729 BPM, heart-rate accuracy was 95.93%, trace match was 14.43%, and overall match was 55.18%.
+
+Subject subject46
+Ground truth is the reference for every comparison in this section.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.9221 BPM, heart-rate accuracy was 95.90%, trace match was 12.86%, and overall match was 54.38%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.0314 BPM, heart-rate accuracy was 95.77%, trace match was 11.32%, and overall match was 53.55%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 3.9422 BPM, heart-rate accuracy was 95.87%, trace match was 9.52%, and overall match was 52.70%.
+- PhysNet: compared with ground truth, heart-rate error was 3.9422 BPM, heart-rate accuracy was 95.87%, trace match was 9.52%, and overall match was 52.70%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 3.9880 BPM, heart-rate accuracy was 95.81%, trace match was 9.37%, and overall match was 52.59%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.8808 BPM, heart-rate accuracy was 95.93%, trace match was 9.18%, and overall match was 52.56%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.0390 BPM, heart-rate accuracy was 95.76%, trace match was 8.99%, and overall match was 52.38%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 5.0510 BPM, heart-rate accuracy was 94.63%, trace match was 9.56%, and overall match was 52.10%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 3.9504 BPM, heart-rate accuracy was 95.86%, trace match was 8.31%, and overall match was 52.08%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 4.0795 BPM, heart-rate accuracy was 95.71%, trace match was 8.38%, and overall match was 52.04%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 3.9086 BPM, heart-rate accuracy was 95.90%, trace match was 8.16%, and overall match was 52.03%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 4.1869 BPM, heart-rate accuracy was 95.57%, trace match was 6.55%, and overall match was 51.06%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.9295 BPM, heart-rate accuracy was 95.88%, trace match was 5.89%, and overall match was 50.89%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 3.8680 BPM, heart-rate accuracy was 95.93%, trace match was 5.75%, and overall match was 50.84%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 4.0745 BPM, heart-rate accuracy was 95.73%, trace match was 5.65%, and overall match was 50.69%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 4.2805 BPM, heart-rate accuracy was 95.48%, trace match was 4.58%, and overall match was 50.03%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 5.1055 BPM, heart-rate accuracy was 94.66%, trace match was 3.11%, and overall match was 48.89%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 4.5300 BPM, heart-rate accuracy was 95.28%, trace match was 0.00%, and overall match was 47.64%.
+
+Subject subject47
+Ground truth is the reference for every comparison in this section.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 3.6808 BPM, heart-rate accuracy was 96.77%, trace match was 36.53%, and overall match was 66.65%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 3.9425 BPM, heart-rate accuracy was 96.55%, trace match was 35.46%, and overall match was 66.00%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 3.9430 BPM, heart-rate accuracy was 96.55%, trace match was 35.28%, and overall match was 65.91%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 4.2248 BPM, heart-rate accuracy was 96.30%, trace match was 31.66%, and overall match was 63.98%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 4.0553 BPM, heart-rate accuracy was 96.44%, trace match was 29.47%, and overall match was 62.96%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 4.3574 BPM, heart-rate accuracy was 96.19%, trace match was 27.94%, and overall match was 62.06%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 3.9861 BPM, heart-rate accuracy was 96.51%, trace match was 26.22%, and overall match was 61.37%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 4.1008 BPM, heart-rate accuracy was 96.41%, trace match was 25.08%, and overall match was 60.74%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 3.9568 BPM, heart-rate accuracy was 96.54%, trace match was 24.79%, and overall match was 60.67%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 4.2366 BPM, heart-rate accuracy was 96.30%, trace match was 20.67%, and overall match was 58.48%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 4.2368 BPM, heart-rate accuracy was 96.30%, trace match was 18.89%, and overall match was 57.59%.
+- PhysNet: compared with ground truth, heart-rate error was 4.2368 BPM, heart-rate accuracy was 96.30%, trace match was 18.89%, and overall match was 57.59%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.2645 BPM, heart-rate accuracy was 96.27%, trace match was 15.46%, and overall match was 55.87%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 4.1720 BPM, heart-rate accuracy was 96.35%, trace match was 14.72%, and overall match was 55.53%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.0392 BPM, heart-rate accuracy was 96.46%, trace match was 14.18%, and overall match was 55.32%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 4.1877 BPM, heart-rate accuracy was 96.33%, trace match was 5.81%, and overall match was 51.07%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 4.0345 BPM, heart-rate accuracy was 96.47%, trace match was 0.00%, and overall match was 48.23%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 4.6832 BPM, heart-rate accuracy was 95.93%, trace match was 0.00%, and overall match was 47.96%.
+
+Subject subject48
+Ground truth is the reference for every comparison in this section.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 1.4186 BPM, heart-rate accuracy was 98.38%, trace match was 53.46%, and overall match was 75.92%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 1.4271 BPM, heart-rate accuracy was 98.37%, trace match was 45.26%, and overall match was 71.81%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 1.1489 BPM, heart-rate accuracy was 98.69%, trace match was 44.17%, and overall match was 71.43%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 1.3141 BPM, heart-rate accuracy was 98.50%, trace match was 35.64%, and overall match was 67.07%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 3.4770 BPM, heart-rate accuracy was 96.05%, trace match was 36.67%, and overall match was 66.36%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 1.2711 BPM, heart-rate accuracy was 98.55%, trace match was 33.99%, and overall match was 66.27%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 1.3395 BPM, heart-rate accuracy was 98.47%, trace match was 33.95%, and overall match was 66.21%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 1.2392 BPM, heart-rate accuracy was 98.59%, trace match was 32.59%, and overall match was 65.59%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 1.2854 BPM, heart-rate accuracy was 98.53%, trace match was 32.19%, and overall match was 65.36%.
+- PhysNet: compared with ground truth, heart-rate error was 1.2854 BPM, heart-rate accuracy was 98.53%, trace match was 32.19%, and overall match was 65.36%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 1.2766 BPM, heart-rate accuracy was 98.54%, trace match was 25.93%, and overall match was 62.24%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.5584 BPM, heart-rate accuracy was 94.76%, trace match was 28.56%, and overall match was 61.66%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 1.2383 BPM, heart-rate accuracy was 98.59%, trace match was 23.13%, and overall match was 60.86%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 5.9807 BPM, heart-rate accuracy was 93.13%, trace match was 22.51%, and overall match was 57.82%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 3.6050 BPM, heart-rate accuracy was 95.87%, trace match was 17.69%, and overall match was 56.78%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 10.4847 BPM, heart-rate accuracy was 88.03%, trace match was 19.49%, and overall match was 53.76%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 21.1382 BPM, heart-rate accuracy was 75.93%, trace match was 13.82%, and overall match was 44.87%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 18.7425 BPM, heart-rate accuracy was 78.58%, trace match was 11.11%, and overall match was 44.84%.
+
+Subject subject8
+Ground truth is the reference for every comparison in this section.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 2.8965 BPM, heart-rate accuracy was 97.32%, trace match was 55.56%, and overall match was 76.44%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 2.8703 BPM, heart-rate accuracy was 97.35%, trace match was 53.74%, and overall match was 75.55%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 2.9962 BPM, heart-rate accuracy was 97.25%, trace match was 53.50%, and overall match was 75.38%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 2.9661 BPM, heart-rate accuracy was 97.27%, trace match was 47.36%, and overall match was 72.31%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 2.9375 BPM, heart-rate accuracy was 97.31%, trace match was 47.14%, and overall match was 72.22%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 2.8426 BPM, heart-rate accuracy was 97.37%, trace match was 46.39%, and overall match was 71.88%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 2.7554 BPM, heart-rate accuracy was 97.46%, trace match was 42.94%, and overall match was 70.20%.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 2.8687 BPM, heart-rate accuracy was 97.35%, trace match was 39.28%, and overall match was 68.32%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 2.8663 BPM, heart-rate accuracy was 97.35%, trace match was 38.24%, and overall match was 67.80%.
+- PhysNet: compared with ground truth, heart-rate error was 2.8663 BPM, heart-rate accuracy was 97.35%, trace match was 38.24%, and overall match was 67.80%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 2.7979 BPM, heart-rate accuracy was 97.41%, trace match was 31.53%, and overall match was 64.47%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 3.3955 BPM, heart-rate accuracy was 96.90%, trace match was 31.18%, and overall match was 64.04%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 2.8717 BPM, heart-rate accuracy was 97.35%, trace match was 30.12%, and overall match was 63.74%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 3.0863 BPM, heart-rate accuracy was 97.17%, trace match was 29.10%, and overall match was 63.14%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 7.6850 BPM, heart-rate accuracy was 92.99%, trace match was 30.61%, and overall match was 61.80%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 3.2848 BPM, heart-rate accuracy was 96.95%, trace match was 18.35%, and overall match was 57.65%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 2.9604 BPM, heart-rate accuracy was 97.26%, trace match was 12.57%, and overall match was 54.91%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 5.3325 BPM, heart-rate accuracy was 95.16%, trace match was 11.40%, and overall match was 53.28%.
+
+Subject subject9
+Ground truth is the reference for every comparison in this section.
+- PhysMamba.rlap: compared with ground truth, heart-rate error was 4.5574 BPM, heart-rate accuracy was 95.75%, trace match was 13.69%, and overall match was 54.72%.
+- RhythmMamba.rlap: compared with ground truth, heart-rate error was 4.2218 BPM, heart-rate accuracy was 96.06%, trace match was 12.57%, and overall match was 54.31%.
+- ME-chunk.pure: compared with ground truth, heart-rate error was 4.1866 BPM, heart-rate accuracy was 96.09%, trace match was 12.31%, and overall match was 54.20%.
+- PhysFormer.pure: compared with ground truth, heart-rate error was 4.5725 BPM, heart-rate accuracy was 95.76%, trace match was 10.03%, and overall match was 52.90%.
+- PhysNet.rlap: compared with ground truth, heart-rate error was 4.2975 BPM, heart-rate accuracy was 96.00%, trace match was 9.56%, and overall match was 52.78%.
+- PhysNet: compared with ground truth, heart-rate error was 4.2975 BPM, heart-rate accuracy was 96.00%, trace match was 9.56%, and overall match was 52.78%.
+- PhysMamba.pure: compared with ground truth, heart-rate error was 5.1838 BPM, heart-rate accuracy was 95.22%, trace match was 9.85%, and overall match was 52.53%.
+- EfficientPhys.rlap: compared with ground truth, heart-rate error was 6.5788 BPM, heart-rate accuracy was 93.87%, trace match was 10.89%, and overall match was 52.38%.
+- ME-flow.pure: compared with ground truth, heart-rate error was 4.6296 BPM, heart-rate accuracy was 95.67%, trace match was 8.99%, and overall match was 52.33%.
+- ME-chunk.rlap: compared with ground truth, heart-rate error was 4.1396 BPM, heart-rate accuracy was 96.15%, trace match was 8.25%, and overall match was 52.20%.
+- TSCAN.rlap: compared with ground truth, heart-rate error was 4.6074 BPM, heart-rate accuracy was 95.70%, trace match was 8.65%, and overall match was 52.18%.
+- PhysFormer.rlap: compared with ground truth, heart-rate error was 4.3969 BPM, heart-rate accuracy was 95.91%, trace match was 7.90%, and overall match was 51.90%.
+- PhysNet.pure: compared with ground truth, heart-rate error was 5.7476 BPM, heart-rate accuracy was 94.67%, trace match was 8.92%, and overall match was 51.79%.
+- TSCAN.pure: compared with ground truth, heart-rate error was 6.0008 BPM, heart-rate accuracy was 94.39%, trace match was 8.46%, and overall match was 51.42%.
+- RhythmMamba.pure: compared with ground truth, heart-rate error was 4.2428 BPM, heart-rate accuracy was 96.06%, trace match was 4.70%, and overall match was 50.38%.
+- FacePhys.rlap: compared with ground truth, heart-rate error was 4.0152 BPM, heart-rate accuracy was 96.26%, trace match was 2.96%, and overall match was 49.61%.
+- ME-flow.rlap: compared with ground truth, heart-rate error was 4.0489 BPM, heart-rate accuracy was 96.23%, trace match was 2.49%, and overall match was 49.36%.
+- EfficientPhys.pure: compared with ground truth, heart-rate error was 14.9121 BPM, heart-rate accuracy was 86.44%, trace match was 5.03%, and overall match was 45.73%.

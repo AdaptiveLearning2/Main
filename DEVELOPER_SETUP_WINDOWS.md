@@ -1,6 +1,6 @@
-# Developer Setup Guide
+# Developer Setup Guide — Windows
 
-This project is an adaptive learning platform for kids with learning disabilities. It adjusts math question difficulty in real time using EEG biometric data from a Muse S headband. The stack runs entirely on a local Windows machine.
+This project is an adaptive learning platform for kids with learning disabilities. It adjusts math question difficulty in real time using EEG biometric data from a Muse S headband.
 
 ## Architecture Overview
 
@@ -20,19 +20,17 @@ Website Backend (:8000)  ──────────────────�
 Supabase (PostgreSQL + Auth)
 ```
 
-| Service | Port | Language | Purpose |
-|---------|------|----------|---------|
-| Frontend | 5173 | React + Vite | Student/teacher/parent UI |
-| Website backend | 8000 | Python FastAPI | LLM question generation, Supabase, auth |
-| EEGResearch backend | 8001 | Python FastAPI | EEG signal processing, adaptation engine |
-| Muse bridge | 8765 | C++ | libMuse SDK → TCP JSON stream |
-| Ollama | 11434 | — | Local LLM (llama3.1:8b) |
+| Service | Port | Purpose |
+|---------|------|---------|
+| Frontend | 5173 | Student/teacher/parent UI |
+| Website backend | 8000 | LLM question generation, Supabase, auth |
+| EEGResearch backend | 8001 | EEG signal processing, adaptation engine |
+| Muse bridge | 8765 | libMuse SDK → TCP JSON stream |
+| Ollama | 11434 | Local LLM (llama3.1:8b) |
 
 ---
 
 ## Prerequisites
-
-Install all of the following before cloning:
 
 ### Required for everyone
 
@@ -43,7 +41,7 @@ Install all of the following before cloning:
 | Ollama | latest | https://ollama.com |
 | Git | any | https://git-scm.com |
 
-### Required only for live headband support (`-Muse` mode)
+### Required only for live headband support
 
 | Tool | Notes |
 |------|-------|
@@ -98,13 +96,11 @@ cd C:\AdaptiveLearning\EEGResearch
 Copy-Item .env.example .env
 ```
 
-The defaults in `.env.example` work for simulator mode. No changes needed unless using a live headband (see section 4).
+The defaults work for simulator mode. No changes needed unless using a live headband (see section 4).
 
 ---
 
 ## 2. Start the stack (simulator mode)
-
-Run everything with one command from the repo root:
 
 ```powershell
 cd C:\AdaptiveLearning
@@ -115,7 +111,7 @@ This will:
 1. Start Ollama and pull `llama3.1:8b` if not already downloaded (takes a few minutes on first run)
 2. Create Python venvs and install dependencies automatically if missing
 3. Install frontend `node_modules` if missing
-4. Launch four terminal windows: EEGResearch (:8001), website backend (:8000), and frontend (:5173)
+4. Launch a terminal window for each service
 
 Once all windows are up, open **http://localhost:5173** in your browser.
 
@@ -132,7 +128,7 @@ Invoke-RestMethod http://localhost:8000/healthz
 # EEGResearch health
 Invoke-RestMethod http://localhost:8001/healthz
 
-# EEG state (requires a session to be started first via the UI)
+# EEG state (start a session in the UI first)
 $h = @{ Authorization = "Bearer learner-token-123" }
 Invoke-RestMethod http://localhost:8001/api/v1/state -Headers $h | ConvertTo-Json -Depth 4
 ```
@@ -140,8 +136,6 @@ Invoke-RestMethod http://localhost:8001/api/v1/state -Headers $h | ConvertTo-Jso
 ---
 
 ## 4. Live headband mode (optional)
-
-Only needed if you have a Muse S headband.
 
 ### One-time: build the C++ bridge
 
@@ -159,7 +153,7 @@ cd C:\AdaptiveLearning
 .\start.ps1 -Muse
 ```
 
-Then in the browser, navigate to the Adaptive Learning page and click **Connect Headband**.
+Then navigate to the Adaptive Learning page in the browser and click **Connect Headband**.
 
 ### Troubleshooting the headband
 
@@ -167,10 +161,10 @@ Then in the browser, navigate to the Adaptive Learning page and click **Connect 
 The headband's BLE state is stuck from a previous session. Power cycle it: hold the button until you hear two beeps, wait 10 seconds, turn it back on.
 
 **Band powers all showing 0**
-Make sure the C++ bridge (not the Python bridge) is the process on port 8765. Check the bridge terminal — it should say `bridge_mode: libmuse`.
+Make sure the C++ bridge is the process on port 8765. The bridge terminal should say `bridge_mode: libmuse`.
 
 **Bridge terminal says "bind() failed on 127.0.0.1:8765"**
-Another process is already on that port. Run:
+Another process is on that port. Run:
 ```powershell
 Stop-Process -Name muse_native_bridge -Force -ErrorAction SilentlyContinue
 ```
@@ -183,7 +177,7 @@ Then restart `.\start.ps1 -Muse`.
 ```
 C:\AdaptiveLearning\
 ├── start.ps1                          ← launch everything from here
-├── DEVELOPER_SETUP.md                 ← this file
+├── DEVELOPER_SETUP_WINDOWS.md         ← this file
 │
 ├── EEGResearch\                       ← EEG signal processing service
 │   ├── src\app\
@@ -227,8 +221,9 @@ pip install <package>
 
 ```powershell
 cd C:\AdaptiveLearning\Website\AdaptiveLearning\backend
-.\.venv\Scripts\pip install <package>
-# Then add to requirements.txt or pyproject.toml
+.\.venv\Scripts\Activate.ps1
+pip install <package>
+# Then add to requirements.txt
 ```
 
 ### Add a frontend dependency
@@ -242,9 +237,8 @@ npm install <package>
 
 ```powershell
 Stop-Process -Name muse_native_bridge -Force -ErrorAction SilentlyContinue
-Remove-Item C:\AdaptiveLearning\EEGResearch\native_bridge\build\Release\muse_native_bridge.exe
 cd C:\AdaptiveLearning
-.\start.ps1 -Muse   # rebuilds automatically
+.\start.ps1 -Muse   # rebuilds automatically if exe is missing
 ```
 
 ---

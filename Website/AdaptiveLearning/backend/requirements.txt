@@ -7,3 +7,4 @@ openai
 flask
 flask_cors
 ollama
+sympy

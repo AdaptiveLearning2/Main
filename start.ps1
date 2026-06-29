@@ -14,8 +14,24 @@ $model       = "llama3.1:8b"
 function Check-Venv {
     param([string]$dir)
     $activate = Join-Path $dir ".venv\Scripts\Activate.ps1"
+    $pyExe    = Join-Path $dir ".venv\Scripts\python.exe"
+    $needRebuild = $false
+
     if (!(Test-Path $activate)) {
+        $needRebuild = $true
         Write-Host "  No venv found in $dir -- creating one..." -ForegroundColor Yellow
+    } else {
+        # Check the venv was built with the same Python version currently on PATH
+        $systemVer = python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+        $venvVer   = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        if ($venvVer -ne $systemVer) {
+            Write-Host "  Venv Python ($venvVer) does not match system Python ($systemVer) -- rebuilding..." -ForegroundColor Yellow
+            Remove-Item -Recurse -Force (Join-Path $dir ".venv")
+            $needRebuild = $true
+        }
+    }
+
+    if ($needRebuild) {
         Push-Location $dir
         python -m venv .venv
         $pip = Join-Path $dir ".venv\Scripts\pip.exe"

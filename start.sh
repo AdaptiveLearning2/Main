@@ -33,8 +33,24 @@ fi
 check_venv() {
     local dir="$1"
     local mode="$2"   # "editable" or "requirements"
+    local need_rebuild=false
+
     if [ ! -f "$dir/.venv/bin/activate" ]; then
         echo -e "  ${YELLOW}No venv found -- creating one in $dir...${NC}"
+        need_rebuild=true
+    else
+        local system_ver
+        local venv_ver
+        system_ver="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+        venv_ver="$("$dir/.venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)"
+        if [ "$venv_ver" != "$system_ver" ]; then
+            echo -e "  ${YELLOW}Venv Python ($venv_ver) does not match system Python ($system_ver) -- rebuilding...${NC}"
+            rm -rf "$dir/.venv"
+            need_rebuild=true
+        fi
+    fi
+
+    if [ "$need_rebuild" = true ]; then
         pushd "$dir" > /dev/null
         "$PYTHON" -m venv .venv
         if [ "$mode" = "editable" ]; then

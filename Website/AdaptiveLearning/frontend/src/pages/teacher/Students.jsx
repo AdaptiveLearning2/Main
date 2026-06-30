@@ -10,15 +10,61 @@ export default function Students() {
 
   useEffect(() => {
     // pull users who registered with the 'student' role
-    supabase
-      .from('profiles')
-      .select('*')
-      .eq('role', 'student')
-      .then(({ data, error }) => {
-        if (!error) setStudents(data || [])
+    let cancelled = false;
+
+    async function loadStudents()
+    {
+      // find what teacher is logged in
+      
+      const {data: { user }, error: userError } = await supabase.auth.getUser()
+      if (userError || !user )
+      {
+        if(!cancelled) setLoading(false)
+        return 
+      }
+      // pull students enrolled in any class taught by teacher.
+      const {data, error} = await supabase
+      .from('class_memberships')
+      .select('student_id, profiles!inner(*), classes!inner(teacher_id)')
+      .eq('classes.teacher_id', user.id)
+
+      if (error) console.error('Failed to load students:', error)
+      console.log('raw result:', data)
+
+      if(cancelled)
+        return
+
+      if (error) 
+      {
+        console.error('Failed to load students:', error )
         setLoading(false)
-      })
-      .catch(() => setLoading(false))
+        return
+      }
+    // Get rid of duplicate students
+    const seen = new Map()
+    for( const row of data || [])
+    {
+      if(row.profiles && !seen.has(row.student_id))
+        seen.set(row.student_id, row.profiles)
+    }
+
+    setStudents(Array.from(seen.values()))
+    setLoading(false)
+  }
+
+  loadStudents()
+  return () => { cancelled = true}
+
+    //Old code, didn't want to delete just in case.
+    // supabase
+    //   .from('profiles')
+    //   .select('*')
+    //   .eq('role', 'student')
+    //   .then(({ data, error }) => {
+    //     if (!error) setStudents(data || [])
+    //     setLoading(false)
+    //   })
+    //   .catch(() => setLoading(false))
   }, [])
 
   const filtered = students.filter(s =>

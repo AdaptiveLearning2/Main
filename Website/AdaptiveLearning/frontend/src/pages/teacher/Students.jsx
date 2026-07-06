@@ -86,6 +86,7 @@ export default function Students() {
     setStatsLoading(prev => ({ ...prev, [studentId]: false }))
   }
 
+  //Function to retrieve student data from user_stats and cognitive_signals tables in supabase
   async function getStudentStats(studentId)
   {
      const [statsRes, signalsRes] = await Promise.all([
@@ -119,7 +120,7 @@ export default function Students() {
       totalQuestions: userStats?.total_questions ?? 0,
       currentStreak: userStats?.current_streak ?? 0,
       bestStreak: userStats?.best_streak ?? 0,
-      focusScore: 'Focus Placeholder',
+      focusScore: 'Focus Placeholder', //Place Holders for Focus, Stress, and Engagement as I am not sure how the data in the cognitive_signals table is meant to be interpreted 
       stressLevel: 'Stress Placeholder',
       engagement: 'Engagement Placeholder',
       signalCount: signals.length

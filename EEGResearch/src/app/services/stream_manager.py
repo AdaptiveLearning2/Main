@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from src.app.config import get_settings
@@ -83,7 +84,39 @@ class StreamManager:
                 self.samples_processed += 1
             except Exception:
                 self.errors_seen += 1
+                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
+                # Zero the reported scores instead of leaving the last stale reading in
+                # place, and clear the rolling window so real scores don't resume by
+                # blending pre-gap and post-gap samples.
+                self.processor.window.clear()
+                self.adaptation.last_label = "no_signal"
+                self.adaptation.last_change_ts = float("-inf")
+                self.latest_payload = self._no_signal_payload()
             await asyncio.sleep(period)
+
+    def _no_signal_payload(self) -> dict[str, Any]:
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "channels": {"tp9": 0.0, "af7": 0.0, "af8": 0.0, "tp10": 0.0},
+            "features": {
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+                "confidence": 0.0,
+                "signal_quality": "no_signal",
+            },
+            "state": {
+                "label": "no_signal",
+                "reason": "No EEG data received",
+                "confidence": 0.0,
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+            },
+            "question_policy": {
+                "action": "fallback_default",
+                "difficulty": self.adaptation.current_difficulty,
+            },
+        }
 
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)

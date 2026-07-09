@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 from src.app.config import get_settings
@@ -43,6 +44,15 @@ class StreamManager:
             self._task = None
         # Adapter disconnect can block on socket shutdown/thread joins.
         await asyncio.to_thread(self.adapter.disconnect)
+        # Session ended deliberately (e.g. "Disconnect" clicked) -- clear
+        # cached state so a stopped session doesn't keep reporting its last
+        # (now stale) scores as current. Without this, snapshot() below
+        # would keep returning the last real payload with status "ok"
+        # forever, since it still has a valid timestamp. Also clear the
+        # rolling window so a future restart doesn't blend pre-stop samples
+        # into the new session's scores.
+        self.latest_payload = {}
+        self.processor.window.clear()
 
     async def _loop(self) -> None:
         period = 1 / max(1, self.settings.eeg_sample_hz)
@@ -83,7 +93,42 @@ class StreamManager:
                 self.samples_processed += 1
             except Exception:
                 self.errors_seen += 1
+                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
+                # Zero the reported scores instead of leaving the last stale reading in
+                # place, and clear the rolling window so real scores don't resume by
+                # blending pre-gap and post-gap samples.
+                self.processor.window.clear()
+                self.adaptation.last_label = "no_signal"
+                self.adaptation.last_change_ts = float("-inf")
+                self.latest_payload = self._no_signal_payload()
             await asyncio.sleep(period)
+
+    def _no_signal_payload(self) -> dict[str, Any]:
+        """All-zero snapshot published when a sample read fails mid-session,
+        so /api/v1/state reports zero focus/calm/confidence instead of the
+        last real reading."""
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "channels": {"tp9": 0.0, "af7": 0.0, "af8": 0.0, "tp10": 0.0},
+            "features": {
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+                "confidence": 0.0,
+                "signal_quality": "no_signal",
+            },
+            "state": {
+                "label": "no_signal",
+                "reason": "No EEG data received",
+                "confidence": 0.0,
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+            },
+            "question_policy": {
+                "action": "fallback_default",
+                "difficulty": self.adaptation.current_difficulty,
+            },
+        }
 
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)

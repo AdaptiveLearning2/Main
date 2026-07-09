@@ -51,6 +51,17 @@ class _Poller(threading.Thread):
                     print(f"!!! [eeg-poller] row was: {row}", flush=True)
             time.sleep(POLL_INTERVAL)
 
+        # Mirror the start_session() call above: tell the EEGResearch sidecar to
+        # actually stop its stream. Without this, stopping the poller only
+        # stopped this thread's Supabase writes -- the sidecar kept running and
+        # kept reporting live (non-zero) scores to anyone polling it directly
+        # (e.g. the frontend debug panel), even after the user disconnected.
+        try:
+            r = eeg_client.stop_session()
+            print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
+        except Exception as e:
+            print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
+
         print(f"<<< [eeg-poller] STOPPED user={self.user_id[:8]} session={self.session_id[:8]} samples={self.samples} errors={self.errors}", flush=True)
 
     def stop(self):

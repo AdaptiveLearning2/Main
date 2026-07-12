@@ -1,4 +1,4 @@
-#Ideally - this will be called from LLMTest2 to randomly select a topic. Then can call methods from other files for specific question generation. 
+#Ideally - this will be called from LLMTest2 to randomly select a topic. Then can call methods from other files for specific question generation.
 import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS #pip install flask-cors
@@ -7,6 +7,7 @@ from dotenv import load_dotenv   #pip install dotenv
 from ollama import generate
 import json
 import random
+from statistics import fmean
 from collections import deque
 import concurrent.futures
 
@@ -27,17 +28,100 @@ supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 #Possibly worthwhile to store history in supabase. 
 #Possibly reset history per session. 
 
-user_cache = {}
 def get_user_performance(user_id):
-    if user_id in user_cache:
-        return user_cache[user_id]
-
-    data = supabase.table("user_math_performance") \
+    # Fetched fresh every call (not cached) so this reflects the student's
+    # up-to-date accuracy, including anything they've answered so far in
+    # their current session -- a stale cache here would defeat the point of
+    # session-aware personalization.
+    return supabase.table("user_math_performance") \
         .select("correct_questions,attempted_questions, math_topics(topic_name)") \
         .eq("user_id", user_id) \
         .execute()
-    user_cache[user_id] = data
-    return data
+
+
+# How many of the session's most recent answers/EEG samples to look at when
+# gauging how the student is doing RIGHT NOW, as opposed to their all-time
+# per-topic accuracy above.
+SESSION_PERFORMANCE_WINDOW = 10
+EEG_BIAS_WINDOW = 5
+# Mirrors EEGResearch's AdaptationEngine.infer_state() thresholds so the same
+# focus/calm/confidence values map to the same learner-state labels here.
+EEG_FOCUSED_FOCUS_MIN = 0.7
+EEG_FOCUSED_CALM_MIN  = 0.5
+EEG_STRESSED_CALM_MAX = 0.35
+EEG_MIN_CONFIDENCE    = 0.45
+
+DIFFS = ["easy", "medium", "hard"]
+
+def _shift_difficulty(current, bias):
+    if current not in DIFFS:
+        current = "medium"
+    idx = max(0, min(len(DIFFS) - 1, DIFFS.index(current) + (bias or 0)))
+    return DIFFS[idx]
+
+
+def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
+    """Recent in-session accuracy -- how the student is doing in THIS
+    session specifically, separate from their all-time per-topic accuracy."""
+    if not session_id:
+        return None
+    try:
+        rows = (
+            supabase.table("session_answers")
+            .select("correct")
+            .eq("session_id", session_id)
+            .order("answered_at", desc=True)
+            .limit(limit)
+            .execute()
+        ).data or []
+        if not rows:
+            return None
+        correct = sum(1 for r in rows if r.get("correct"))
+        return {"answered": len(rows), "correct": correct, "accuracy": round(correct / len(rows), 3)}
+    except Exception as e:
+        print(f"[session_performance] {e}")
+        return None
+
+
+def get_session_eeg_state(session_id):
+    """This session's recent EEG history from cognitive_signals (written
+    continuously by eeg_poller) -- reads the database instead of calling the
+    EEGResearch sidecar directly, so it works even if that service is down
+    and reflects a short rolling window rather than one instantaneous
+    reading."""
+    if not session_id:
+        return None
+    try:
+        rows = (
+            supabase.table("cognitive_signals")
+            .select("focus, stress, engagement")
+            .eq("session_id", session_id)
+            .order("ts", desc=True)
+            .limit(EEG_BIAS_WINDOW)
+            .execute()
+        ).data or []
+        focus_vals      = [r["focus"]      for r in rows if r.get("focus")      is not None]
+        stress_vals     = [r["stress"]     for r in rows if r.get("stress")     is not None]
+        engagement_vals = [r["engagement"] for r in rows if r.get("engagement") is not None]
+        if not focus_vals or not stress_vals or not engagement_vals:
+            return None
+
+        focus      = fmean(focus_vals)
+        calm       = 1.0 - fmean(stress_vals)
+        confidence = fmean(engagement_vals)
+
+        if confidence < EEG_MIN_CONFIDENCE:
+            label = "insufficient_signal"
+        elif focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
+            label = "focused"
+        elif calm < EEG_STRESSED_CALM_MAX:
+            label = "stressed"
+        else:
+            label = "neutral"
+        return {"label": label, "focus": round(focus, 3), "calm": round(calm, 3), "confidence": round(confidence, 3)}
+    except Exception as e:
+        print(f"[session_eeg] {e}")
+        return None
 
 #Store 40 questions globally, 10 per topic 
 user_histories = {}
@@ -77,9 +161,16 @@ def extract_json(text):
     return None
 
 def add_question_to_supabase(question, difficulty):
-    questions = supabase.table("questions").select("question_text").execute().data or []
+    # Let the database check for the duplicate instead of pulling every row in
+    # the (unboundedly growing) questions table into Python on every single
+    # generated question.
+    existing = supabase.table("questions") \
+        .select("id") \
+        .eq("question_text", question["question_text"]) \
+        .limit(1) \
+        .execute()
 
-    if any(q["question_text"] == question["question_text"] for q in questions):
+    if existing.data:
         return False
 
     response = supabase.table("questions").insert({
@@ -419,23 +510,34 @@ def question_generation(topic, difficulty, user_id, grade):
                     "topic": "angle_relationships"})
     return response
 
-def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade):
+def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):
     accuracy_response = get_user_performance(user_id)
-    
+
     json_response = accuracy_response.data or []
-    
+
     history = get_user_history(user_id)
     recent_global = list(history["global"])[-10:]
-    
+
+    # Session-scoped signals: how the student is doing and feeling RIGHT NOW
+    # in their current session, as opposed to their all-time accuracy above.
+    # Both read straight from the database (cognitive_signals / session_answers,
+    # written continuously by eeg_poller / the answer endpoint) rather than a
+    # live sidecar call, so this works even if the EEG service is unreachable.
+    session_perf = get_session_performance(session_id)
+    eeg_state    = get_session_eeg_state(session_id)
+    eeg_label    = eeg_state["label"] if eeg_state else "no_eeg"
+
     prompt = f"""
         You are a function that returns ONLY valid JSON.
 
         DO NOT include explanations, reasoning, code, markdown, symbols, or extra text.
 
         INPUT:
-        Student Performance = {json_response}
+        Student Performance (all-time, per topic) = {json_response}
         Recent Question History = {recent_global}
         Student Grade Level = {grade}
+        This Session's Recent Accuracy = {session_perf if session_perf else "no answers yet this session"}
+        Student's Current Cognitive State (from EEG) = {eeg_label}
 
         TASK:
         Select a math topic and difficulty level.
@@ -458,11 +560,16 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade):
         PERFORMANCE RULES:
         - Use ONLY provided data
         - If correct_questions OR attempted_questions is 0 or null → accuracy = 0
+        - This Session's Recent Accuracy reflects how the student is doing RIGHT NOW and should be
+          weighted more heavily than all-time accuracy when the two disagree
 
         DIFFICULTY RULES:
         - accuracy < 40% → easy
         - 40%–70% → medium
         - > 70% → hard
+        - If Student's Current Cognitive State is "stressed", prefer easier difficulty regardless of accuracy
+        - If Student's Current Cognitive State is "focused" and accuracy supports it, prefer harder difficulty
+        - If Student's Current Cognitive State is "no_eeg" or "insufficient_signal", ignore it and use accuracy alone
 
         GRADE RULES:
         - Grades 1–4 → mostly easy
@@ -475,7 +582,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade):
             "difficulty": "easy_or_medium_or_hard"
         }}
         """
-    
+
     topic_data = None
     for attempt in range(3):
         response = generate(model="llama3.1:8b", prompt=prompt,
@@ -506,16 +613,38 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade):
     if topic_data:
         topic = topic_data["topic"]
         difficulty = topic_data["difficulty"]
-    else: #backup if generation failed. 
+    else: #backup if generation failed.
         print("LLM selection generation failed, fallback to randomized selection")
         topic,difficulty = randomize_selection(accuracy_response)
-    
-    # topic = "probability" #TESTING
+
+    # EEG state and the manual Easier/Auto/Harder control were both given to
+    # the LLM above as context for topic/difficulty selection, but an 8B model
+    # doesn't reliably follow soft prompt instructions (verified: it has
+    # returned "medium" for a clearly stressed student despite being told to
+    # prefer easier). Difficulty needs to be a dependable safety behavior, not
+    # a probabilistic one, so apply both as a deterministic shift on top of
+    # whatever the LLM picked -- same rules as the old live-sidecar bias:
+    # stressed always eases off, focused only pushes harder when the student
+    # left the control on Auto, and this never costs a second LLM call.
+    effective_bias = manual_bias
+    if eeg_label == "stressed":
+        effective_bias = -1
+    elif eeg_label == "focused" and manual_bias == 0:
+        effective_bias = 1
+    if effective_bias:
+        difficulty = _shift_difficulty(difficulty, effective_bias)
+
     question = question_generation(topic, difficulty, user_id, grade)
     print(question)
 
     if (add_question_to_supabase(question, difficulty)):
         print("Question added to supabase successfully")
+
+    # Metadata for the frontend's "EEG eased/raised difficulty" badge -- reuses
+    # the same session-scoped EEG read above rather than a second lookup.
+    question["eeg_label"]    = eeg_label
+    question["eeg_adjusted"] = eeg_label in ("focused", "stressed")
+    question["difficulty"]   = difficulty
 
     return question
 

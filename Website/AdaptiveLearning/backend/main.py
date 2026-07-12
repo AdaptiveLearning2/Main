@@ -58,6 +58,182 @@ def _profile(uid: str) -> dict:
         pass
     return {"id": uid, "display_name": "Student", "email": "", "role": "student", "grade_level": None}
 
+
+def _avg(values):
+    nums = [float(v) for v in values if v is not None]
+    if not nums:
+        return None
+    return round(sum(nums) / len(nums), 2)
+
+def _iso_days_ago(days: int = 7) -> str:
+    return (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+def _topic_breakdown(student_id: str):
+    try:
+        rows = supabase.table("user_math_performance") \
+            .select("*, math_topics(topic_name)") \
+            .eq("user_id", student_id).execute().data or []
+    except Exception as e:
+        print(f"[topic_breakdown] {e}")
+        rows = []
+    out = []
+    for r in rows:
+        attempted = r.get("attempted_questions") or 0
+        correct = r.get("correct_questions") or 0
+        accuracy = round((correct / attempted) * 100) if attempted else 0
+        topic_name = ((r.get("math_topics") or {}).get("topic_name") or "Unknown")
+        out.append({
+            "topic_id": r.get("topic_id"),
+            "topic_name": topic_name,
+            "attempted_questions": attempted,
+            "correct_questions": correct,
+            "accuracy": accuracy,
+            "stress": r.get("stress"),
+            "updated_at": r.get("updated_at"),
+        })
+    return out
+
+def _weekly_signal_report(student_id: str, days: int = 7):
+    since = _iso_days_ago(days)
+    try:
+        cog = supabase.table("cognitive_signals").select("*") \
+            .eq("user_id", student_id).gte("ts", since).order("ts", desc=True).limit(5000).execute().data or []
+    except Exception as e:
+        print(f"[weekly_report:cognitive] {e}")
+        cog = []
+    try:
+        face = supabase.table("face_signals").select("*") \
+            .eq("user_id", student_id).gte("ts", since).order("ts", desc=True).limit(5000).execute().data or []
+    except Exception as e:
+        print(f"[weekly_report:face] {e}")
+        face = []
+    try:
+        sessions = supabase.table("sessions").select("*") \
+            .eq("user_id", student_id).gte("started_at", since).order("started_at", desc=True).limit(100).execute().data or []
+    except Exception as e:
+        print(f"[weekly_report:sessions] {e}")
+        sessions = []
+
+    latest_cognitive = cog[0] if cog else None
+    latest_face = face[0] if face else None
+    avg_focus = _avg([r.get("focus") for r in cog])
+    avg_stress = _avg([r.get("stress") for r in cog])
+    avg_engagement = _avg([r.get("engagement") for r in cog])
+    avg_attention = _avg([r.get("attention") for r in face])
+    avg_identity_confidence = _avg([r.get("identity_confidence") for r in face])
+    highest_stress = max([float(r.get("stress")) for r in cog if r.get("stress") is not None], default=None)
+    lowest_focus = min([float(r.get("focus")) for r in cog if r.get("focus") is not None], default=None)
+
+    emotion_counts = {}
+    for r in face:
+        emo = r.get("emotion")
+        if emo:
+            emotion_counts[emo] = emotion_counts.get(emo, 0) + 1
+    dominant_emotion = max(emotion_counts, key=emotion_counts.get) if emotion_counts else None
+
+    daily = []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
+        day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
+        day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        day_sessions = [r for r in sessions if str(r.get("started_at", ""))[:10] == day]
+        daily.append({
+            "date": day,
+            "focus": _avg([r.get("focus") for r in day_cog]),
+            "stress": _avg([r.get("stress") for r in day_cog]),
+            "engagement": _avg([r.get("engagement") for r in day_cog]),
+            "attention": _avg([r.get("attention") for r in day_face]),
+            "sessions": len(day_sessions),
+        })
+
+    summary_bits = []
+    if avg_focus is not None:
+        summary_bits.append(f"average focus was {avg_focus}%")
+    if avg_stress is not None:
+        summary_bits.append(f"average stress was {avg_stress}%")
+    if avg_attention is not None:
+        summary_bits.append(f"average face attention was {avg_attention}%")
+    summary = "No EEG or facial recognition samples were recorded this week."
+    if summary_bits:
+        summary = "This week, " + ", ".join(summary_bits) + "."
+
+    return {
+        "student_id": student_id,
+        "days": days,
+        "since": since,
+        "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
+        "averages": {
+            "focus": avg_focus,
+            "stress": avg_stress,
+            "engagement": avg_engagement,
+            "face_attention": avg_attention,
+            "identity_confidence": avg_identity_confidence,
+        },
+        "highlights": {
+            "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
+            "lowest_focus": round(lowest_focus, 2) if lowest_focus is not None else None,
+            "dominant_emotion": dominant_emotion,
+        },
+        "latest": {"cognitive": latest_cognitive, "face": latest_face},
+        "daily": daily,
+        "summary": summary,
+    }
+
+def _can_view_student(viewer: dict, student_id: str) -> bool:
+    uid = viewer["id"]
+    role = viewer.get("user_metadata", {}).get("role", "student")
+    if uid == student_id:
+        return True
+    if role == "teacher":
+        try:
+            classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
+            class_ids = [c["id"] for c in classes]
+            if not class_ids:
+                return False
+            memberships = supabase.table("class_memberships").select("id") \
+                .in_("class_id", class_ids).eq("student_id", student_id).limit(1).execute().data or []
+            return bool(memberships)
+        except Exception as e:
+            print(f"[can_view:teacher] {e}")
+            return False
+    if role == "parent":
+        try:
+            links = supabase.table("parent_child_links").select("id") \
+                .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data or []
+            return bool(links)
+        except Exception as e:
+            print(f"[can_view:parent] {e}")
+            return False
+    return False
+
+def _student_overview(student_id: str, joined_at: str | None = None, class_id: str | None = None):
+    p = _profile(student_id)
+    stats_res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
+    stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
+    total_questions = stats.get("total_questions") or 0
+    total_correct = stats.get("total_correct") or 0
+    accuracy = round((total_correct / total_questions) * 100) if total_questions else 0
+    report = _weekly_signal_report(student_id)
+    topics = _topic_breakdown(student_id)
+    try:
+        sessions = supabase.table("sessions").select("*").eq("user_id", student_id).order("started_at", desc=True).limit(10).execute().data or []
+    except Exception:
+        sessions = []
+    return {
+        "user_id": student_id,
+        "id": student_id,
+        "name": p.get("display_name") or p.get("email") or "Student",
+        "email": p.get("email") or "",
+        "grade_level": p.get("grade_level"),
+        "joined_at": joined_at,
+        "class_id": class_id,
+        "stats": stats,
+        "accuracy": accuracy,
+        "topic_breakdown": topics,
+        "weekly_report": report,
+        "sessions": sessions,
+    }
+
 DIFFS = ["easy", "medium", "hard"]
 
 def _shift_difficulty(current: str | None, bias: int) -> str:
@@ -464,24 +640,80 @@ def join_class(payload: JoinClassRequest, request: Request):
     }).execute()
     return cls.data[0]
 
+
+@app.get("/api/teacher/students")
+def teacher_students(request: Request):
+    user = get_user(request)
+    if user.get("user_metadata", {}).get("role") != "teacher":
+        raise HTTPException(403, "Only teachers can view connected students")
+    classes = supabase.table("classes").select("id, name").eq("teacher_id", user["id"]).execute().data or []
+    class_ids = [c["id"] for c in classes]
+    if not class_ids:
+        return []
+    memberships = supabase.table("class_memberships").select("class_id, student_id, joined_at") \
+        .in_("class_id", class_ids).execute().data or []
+    seen = set()
+    out = []
+    class_name = {c["id"]: c.get("name") for c in classes}
+    for m in memberships:
+        sid = m["student_id"]
+        if sid in seen:
+            continue
+        seen.add(sid)
+        row = _student_overview(sid, joined_at=m.get("joined_at"), class_id=m.get("class_id"))
+        row["class_name"] = class_name.get(m.get("class_id"))
+        out.append(row)
+    return out
+
+@app.get("/api/teacher/students/{student_id}/overview")
+def teacher_student_overview(student_id: str, request: Request):
+    user = get_user(request)
+    if not _can_view_student(user, student_id):
+        raise HTTPException(403, "You do not have access to this student")
+    return _student_overview(student_id)
+
+@app.get("/api/teacher/students/{student_id}/weekly-eeg-report")
+def teacher_student_weekly_eeg_report(student_id: str, request: Request, days: int = 7):
+    user = get_user(request)
+    if not _can_view_student(user, student_id):
+        raise HTTPException(403, "You do not have access to this student")
+    p = _profile(student_id)
+    return {
+        "student_id": student_id,
+        "student_name": p.get("display_name") or p.get("email") or "Student",
+        **_weekly_signal_report(student_id, max(1, min(days, 30))),
+    }
+
+@app.get("/api/classes/{class_id}")
+def get_class_detail(class_id: str, request: Request):
+    user = get_user(request)
+    cls = supabase.table("classes").select("*").eq("id", class_id).single().execute()
+    if not cls.data:
+        raise HTTPException(404, "Class not found")
+    role = user.get("user_metadata", {}).get("role", "student")
+    if role == "teacher" and cls.data.get("teacher_id") != user["id"]:
+        raise HTTPException(403, "Not your class")
+    if role == "student":
+        member = supabase.table("class_memberships").select("id") \
+            .eq("class_id", class_id).eq("student_id", user["id"]).limit(1).execute().data or []
+        if not member:
+            raise HTTPException(403, "Not your class")
+    return cls.data
+
 @app.get("/api/classes/{class_id}/students")
 def class_students(class_id: str, request: Request):
-    get_user(request)
+    user = get_user(request)
+    cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
+    if not cls.data:
+        raise HTTPException(404, "Class not found")
+    role = user.get("user_metadata", {}).get("role", "student")
+    if role == "teacher" and cls.data.get("teacher_id") != user["id"]:
+        raise HTTPException(403, "Not your class")
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
     for m in (memberships.data or []):
-        sid = m["student_id"]
-        stats_res = supabase.table("user_stats").select("*").eq("user_id", sid).execute()
-        stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0}
-        p = _profile(sid)
-        students.append({
-            "user_id":   sid,
-            "name":      p.get("display_name") or "Student",
-            "email":     p.get("email") or "",
-            "joined_at": m["joined_at"],
-            **stats,
-        })
+        students.append(_student_overview(m["student_id"], joined_at=m.get("joined_at"), class_id=class_id))
     return students
 
 
@@ -773,6 +1005,7 @@ def my_children(request: Request):
             "stats":       stats,
             "sessions":    sess_res.data or [],
             "performance": perf_res.data or [],
+            "weekly_report": _weekly_signal_report(cid),
         })
     return children
 

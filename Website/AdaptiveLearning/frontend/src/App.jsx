@@ -27,6 +27,7 @@ import Questions        from './pages/teacher/Questions'
 import Analytics        from './pages/teacher/Analytics'
 import TeacherSettings  from './pages/teacher/Settings'
 import Classes          from './pages/teacher/Classes'
+import ClassDetail      from './pages/teacher/ClassDetail'
 import Live             from './pages/teacher/Live'
 import SessionReview    from './pages/teacher/SessionReview'
 import Sessions         from './pages/teacher/Sessions'
@@ -68,6 +69,7 @@ export default function App() {
               <Route path="/teacher/live"                element={<Live />} />
               <Route path="/teacher/sessions/:sessionId" element={<SessionReview />} />
               <Route path="/teacher/classes"             element={<Classes />} />
+              <Route path="/teacher/classes/:id"          element={<ClassDetail />} />
               <Route path="/teacher/students"            element={<Students />} />
               <Route path="/teacher/questions"           element={<Questions />} />
               <Route path="/teacher/analytics"           element={<Analytics />} />

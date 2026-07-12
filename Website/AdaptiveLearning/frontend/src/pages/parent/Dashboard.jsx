@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame } from 'lucide-react'
+import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
@@ -85,6 +85,22 @@ export default function ParentDashboard() {
                     <div key={s.label} className="p-4 text-center">
                       <p className={`text-2xl font-black ${s.color}`}>{s.value}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* parent-side initial EEG / facial-recognition layout */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800">
+                  {[
+                    { icon: Brain, label: 'Weekly Focus', value: child.weekly_report?.averages?.focus != null ? `${Math.round(child.weekly_report.averages.focus)}%` : 'N/A', color: 'text-emerald-600' },
+                    { icon: Zap, label: 'Weekly Stress', value: child.weekly_report?.averages?.stress != null ? `${Math.round(child.weekly_report.averages.stress)}%` : 'N/A', color: 'text-rose-600' },
+                    { icon: Eye, label: 'Face Attention', value: child.weekly_report?.averages?.face_attention != null ? `${Math.round(child.weekly_report.averages.face_attention)}%` : 'N/A', color: 'text-sky-600' },
+                    { icon: Activity, label: 'AI Sessions', value: child.weekly_report?.sample_counts?.sessions ?? 0, color: 'text-amber-600' },
+                  ].map(item => (
+                    <div key={item.label} className="rounded-2xl bg-slate-50 dark:bg-gray-800 p-4">
+                      <item.icon size={17} className={`${item.color} mb-2`} />
+                      <p className={`text-xl font-black ${item.color}`}>{item.value}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.label}</p>
                     </div>
                   ))}
                 </div>

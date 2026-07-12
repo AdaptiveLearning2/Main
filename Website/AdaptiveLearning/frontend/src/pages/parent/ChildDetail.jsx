@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
+import { WeeklySignalReport, LiveSignalSummary } from '../../components/signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -13,16 +14,19 @@ export default function ChildDetail() {
   const [perf, setPerf]           = useState([])
   const [loading, setLoading]     = useState(true)
   const [name, setName]           = useState('Child')
+  const [signalReport, setSignalReport] = useState(null)
 
   useEffect(() => {
     Promise.all([
       apiFetch(`/api/stats/student/${id}`),
       apiFetch(`/api/sessions/student/${id}`),
       apiFetch(`/api/performance/student/${id}`),
-    ]).then(([s, sess, p]) => {
+      apiFetch(`/api/teacher/students/${id}/weekly-eeg-report`),
+    ]).then(([s, sess, p, report]) => {
       setStats(s)
       setSessions(sess || [])
       setPerf(p || [])
+      setSignalReport(report)
       setLoading(false)
     }).catch(() => setLoading(false))
 
@@ -69,6 +73,11 @@ export default function ChildDetail() {
                 </div>
               </motion.div>
             ))}
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-6">
+            <LiveSignalSummary report={signalReport} title="Live Signal Snapshot" />
+            <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
           </div>
 
           <div className="grid lg:grid-cols-2 gap-6">

@@ -47,6 +47,12 @@ class StreamManager:
             self._task = None
         # Adapter disconnect can block on socket shutdown/thread joins.
         await asyncio.to_thread(self.adapter.disconnect)
+        # Stopping the stream is itself a "no data" condition -- without this,
+        # snapshot() would keep returning the last reading from before stop()
+        # forever, indistinguishable from a live session.
+        self.processor.reset()
+        self.adaptation.reset_for_signal_loss()
+        self.latest_payload = self._no_signal_payload()
 
     async def _loop(self) -> None:
         period = 1 / max(1, self.settings.eeg_sample_hz)

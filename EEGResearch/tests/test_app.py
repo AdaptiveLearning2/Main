@@ -10,6 +10,7 @@ from src.app.models import EegSample
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import (
     _apply_bridge_ingestion_fields,
+    SimulatedMuseIngestionAdapter,
     TcpMuseBridgeAdapter,
     build_ingestion_adapter,
     enrich_ingestion_dict,
@@ -339,6 +340,25 @@ def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():
     assert manager.latest_payload["state"]["label"] == "no_signal"
     assert len(manager.processor.window) == 0
     assert manager.adaptation.last_label == "no_signal"
+
+
+def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = SimulatedMuseIngestionAdapter()
+        await manager.start()
+        # Let a couple of real samples land so latest_payload has non-zero scores.
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        assert manager.latest_payload["features"]["focus_score"] != 0.0
+        await manager.stop()
+        return manager
+
+    manager = asyncio.run(run_case())
+    assert manager.latest_payload["features"]["focus_score"] == 0.0
+    assert manager.latest_payload["features"]["calm_score"] == 0.0
+    assert manager.latest_payload["features"]["signal_quality"] == "no_signal"
+    assert manager.latest_payload["state"]["label"] == "no_signal"
 
 
 def test_ingestion_adapter_supports_live_muse_source():

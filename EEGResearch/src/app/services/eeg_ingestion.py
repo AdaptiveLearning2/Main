@@ -197,11 +197,16 @@ class SimulatedMuseIngestionAdapter:
         beta = math.exp(target_focus_log_ratio) * (alpha + theta)
         return {
             "bridge_mode": "python_sim",
-            "muse_connected": self.connected,
-            "muse_discovered": self.connected,
-            "connection_state": 1 if self.connected else -1,
-            "muse_devices": ["SIM-0001"] if self.connected else [],
-            "active_muse_name": "Simulated Muse" if self.connected else "",
+            # These intentionally stay false/empty regardless of self.connected:
+            # they represent a *real* Muse BLE pairing (interaxon bridge connection
+            # state), which the frontend's headband-pairing wizard checks directly
+            # (see muse_connected / muse_devices in Adaptive.jsx) to confirm actual
+            # hardware paired -- the simulator has no real device to report.
+            "muse_connected": False,
+            "muse_discovered": False,
+            "connection_state": -1,
+            "muse_devices": [],
+            "active_muse_name": "",
             "firmware_version": "sim-1.0",
             "delta": 4.0,
             "theta": round(theta, 3),

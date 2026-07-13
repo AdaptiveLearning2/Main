@@ -55,6 +55,28 @@ def test_muse_status_returns_ingestion_shape():
     assert "connection_state_name" in ing
 
 
+def test_state_endpoint_serializes_no_signal_payload():
+    # Regression test: FeatureData.signal_quality is a strict Pydantic Literal.
+    # A "no_signal" payload must actually serialize through /api/v1/state (not
+    # just be correct as an in-memory dict) or every real disconnect/stop
+    # would 500 instead of reporting zeroed scores.
+    client = TestClient(app)
+    settings = get_settings()
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    previous_payload = stream_manager.latest_payload
+    stream_manager.latest_payload = stream_manager._no_signal_payload()
+    try:
+        r = client.get("/api/v1/state", headers=learner_headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["data"]["features"]["signal_quality"] == "no_signal"
+        assert body["data"]["features"]["focus_score"] == 0.0
+        assert body["data"]["state"]["label"] == "no_signal"
+    finally:
+        stream_manager.latest_payload = previous_payload
+
+
 def test_muse_refresh_returns_ok_false_when_not_tcp_muse():
     client = TestClient(app)
     settings = get_settings()

@@ -16,7 +16,7 @@ class FeatureData(BaseModel):
     focus_score: float
     calm_score: float
     confidence: float
-    signal_quality: Literal["good", "degraded", "poor"]
+    signal_quality: Literal["good", "degraded", "poor", "no_signal"]
 
 
 class StateData(BaseModel):

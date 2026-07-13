@@ -59,6 +59,22 @@ class _Poller(threading.Thread):
                         print(f"!!! [eeg-poller] row was: {row}", flush=True)
             time.sleep(POLL_INTERVAL)
 
+        try:
+            # The EEGResearch sidecar is a single shared stream, not one per
+            # session. If start() already swapped in a new poller for this
+            # user (rapid disconnect+reconnect) before this thread noticed
+            # its stop signal, leave the sidecar running for that new poller
+            # instead of yanking the stream out from under it.
+            with _lock:
+                stream_still_needed = any(p.is_alive() for p in _active.values())
+            if stream_still_needed:
+                print(">>> [eeg-poller] another poller is active, leaving sidecar stream running", flush=True)
+            else:
+                r = eeg_client.stop_session()
+                print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
+        except Exception as e:
+            print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
+
         print(f"<<< [eeg-poller] STOPPED user={self.user_id[:8]} session={self.session_id[:8]} samples={self.samples} errors={self.errors}", flush=True)
 
     def stop(self):

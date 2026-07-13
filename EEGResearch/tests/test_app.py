@@ -256,6 +256,91 @@ def test_signal_processor_uses_band_features_when_available():
     assert high_calm["calm_score"] > low_calm["calm_score"]
 
 
+def test_signal_processor_reset_clears_window():
+    processor = SignalProcessor(window_size=4)
+    processor.update(
+        EegSample(
+            timestamp=datetime.now(timezone.utc),
+            channel_tp9=700.0,
+            channel_af7=700.0,
+            channel_af8=700.0,
+            channel_tp10=700.0,
+        )
+    )
+    assert len(processor.window) == 1
+    processor.reset()
+    assert len(processor.window) == 0
+
+
+def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
+    engine = AdaptationEngine()
+    engine.cooldown_seconds = 1000.0
+    focused = engine.infer_state({"focus_score": 90.0, "calm_score": 80.0, "confidence": 90.0})
+    assert focused.label == "focused"
+
+    engine.reset_for_signal_loss()
+    assert engine.last_label == "no_signal"
+
+    # Without the reset, the 1000s cooldown would hold the stale "focused" label.
+    next_state = engine.infer_state({"focus_score": 10.0, "calm_score": 90.0, "confidence": 90.0})
+    assert "Cooldown" not in next_state.reason
+
+
+def test_stream_manager_no_signal_payload_zeroes_scores():
+    manager = stream_manager.__class__()
+    payload = manager._no_signal_payload()
+    assert payload["features"]["focus_score"] == 0.0
+    assert payload["features"]["calm_score"] == 0.0
+    assert payload["features"]["confidence"] == 0.0
+    assert payload["features"]["signal_quality"] == "no_signal"
+    assert payload["state"]["label"] == "no_signal"
+    assert payload["question_policy"]["action"] == "fallback_default"
+
+
+def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():
+    class FailingAdapter:
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def read_sample(self):
+            raise RuntimeError("no data")
+
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = FailingAdapter()
+        manager.processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=700.0,
+                channel_af7=700.0,
+                channel_af8=700.0,
+                channel_tp10=700.0,
+            )
+        )
+        manager.adaptation.last_label = "focused"
+        manager.adaptation.last_change_ts = time.monotonic()
+        manager.running = True
+        loop_task = asyncio.create_task(manager._loop())
+        await asyncio.sleep(0.08)
+        manager.running = False
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        return manager
+
+    manager = asyncio.run(run_case())
+    assert manager.latest_payload["features"]["focus_score"] == 0.0
+    assert manager.latest_payload["features"]["calm_score"] == 0.0
+    assert manager.latest_payload["state"]["label"] == "no_signal"
+    assert len(manager.processor.window) == 0
+    assert manager.adaptation.last_label == "no_signal"
+
+
 def test_ingestion_adapter_supports_live_muse_source():
     settings = get_settings().model_copy(update={"eeg_source": "muse"})
     adapter = build_ingestion_adapter(settings)

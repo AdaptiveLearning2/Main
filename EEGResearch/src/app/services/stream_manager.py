@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from src.app.config import get_settings
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
 from src.app.services.signal_processing import SignalProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class StreamManager:
@@ -58,6 +62,20 @@ class StreamManager:
                     if hasattr(self.adapter, "get_ingestion_meta")
                     else {}
                 )
+            except Exception as exc:
+                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
+                # Zero the reported scores instead of leaving the last successful
+                # reading frozen in place, and reset the processor/adaptation state so
+                # real scores don't resume by blending pre-gap and post-gap samples.
+                self.errors_seen += 1
+                logger.debug("EEG read failed, reporting no signal: %s: %s", type(exc).__name__, exc)
+                self.processor.reset()
+                self.adaptation.reset_for_signal_loss()
+                self.latest_payload = self._no_signal_payload()
+                await asyncio.sleep(period)
+                continue
+
+            try:
                 features = self.processor.update(sample, raw_meta)
                 state = self.adaptation.infer_state(features)
                 policy = self.adaptation.next_question_policy(state)
@@ -81,9 +99,37 @@ class StreamManager:
                     "question_policy": policy,
                 }
                 self.samples_processed += 1
-            except Exception:
+            except Exception as exc:
+                # A real sample was read successfully, so this is a bug in the
+                # processing pipeline (not a signal-loss condition) -- log and
+                # skip this tick without touching signal-loss state.
                 self.errors_seen += 1
+                logger.warning("EEG sample processing failed: %s: %s", type(exc).__name__, exc)
             await asyncio.sleep(period)
+
+    def _no_signal_payload(self) -> dict[str, Any]:
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "channels": {"tp9": 0.0, "af7": 0.0, "af8": 0.0, "tp10": 0.0},
+            "features": {
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+                "confidence": 0.0,
+                "signal_quality": "no_signal",
+            },
+            "state": {
+                "label": "no_signal",
+                "reason": "No EEG data received",
+                "confidence": 0.0,
+                "focus_score": 0.0,
+                "calm_score": 0.0,
+            },
+            "question_policy": {
+                "action": "fallback_default",
+                "difficulty": self.adaptation.current_difficulty,
+            },
+        }
 
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)

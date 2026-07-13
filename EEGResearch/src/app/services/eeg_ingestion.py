@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import queue
 import random
 import socket
@@ -10,6 +11,7 @@ from typing import Any, TextIO
 
 from src.app.config import Settings
 from src.app.models import EegSample
+from src.app.services.signal_processing import SignalProcessor
 
 # interaxon::bridge::ConnectionState (see libMuse bridge_connection_state.h)
 CONNECTION_STATE_NAMES: dict[int, str] = {
@@ -106,44 +108,106 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
 
 
 class SimulatedMuseIngestionAdapter:
-    """Local adapter: emits simulated Muse-like EEG values."""
+    """Local adapter: emits simulated Muse-like EEG values.
+
+    Drives a slowly drifting hidden focus/calm state (a bounded random walk)
+    rather than independent per-sample noise, so scores tell a plausible
+    continuous story instead of jittering around a fixed midpoint. Band
+    powers are derived from that same hidden state using SignalProcessor's
+    own calibrated log-ratio bounds, so the spectral-ratio path is exercised
+    the same way it would be with a real headset.
+
+    Note: SignalProcessor's focus ratio (beta / (alpha+theta)) and calm ratio
+    (alpha / (beta+gamma)) share alpha and beta, so pushing focus toward its
+    high end structurally requires beta > alpha, while pushing calm toward
+    its high end requires the opposite. That means simultaneously satisfying
+    both the "focused" label's focus>=70% AND calm>=50% thresholds is
+    difficult by construction (a property of the real formula, not a
+    simulator defect) -- "stressed" and high-focus states are independently
+    reachable, but "focused" may rarely or never fire from bands alone.
+    """
+
+    # Bounded random-walk step per sample; keeps the hidden state continuous
+    # tick-to-tick instead of resetting on every read.
+    _DRIFT_STEP = 0.03
+    # Keep simulator ranges aligned with SignalProcessor calibration.
+    _BASE_LEVEL = 690.0
+    _LEVEL_SPAN = 130.0
+    _CHANNEL_NOISE = 12.0
+    # Scales how much the beta/(alpha+theta) ratio swings with focus_state.
+    # Kept well below 1.0 so beta doesn't overwhelm alpha's contribution to
+    # the calm ratio at high focus (see class docstring).
+    _FOCUS_BAND_GAIN = 0.4
 
     def __init__(self) -> None:
         self.connected = False
+        self._focus_state = 0.5
+        self._calm_state = 0.5
 
     def connect(self) -> None:
         self.connected = True
+        self._focus_state = random.uniform(0.4, 0.6)
+        self._calm_state = random.uniform(0.4, 0.6)
 
     def disconnect(self) -> None:
         self.connected = False
 
+    @staticmethod
+    def _drift(value: float, step: float) -> float:
+        # Reflect off the [0, 1] boundaries instead of clamping, so the walk
+        # doesn't disproportionately "stick" near an edge over a long session.
+        value += random.uniform(-step, step)
+        if value < 0.0:
+            value = -value
+        elif value > 1.0:
+            value = 2.0 - value
+        return max(0.0, min(1.0, value))
+
     def read_sample(self) -> EegSample:
         if not self.connected:
             raise RuntimeError("Muse adapter not connected")
-        # Keep simulator ranges aligned with SignalProcessor calibration.
-        base = random.uniform(620.0, 760.0)
+        self._focus_state = self._drift(self._focus_state, self._DRIFT_STEP)
+        self._calm_state = self._drift(self._calm_state, self._DRIFT_STEP)
+        base = self._BASE_LEVEL + (self._focus_state - 0.5) * self._LEVEL_SPAN
+        # Lower calm -> wider cross-channel spread (more erratic signal).
+        spread_scale = 1.6 - self._calm_state
         return EegSample(
             timestamp=datetime.now(tz=timezone.utc),
-            channel_tp9=base + random.uniform(-20.0, 20.0),
-            channel_af7=base + random.uniform(-20.0, 20.0),
-            channel_af8=base + random.uniform(-20.0, 20.0),
-            channel_tp10=base + random.uniform(-20.0, 20.0),
+            channel_tp9=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af7=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_af8=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
+            channel_tp10=base + random.uniform(-self._CHANNEL_NOISE, self._CHANNEL_NOISE) * spread_scale,
         )
 
     def get_ingestion_meta(self) -> dict[str, Any]:
+        # Derive band powers from the same hidden state driving the raw
+        # channel values, using SignalProcessor's own calibrated log-ratio
+        # bounds so the spectral path lands in a realistic range instead of
+        # saturating at 0 or 100 every tick. alpha/theta/gamma are picked
+        # first; beta is solved to hit the target focus log-ratio exactly,
+        # so focus_score responds cleanly to focus_state while calm
+        # naturally (and realistically) tapers as simulated focus rises.
+        alpha = 40.0 + self._calm_state * 20.0
+        theta = 4.0
+        gamma = 1.0
+        target_focus_log_ratio = self._FOCUS_BAND_GAIN * (
+            SignalProcessor.FOCUS_LOG_RATIO_MIN
+            + self._focus_state * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
+        )
+        beta = math.exp(target_focus_log_ratio) * (alpha + theta)
         return {
             "bridge_mode": "python_sim",
-            "muse_connected": False,
-            "muse_discovered": False,
-            "connection_state": -1,
-            "muse_devices": [],
-            "active_muse_name": "",
-            "firmware_version": "",
-            "delta": 0.0,
-            "theta": 0.0,
-            "alpha": 0.0,
-            "beta": 0.0,
-            "gamma": 0.0,
+            "muse_connected": self.connected,
+            "muse_discovered": self.connected,
+            "connection_state": 1 if self.connected else -1,
+            "muse_devices": ["SIM-0001"] if self.connected else [],
+            "active_muse_name": "Simulated Muse" if self.connected else "",
+            "firmware_version": "sim-1.0",
+            "delta": 4.0,
+            "theta": round(theta, 3),
+            "alpha": round(alpha, 3),
+            "beta": round(beta, 3),
+            "gamma": round(gamma, 3),
         }
 
     def send_bridge_command(self, _payload: dict[str, Any]) -> None:

@@ -383,6 +383,29 @@ def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
     assert manager.latest_payload["state"]["label"] == "no_signal"
 
 
+def test_snapshot_zeroes_bands_on_no_signal_instead_of_stale_adapter_meta():
+    # Regression test: snapshot() used to pull "bands" live from
+    # adapter.get_ingestion_meta() unconditionally, bypassing the zeroed
+    # no-signal payload entirely. Adapters (real and simulated) cache their
+    # last-known band values and don't reset them on disconnect, so the EEG
+    # Bands display kept showing stale non-zero values after a disconnect
+    # even though focus/calm/confidence correctly zeroed out.
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = SimulatedMuseIngestionAdapter()
+        await manager.start()
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        running_bands = manager.snapshot()["bands"]
+        await manager.stop()
+        return manager, running_bands
+
+    manager, running_bands = asyncio.run(run_case())
+    assert any(v != 0.0 for v in running_bands.values())
+    stopped_bands = manager.snapshot()["bands"]
+    assert stopped_bands == {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
+
+
 def test_ingestion_adapter_supports_live_muse_source():
     settings = get_settings().model_copy(update={"eeg_source": "muse"})
     adapter = build_ingestion_adapter(settings)

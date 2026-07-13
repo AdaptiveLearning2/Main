@@ -146,17 +146,25 @@ class StreamManager:
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)
         out.setdefault("contract_version", self.CONTRACT_VERSION)
+        no_signal = out.get("features", {}).get("signal_quality") == "no_signal"
         if hasattr(self.adapter, "get_ingestion_meta"):
             raw_meta = self.adapter.get_ingestion_meta()
             ing = enrich_ingestion_dict(self.settings, raw_meta)
             out["ingestion"] = ing
-            out["bands"] = {
-                "delta": float(raw_meta.get("delta", 0.0)),
-                "theta": float(raw_meta.get("theta", 0.0)),
-                "alpha": float(raw_meta.get("alpha", 0.0)),
-                "beta": float(raw_meta.get("beta", 0.0)),
-                "gamma": float(raw_meta.get("gamma", 0.0)),
-            }
+            if no_signal:
+                # Adapters cache their last-known band values and don't reset
+                # them on disconnect, so pulling live meta here would keep
+                # showing stale non-zero bands even though features/scores
+                # have already been zeroed for the same no-signal condition.
+                out["bands"] = {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
+            else:
+                out["bands"] = {
+                    "delta": float(raw_meta.get("delta", 0.0)),
+                    "theta": float(raw_meta.get("theta", 0.0)),
+                    "alpha": float(raw_meta.get("alpha", 0.0)),
+                    "beta": float(raw_meta.get("beta", 0.0)),
+                    "gamma": float(raw_meta.get("gamma", 0.0)),
+                }
         return out
 
     def metrics(self) -> dict[str, int | bool]:

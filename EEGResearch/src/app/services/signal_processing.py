@@ -29,6 +29,12 @@ class SignalProcessor:
     def __init__(self, window_size: int = 20) -> None:
         self.window: deque[EegSample] = deque(maxlen=window_size)
 
+    def reset(self) -> None:
+        """Drop all buffered samples (e.g. after a signal-loss gap) so the next
+        real reading warms back up cleanly instead of blending pre-gap and
+        post-gap samples."""
+        self.window.clear()
+
     @staticmethod
     def _clamp01(value: float) -> float:
         return max(0.0, min(1.0, value))

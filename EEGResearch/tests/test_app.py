@@ -10,6 +10,7 @@ from src.app.models import EegSample
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import (
     _apply_bridge_ingestion_fields,
+    SimulatedMuseIngestionAdapter,
     TcpMuseBridgeAdapter,
     build_ingestion_adapter,
     enrich_ingestion_dict,
@@ -52,6 +53,28 @@ def test_muse_status_returns_ingestion_shape():
     assert ing["eeg_source"] in {"sim", "muse"}
     assert "muse_devices" in ing
     assert "connection_state_name" in ing
+
+
+def test_state_endpoint_serializes_no_signal_payload():
+    # Regression test: FeatureData.signal_quality is a strict Pydantic Literal.
+    # A "no_signal" payload must actually serialize through /api/v1/state (not
+    # just be correct as an in-memory dict) or every real disconnect/stop
+    # would 500 instead of reporting zeroed scores.
+    client = TestClient(app)
+    settings = get_settings()
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    previous_payload = stream_manager.latest_payload
+    stream_manager.latest_payload = stream_manager._no_signal_payload()
+    try:
+        r = client.get("/api/v1/state", headers=learner_headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["data"]["features"]["signal_quality"] == "no_signal"
+        assert body["data"]["features"]["focus_score"] == 0.0
+        assert body["data"]["state"]["label"] == "no_signal"
+    finally:
+        stream_manager.latest_payload = previous_payload
 
 
 def test_muse_refresh_returns_ok_false_when_not_tcp_muse():
@@ -254,6 +277,133 @@ def test_signal_processor_uses_band_features_when_available():
     low_calm = processor.update(sample, {"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
     high_calm = processor.update(sample, {"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
     assert high_calm["calm_score"] > low_calm["calm_score"]
+
+
+def test_signal_processor_reset_clears_window():
+    processor = SignalProcessor(window_size=4)
+    processor.update(
+        EegSample(
+            timestamp=datetime.now(timezone.utc),
+            channel_tp9=700.0,
+            channel_af7=700.0,
+            channel_af8=700.0,
+            channel_tp10=700.0,
+        )
+    )
+    assert len(processor.window) == 1
+    processor.reset()
+    assert len(processor.window) == 0
+
+
+def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
+    engine = AdaptationEngine()
+    engine.cooldown_seconds = 1000.0
+    focused = engine.infer_state({"focus_score": 90.0, "calm_score": 80.0, "confidence": 90.0})
+    assert focused.label == "focused"
+
+    engine.reset_for_signal_loss()
+    assert engine.last_label == "no_signal"
+
+    # Without the reset, the 1000s cooldown would hold the stale "focused" label.
+    next_state = engine.infer_state({"focus_score": 10.0, "calm_score": 90.0, "confidence": 90.0})
+    assert "Cooldown" not in next_state.reason
+
+
+def test_stream_manager_no_signal_payload_zeroes_scores():
+    manager = stream_manager.__class__()
+    payload = manager._no_signal_payload()
+    assert payload["features"]["focus_score"] == 0.0
+    assert payload["features"]["calm_score"] == 0.0
+    assert payload["features"]["confidence"] == 0.0
+    assert payload["features"]["signal_quality"] == "no_signal"
+    assert payload["state"]["label"] == "no_signal"
+    assert payload["question_policy"]["action"] == "fallback_default"
+
+
+def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():
+    class FailingAdapter:
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def read_sample(self):
+            raise RuntimeError("no data")
+
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = FailingAdapter()
+        manager.processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=700.0,
+                channel_af7=700.0,
+                channel_af8=700.0,
+                channel_tp10=700.0,
+            )
+        )
+        manager.adaptation.last_label = "focused"
+        manager.adaptation.last_change_ts = time.monotonic()
+        manager.running = True
+        loop_task = asyncio.create_task(manager._loop())
+        await asyncio.sleep(0.08)
+        manager.running = False
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        return manager
+
+    manager = asyncio.run(run_case())
+    assert manager.latest_payload["features"]["focus_score"] == 0.0
+    assert manager.latest_payload["features"]["calm_score"] == 0.0
+    assert manager.latest_payload["state"]["label"] == "no_signal"
+    assert len(manager.processor.window) == 0
+    assert manager.adaptation.last_label == "no_signal"
+
+
+def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = SimulatedMuseIngestionAdapter()
+        await manager.start()
+        # Let a couple of real samples land so latest_payload has non-zero scores.
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        assert manager.latest_payload["features"]["focus_score"] != 0.0
+        await manager.stop()
+        return manager
+
+    manager = asyncio.run(run_case())
+    assert manager.latest_payload["features"]["focus_score"] == 0.0
+    assert manager.latest_payload["features"]["calm_score"] == 0.0
+    assert manager.latest_payload["features"]["signal_quality"] == "no_signal"
+    assert manager.latest_payload["state"]["label"] == "no_signal"
+
+
+def test_snapshot_zeroes_bands_on_no_signal_instead_of_stale_adapter_meta():
+    # Regression test: snapshot() used to pull "bands" live from
+    # adapter.get_ingestion_meta() unconditionally, bypassing the zeroed
+    # no-signal payload entirely. Adapters (real and simulated) cache their
+    # last-known band values and don't reset them on disconnect, so the EEG
+    # Bands display kept showing stale non-zero values after a disconnect
+    # even though focus/calm/confidence correctly zeroed out.
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = SimulatedMuseIngestionAdapter()
+        await manager.start()
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        running_bands = manager.snapshot()["bands"]
+        await manager.stop()
+        return manager, running_bands
+
+    manager, running_bands = asyncio.run(run_case())
+    assert any(v != 0.0 for v in running_bands.values())
+    stopped_bands = manager.snapshot()["bands"]
+    assert stopped_bands == {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
 
 
 def test_ingestion_adapter_supports_live_muse_source():

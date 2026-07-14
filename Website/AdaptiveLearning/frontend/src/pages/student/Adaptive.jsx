@@ -702,8 +702,8 @@ export default function Adaptive() {
                         {bar(feat.confidence, 'bg-violet-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
-                        {bar(feat.calm_score != null ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
+                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && feat.signal_quality !== 'no_signal' ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
+                        {bar(feat.calm_score != null && feat.signal_quality !== 'no_signal' ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
                       </div>
                     </div>
 

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save } from 'lucide-react'
+import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
 export default function Classes() {
+  const navigate = useNavigate()
   const [classes, setClasses]     = useState([])
   const [loading, setLoading]     = useState(true)
   const [creating, setCreating]   = useState(false)
@@ -14,8 +16,6 @@ export default function Classes() {
   const [newGrade, setNewGrade]   = useState('5th Grade')
   const [showForm, setShowForm]   = useState(false)
   const [copiedId, setCopiedId]   = useState(null)
-  const [expanded, setExpanded]   = useState(null)
-  const [students, setStudents]   = useState({})
   const [editingId, setEditingId] = useState(null)
   const [editGrade, setEditGrade] = useState('')
 
@@ -60,16 +60,8 @@ export default function Classes() {
     }
   }
 
-  async function loadStudents(classId) {
-    if (students[classId]) { setExpanded(classId); return }
-    try {
-      const s = await apiFetch(`/api/classes/${classId}/students`)
-      setStudents(prev => ({ ...prev, [classId]: s }))
-      setExpanded(classId)
-    } catch { toast.error('Could not load students') }
-  }
-
-  function copyCode(code, id) {
+  function copyCode(code, id, e) {
+    e.stopPropagation()
     navigator.clipboard.writeText(code)
     setCopiedId(id)
     toast.success(`Copied code: ${code}`)
@@ -130,7 +122,8 @@ export default function Classes() {
           {classes.map((cls, i) => (
             <motion.div key={cls.id}
               initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
-              className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
+              onClick={() => navigate(`/teacher/classes/${cls.id}`)}
+              className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden cursor-pointer hover:border-violet-300 dark:hover:border-violet-700 hover:shadow-md transition">
               <div className="flex items-center justify-between p-5 flex-wrap gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
@@ -141,14 +134,14 @@ export default function Classes() {
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className="text-xs text-gray-500 dark:text-gray-400">Code:</span>
                       <span className="font-mono font-black text-violet-600 dark:text-violet-400 text-sm tracking-widest">{cls.join_code}</span>
-                      <button onClick={() => copyCode(cls.join_code, cls.id)}
+                      <button onClick={(e) => copyCode(cls.join_code, cls.id, e)}
                         className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
                         {copiedId === cls.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
                       </button>
 
                       {/* grade pill / editor */}
                       {editingId === cls.id ? (
-                        <span className="flex items-center gap-1 ml-2">
+                        <span className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
                           <select value={editGrade} onChange={e => setEditGrade(e.target.value)}
                             className="px-2 py-1 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 dark:text-white">
                             {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
@@ -163,50 +156,17 @@ export default function Classes() {
                       ) : (
                         <span className="flex items-center gap-1 ml-2 text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">
                           <GraduationCap size={11} /> {cls.grade_level || 'Grade not set'}
-                          <button onClick={() => { setEditingId(cls.id); setEditGrade(cls.grade_level || '5th Grade') }}
+                          <button onClick={(e) => { e.stopPropagation(); setEditingId(cls.id); setEditGrade(cls.grade_level || '5th Grade') }}
                             className="ml-1 opacity-60 hover:opacity-100"><Pencil size={11} /></button>
                         </span>
                       )}
                     </div>
                   </div>
                 </div>
-                <button onClick={() => expanded === cls.id ? setExpanded(null) : loadStudents(cls.id)}
-                  className="px-4 py-2 bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 rounded-xl text-sm font-bold hover:bg-violet-100 dark:hover:bg-violet-900/50 transition">
-                  {expanded === cls.id ? 'Hide Students' : 'View Students'}
-                </button>
+                <div className="flex items-center gap-2 px-4 py-2 bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 rounded-xl text-sm font-bold">
+                  View Students <ChevronRight size={15} />
+                </div>
               </div>
-
-              <AnimatePresence>
-                {expanded === cls.id && (
-                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                    className="border-t border-gray-50 dark:border-gray-800 overflow-hidden">
-                    {!students[cls.id] ? (
-                      <div className="p-5 text-center text-gray-400">Loading...</div>
-                    ) : students[cls.id].length === 0 ? (
-                      <div className="p-5 text-center">
-                        <p className="text-gray-400 text-sm">No students have joined yet. Share the code <span className="font-mono font-black text-violet-600">{cls.join_code}</span></p>
-                      </div>
-                    ) : (
-                      <div className="p-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {students[cls.id].map(s => {
-                          const acc = s.total_questions > 0 ? Math.round((s.total_correct / s.total_questions) * 100) : 0
-                          return (
-                            <div key={s.user_id} className="bg-slate-50 dark:bg-gray-800 rounded-xl p-3 flex items-center gap-3">
-                              <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-violet-500 rounded-full flex items-center justify-center text-white text-xs font-black flex-shrink-0">
-                                {s.name[0].toUpperCase()}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{s.name}</p>
-                                <p className="text-xs text-gray-400">{s.total_correct} correct · {acc}% acc</p>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </motion.div>
           ))}
         </div>

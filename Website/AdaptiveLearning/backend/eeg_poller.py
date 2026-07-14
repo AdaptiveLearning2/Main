@@ -61,17 +61,20 @@ class _Poller(threading.Thread):
 
         try:
             # The EEGResearch sidecar is a single shared stream, not one per
-            # session. If start() already swapped in a new poller for this
-            # user (rapid disconnect+reconnect) before this thread noticed
-            # its stop signal, leave the sidecar running for that new poller
-            # instead of yanking the stream out from under it.
+            # session. Hold _lock across the whole check-then-stop sequence
+            # (not just the _active read) so start() -- which also holds
+            # _lock while registering a new poller and spawning its thread
+            # -- can't register a replacement in the gap between our check
+            # and the actual stop_session() call. Without this, a rapid
+            # disconnect+reconnect could have this thread kill the stream
+            # right after a new poller started depending on it.
             with _lock:
                 stream_still_needed = any(p.is_alive() for p in _active.values())
-            if stream_still_needed:
-                print(">>> [eeg-poller] another poller is active, leaving sidecar stream running", flush=True)
-            else:
-                r = eeg_client.stop_session()
-                print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
+                if stream_still_needed:
+                    print(">>> [eeg-poller] another poller is active, leaving sidecar stream running", flush=True)
+                else:
+                    r = eeg_client.stop_session()
+                    print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
         except Exception as e:
             print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
 

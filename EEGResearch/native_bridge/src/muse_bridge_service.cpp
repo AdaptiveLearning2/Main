@@ -6,6 +6,10 @@
 #include <thread>
 
 #if defined(ENABLE_LIBMUSE)
+#include <winrt/Windows.Devices.Radios.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Foundation.h>
+
 namespace {
 void wait_for_disconnect(const std::shared_ptr<interaxon::bridge::Muse>& muse, int timeout_ms = 3000) {
     if (!muse) {
@@ -92,6 +96,7 @@ bool MuseBridgeService::start() {
 
     manager_->set_muse_listener(muse_listener_);
     manager_->remove_from_list_after(0);
+    refresh_bluetooth_state();
     manager_->start_listening();
 #endif
 
@@ -145,6 +150,10 @@ void MuseBridgeService::refresh_scan() {
     if (!manager_) {
         return;
     }
+    // Re-check on every explicit refresh (not just at startup) so a radio
+    // toggled off mid-session is caught on the next scan, unlike GettingData32
+    // which only ever checks once and relies on a possibly-stale cached flag.
+    refresh_bluetooth_state();
     manager_->stop_listening();
     manager_->start_listening();
 #endif
@@ -373,6 +382,29 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
         firmware_version_.clear();
     }
 }
+
+void MuseBridgeService::refresh_bluetooth_state() {
+    // Blocking .get() is safe here: the bridge has no message pump to stall
+    // (main() runs winrt::init_apartment() in MTA mode), unlike GettingData32
+    // which must never block its UI thread and so only checks this once at
+    // startup via an async continuation.
+    try {
+        using namespace winrt::Windows::Devices::Radios;
+        for (const auto& radio : Radio::GetRadiosAsync().get()) {
+            if (radio.Kind() == RadioKind::Bluetooth) {
+                bluetooth_enabled_.store(radio.State() == RadioState::On);
+                return;
+            }
+        }
+    } catch (const winrt::hresult_error&) {
+        // Radio API unavailable/denied -- keep the last known value rather
+        // than reporting a false "Bluetooth is off".
+        return;
+    }
+    // No Bluetooth radio enumerated: default to enabled so this diagnostic
+    // never masks the real cause of a failed scan.
+    bluetooth_enabled_.store(true);
+}
 #endif
 
 const char* MuseBridgeService::bridge_mode() const noexcept {
@@ -398,6 +430,14 @@ bool MuseBridgeService::is_muse_discovered() const {
     return discovered_;
 #else
     return false;
+#endif
+}
+
+bool MuseBridgeService::bluetooth_enabled() const {
+#if defined(ENABLE_LIBMUSE)
+    return bluetooth_enabled_.load();
+#else
+    return true;
 #endif
 }
 

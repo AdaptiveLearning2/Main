@@ -10,13 +10,15 @@ Every JSON line is one of two kinds:
 
 **EEG frame** (220Hz when connected, `PRESET_21`):
 ```json
-{"kind":"eeg","mono_ts_ms":1735689600123,"tp9":714.2,"af7":698.5,"af8":702.1,"tp10":711.8,"bridge_mode":"libmuse","muse_connected":true,"muse_discovered":true,"connection_state":1,"muse_devices":["MuseS-0FFC"],"active_muse_name":"MuseS-0FFC","firmware_version":"","delta":0.0,"theta":0.0,"alpha":0.0,"beta":0.0,"gamma":0.0}
+{"kind":"eeg","mono_ts_ms":1735689600123,"tp9":714.2,"af7":698.5,"af8":702.1,"tp10":711.8,"bridge_mode":"libmuse","muse_connected":true,"muse_discovered":true,"bluetooth_enabled":true,"connection_state":1,"muse_devices":["MuseS-0FFC"],"active_muse_name":"MuseS-0FFC","firmware_version":"","delta":0.0,"theta":0.0,"alpha":0.0,"beta":0.0,"gamma":0.0}
 ```
 
 **Status heartbeat** (every 200ms when no EEG, or on command response):
 ```json
-{"kind":"status","bridge_mode":"libmuse","muse_connected":false,"muse_discovered":true,"connection_state":3,"muse_devices":["MuseS-0FFC"],"active_muse_name":"","firmware_version":"","delta":0.0,"theta":0.0,"alpha":0.0,"beta":0.0,"gamma":0.0}
+{"kind":"status","bridge_mode":"libmuse","muse_connected":false,"muse_discovered":true,"bluetooth_enabled":true,"connection_state":3,"muse_devices":["MuseS-0FFC"],"active_muse_name":"","firmware_version":"","delta":0.0,"theta":0.0,"alpha":0.0,"beta":0.0,"gamma":0.0}
 ```
+
+`bluetooth_enabled` reflects the Windows Bluetooth radio's on/off state (via `winrt::Windows::Devices::Radios::Radio`, the same check `GettingData32`/`GettingData` perform), re-queried on startup and on every `refresh` command. It defaults to `true` when the radio state can't be determined, so it's a diagnostic hint, not a gate on scanning.
 
 Band power fields (`delta`–`gamma`) are non-zero once the headband has been streaming long enough for libMuse to compute them.
 
@@ -80,9 +82,14 @@ If `StartStreaming` returns `rc=3` (BadStateError: "headband was already streami
 | `StartStreaming rc=3` (BadStateError) | Headband stuck in streaming state | Power cycle headband |
 | Band powers all 0 | Python bridge on port instead of C++ bridge | Stop Python bridge, ensure exe is running |
 | No output when double-clicking | Console app | Run from PowerShell terminal |
+| `muse_devices` stays empty, `bluetooth_enabled:false` in status | Windows Bluetooth radio is off | Turn on Bluetooth in Windows Settings, then send `{"cmd":"refresh"}` again |
 
 ## Runtime Requirements
 
 - `libmuse.dll` must be in the same directory as `muse_native_bridge.exe`. `start.ps1` copies it automatically.
 - Windows 10/11, Bluetooth adapter enabled.
 - Muse S headband firmware 3.1.x (Athena hardware).
+
+## Build Requirements (ENABLE_LIBMUSE builds)
+
+- A Windows SDK with in-box C++/WinRT headers (`10.0.19041.0` or newer; anything installed alongside a recent Visual Studio already qualifies) — used for the `bluetooth_enabled` radio-state check. No NuGet package needed; CMake links `WindowsApp.lib` directly.

@@ -11,6 +11,10 @@
 #include <string>
 #include <thread>
 
+#if defined(ENABLE_LIBMUSE)
+#include <winrt/Windows.Foundation.h>
+#endif
+
 namespace {
 std::atomic<bool> g_keep_running{true};
 
@@ -32,6 +36,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     o << ",\"bridge_mode\":\"" << svc.bridge_mode() << "\""
       << ",\"muse_connected\":" << (svc.is_muse_connected() ? "true" : "false")
       << ",\"muse_discovered\":" << (svc.is_muse_discovered() ? "true" : "false")
+      << ",\"bluetooth_enabled\":" << (svc.bluetooth_enabled() ? "true" : "false")
       << ",\"connection_state\":" << svc.connection_state();
 
     o << ",\"muse_devices\":[";
@@ -151,6 +156,19 @@ unsigned short read_port_from_env() {
 int main() {
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
+
+#if defined(ENABLE_LIBMUSE)
+    // MTA (the default apartment type) lets MuseBridgeService::refresh_bluetooth_state()
+    // block on Radio::GetRadiosAsync().get() safely -- this process has no
+    // message pump to deadlock, unlike the GettingData32/GettingData UI apps.
+    try {
+        winrt::init_apartment();
+    } catch (const winrt::hresult_error& e) {
+        std::cerr << "Warning: winrt::init_apartment() failed (Bluetooth radio state "
+                     "checks will be unavailable): "
+                  << winrt::to_string(e.message()) << "\n";
+    }
+#endif
 
     const unsigned short kPort = read_port_from_env();
     if (kPort == 0) {

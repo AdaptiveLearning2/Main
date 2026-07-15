@@ -28,6 +28,13 @@ if(ENABLE_LIBMUSE)
     target_compile_definitions(muse_native_bridge PRIVATE ENABLE_LIBMUSE=1)
     target_include_directories(muse_native_bridge PRIVATE "${LIBMUSE_SDK_DIR}/examples/include")
 
+    # C++/WinRT (winrt::Windows::Devices::Radios::Radio) is used to detect
+    # whether the Windows Bluetooth radio itself is powered on, the same
+    # check GettingData32/GettingData perform via Radio::GetRadiosAsync().
+    # WindowsApp.lib is the standard link target for consuming WinRT APIs
+    # from a plain Win32/console executable (no UWP packaging required).
+    target_link_libraries(muse_native_bridge PRIVATE WindowsApp)
+
     # libMuse ships import libraries under examples/lib/{debug,release}/{Win32,x64}
     # Match the common VS sample layout used by GettingData32.
     if(CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")

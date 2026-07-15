@@ -175,16 +175,28 @@ export default function Adaptive() {
 
       // 4. Poll up to 12 s for at least one device to appear
       let devices = []
+      let bluetoothEnabled = true
       for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 1000))
         const s = await eegStatus()
         devices = s?.muse?.ingestion?.muse_devices || []
         if (devices.length > 0) break
+        // Bridge reports the PC's Bluetooth radio state directly (see
+        // MuseBridgeService::bluetooth_enabled) — stop waiting immediately
+        // instead of burning the full 12 s when the radio itself is off.
+        if (s?.muse?.ingestion?.bluetooth_enabled === false) {
+          bluetoothEnabled = false
+          break
+        }
       }
 
       if (devices.length === 0) {
         setHeadband(s => ({ ...s, phase: 'idle' }))
-        alert('No Muse headband found after 12 s.\n\n• Make sure the headband is turned on\n• Keep it within 1 m of your computer\n• Bluetooth must be enabled on your PC')
+        alert(
+          bluetoothEnabled === false
+            ? 'Bluetooth is turned off on this PC.\n\nTurn on Bluetooth in Windows Settings, then click Connect Headband again.'
+            : 'No Muse headband found after 12 s.\n\n• Make sure the headband is turned on\n• Keep it within 1 m of your computer\n• Bluetooth must be enabled on your PC'
+        )
         return
       }
 
@@ -649,6 +661,9 @@ export default function Adaptive() {
                         <span><span className="text-green-400">✓</span> EEGResearch :8001</span>
                         <span className={museSvcRunning ? 'text-green-400' : 'text-yellow-400'}>
                           {museSvcRunning ? '✓' : '○'} Session{museSvcRunning ? ' running' : ' not started — click Connect Headband'}
+                        </span>
+                        <span className={ing.bluetooth_enabled === false ? 'text-red-400' : 'text-green-400'}>
+                          {ing.bluetooth_enabled === false ? '✗' : '✓'} Bluetooth radio{ing.bluetooth_enabled === false ? ' — turn on in Windows Settings' : ' on'}
                         </span>
                         <span className={ing.muse_connected ? 'text-green-400' : 'text-red-400'}>
                           {ing.muse_connected ? '✓' : '✗'} Native bridge :8765{!ing.muse_connected ? ' — run muse_native_bridge.exe' : ''}

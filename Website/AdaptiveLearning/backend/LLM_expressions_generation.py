@@ -91,11 +91,10 @@ JSON for this scenario must follow this exact structure:
 }}
 
 Rules:
-- Select ONLY ONE scenario, Generate ONLY ONE question, return ONLY ONE JSON object. 
+- Select ONLY ONE scenario, Generate ONLY ONE question, return ONLY ONE JSON object.
 - Use ONLY the symbols "+", "-", "*", "/", "(", ")" in expressions.
 - Use ONLY integers (no decimals or fractions).
-- There may be up to six operations.
-- There can be up to two sets of parentheses.
+- The number of operations and parentheses allowed is given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that, not a fixed count.
 - For simplify problems, only combine like terms (no equations).
 - Ensure the final answer is a whole number when possible.
 - Use ONLY double quotes for all strings.
@@ -105,6 +104,37 @@ Rules:
 
 Return ONLY valid JSON with no text before or after the JSON object.
 """
+
+# expressions' three scenarios (evaluate / order_of_operations / simplify) aren't
+# naturally ordered by difficulty -- all three are valid at any level. So
+# instead of gating which scenario gets picked, difficulty scales the actual
+# complexity of the expression (operation count, parentheses), which is what
+# previously was a fixed "up to six operations / up to two parens" rule
+# applied identically regardless of difficulty.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use 2-3 operations total. Do NOT use any parentheses.",
+    "medium": "Use 3-4 operations total. You may use up to one set of parentheses.",
+    "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses.",
+}
+
+# Difficulty governs operation/parentheses count above; grade controls the
+# magnitude of the numbers used in the expression.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Use only single-digit numbers (1-9) in the expression.",
+    "middle":   "Numbers may be up to two digits (1-50).",
+    "upper":    "Numbers may be up to three digits (1-200).",
+    "advanced": "No additional restriction.",
+}
 
 solution = -1
 
@@ -135,6 +165,14 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

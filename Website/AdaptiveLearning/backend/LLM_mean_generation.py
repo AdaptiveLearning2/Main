@@ -59,7 +59,7 @@ The Question Text, Question Topic, and Variables will be displayed. The Question
 Mean example: "What is the mean of these values: 12, 15, 18, 21, 24" 
 The question should include the listof values to be used when finding the solution. Each numeric value should be listed in the variables array.
 
-Use a variety of integer values as long as the mean has a WHOLE number solution. To ensure this, the sum of the values should be divisible by the number of values.
+Use a variety of integer values as long as the mean has a WHOLE number solution. To ensure this, the sum of the values should be divisible by the number of values. Dataset size and value magnitude are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that.
 
 Return ONLY valid JSON with no text before or after the JSON object.
 
@@ -81,10 +81,36 @@ Rules:
 
 solution = -1
 
+# Dataset size wasn't constrained at all before -- the LLM picked freely
+# regardless of difficulty. Now it scales the number of values to average.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use 3-4 values, each a one or two-digit whole number.",
+    "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
+    "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers.",
+}
+
+# Difficulty already governs dataset size/magnitude above, so grade controls
+# something it doesn't touch: whether negative values appear.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Use only positive whole numbers.",
+    "middle":   "Use only positive whole numbers.",
+    "upper":    "Negative whole numbers may be used (e.g. representing temperatures or scores relative to zero).",
+    "advanced": "No additional restriction; negative numbers may be used freely.",
+}
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -101,6 +127,14 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

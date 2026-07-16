@@ -145,10 +145,43 @@ Rules:
 
 solution = -1
 
+# probability_of is direct counting (EASY). dice requires reasoning about a
+# condition over a sample space, e.g. "greater than 4" (MEDIUM). not_probability_of
+# additionally requires the complementary-probability concept -- one more
+# conceptual step on top of probability_of (HARD).
+DIFFICULTY_SCENARIOS = {
+    "easy":   [1],
+    "medium": [3],
+    "hard":   [2],
+}
+
+def _pick_scenario(difficulty):
+    return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
+
+# Difficulty governs which scenario gets picked above; grade controls the
+# size of the sample space (total items or dice sides) within whatever
+# scenario gets chosen.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Keep the total number of items (or dice sides) small, no more than 10 total.",
+    "middle":   "Total items may be up to 20.",
+    "upper":    "Total items may be up to 50.",
+    "advanced": "No additional restriction.",
+}
+
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 
 #LLM seems to have poor randomization of scenarios, for now selecting randomized scenario for it.
 def generate_probability_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
@@ -160,8 +193,8 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         else:
             prompt = prob_prompt
 
-        #randomize scenario selection to ensure variety in generated questions.
-        scenario = random.randint(1,3)
+        #select a scenario from the tier matching this question's difficulty.
+        scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
         print(scenario)
@@ -175,6 +208,10 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

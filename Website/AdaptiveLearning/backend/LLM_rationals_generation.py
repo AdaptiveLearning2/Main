@@ -55,7 +55,7 @@ Rationals example: "Solve 4/5 - 1/10"
 The question should include the rational expression to be solved. Variables must be formatted as strings such as "x", and operations must be 
 represented using the symbols "+", "-", "*", "/". For example, the variables list ["4/5", "-", "1/10"] represents the question 4/5 - 1/10.
 
-There may be up to three operations on the left-hand side. Each numerical value should be a fraction displayed in JSON in the format "a/b". Do not attempt to format mixed numbers.
+The number of operations and denominator complexity are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that, not a fixed count. Each numerical value should be a fraction displayed in JSON in the format "a/b". Do not attempt to format mixed numbers.
 Use a variety of rational values as long as the equation has a valid solution.
 
 Return ONLY valid JSON with no text before or after the JSON object.
@@ -77,10 +77,37 @@ Rules:
 
 solution = -1
 
+# Previously a fixed "up to three operations" rule applied at every
+# difficulty. Now operation count and denominator complexity scale with it.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use a SINGLE operation between two fractions that already share the same denominator (e.g. 3/8 + 2/8).",
+    "medium": "Use TWO operations between fractions with different denominators.",
+    "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths).",
+}
+
+# Grade controls numerator magnitude and whether negative fractions appear,
+# independent of difficulty's effect on denominator complexity/operation
+# count above.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Use only positive fractions with numerators and denominators no greater than 12.",
+    "middle":   "Use only positive fractions.",
+    "upper":    "Negative fractions are allowed.",
+    "advanced": "No additional restriction.",
+}
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_rational_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -97,6 +124,14 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

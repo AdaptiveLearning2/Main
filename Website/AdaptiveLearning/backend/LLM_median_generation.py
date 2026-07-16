@@ -59,6 +59,8 @@ Use a variety of integer values as long as the median has a WHOLE number solutio
 1. Ensuring an odd number of values are in the array.
 2. If there are an even number of values in the array, the sum of the middle two values should be evenly divisble by two.
 
+Dataset size, and whether to use an odd or even count, are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that.
+
 
 Return ONLY valid JSON with no text before or after the JSON object.
 
@@ -114,9 +116,38 @@ def generate_incorrect_answers(solution, values):
     return incorrect_answers
 
 
+# Odd-length datasets need no averaging (just pick the middle value); even-length
+# datasets require averaging the two middle values -- one genuine extra step.
+# Tying that step to difficulty, plus dataset size, replaces what was
+# previously an unconstrained (LLM's free choice) dataset size at every level.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use an ODD number of values (3-5 total), so the median is simply the middle value with no averaging needed.",
+    "medium": "Use an ODD number of values (5-7 total).",
+    "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values.",
+}
+
+# Difficulty governs count/averaging above; grade controls value magnitude
+# and whether negatives appear.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Use whole numbers between 1 and 30, no negatives.",
+    "middle":   "Use whole numbers between 1 and 200, no negatives.",
+    "upper":    "Use whole numbers between 1 and 500; negative numbers may be used.",
+    "advanced": "No additional restriction.",
+}
+
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_median_question(global_questions, prev_questions,difficulty,grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -133,6 +164,14 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

@@ -51,8 +51,8 @@ mode example: "A teacher recorded the number of books students finished during a
 
 The question should include the list of values to be used when finding the solution. Each numeric value should be listed in the variables array.
 
-Use a variety of integer values as long as the mode has a WHOLE number solution. Multiple different values can be repeated, as long as there is a SINGULAR
-most common value as the mode. 
+Use a variety of integer values as long as the mode has a WHOLE number solution. Dataset size, and whether more than one value may tie for
+most frequent, are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that.
 
 Return ONLY valid JSON with no text before or after the JSON object.
 
@@ -130,9 +130,39 @@ def normalize_answer(ans):
         return [str(x) for x in ans]
     return [str(ans)]
 
+# The solver (mode()/generate_incorrect_answers() above) already supports
+# multi-modal datasets (returns a list of tied values), but the prompt used
+# to unconditionally forbid them ("SINGULAR most common value"), so that
+# path never actually got exercised. Now bimodal datasets are allowed at
+# hard difficulty specifically, alongside dataset size scaling.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use 5-6 values with a SINGLE clear mode -- the most frequent value should appear at least 2 more times than any other value.",
+    "medium": "Use 7-9 values with a SINGLE mode, but the most frequent value should appear only ONE more time than the next most frequent value, requiring careful counting.",
+    "hard":   "Use 8-10 values. The dataset MAY be bimodal (two values tied for most frequent) in addition to single-mode datasets.",
+}
+
+# Difficulty governs count/single-vs-multi-modal above; grade controls value
+# magnitude and whether negatives appear.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Use whole numbers between 1 and 20, no negatives.",
+    "middle":   "Use whole numbers between 1 and 100, no negatives.",
+    "upper":    "Use whole numbers between 1 and 200; negative numbers may be used.",
+    "advanced": "No additional restriction.",
+}
+
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_mode_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -149,6 +179,14 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

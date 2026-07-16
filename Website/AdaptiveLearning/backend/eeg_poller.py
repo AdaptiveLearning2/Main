@@ -39,26 +39,42 @@ class _Poller(threading.Thread):
 
             if data and data.get("timestamp") and data["timestamp"] != self.last_ts:
                 self.last_ts = data["timestamp"]
-                row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
-                try:
-                    res = self.supabase.table("cognitive_signals").insert(row).execute()
-                    self.samples += 1
-                    if self.samples <= 3 or self.samples % 10 == 0:
-                        print(f"+++ [eeg-poller] INSERTED #{self.samples} session={self.session_id[:8]} focus={row.get('focus')}", flush=True)
-                except Exception as e:
-                    self.errors += 1
-                    print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
-                    print(f"!!! [eeg-poller] row was: {row}", flush=True)
+                signal_quality = (data.get("features") or {}).get("signal_quality")
+                if signal_quality == "no_signal":
+                    # EEG service has no data this cycle (headset disconnected, etc.) and
+                    # reports zeroed focus/calm scores -- skip inserting so cognitive_signals
+                    # isn't flooded with phantom max-stress rows for the outage duration.
+                    if loops <= 3 or loops % 10 == 0:
+                        print(f">>> [eeg-poller] loop={loops} no_signal, skipping insert", flush=True)
+                else:
+                    row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
+                    try:
+                        res = self.supabase.table("cognitive_signals").insert(row).execute()
+                        self.samples += 1
+                        if self.samples <= 3 or self.samples % 10 == 0:
+                            print(f"+++ [eeg-poller] INSERTED #{self.samples} session={self.session_id[:8]} focus={row.get('focus')}", flush=True)
+                    except Exception as e:
+                        self.errors += 1
+                        print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
+                        print(f"!!! [eeg-poller] row was: {row}", flush=True)
             time.sleep(POLL_INTERVAL)
 
-        # Mirror the start_session() call above: tell the EEGResearch sidecar to
-        # actually stop its stream. Without this, stopping the poller only
-        # stopped this thread's Supabase writes -- the sidecar kept running and
-        # kept reporting live (non-zero) scores to anyone polling it directly
-        # (e.g. the frontend debug panel), even after the user disconnected.
         try:
-            r = eeg_client.stop_session()
-            print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
+            # The EEGResearch sidecar is a single shared stream, not one per
+            # session. Hold _lock across the whole check-then-stop sequence
+            # (not just the _active read) so start() -- which also holds
+            # _lock while registering a new poller and spawning its thread
+            # -- can't register a replacement in the gap between our check
+            # and the actual stop_session() call. Without this, a rapid
+            # disconnect+reconnect could have this thread kill the stream
+            # right after a new poller started depending on it.
+            with _lock:
+                stream_still_needed = any(p.is_alive() for p in _active.values())
+                if stream_still_needed:
+                    print(">>> [eeg-poller] another poller is active, leaving sidecar stream running", flush=True)
+                else:
+                    r = eeg_client.stop_session()
+                    print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
         except Exception as e:
             print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
 

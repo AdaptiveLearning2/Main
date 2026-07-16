@@ -2,6 +2,9 @@
 .branches
 .temp
 
+# Seed data — dumped from the remote DB; contains real user data, never commit
+seed.sql
+
 # dotenvx
 .env.keys
 .env.local

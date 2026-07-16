@@ -622,6 +622,7 @@ export default function Adaptive() {
                 const policy  = snap?.question_policy || {}
                 const ing     = muse?.ingestion  || snap?.ingestion || {}
                 const museSvcRunning = muse?.running
+                const noSignal = feat.signal_quality === 'no_signal'
 
                 const pct = v => v == null ? '—' : `${Math.round(typeof v === 'number' && v > 1 ? v : v * 100)}%`
                 const bar = (v, color) => {
@@ -690,20 +691,20 @@ export default function Adaptive() {
                     {/* Row 2 — scores */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{pct(feat.focus_score)}</span></p>
-                        {bar(feat.focus_score, 'bg-blue-500')}
+                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{noSignal ? '—' : pct(feat.focus_score)}</span></p>
+                        {bar(noSignal ? null : feat.focus_score, 'bg-blue-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{pct(feat.calm_score)}</span></p>
-                        {bar(feat.calm_score, 'bg-emerald-500')}
+                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{noSignal ? '—' : pct(feat.calm_score)}</span></p>
+                        {bar(noSignal ? null : feat.calm_score, 'bg-emerald-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{pct(feat.confidence)}</span></p>
-                        {bar(feat.confidence, 'bg-violet-500')}
+                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{noSignal ? '—' : pct(feat.confidence)}</span></p>
+                        {bar(noSignal ? null : feat.confidence, 'bg-violet-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
-                        {bar(feat.calm_score != null ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
+                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !noSignal ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
+                        {bar(feat.calm_score != null && !noSignal ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
                       </div>
                     </div>
 

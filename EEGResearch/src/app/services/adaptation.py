@@ -16,6 +16,13 @@ class AdaptationEngine:
         self.last_change_ts = float("-inf")
         self.cooldown_seconds = 3.0
 
+    def reset_for_signal_loss(self) -> None:
+        """Mark the learner state as unknown after a data gap so the next real
+        reading is applied immediately instead of being held by the cooldown
+        meant for flapping between real readings."""
+        self.last_label = "no_signal"
+        self.last_change_ts = float("-inf")
+
     def infer_state(self, features: dict[str, float]) -> LearnerState:
         focus = features["focus_score"]
         calm = features["calm_score"]

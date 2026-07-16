@@ -66,7 +66,7 @@ export default function Practice() {
     if (!session) return
 
     const selectedVal = idx >= 0 ? q.options[idx] : null
-    const isCorrect = selectedVal !== null && normalize(selectedVal) === normalize(q.options[q.correct_index])
+    const isCorrect = selectedVal !== null && normalize(selectedVal) === normalize(q.correct_answer)
     
     await apiFetch(`/api/sessions/${session.id}/answer`, {
       method: 'POST',
@@ -98,7 +98,7 @@ export default function Practice() {
     const q = questions[index]
     setSelectedAnswer(q.options[idx])
     const selectedVal = q.options[idx]
-    if (normalize(selectedVal) === normalize(q.options[q.correct_index])) {
+    if (normalize(selectedVal) === normalize(q.correct_answer)) {
       setScore(s => s + 1)
     }
     // if (idx === q.correct_index) setScore(s => s + 1)

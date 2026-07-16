@@ -113,9 +113,18 @@ class SimulatedMuseIngestionAdapter:
     Drives a slowly drifting hidden focus/calm state (a bounded random walk)
     rather than independent per-sample noise, so scores tell a plausible
     continuous story instead of jittering around a fixed midpoint. Band
-    powers are derived from the same hidden state so the spectral-ratio path
-    in SignalProcessor is exercised the same way it would be with a real
-    headset.
+    powers are derived from that same hidden state using SignalProcessor's
+    own calibrated log-ratio bounds, so the spectral-ratio path is exercised
+    the same way it would be with a real headset.
+
+    Note: SignalProcessor's focus ratio (beta / (alpha+theta)) and calm ratio
+    (alpha / (beta+gamma)) share alpha and beta, so pushing focus toward its
+    high end structurally requires beta > alpha, while pushing calm toward
+    its high end requires the opposite. That means simultaneously satisfying
+    both the "focused" label's focus>=70% AND calm>=50% thresholds is
+    difficult by construction (a property of the real formula, not a
+    simulator defect) -- "stressed" and high-focus states are independently
+    reachable, but "focused" may rarely or never fire from bands alone.
     """
 
     # Bounded random-walk step per sample; keeps the hidden state continuous
@@ -126,9 +135,8 @@ class SimulatedMuseIngestionAdapter:
     _LEVEL_SPAN = 130.0
     _CHANNEL_NOISE = 12.0
     # Scales how much the beta/(alpha+theta) ratio swings with focus_state.
-    # Kept below 1.0 so beta doesn't overwhelm alpha's contribution to the
-    # calm ratio at high focus (real beta/alpha activity is anti-correlated,
-    # but a full-strength swing here would flatten calm to zero too abruptly).
+    # Kept well below 1.0 so beta doesn't overwhelm alpha's contribution to
+    # the calm ratio at high focus (see class docstring).
     _FOCUS_BAND_GAIN = 0.4
 
     def __init__(self) -> None:
@@ -146,7 +154,14 @@ class SimulatedMuseIngestionAdapter:
 
     @staticmethod
     def _drift(value: float, step: float) -> float:
-        return max(0.0, min(1.0, value + random.uniform(-step, step)))
+        # Reflect off the [0, 1] boundaries instead of clamping, so the walk
+        # doesn't disproportionately "stick" near an edge over a long session.
+        value += random.uniform(-step, step)
+        if value < 0.0:
+            value = -value
+        elif value > 1.0:
+            value = 2.0 - value
+        return max(0.0, min(1.0, value))
 
     def read_sample(self) -> EegSample:
         if not self.connected:
@@ -166,11 +181,11 @@ class SimulatedMuseIngestionAdapter:
 
     def get_ingestion_meta(self) -> dict[str, Any]:
         # Derive band powers from the same hidden state driving the raw
-        # channel values, using the SignalProcessor's own calibrated
-        # log-ratio bounds so the spectral path lands in a realistic range
-        # instead of saturating at 0 or 100 every tick. alpha/theta/gamma are
-        # picked first; beta is solved to hit the target focus log-ratio
-        # exactly, so focus_score responds cleanly to focus_state while calm
+        # channel values, using SignalProcessor's own calibrated log-ratio
+        # bounds so the spectral path lands in a realistic range instead of
+        # saturating at 0 or 100 every tick. alpha/theta/gamma are picked
+        # first; beta is solved to hit the target focus log-ratio exactly,
+        # so focus_score responds cleanly to focus_state while calm
         # naturally (and realistically) tapers as simulated focus rises.
         alpha = 40.0 + self._calm_state * 20.0
         theta = 4.0
@@ -182,11 +197,16 @@ class SimulatedMuseIngestionAdapter:
         beta = math.exp(target_focus_log_ratio) * (alpha + theta)
         return {
             "bridge_mode": "python_sim",
-            "muse_connected": self.connected,
-            "muse_discovered": self.connected,
-            "connection_state": 1 if self.connected else -1,
-            "muse_devices": ["SIM-0001"] if self.connected else [],
-            "active_muse_name": "Simulated Muse" if self.connected else "",
+            # These intentionally stay false/empty regardless of self.connected:
+            # they represent a *real* Muse BLE pairing (interaxon bridge connection
+            # state), which the frontend's headband-pairing wizard checks directly
+            # (see muse_connected / muse_devices in Adaptive.jsx) to confirm actual
+            # hardware paired -- the simulator has no real device to report.
+            "muse_connected": False,
+            "muse_discovered": False,
+            "connection_state": -1,
+            "muse_devices": [],
+            "active_muse_name": "",
             "firmware_version": "sim-1.0",
             "delta": 4.0,
             "theta": round(theta, 3),

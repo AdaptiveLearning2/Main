@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -8,6 +9,8 @@ from src.app.config import get_settings
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
 from src.app.services.signal_processing import SignalProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class StreamManager:
@@ -34,6 +37,7 @@ class StreamManager:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        was_running = self._task is not None
         self.running = False
         if self._task is not None:
             self._task.cancel()
@@ -44,15 +48,17 @@ class StreamManager:
             self._task = None
         # Adapter disconnect can block on socket shutdown/thread joins.
         await asyncio.to_thread(self.adapter.disconnect)
-        # Session ended deliberately (e.g. "Disconnect" clicked) -- clear
-        # cached state so a stopped session doesn't keep reporting its last
-        # (now stale) scores as current. Without this, snapshot() below
-        # would keep returning the last real payload with status "ok"
-        # forever, since it still has a valid timestamp. Also clear the
-        # rolling window so a future restart doesn't blend pre-stop samples
-        # into the new session's scores.
-        self.latest_payload = {}
-        self.processor.window.clear()
+        if was_running:
+            # Stopping an active stream is itself a "no data" condition --
+            # without this, snapshot() would keep returning the last reading
+            # from before stop() forever, indistinguishable from a live
+            # session. Skip this when stop() is called without an active
+            # stream (e.g. a duplicate stop, or one that races ahead of
+            # start()) so a session that was never started still reports
+            # "idle" via /api/v1/state instead of a fabricated zero reading.
+            self.processor.reset()
+            self.adaptation.reset_for_signal_loss()
+            self.latest_payload = self._no_signal_payload()
 
     async def _loop(self) -> None:
         period = 1 / max(1, self.settings.eeg_sample_hz)
@@ -68,6 +74,20 @@ class StreamManager:
                     if hasattr(self.adapter, "get_ingestion_meta")
                     else {}
                 )
+            except Exception as exc:
+                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
+                # Zero the reported scores instead of leaving the last successful
+                # reading frozen in place, and reset the processor/adaptation state so
+                # real scores don't resume by blending pre-gap and post-gap samples.
+                self.errors_seen += 1
+                logger.debug("EEG read failed, reporting no signal: %s: %s", type(exc).__name__, exc)
+                self.processor.reset()
+                self.adaptation.reset_for_signal_loss()
+                self.latest_payload = self._no_signal_payload()
+                await asyncio.sleep(period)
+                continue
+
+            try:
                 features = self.processor.update(sample, raw_meta)
                 state = self.adaptation.infer_state(features)
                 policy = self.adaptation.next_question_policy(state)
@@ -91,22 +111,15 @@ class StreamManager:
                     "question_policy": policy,
                 }
                 self.samples_processed += 1
-            except Exception:
+            except Exception as exc:
+                # A real sample was read successfully, so this is a bug in the
+                # processing pipeline (not a signal-loss condition) -- log and
+                # skip this tick without touching signal-loss state.
                 self.errors_seen += 1
-                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
-                # Zero the reported scores instead of leaving the last stale reading in
-                # place, and clear the rolling window so real scores don't resume by
-                # blending pre-gap and post-gap samples.
-                self.processor.window.clear()
-                self.adaptation.last_label = "no_signal"
-                self.adaptation.last_change_ts = float("-inf")
-                self.latest_payload = self._no_signal_payload()
+                logger.warning("EEG sample processing failed: %s: %s", type(exc).__name__, exc)
             await asyncio.sleep(period)
 
     def _no_signal_payload(self) -> dict[str, Any]:
-        """All-zero snapshot published when a sample read fails mid-session,
-        so /api/v1/state reports zero focus/calm/confidence instead of the
-        last real reading."""
         return {
             "contract_version": self.CONTRACT_VERSION,
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
@@ -133,17 +146,25 @@ class StreamManager:
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)
         out.setdefault("contract_version", self.CONTRACT_VERSION)
+        no_signal = out.get("features", {}).get("signal_quality") == "no_signal"
         if hasattr(self.adapter, "get_ingestion_meta"):
             raw_meta = self.adapter.get_ingestion_meta()
             ing = enrich_ingestion_dict(self.settings, raw_meta)
             out["ingestion"] = ing
-            out["bands"] = {
-                "delta": float(raw_meta.get("delta", 0.0)),
-                "theta": float(raw_meta.get("theta", 0.0)),
-                "alpha": float(raw_meta.get("alpha", 0.0)),
-                "beta": float(raw_meta.get("beta", 0.0)),
-                "gamma": float(raw_meta.get("gamma", 0.0)),
-            }
+            if no_signal:
+                # Adapters cache their last-known band values and don't reset
+                # them on disconnect, so pulling live meta here would keep
+                # showing stale non-zero bands even though features/scores
+                # have already been zeroed for the same no-signal condition.
+                out["bands"] = {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
+            else:
+                out["bands"] = {
+                    "delta": float(raw_meta.get("delta", 0.0)),
+                    "theta": float(raw_meta.get("theta", 0.0)),
+                    "alpha": float(raw_meta.get("alpha", 0.0)),
+                    "beta": float(raw_meta.get("beta", 0.0)),
+                    "gamma": float(raw_meta.get("gamma", 0.0)),
+                }
         return out
 
     def metrics(self) -> dict[str, int | bool]:

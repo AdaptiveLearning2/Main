@@ -68,7 +68,7 @@ Algebra example: "Solve for x: 2x + 3 = 7."
 The question should include the equation to be solved. Variables must be formatted as strings such as "x", and operations must be 
 represented using the symbols "+", "-", "*", "/". For example, the variables list ["2x", "+", "3", "=", "7"] represents the equation 2x + 3 = 7.
 
-There may be up to three operations on the left-hand side, and up to two terms may contain the variable "x". 
+The number of steps needed to solve the equation is given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that, not a fixed step count.
 Use a variety of integer values as long as the equation has a valid solution.
 
 Return ONLY valid JSON with no text before or after the JSON object.
@@ -89,17 +89,46 @@ Rules:
 
 solution = -1
 
+# Algebra's difficulty was previously just a soft prompt hint on top of a
+# fixed "up to three operations, up to two x terms" rule applied identically
+# at every difficulty. Now the equation's actual structure scales with it.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use a ONE-STEP equation: a single operation applied to x (e.g. x + a = b or x - a = b). The coefficient of x must be 1.",
+    "medium": "Use a TWO-STEP equation (e.g. ax + b = c) with the coefficient of x greater than 1.",
+    "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d).",
+}
+
+# Grade controls value magnitude/sign, independent of difficulty's effect on
+# equation structure above -- the two stack rather than conflict (e.g. a 2nd
+# grader on "hard" still gets small whole-number constants, just combined
+# using a harder equation structure).
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"  # Highschool, College, or unrecognized
+
+GRADE_COMPLEXITY = {
+    "early":    "Keep all constants and coefficients between 1 and 20. Do not use negative numbers.",
+    "middle":   "Keep all constants and coefficients between 1 and 100. Negative constants are allowed.",
+    "upper":    "Constants and coefficients may be as large as 200. Negative coefficients are allowed.",
+    "advanced": "No additional magnitude restriction beyond what's typical for the equation.",
+}
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_algebra_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
             prompt = algebra_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
         else:
             prompt = algebra_prompt
-        
+
         prompt += (
             "\nPreviously generated questions:\n"
             + "\n".join(q["text"] for q in prev_questions)
@@ -110,6 +139,14 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
 
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
 
         response = generate(

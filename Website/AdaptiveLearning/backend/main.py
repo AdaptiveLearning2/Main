@@ -58,83 +58,52 @@ def _profile(uid: str) -> dict:
         pass
     return {"id": uid, "display_name": "Student", "email": "", "role": "student", "grade_level": None}
 
-DIFFS = ["easy", "medium", "hard"]
-
-def _shift_difficulty(current: str | None, bias: int) -> str:
-    if current not in DIFFS:
-        current = "medium"
-    idx = max(0, min(len(DIFFS) - 1, DIFFS.index(current) + (bias or 0)))
-    return DIFFS[idx]
-
-def _eeg_bias(manual_bias: int) -> tuple[int, str]:
-    """
-    Ask the EEGResearch sidecar for the current learner state and map it to
-    a difficulty bias.  Returns (effective_bias, eeg_label).
-
-    Rules:
-    - stressed  → always ease off (-1), overrides manual choice
-    - focused   → push harder (+1) only when student left difficulty on Auto
-    - everything else → honour the manual bias unchanged
-    """
-    try:
-        snapshot = eeg_client.get_state(timeout=0.5)
-        if not snapshot:
-            return manual_bias, "no_eeg"
-        state  = snapshot.get("state")  or {}
-        policy = snapshot.get("question_policy") or {}
-        label  = state.get("label", "neutral")
-        action = policy.get("action", "")
-        if action == "decrease_difficulty":
-            return -1, label          # student is stressed → easier
-        if action == "increase_difficulty" and manual_bias == 0:
-            return 1, label           # student is focused + auto mode → harder
-        return manual_bias, label
-    except Exception as e:
-        print(f"[eeg_bias] {e}")
-        return manual_bias, "no_eeg"
-
 # ─── question prefetch cache ──────────────────────────────────────────────
 # Maintains a queue of up to QUEUE_SIZE pre-generated questions per user.
 QUEUE_SIZE = 2
 _prefetch_cache: dict[str, list] = {}   # user_id → list of questions
 _prefetch_lock = threading.Lock()
-_prefetch_active: set[str] = set()      # track in-flight workers per user
+_prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
 
-def _prefetch_worker(user_id: str, grade: str, bias: int):
+def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
     try:
-        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(user_id, grade)
-        if question and bias != 0:
-            cur_diff    = question.get("difficulty") or "medium"
-            target_diff = _shift_difficulty(cur_diff, bias)
-            if target_diff != cur_diff:
-                try:
-                    question = LLM_topic_decider.question_generation(
-                        question.get("question_topic"), target_diff, user_id, grade
-                    )
-                    question["difficulty"] = target_diff
-                except Exception:
-                    pass
+        # Topic, difficulty, EEG state, and the manual Easier/Auto/Harder bias
+        # are all resolved in this one call now -- no second "regenerate at
+        # adjusted difficulty" LLM call needed, so each prefetched question
+        # only ever costs one topic/difficulty decision + one generation call.
+        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+            user_id, grade, session_id, bias
+        )
         if question:
             with _prefetch_lock:
                 _prefetch_cache.setdefault(user_id, []).append(question)
-                _prefetch_active.discard(user_id)
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
+    finally:
+        # Always decrement by exactly 1, whether this worker succeeded,
+        # raised, or found nothing to generate -- a set-membership flag here
+        # (rather than a real count) previously let the FIRST of several
+        # concurrent workers clear the "in flight" state for ALL of them,
+        # so _ensure_queue kept spawning more on top of ones still running.
+        # That compounds every time a question is served (not just on rapid
+        # clicks), eventually piling up far more concurrent Ollama calls than
+        # QUEUE_SIZE ever intended, which is what made generation grind to a
+        # halt after several questions even at a normal pace.
         with _prefetch_lock:
-            _prefetch_active.discard(user_id)
+            _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
 
-def _ensure_queue(user_id: str, grade: str, bias: int):
+def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = None):
     """Spawn workers until the queue + in-flight workers reach QUEUE_SIZE."""
     with _prefetch_lock:
         queued   = len(_prefetch_cache.get(user_id, []))
-        inflight = 1 if user_id in _prefetch_active else 0
+        inflight = _prefetch_active.get(user_id, 0)
         needed   = QUEUE_SIZE - queued - inflight
         if needed <= 0:
             return
-        _prefetch_active.add(user_id)
+        _prefetch_active[user_id] = inflight + needed
     for _ in range(needed):
         threading.Thread(
-            target=_prefetch_worker, args=(user_id, grade, bias), daemon=True
+            target=_prefetch_worker, args=(user_id, grade, bias, session_id), daemon=True
         ).start()
 
 # ─── models ──────────────────────────────────────────────────────────────
@@ -210,10 +179,11 @@ def get_questions(limit: int = 100, subject: str | None = None, difficulty: str 
 
 @app.get("/api/generate-question")
 def generate_question(
-    user_id:  str        = Query(...),
-    grade:    str | None = Query(None),
-    class_id: str | None = Query(None),
-    bias:     int        = Query(0),
+    user_id:    str        = Query(...),
+    grade:      str | None = Query(None),
+    class_id:   str | None = Query(None),
+    bias:       int        = Query(0),
+    session_id: str | None = Query(None),
 ):
     effective_grade = grade or "5th Grade"
     if class_id:
@@ -223,46 +193,33 @@ def generate_question(
 
     manual_bias = max(-1, min(1, int(bias or 0)))
 
-    # Override difficulty with live EEG state when headband is streaming
-    effective_bias, eeg_label = _eeg_bias(manual_bias)
-    eeg_adjusted = (effective_bias != manual_bias)
-    if eeg_adjusted:
-        direction = "easier" if effective_bias < manual_bias else "harder"
-        print(f"[generate] EEG({eeg_label}) adjusted bias {manual_bias}→{effective_bias} ({direction})")
-
-    # Serve from prefetch queue if available
+    # Serve from prefetch queue if available. Topic, difficulty, this
+    # session's recent EEG state, and manual bias are all resolved together
+    # inside LLM_single_prompt_topic_and_difficulty_decider -- one topic/
+    # difficulty decision + one generation call, whether this question came
+    # from the queue (decided when it was prefetched) or is generated fresh
+    # below (decided right now).
     with _prefetch_lock:
         queue    = _prefetch_cache.get(user_id, [])
         question = queue.pop(0) if queue else None
 
     if not question:
         print(f"[generate] cache miss for {user_id[:8]} — generating inline")
-        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(user_id, effective_grade)
+        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+            user_id, effective_grade, session_id, manual_bias
+        )
         if not question:
             raise HTTPException(500, "Failed to generate question")
-
-        if effective_bias != 0:
-            topic       = question.get("question_topic")
-            cur_diff    = question.get("difficulty") or "medium"
-            target_diff = _shift_difficulty(cur_diff, effective_bias)
-            if topic and target_diff != cur_diff:
-                try:
-                    question = LLM_topic_decider.question_generation(
-                        topic, target_diff, user_id, effective_grade
-                    )
-                    question["difficulty"] = target_diff
-                except Exception as e:
-                    print("bias regeneration failed, returning original:", e)
     else:
         print(f"[generate] cache hit for {user_id[:8]} — instant serve")
 
     question["effective_grade"] = effective_grade
     question["bias"]            = manual_bias
-    question["eeg_label"]       = eeg_label       # "focused" | "stressed" | "neutral" | "no_eeg"
-    question["eeg_adjusted"]    = eeg_adjusted     # True when EEG overrode the manual bias
+    # eeg_label / eeg_adjusted / difficulty were already set by the decider
+    # above (or by the prefetch worker that generated this queued question).
 
     # Refill queue in background
-    _ensure_queue(user_id, effective_grade, effective_bias)
+    _ensure_queue(user_id, effective_grade, manual_bias, session_id)
 
     return question
 
@@ -284,7 +241,7 @@ def start_session(payload: StartSessionRequest, request: Request):
     # Pre-warm question queue in background while student sees the setup screen
     profile = _profile(user["id"])
     grade   = profile.get("grade_level") or "5th Grade"
-    _ensure_queue(user["id"], grade, 0)
+    _ensure_queue(user["id"], grade, 0, res.data[0]["id"])
 
     return res.data[0]
 

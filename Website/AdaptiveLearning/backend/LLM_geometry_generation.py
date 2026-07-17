@@ -419,10 +419,46 @@ FINAL RULES:
 
 solution = -1
 
+# Maps each difficulty tier to the scenario numbers listed under EASY/MEDIUM/
+# HARD TOPICS in the prompt above (14 triangle_missing_side_area and
+# 15 triangle_missing_side_perimeter weren't called out explicitly there but
+# are the same "solve for a missing side" family as the other MEDIUM
+# scenarios). Previously the prompt described these tiers but scenario
+# selection ignored them entirely (random.randint(1,18) regardless of
+# difficulty), so difficulty had no actual effect on question complexity.
+DIFFICULTY_SCENARIOS = {
+    "easy":   [1, 2, 3, 4, 5, 6],
+    "medium": [10, 11, 12, 13, 14, 15, 16],
+    "hard":   [7, 8, 9, 17, 18],
+}
+
+def _pick_scenario(difficulty):
+    return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
+
+# Difficulty governs which scenario gets picked above; grade controls the
+# magnitude of the given measurements (side lengths, radii, etc.) within
+# whatever scenario gets chosen.
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Keep all given measurements (lengths, radii, etc.) between 1 and 12.",
+    "middle":   "Measurements may range from 1 to 30.",
+    "upper":    "Measurements may range from 1 to 100.",
+    "advanced": "No additional restriction.",
+}
+
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
+#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_geometry_question(global_questions, prev_questions, difficulty, grade,max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -430,8 +466,8 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         else:
             prompt = geometry_prompt
 
-        #randomize scenario selection to ensure variety in generated questions.
-        scenario = random.randint(1,18)
+        #select a scenario from the tier matching this question's difficulty.
+        scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
         print(scenario)
@@ -445,6 +481,10 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

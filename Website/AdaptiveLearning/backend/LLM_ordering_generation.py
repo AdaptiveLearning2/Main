@@ -50,8 +50,9 @@ You are to provide a Math question suitable for students. The response must be i
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "ordering".
 
 Ordering example question: "Order from least to greatest: 3/6, 0.6, 2/3, 0.75". The question text should display the direction
-(least_to_greatest or greatest_to_least) as well as every value to be ordered. There should not be equivalent values, for example 0.5 and 1/2 should not 
-both be values for a single question. All values should be numeric, with an emphasis on unequivalent decimals and rational values. Values may go to two decimal places.
+(least_to_greatest or greatest_to_least) as well as every value to be ordered. There should not be equivalent values, for example 0.5 and 1/2 should not
+both be values for a single question. All values should be numeric. Values may go to two decimal places.
+The number of values and which value types to use (whole numbers, decimals, fractions, negatives) are given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that.
 Return ONLY valid JSON with no text before or after the JSON object.
 
 The JSON must follow this exact structure:
@@ -95,6 +96,35 @@ def shuffle_incorrect_answers(solution):
 
     return [list(ans) for ans in incorrect_answers]
 
+# Value count and value types weren't tied to difficulty before -- the LLM
+# picked freely regardless. Now both scale, from whole numbers/simple decimals
+# at easy up to fractions and negatives mixed in at hard.
+DIFFICULTY_COMPLEXITY = {
+    "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values (e.g. 4, 7, 2.5). No fractions.",
+    "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions (e.g. 1/2, 3/4).",
+    "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value.",
+}
+
+# Difficulty already governs which value TYPES appear above (whole/decimal/
+# fraction/negative); grade controls magnitude only, so the two don't give
+# contradictory instructions (e.g. "no fractions" vs "use fractions").
+def _grade_band(grade):
+    g = (grade or "").strip().lower()
+    if g in {"1st grade", "2nd grade", "3rd grade"}:
+        return "early"
+    if g in {"4th grade", "5th grade", "6th grade"}:
+        return "middle"
+    if g in {"7th grade", "8th grade"}:
+        return "upper"
+    return "advanced"
+
+GRADE_COMPLEXITY = {
+    "early":    "Keep all values below 20 in magnitude.",
+    "middle":   "Values may be up to 100 in magnitude.",
+    "upper":    "Values may be up to 200 in magnitude.",
+    "advanced": "No additional magnitude restriction.",
+}
+
 def generate_ordering_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -112,6 +142,14 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
         )
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
+        )
+        prompt += (
+            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
+            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+        )
+        prompt += (
+            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
+            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
         )
         response = generate(
             model="llama3.1:8b",

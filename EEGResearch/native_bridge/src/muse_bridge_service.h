@@ -74,6 +74,27 @@ public:
     BandPowers band_powers() const;
     /** Per-electrode fit/validity as reported by the headband itself. */
     ContactQuality contact_quality() const;
+    /**
+     * How many electrodes were averaged into the most recent band values.
+     * 4 means all were usable; a lower number means the rest were excluded as
+     * badly seated or invalid. 0 before any band packet has arrived.
+     */
+    int band_channels_used() const;
+    /**
+     * True while libMuse is *currently* delivering notch-filtered EEG
+     * (45-65Hz removed) -- i.e. one arrived within NOTCH_STALE_MS.
+     *
+     * Deliberately not a latch. Latching on the first notch packet means raw
+     * EEG stays suppressed forever if notch packets later stop, and since raw
+     * is the only fallback, the bridge then enqueues nothing at all until a
+     * reconnect: a full outage, recoverable only by cycling the headband.
+     */
+    bool notch_available() const;
+    /** Called by the data listener each time a notch-filtered packet lands. */
+    void note_notch_available();
+    /** How long a notch packet keeps raw EEG suppressed. Notch arrives at the
+     *  same rate as raw EEG (well under 1s apart), so this is generous. */
+    static constexpr long long NOTCH_STALE_MS = 2000;
 
     /** BLE rescan: stop_listening + start_listening (matches GettingData32 Refresh). */
     void refresh_scan();
@@ -95,6 +116,10 @@ private:
     long long frame_counter_;
     BandPowers latest_bands_{};
     ContactQuality latest_contact_{};
+    int band_channels_used_{0};
+    // steady_clock ms at which the last notch-filtered packet arrived; 0 means
+    // none yet. Not a bool: see notch_available().
+    std::atomic<long long> last_notch_ms_{0};
 
 #if defined(ENABLE_LIBMUSE)
     class BridgeMuseListener;

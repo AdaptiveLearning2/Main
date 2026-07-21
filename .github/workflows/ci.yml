@@ -26,6 +26,30 @@ jobs:
           EEG_SOURCE: sim
         run: pytest
 
+  native-bridge-build:
+    name: Native bridge build
+    # Windows, not ubuntu: bridge_tcp_server.h includes <winsock2.h> and
+    # CMakeLists links Ws2_32 unconditionally, so the bridge does not build on
+    # Linux even with ENABLE_LIBMUSE=OFF.
+    #
+    # ENABLE_LIBMUSE=OFF because the libMuse paths need a vendored SDK we
+    # cannot ship to CI. That still compiles every file, so syntax errors, bad
+    # signatures and type mistakes are caught -- which is what has been
+    # slipping through, across #18 and #20. It does NOT cover the code inside
+    # the ENABLE_LIBMUSE guards, which is most of the packet handling; that
+    # still needs a manual Windows build with the SDK before release.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        working-directory: EEGResearch/native_bridge
+        run: cmake -S . -B build -DENABLE_LIBMUSE=OFF
+
+      - name: Build
+        working-directory: EEGResearch/native_bridge
+        run: cmake --build build --config Release
+
   website-backend:
     name: Website backend tests
     runs-on: ubuntu-latest

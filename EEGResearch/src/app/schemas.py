@@ -17,6 +17,13 @@ class FeatureData(BaseModel):
     calm_score: float
     confidence: float
     signal_quality: Literal["good", "degraded", "poor", "no_signal"]
+    # Whether signal_quality came from the headband's electrode data
+    # ("contact") or the legacy calm-based fallback ("heuristic").
+    quality_basis: Literal["contact", "heuristic"] | None = None
+    # Diagnostics: frames dropped by the contact filter this session, and how
+    # many electrodes the bridge averaged into the band values (4 = all).
+    samples_rejected: int | None = None
+    band_channels_used: int | None = None
 
 
 class StateData(BaseModel):

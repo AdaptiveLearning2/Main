@@ -40,8 +40,22 @@ public:
     void receive_muse_data_packet(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet,
                                   const std::shared_ptr<interaxon::bridge::Muse>&) override {
         switch (packet->packet_type()) {
-        case interaxon::bridge::MuseDataPacketType::EEG:
+        case interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG:
+            // Same channel mapping as raw EEG, with 45-65Hz removed. Mains hum
+            // couples in harder as contact impedance rises, i.e. exactly when
+            // the signal is already marginal, so prefer this when it flows.
+            service_.note_notch_available();
             service_.enqueue_frame(packet);
+            break;
+        case interaxon::bridge::MuseDataPacketType::EEG:
+            // Fall back to raw only while notch-filtered packets are NOT
+            // arriving (none within NOTCH_STALE_MS), so a preset that doesn't
+            // emit them still produces data -- and so does a session where they
+            // stop partway through, which a latch would have turned into a
+            // total loss of frames until reconnect.
+            if (!service_.notch_available()) {
+                service_.enqueue_frame(packet);
+            }
             break;
         case interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE:
         case interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE:
@@ -49,6 +63,10 @@ public:
         case interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE:
         case interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE:
             service_.update_band_power(packet);
+            break;
+        case interaxon::bridge::MuseDataPacketType::HSI_PRECISION:
+        case interaxon::bridge::MuseDataPacketType::IS_GOOD:
+            service_.update_contact_quality(packet);
             break;
         default:
             break;
@@ -122,6 +140,9 @@ void MuseBridgeService::stop() {
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
+            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
             muse->unregister_connection_listener(connection_listener_);
         }
     }
@@ -139,6 +160,9 @@ void MuseBridgeService::stop() {
         active_muse_name_.clear();
         firmware_version_.clear();
         latest_bands_ = BandPowers{};
+        latest_contact_ = ContactQuality{};
+        band_channels_used_ = 0;
+        last_notch_ms_.store(0);
         connected_ = false;
         last_connection_state_ = static_cast<int>(interaxon::bridge::ConnectionState::UNKNOWN);
     }
@@ -191,6 +215,11 @@ bool MuseBridgeService::connect_named(const std::string& name) {
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+    // Electrode fit/validity reported by the headband itself -- the correct
+    // basis for "signal quality", as opposed to inferring it from calmness.
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -214,6 +243,9 @@ void MuseBridgeService::disconnect_muse() {
         active_muse_name_.clear();
         firmware_version_.clear();
         latest_bands_ = BandPowers{};
+        latest_contact_ = ContactQuality{};
+        band_channels_used_ = 0;
+        last_notch_ms_.store(0);
         connected_ = false;
         last_connection_state_ = static_cast<int>(interaxon::bridge::ConnectionState::DISCONNECTED);
     }
@@ -226,6 +258,9 @@ void MuseBridgeService::disconnect_muse() {
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
         muse->unregister_connection_listener(connection_listener_);
     }
 #endif
@@ -264,6 +299,44 @@ BandPowers MuseBridgeService::band_powers() const {
     return latest_bands_;
 #else
     return BandPowers{};
+#endif
+}
+
+ContactQuality MuseBridgeService::contact_quality() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return latest_contact_;
+#else
+    return ContactQuality{};
+#endif
+}
+
+namespace {
+long long steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
+
+bool MuseBridgeService::notch_available() const {
+    const long long last = last_notch_ms_.load();
+    if (last == 0) {
+        return false;
+    }
+    return (steady_now_ms() - last) <= NOTCH_STALE_MS;
+}
+
+void MuseBridgeService::note_notch_available() {
+    last_notch_ms_.store(steady_now_ms());
+}
+
+int MuseBridgeService::band_channels_used() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return band_channels_used_;
+#else
+    return 0;
 #endif
 }
 
@@ -330,13 +403,46 @@ void MuseBridgeService::enqueue_frame(const std::shared_ptr<interaxon::bridge::M
 }
 
 void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    const double avg = (packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG1) +
-                        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG2) +
-                        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG3) +
-                        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG4)) /
-                       4.0;
+    const std::array<double, 4> per_channel{{
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG1),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG2),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG3),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG4),
+    }};
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
+
+    // Average only the electrodes the headband says are usable. Averaging all
+    // four unconditionally meant a single failed electrode contaminated every
+    // band value, and two failed ones (the ear contacts are the usual pair)
+    // made the whole spectrum unusable -- even while the two frontal
+    // electrodes were reading cleanly. Excluding the bad ones keeps the good
+    // channels' data intact instead of discarding the whole frame.
+    //
+    // Falls back to all four when no contact data has arrived yet, so this
+    // never produces less data than the previous behaviour.
+    double sum = 0.0;
+    int used = 0;
+    if (latest_contact_.has_is_good || latest_contact_.has_hsi) {
+        for (size_t i = 0; i < per_channel.size(); ++i) {
+            const bool valid_data = !latest_contact_.has_is_good || latest_contact_.is_good[i] >= 1.0;
+            // HSI: 1 good, 2 mediocre, 4 poor. 0 means "not reported", which
+            // is covered by <= 2.0 -- absence of a fit reading is not evidence
+            // of a bad fit, so it must not exclude the channel.
+            const double fit = latest_contact_.hsi[i];
+            const bool seated = !latest_contact_.has_hsi || fit <= 2.0;
+            if (valid_data && seated) {
+                sum += per_channel[i];
+                ++used;
+            }
+        }
+    }
+    if (used == 0) {
+        sum = per_channel[0] + per_channel[1] + per_channel[2] + per_channel[3];
+        used = 4;
+    }
+    const double avg = sum / static_cast<double>(used);
+    band_channels_used_ = used;
     switch (packet->packet_type()) {
     case interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE:
         latest_bands_.delta = avg;
@@ -355,6 +461,26 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
         break;
     default:
         break;
+    }
+}
+
+void MuseBridgeService::update_contact_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
+    // Both HSI_PRECISION and IS_GOOD carry one value per EEG electrode and use
+    // the same channel mapping as an EEG packet, so read them the same way.
+    const std::array<double, 4> values{{
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG1),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG2),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG3),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG4),
+    }};
+
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (packet->packet_type() == interaxon::bridge::MuseDataPacketType::HSI_PRECISION) {
+        latest_contact_.hsi = values;
+        latest_contact_.has_hsi = true;
+    } else {
+        latest_contact_.is_good = values;
+        latest_contact_.has_is_good = true;
     }
 }
 

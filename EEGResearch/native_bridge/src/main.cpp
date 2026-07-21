@@ -57,6 +57,27 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
       << ",\"alpha\":" << bands.alpha
       << ",\"beta\":" << bands.beta
       << ",\"gamma\":" << bands.gamma;
+
+    // Per-electrode contact quality straight from the headband. Emitted as
+    // null when the corresponding packet hasn't arrived yet so consumers can
+    // tell "not reported" apart from a genuine reading.
+    const ContactQuality contact = svc.contact_quality();
+    o << ",\"hsi\":";
+    if (contact.has_hsi) {
+        o << '[' << contact.hsi[0] << ',' << contact.hsi[1] << ','
+          << contact.hsi[2] << ',' << contact.hsi[3] << ']';
+    } else {
+        o << "null";
+    }
+    o << ",\"band_channels_used\":" << svc.band_channels_used()
+      << ",\"notch_filtered\":" << (svc.notch_available() ? "true" : "false");
+    o << ",\"is_good\":";
+    if (contact.has_is_good) {
+        o << '[' << contact.is_good[0] << ',' << contact.is_good[1] << ','
+          << contact.is_good[2] << ',' << contact.is_good[3] << ']';
+    } else {
+        o << "null";
+    }
 }
 
 void send_status_line(BridgeTcpServer& server, MuseBridgeService& svc) {

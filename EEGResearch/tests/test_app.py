@@ -1,6 +1,7 @@
 import asyncio
 import math
 import pytest
+from statistics import fmean
 from fastapi.testclient import TestClient
 import time
 from datetime import datetime, timezone
@@ -729,6 +730,57 @@ def test_amplitude_path_excludes_electrodes_the_headband_flagged():
     _, a_raw = run(ears(730.0, 700.0), unflagged_meta)
     _, b_raw = run(ears(800.0, 650.0), unflagged_meta)
     assert abs(a_raw["calm_score"] - b_raw["calm_score"]) > 5.0
+
+
+def test_mean_level_weights_frames_equally_regardless_of_channel_count():
+    """Window entries vary in width now that bad electrodes are dropped.
+    Pooling every channel value would weight a 4-channel frame twice as
+    heavily as a 2-channel one, so during a contact transition the level would
+    drift toward whichever regime contributed more channels."""
+    now = datetime.now(timezone.utc)
+    all_good = {"is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
+    ears_bad = {"is_good": [0, 1, 1, 0], "hsi": [4, 1, 1, 4]}
+    # Frontals sit at 800; the ears sit at 600, so the two regimes have
+    # genuinely different means and any weighting error is visible.
+    sample = EegSample(timestamp=now, channel_tp9=600.0, channel_af7=800.0,
+                       channel_af8=800.0, channel_tp10=600.0)
+
+    processor = SignalProcessor(window_size=4)
+    processor.update(sample, all_good)              # 4 channels -> frame mean 700
+    features = processor.update(sample, ears_bad)   # 2 channels (both 800)
+    assert [len(v) for v in processor.window] == [4, 2]
+
+    def to_score(level):
+        return SignalProcessor._clamp01(
+            (level - SignalProcessor.FOCUS_MIN_LEVEL)
+            / (SignalProcessor.FOCUS_MAX_LEVEL - SignalProcessor.FOCUS_MIN_LEVEL)
+        ) * 100.0
+
+    # Equal weight per frame: (700 + 800) / 2 = 750.
+    per_frame = fmean([700.0, 800.0])
+    # Pooling all six channel values instead: 4400 / 6 = 733.3, dragged toward
+    # the 4-channel frame purely because it contributed more values.
+    pooled = fmean([600.0, 800.0, 800.0, 600.0, 800.0, 800.0])
+    assert per_frame == pytest.approx(750.0, abs=0.01)
+    assert pooled == pytest.approx(733.33, abs=0.01)
+
+    # focus_score is 100% amplitude here: no band data, so no spectral blend.
+    assert features["focus_score"] == pytest.approx(to_score(per_frame), abs=0.01)
+    assert features["focus_score"] != pytest.approx(to_score(pooled), abs=0.01)
+
+
+def test_contradictory_contact_flags_keep_all_four_channels():
+    """is_good says every channel is usable, hsi says nothing is seated. The
+    two disagree; _sample_is_usable admits the frame and _good_channel_values
+    would exclude everything, so it falls back to all four rather than
+    discarding data on the more pessimistic of two conflicting signals."""
+    now = datetime.now(timezone.utc)
+    sample = EegSample(timestamp=now, channel_tp9=700.0, channel_af7=705.0,
+                       channel_af8=695.0, channel_tp10=702.0)
+    processor = SignalProcessor(window_size=4)
+    processor.update(sample, {"is_good": [1, 1, 1, 1], "hsi": [4, 4, 4, 4]})
+    assert len(processor.window) == 1
+    assert len(processor.window[0]) == 4
 
 
 def test_single_good_electrode_does_not_fabricate_perfect_calm():

@@ -317,6 +317,22 @@ class SignalProcessor:
 
         Falls back to all four whenever contact data is absent or would exclude
         everything, so this never yields less data than the previous behaviour.
+
+        Note the predicate here is deliberately stricter than
+        _sample_is_usable, which consults IS_GOOD only. The two answer
+        different questions: that one asks "is this frame worth keeping at
+        all", this one asks "which electrodes within it can be trusted", and a
+        poor HSI fit is a reason to distrust a channel without being a reason
+        to throw away a frame whose other channels are fine.
+
+        The asymmetry has one visible consequence. A frame reporting
+        is_good=[1,1,1,1] with hsi=[4,4,4,4] -- IS_GOOD says the data is
+        usable, HSI says nothing is seated -- is admitted by _sample_is_usable,
+        then excludes every channel here and falls back to all four. Those two
+        readings contradict each other, and given the headband is still
+        claiming usable data, keeping all four is the conservative choice:
+        it preserves the previous behaviour rather than discarding a frame on
+        the strength of the more pessimistic of two disagreeing signals.
         """
         values = [sample.channel_tp9, sample.channel_af7, sample.channel_af8, sample.channel_tp10]
         meta = meta or {}
@@ -346,6 +362,11 @@ class SignalProcessor:
         spread and stability for the whole window length afterwards (5s at the
         default size). Better to leave the window holding the last known-good
         samples than to average an artifact into it.
+
+        Intentionally consults IS_GOOD only, unlike _good_channel_values, which
+        also requires an HSI fit of <= 2 per channel -- see the note there. A
+        bad fit is a reason to distrust one electrode, not to discard a frame
+        outright.
         """
         is_good = (meta or {}).get("is_good")
         if not isinstance(is_good, list) or not is_good:
@@ -366,18 +387,22 @@ class SignalProcessor:
             # Store only the electrodes the headband vouches for, so a failed
             # contact cannot skew mean level or spread for the whole window.
             self.window.append(self._good_channel_values(sample, bands))
-        all_values: list[float] = []
         per_sample_spreads: list[float] = []
         per_sample_means: list[float] = []
         for values in self.window:
-            all_values.extend(values)
             per_sample_means.append(fmean(values))
             # A spread needs at least two electrodes. With one good channel
             # max-min is 0, which would score as a perfectly steady signal --
             # fabricating "maximally calm" out of an almost-dead headband.
             if len(values) >= 2:
                 per_sample_spreads.append(max(values) - min(values))
-        mean_level = fmean(all_values)
+        # Mean of the per-frame means, not of every channel value pooled
+        # together. Window entries vary in length now that bad electrodes are
+        # dropped, and pooling would weight a 4-channel frame twice as heavily
+        # as a 2-channel one -- so during a contact transition the level would
+        # drift toward whichever regime happened to contribute more channels.
+        # Identical to pooling whenever every frame has the same width.
+        mean_level = fmean(per_sample_means)
         mean_spread = fmean(per_sample_spreads) if per_sample_spreads else None
 
         focus_span = self.FOCUS_MAX_LEVEL - self.FOCUS_MIN_LEVEL

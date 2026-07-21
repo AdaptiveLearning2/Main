@@ -346,6 +346,80 @@ def test_negative_band_values_do_not_break_ratio_extraction():
     assert math.isfinite(focus_lr) and math.isfinite(calm_lr)
 
 
+def test_simulator_bands_stay_within_processor_ratio_bounds():
+    """The simulator is a *producer* of band powers, so it has to emit them on
+    the same scale the processor reads them (Bels), across its whole hidden
+    state domain.
+
+    Emitting linear magnitudes instead is silently catastrophic rather than
+    loud: the processor exponentiates them to ~10**40, both log-ratios land
+    around +-31 against bounds spanning ~1.6, and every spectral term clamps.
+    The scores still come back in 0..100 -- only the 25% amplitude term is
+    still moving -- so nothing raises and nothing looks obviously wrong. This
+    asserts on the raw ratios rather than the scores for exactly that reason.
+    """
+    processor = SignalProcessor(window_size=4)
+    adapter = SimulatedMuseIngestionAdapter()
+    adapter.connect()
+
+    for focus_state in (0.0, 0.5, 1.0):
+        for calm_state in (0.0, 0.5, 1.0):
+            adapter._focus_state = focus_state
+            adapter._calm_state = calm_state
+            meta = adapter.get_ingestion_meta()
+            focus_lr, calm_lr = processor._extract_band_log_ratios(meta)
+            assert focus_lr is not None and calm_lr is not None
+            assert SignalProcessor.FOCUS_LOG_RATIO_MIN <= focus_lr <= SignalProcessor.FOCUS_LOG_RATIO_MAX, (
+                f"focus log-ratio {focus_lr} outside calibrated bounds at "
+                f"focus_state={focus_state} calm_state={calm_state}"
+            )
+            assert SignalProcessor.CALM_LOG_RATIO_MIN <= calm_lr <= SignalProcessor.CALM_LOG_RATIO_MAX, (
+                f"calm log-ratio {calm_lr} outside calibrated bounds at "
+                f"focus_state={focus_state} calm_state={calm_state}"
+            )
+            # Bels, in the range live Muse S captures actually produce.
+            for band in ("delta", "theta", "alpha", "beta", "gamma"):
+                assert -2.0 <= meta[band] <= 2.0, f"{band}={meta[band]} is not a plausible Bel value"
+
+
+def test_simulator_focus_and_calm_are_not_mirror_images():
+    """Under linear band values, alpha/beta reach ~10**40 while theta/gamma sit
+    at ~10**4, so theta and gamma become numerically negligible: focus collapses
+    to ln(beta/alpha) and calm to ln(alpha/beta), exact negations. The two
+    scores then carry identical information and AdaptationEngine cannot
+    separate states. Holding focus fixed while calm_state moves must move calm
+    and leave focus alone."""
+    processor = SignalProcessor(window_size=4)
+    adapter = SimulatedMuseIngestionAdapter()
+    adapter.connect()
+    adapter._focus_state = 0.5
+
+    adapter._calm_state = 0.0
+    focus_lo, calm_lo = processor._extract_band_log_ratios(adapter.get_ingestion_meta())
+    adapter._calm_state = 1.0
+    focus_hi, calm_hi = processor._extract_band_log_ratios(adapter.get_ingestion_meta())
+
+    assert calm_hi > calm_lo + 0.1, "calm_state must move the calm ratio"
+    assert focus_hi == pytest.approx(focus_lo, abs=0.01), "calm_state must not move the focus ratio"
+    # The mirroring failure mode: focus == -calm for every input.
+    assert abs(focus_lo + calm_lo) > 0.1
+
+
+def test_absurd_band_values_fall_back_instead_of_raising():
+    """10.0**x overflows past ~308. That means an upstream producer isn't
+    emitting Bels -- the same class of problem as a malformed value -- so it
+    has to be handled here. Letting OverflowError escape sends it to
+    stream_manager's broad except, which drops the tick, and a dropped tick
+    freezes latest_payload at a stale value."""
+    processor = SignalProcessor(window_size=2)
+    assert processor._extract_band_log_ratios(
+        {"alpha": 400.0, "beta": 1.0, "theta": 0.5, "gamma": 0.2}
+    ) == (None, None)
+    assert processor._extract_band_log_ratios(
+        {"alpha": 1e9, "beta": 1e9, "theta": 1e9, "gamma": 1e9}
+    ) == (None, None)
+
+
 def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
     processor = SignalProcessor(window_size=2)
     assert processor._extract_band_log_ratios(

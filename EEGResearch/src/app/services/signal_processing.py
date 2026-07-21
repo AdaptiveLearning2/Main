@@ -108,36 +108,46 @@ class SignalProcessor:
     def _extract_band_log_ratios(self, bands: dict[str, Any] | None) -> tuple[float | None, float | None]:
         if not bands:
             return (None, None)
+        # The exponentiation below is inside this try, not after it. 10.0**x
+        # raises OverflowError once x is past ~308, and a band value that large
+        # means the same thing as a malformed one: an upstream producer that
+        # isn't emitting Bels. Letting it escape only pushes the failure up to
+        # stream_manager's broad except, which drops the whole tick -- and a
+        # dropped tick freezes latest_payload at its last value, which is
+        # exactly the staleness _no_signal_payload exists to prevent. Better to
+        # return (None, None) here and fall back to the amplitude path.
         try:
             alpha = float(bands.get("alpha", 0.0))
             beta = float(bands.get("beta", 0.0))
             theta = float(bands.get("theta", 0.0))
             gamma = float(bands.get("gamma", 0.0))
-        except (TypeError, ValueError):
-            return (None, None)
-        # Bridge reports exact zeros across every band when it has no band
-        # features yet. Note this must stay an all-zero check: libMuse band
-        # powers are logarithms, so individual bands are legitimately negative
-        # and a "<= 0" test on any single band would discard valid frames.
-        if alpha == 0.0 and beta == 0.0 and theta == 0.0 and gamma == 0.0:
-            return (None, None)
 
-        # libMuse ABSOLUTE band powers are logarithmic (Bels): "the logarithm
-        # of the sum of the Power Spectral Density ... some of the values will
-        # be negative". They must be converted back to linear power before
-        # being added, because adding logs multiplies the underlying powers.
-        # Previously these were fed straight into log() -- taking a logarithm
-        # of a logarithm -- and summed in log space, which made both ratios
-        # meaningless (and could take log() of a negative sum, since theta in
-        # particular is routinely negative).
-        # linear = 10 ** bels, per the libMuse documentation.
-        alpha_p = 10.0**alpha
-        beta_p = 10.0**beta
-        theta_p = 10.0**theta
-        gamma_p = 10.0**gamma
+            # Bridge reports exact zeros across every band when it has no band
+            # features yet. Note this must stay an all-zero check: libMuse band
+            # powers are logarithms, so individual bands are legitimately
+            # negative and a "<= 0" test on any single band would discard valid
+            # frames.
+            if alpha == 0.0 and beta == 0.0 and theta == 0.0 and gamma == 0.0:
+                return (None, None)
 
-        focus_log_ratio = log(beta_p + self.EPSILON) - log(alpha_p + theta_p + self.EPSILON)
-        calm_log_ratio = log(alpha_p + self.EPSILON) - log(beta_p + gamma_p + self.EPSILON)
+            # libMuse ABSOLUTE band powers are logarithmic (Bels): "the
+            # logarithm of the sum of the Power Spectral Density ... some of the
+            # values will be negative". They must be converted back to linear
+            # power before being added, because adding logs multiplies the
+            # underlying powers. Previously these were fed straight into log()
+            # -- taking a logarithm of a logarithm -- and summed in log space,
+            # which made both ratios meaningless (and could take log() of a
+            # negative sum, since theta in particular is routinely negative).
+            # linear = 10 ** bels, per the libMuse documentation.
+            alpha_p = 10.0**alpha
+            beta_p = 10.0**beta
+            theta_p = 10.0**theta
+            gamma_p = 10.0**gamma
+
+            focus_log_ratio = log(beta_p + self.EPSILON) - log(alpha_p + theta_p + self.EPSILON)
+            calm_log_ratio = log(alpha_p + self.EPSILON) - log(beta_p + gamma_p + self.EPSILON)
+        except (TypeError, ValueError, OverflowError):
+            return (None, None)
         return (focus_log_ratio, calm_log_ratio)
 
     def _smoothed(self, history: deque, now: float, value: float) -> float:

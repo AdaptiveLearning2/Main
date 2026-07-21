@@ -58,6 +58,148 @@ def _profile(uid: str) -> dict:
         pass
     return {"id": uid, "display_name": "Student", "email": "", "role": "student", "grade_level": None}
 
+
+# ─── biosignal reporting ─────────────────────────────────────────────────
+
+# Cap on rows pulled per signal table for one report. A week of continuous
+# recording exceeds this, so the query orders by ts DESC and the cap trims the
+# OLDEST samples -- see _weekly_signal_report for why the day buckets are built
+# from what actually came back rather than from the requested date range.
+_REPORT_ROW_CAP = 5000
+
+
+def _avg(values):
+    nums = [float(v) for v in values if v is not None]
+    if not nums:
+        return None
+    return round(sum(nums) / len(nums), 2)
+
+
+def _iso_days_ago(days: int = 7) -> str:
+    return (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+
+def _topic_breakdown(student_id: str):
+    try:
+        rows = supabase.table("user_math_performance") \
+            .select("*, math_topics(topic_name)") \
+            .eq("user_id", student_id).execute().data or []
+    except Exception as e:
+        print(f"[topic_breakdown] {e}")
+        rows = []
+    out = []
+    for r in rows:
+        attempted = r.get("attempted_questions") or 0
+        correct = r.get("correct_questions") or 0
+        out.append({
+            "topic_id": r.get("topic_id"),
+            "topic_name": ((r.get("math_topics") or {}).get("topic_name") or "Unknown"),
+            "attempted_questions": attempted,
+            "correct_questions": correct,
+            "accuracy": round((correct / attempted) * 100) if attempted else 0,
+            "stress": r.get("stress"),
+            "updated_at": r.get("updated_at"),
+        })
+    return out
+
+
+def _weekly_signal_report(student_id: str, days: int = 7):
+    """Aggregate a student's recent EEG and facial signals for reporting.
+
+    Returns averages, highlights and per-day buckets. Callers must have already
+    established that the requester may see this student.
+    """
+    since = _iso_days_ago(days)
+
+    def _fetch(table: str, ts_col: str, limit: int):
+        try:
+            return supabase.table(table).select("*") \
+                .eq("user_id", student_id).gte(ts_col, since) \
+                .order(ts_col, desc=True).limit(limit).execute().data or []
+        except Exception as e:
+            print(f"[weekly_report:{table}] {e}")
+            return []
+
+    cog = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    face = _fetch("face_signals", "ts", _REPORT_ROW_CAP)
+    sessions = _fetch("sessions", "started_at", 100)
+
+    # The row cap trims oldest-first, so on a heavy week the earliest days come
+    # back empty and would be reported as "no activity" rather than "not
+    # retrieved". Only build buckets for days actually covered by the data, and
+    # tell the caller when the window was clipped, so the UI can say so instead
+    # of drawing a misleading flat line.
+    truncated = len(cog) >= _REPORT_ROW_CAP or len(face) >= _REPORT_ROW_CAP
+    oldest_ts = min(
+        [str(r.get("ts", "")) for r in cog if r.get("ts")]
+        + [str(r.get("ts", "")) for r in face if r.get("ts")],
+        default="",
+    )
+
+    latest_cognitive = cog[0] if cog else None
+    latest_face = face[0] if face else None
+
+    daily = []
+    for i in range(days - 1, -1, -1):
+        day = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
+        if truncated and oldest_ts and day < oldest_ts[:10]:
+            continue  # older than what the cap let us retrieve
+        day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
+        day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        daily.append({
+            "date": day,
+            "focus": _avg([r.get("focus") for r in day_cog]),
+            "stress": _avg([r.get("stress") for r in day_cog]),
+            "engagement": _avg([r.get("engagement") for r in day_cog]),
+            "attention": _avg([r.get("attention") for r in day_face]),
+            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
+        })
+
+    emotion_counts: dict[str, int] = {}
+    for r in face:
+        if r.get("emotion"):
+            emotion_counts[r["emotion"]] = emotion_counts.get(r["emotion"], 0) + 1
+
+    avg_focus = _avg([r.get("focus") for r in cog])
+    avg_stress = _avg([r.get("stress") for r in cog])
+    avg_attention = _avg([r.get("attention") for r in face])
+    highest_stress = max([float(r["stress"]) for r in cog if r.get("stress") is not None], default=None)
+    lowest_focus = min([float(r["focus"]) for r in cog if r.get("focus") is not None], default=None)
+
+    bits = []
+    if avg_focus is not None:
+        bits.append(f"average focus was {avg_focus}%")
+    if avg_stress is not None:
+        bits.append(f"average stress was {avg_stress}%")
+    if avg_attention is not None:
+        bits.append(f"average face attention was {avg_attention}%")
+    summary = ("This week, " + ", ".join(bits) + ".") if bits else \
+        "No EEG or facial recognition samples were recorded this week."
+
+    return {
+        "student_id": student_id,
+        "days": days,
+        "since": since,
+        "truncated": truncated,
+        "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
+        "averages": {
+            "focus": avg_focus,
+            "stress": avg_stress,
+            "engagement": _avg([r.get("engagement") for r in cog]),
+            "face_attention": avg_attention,
+            "identity_confidence": _avg([r.get("identity_confidence") for r in face]),
+        },
+        "highlights": {
+            "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
+            "lowest_focus": round(lowest_focus, 2) if lowest_focus is not None else None,
+            "dominant_emotion": max(emotion_counts, key=emotion_counts.get) if emotion_counts else None,
+        },
+        "latest": {"cognitive": latest_cognitive, "face": latest_face},
+        "daily": daily,
+        "summary": summary,
+    }
+
+
 # ─── question prefetch cache ──────────────────────────────────────────────
 # Maintains a queue of up to QUEUE_SIZE pre-generated questions per user.
 QUEUE_SIZE = 2
@@ -337,6 +479,28 @@ def student_performance(student_id: str, request: Request):
         .select("*, math_topics(topic_name)") \
         .eq("user_id", student_id).execute()
     return res.data or []
+
+
+@app.get("/api/students/{student_id}/weekly-report")
+def student_weekly_report(student_id: str, request: Request, days: int = 7):
+    """Aggregated EEG/facial signals for a student over the last `days`.
+
+    Role-neutral path: teachers and parents both read this for the students
+    they're entitled to see, so namespacing it under /api/teacher/ would be
+    misleading. Access is decided by relationship, not by role name.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    p = _profile(student_id)
+    return {
+        "student_name": p.get("display_name") or p.get("email") or "Student",
+        **_weekly_signal_report(student_id, max(1, min(days, 30))),
+    }
+
+
+@app.get("/api/students/{student_id}/topic-breakdown")
+def student_topic_breakdown(student_id: str, request: Request):
+    _verify_can_view_student(get_user(request), student_id)
+    return _topic_breakdown(student_id)
 
 
 # ─── leaderboard ─────────────────────────────────────────────────────────

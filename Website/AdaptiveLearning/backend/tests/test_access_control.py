@@ -171,6 +171,48 @@ def test_student_is_rejected_from_class_roster():
     assert exc.value.status_code == 403
 
 
+def test_weekly_report_averages_only_non_null_values():
+    assert main._avg([10, 20, None, 30]) == 20.0
+    assert main._avg([None, None]) is None
+    assert main._avg([]) is None
+
+
+def test_topic_breakdown_handles_zero_attempts_without_dividing_by_zero():
+    monkeypatched = _FakeSupabase({
+        "user_math_performance": [
+            {"user_id": "student-1", "topic_id": "t1", "attempted_questions": 0,
+             "correct_questions": 0, "math_topics": {"topic_name": "algebra"}},
+            {"user_id": "student-1", "topic_id": "t2", "attempted_questions": 4,
+             "correct_questions": 3, "math_topics": {"topic_name": "geometry"}},
+        ],
+    })
+    original = main.supabase
+    main.supabase = monkeypatched
+    try:
+        out = main._topic_breakdown("student-1")
+    finally:
+        main.supabase = original
+    by_topic = {r["topic_name"]: r for r in out}
+    assert by_topic["algebra"]["accuracy"] == 0
+    assert by_topic["geometry"]["accuracy"] == 75
+
+
+def test_topic_breakdown_survives_a_missing_topic_join():
+    monkeypatched = _FakeSupabase({
+        "user_math_performance": [
+            {"user_id": "student-1", "topic_id": "t1", "attempted_questions": 2,
+             "correct_questions": 1, "math_topics": None},
+        ],
+    })
+    original = main.supabase
+    main.supabase = monkeypatched
+    try:
+        out = main._topic_breakdown("student-1")
+    finally:
+        main.supabase = original
+    assert out[0]["topic_name"] == "Unknown"
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:

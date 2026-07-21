@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
+import { WeeklySignalReport, LiveSignalSummary } from '../../components/signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -13,6 +14,7 @@ export default function ChildDetail() {
   const [perf, setPerf]           = useState([])
   const [loading, setLoading]     = useState(true)
   const [name, setName]           = useState('Child')
+  const [signalReport, setSignalReport] = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -25,6 +27,13 @@ export default function ChildDetail() {
       setPerf(p || [])
       setLoading(false)
     }).catch(() => setLoading(false))
+
+    // Fetched separately from the Promise.all above: this is the newest and
+    // heaviest query, and a failure here shouldn't blank the whole page when
+    // the academic stats loaded fine.
+    apiFetch(`/api/students/${id}/weekly-report`)
+      .then(setSignalReport)
+      .catch(() => setSignalReport(null))
 
     // also try to get name from children list
     apiFetch('/api/parent/children').then(children => {
@@ -70,6 +79,16 @@ export default function ChildDetail() {
               </motion.div>
             ))}
           </div>
+
+          {/* Only rendered once the report loads -- the panels would otherwise
+              show a full grid of "N/A" and read as "no activity" rather than
+              "still loading". */}
+          {signalReport && (
+            <div className="grid lg:grid-cols-2 gap-6">
+              <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
+              <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
+            </div>
+          )}
 
           <div className="grid lg:grid-cols-2 gap-6">
             {/* topic performance */}

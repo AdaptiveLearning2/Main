@@ -11,19 +11,39 @@ from src.app.models import EegSample
 class SignalProcessor:
     """Computes smoothed focus/calm features from incoming samples."""
 
-    # Tuned for raw Muse ranges observed in pilot runs (roughly 500-850).
-    FOCUS_MIN_LEVEL = 500.0
-    FOCUS_MAX_LEVEL = 850.0
+    # Raw amplitude bounds. Widened from the original 500-850 / 5-120: live
+    # Muse S captures show mean levels near 950 and cross-channel spreads in
+    # the hundreds of uV, so the old bounds clamped both amplitude terms to
+    # their extremes on real hardware.
+    FOCUS_MIN_LEVEL = 400.0
+    FOCUS_MAX_LEVEL = 1000.0
+    # Floor stays low: a well-seated headband on a quiet signal legitimately
+    # produces single- to low-double-digit spreads, and raising the floor makes
+    # those saturate at maximum calm. Only the ceiling needed widening.
     CALM_MIN_SPREAD = 5.0
-    CALM_MAX_SPREAD = 120.0
+    CALM_MAX_SPREAD = 300.0
     STABILITY_STD_MAX = 45.0
-    # Log-ratio bounds derived from prior heuristic ratio ranges:
-    # focus: beta / (alpha + theta), calm: alpha / (beta + gamma).
-    # Log-ratios are less sensitive to denominator spikes and are easier to calibrate.
-    FOCUS_LOG_RATIO_MIN = -0.511  # ln(0.60)
-    FOCUS_LOG_RATIO_MAX = 0.588  # ln(1.80)
-    CALM_LOG_RATIO_MIN = -0.357  # ln(0.70)
-    CALM_LOG_RATIO_MAX = 0.788  # ln(2.20)
+
+    # Log-ratio bounds for the spectral terms:
+    #   focus = beta / (alpha + theta), calm = alpha / (beta + gamma)
+    # (computed on linear power -- see _extract_band_log_ratios).
+    #
+    # Recalibrated for the actual use case: a seated student working through
+    # problems with their eyes open. Alpha is the relaxed, eyes-closed rhythm
+    # and is suppressed during engaged mental effort (alpha desynchronization),
+    # so the previous calm floor of ln(0.70) sat above where an engaged learner
+    # actually lives -- pinning calm_band_ratio to 0 and making "not stressed"
+    # unreachable while concentrating.
+    #
+    # Calm spans ratio 0.20 (aroused/stressed) to 1.60 (clearly alpha-dominant,
+    # relaxed); focus spans 0.40 (drowsy, theta/alpha heavy) to 2.00 (strongly
+    # beta-dominant). These are physiology-informed heuristics, not values
+    # derived from a controlled study -- a clean multi-subject baseline capture
+    # (good contact on all four electrodes) should be used to tighten them.
+    FOCUS_LOG_RATIO_MIN = -0.916  # ln(0.40)
+    FOCUS_LOG_RATIO_MAX = 0.693  # ln(2.00)
+    CALM_LOG_RATIO_MIN = -1.609  # ln(0.20)
+    CALM_LOG_RATIO_MAX = 0.470  # ln(1.60)
     EPSILON = 1e-6
 
     def __init__(self, window_size: int = 20) -> None:
@@ -56,11 +76,29 @@ class SignalProcessor:
             gamma = float(bands.get("gamma", 0.0))
         except (TypeError, ValueError):
             return (None, None)
-        # Bridge reports zeros when no band features are available; ignore those frames.
-        if alpha <= 0.0 and beta <= 0.0 and theta <= 0.0 and gamma <= 0.0:
+        # Bridge reports exact zeros across every band when it has no band
+        # features yet. Note this must stay an all-zero check: libMuse band
+        # powers are logarithms, so individual bands are legitimately negative
+        # and a "<= 0" test on any single band would discard valid frames.
+        if alpha == 0.0 and beta == 0.0 and theta == 0.0 and gamma == 0.0:
             return (None, None)
-        focus_log_ratio = log(beta + self.EPSILON) - log(alpha + theta + self.EPSILON)
-        calm_log_ratio = log(alpha + self.EPSILON) - log(beta + gamma + self.EPSILON)
+
+        # libMuse ABSOLUTE band powers are logarithmic (Bels): "the logarithm
+        # of the sum of the Power Spectral Density ... some of the values will
+        # be negative". They must be converted back to linear power before
+        # being added, because adding logs multiplies the underlying powers.
+        # Previously these were fed straight into log() -- taking a logarithm
+        # of a logarithm -- and summed in log space, which made both ratios
+        # meaningless (and could take log() of a negative sum, since theta in
+        # particular is routinely negative).
+        # linear = 10 ** bels, per the libMuse documentation.
+        alpha_p = 10.0**alpha
+        beta_p = 10.0**beta
+        theta_p = 10.0**theta
+        gamma_p = 10.0**gamma
+
+        focus_log_ratio = log(beta_p + self.EPSILON) - log(alpha_p + theta_p + self.EPSILON)
+        calm_log_ratio = log(alpha_p + self.EPSILON) - log(beta_p + gamma_p + self.EPSILON)
         return (focus_log_ratio, calm_log_ratio)
 
     def _signal_quality(

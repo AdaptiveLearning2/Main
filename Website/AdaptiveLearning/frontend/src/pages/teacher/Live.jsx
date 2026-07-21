@@ -130,7 +130,17 @@ export default function Live() {
           const c = r.latest_cognitive
           if (!c) return
           const arr = historyRef.current[r.user_id] || []
-          arr.push({ focus: c.focus ?? 0, engagement: c.engagement ?? 0, stress: c.stress ?? 0 })
+          // Null, not 0. A row can exist with null measurements when the
+          // headband reported bad electrode contact -- the row is kept so the
+          // session's timeline stays intact, but there is no measurement.
+          // Coercing that to 0 draws it as "totally unfocused, perfectly calm",
+          // which is a fabricated reading presented as a real one. recharts
+          // leaves a gap for null (connectNulls defaults to false).
+          arr.push({
+            focus:      c.focus ?? null,
+            engagement: c.engagement ?? null,
+            stress:     c.stress ?? null,
+          })
           while (arr.length > 60) arr.shift()
           historyRef.current[r.user_id] = arr
         })

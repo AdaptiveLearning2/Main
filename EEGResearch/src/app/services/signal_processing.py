@@ -61,9 +61,14 @@ class SignalProcessor:
         # over the same window rather than letting one blink downgrade the
         # reported quality.
         # (monotonic_seconds, value) pairs, pruned by elapsed time rather than
-        # by count -- see _smoothed.
-        self._is_good_history: deque[tuple[float, float]] = deque()
-        self._hsi_history: deque[tuple[float, float]] = deque()
+        # by count -- see _smoothed. maxlen is a backstop only: pruning is what
+        # bounds these, but without it correctness would rest entirely on
+        # monotonic() advancing, and an unbounded deque is a bad thing to leave
+        # one assumption away from growing forever. Sized well above the sample
+        # count the time window can hold at realistic stream rates.
+        self._contact_history_cap = max(64, window_size * 16)
+        self._is_good_history: deque[tuple[float, float]] = deque(maxlen=self._contact_history_cap)
+        self._hsi_history: deque[tuple[float, float]] = deque(maxlen=self._contact_history_cap)
 
     def reset(self) -> None:
         """Drop all buffered samples (e.g. after a signal-loss gap) so the next

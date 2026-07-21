@@ -121,6 +121,11 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
             "state":           eeg.get("state"),
             "question_policy": eeg.get("question_policy"),
             "signal_quality":  f.get("signal_quality"),
+            # Stored alongside signal_quality because it's what distinguishes a
+            # row whose measurements were nulled for bad electrode contact from
+            # one where the legacy heuristic merely said "poor". Without it,
+            # a null-measurement row can't be explained after the fact.
+            "quality_basis":   f.get("quality_basis"),
             "ingestion":       eeg.get("ingestion"),
         },
     }

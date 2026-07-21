@@ -1,4 +1,5 @@
 import asyncio
+import math
 import pytest
 from fastapi.testclient import TestClient
 import time
@@ -312,6 +313,158 @@ def test_signal_processor_uses_band_features_when_available():
     low_calm = processor.update(sample, {"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
     high_calm = processor.update(sample, {"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
     assert high_calm["calm_score"] > low_calm["calm_score"]
+
+
+def test_band_powers_are_treated_as_logarithmic_not_linear():
+    """libMuse ABSOLUTE band powers are Bels (logarithms), so they must be
+    converted with 10**x before being combined. Feeding them straight into
+    log() -- a logarithm of a logarithm -- and summing in log space made the
+    ratios meaningless, and could take log() of a negative sum since theta is
+    routinely negative."""
+    processor = SignalProcessor(window_size=2)
+    # Real capture from a Muse S. theta is negative, which is normal on a log
+    # scale, and alpha + theta = 0.148 under the old (broken) arithmetic.
+    live = {"delta": 0.360908, "theta": -0.0567422, "alpha": 0.205242,
+            "beta": 0.212698, "gamma": 0.00128006}
+    focus_lr, calm_lr = processor._extract_band_log_ratios(live)
+
+    # Correct values, computed on linear power (10**bels):
+    #   focus = ln(10**0.2127) - ln(10**0.2052 + 10**-0.0567) ~= -0.419
+    #   calm  = ln(10**0.2052) - ln(10**0.2127 + 10**0.00128) ~= -0.497
+    assert focus_lr == pytest.approx(-0.419, abs=0.01)
+    assert calm_lr == pytest.approx(-0.497, abs=0.01)
+
+
+def test_negative_band_values_do_not_break_ratio_extraction():
+    # Strongly negative theta/gamma used to be able to drive the denominator
+    # negative under the old log-space summing.
+    processor = SignalProcessor(window_size=2)
+    focus_lr, calm_lr = processor._extract_band_log_ratios(
+        {"theta": -1.5, "alpha": -0.8, "beta": -0.3, "gamma": -2.0}
+    )
+    assert focus_lr is not None and calm_lr is not None
+    assert math.isfinite(focus_lr) and math.isfinite(calm_lr)
+
+
+def test_simulator_bands_stay_within_processor_ratio_bounds():
+    """The simulator is a *producer* of band powers, so it has to emit them on
+    the same scale the processor reads them (Bels), across its whole hidden
+    state domain.
+
+    Emitting linear magnitudes instead is silently catastrophic rather than
+    loud: the processor exponentiates them to ~10**40, both log-ratios land
+    around +-31 against bounds spanning ~1.6, and every spectral term clamps.
+    The scores still come back in 0..100 -- only the 25% amplitude term is
+    still moving -- so nothing raises and nothing looks obviously wrong. This
+    asserts on the raw ratios rather than the scores for exactly that reason.
+    """
+    processor = SignalProcessor(window_size=4)
+    adapter = SimulatedMuseIngestionAdapter()
+    adapter.connect()
+
+    for focus_state in (0.0, 0.5, 1.0):
+        for calm_state in (0.0, 0.5, 1.0):
+            adapter._focus_state = focus_state
+            adapter._calm_state = calm_state
+            meta = adapter.get_ingestion_meta()
+            focus_lr, calm_lr = processor._extract_band_log_ratios(meta)
+            assert focus_lr is not None and calm_lr is not None
+            assert SignalProcessor.FOCUS_LOG_RATIO_MIN <= focus_lr <= SignalProcessor.FOCUS_LOG_RATIO_MAX, (
+                f"focus log-ratio {focus_lr} outside calibrated bounds at "
+                f"focus_state={focus_state} calm_state={calm_state}"
+            )
+            assert SignalProcessor.CALM_LOG_RATIO_MIN <= calm_lr <= SignalProcessor.CALM_LOG_RATIO_MAX, (
+                f"calm log-ratio {calm_lr} outside calibrated bounds at "
+                f"focus_state={focus_state} calm_state={calm_state}"
+            )
+            # Bels, in the range live Muse S captures actually produce.
+            for band in ("delta", "theta", "alpha", "beta", "gamma"):
+                assert -2.0 <= meta[band] <= 2.0, f"{band}={meta[band]} is not a plausible Bel value"
+
+
+def test_simulator_focus_and_calm_are_not_mirror_images():
+    """Under linear band values, alpha/beta reach ~10**40 while theta/gamma sit
+    at ~10**4, so theta and gamma become numerically negligible: focus collapses
+    to ln(beta/alpha) and calm to ln(alpha/beta), exact negations. The two
+    scores then carry identical information and AdaptationEngine cannot
+    separate states. Holding focus fixed while calm_state moves must move calm
+    and leave focus alone."""
+    processor = SignalProcessor(window_size=4)
+    adapter = SimulatedMuseIngestionAdapter()
+    adapter.connect()
+    adapter._focus_state = 0.5
+
+    adapter._calm_state = 0.0
+    focus_lo, calm_lo = processor._extract_band_log_ratios(adapter.get_ingestion_meta())
+    adapter._calm_state = 1.0
+    focus_hi, calm_hi = processor._extract_band_log_ratios(adapter.get_ingestion_meta())
+
+    assert calm_hi > calm_lo + 0.1, "calm_state must move the calm ratio"
+    assert focus_hi == pytest.approx(focus_lo, abs=0.01), "calm_state must not move the focus ratio"
+    # The mirroring failure mode: focus == -calm for every input.
+    assert abs(focus_lo + calm_lo) > 0.1
+
+
+def test_absurd_band_values_fall_back_instead_of_raising():
+    """10.0**x overflows past ~308. That means an upstream producer isn't
+    emitting Bels -- the same class of problem as a malformed value -- so it
+    has to be handled here. Letting OverflowError escape sends it to
+    stream_manager's broad except, which drops the tick, and a dropped tick
+    freezes latest_payload at a stale value."""
+    processor = SignalProcessor(window_size=2)
+    assert processor._extract_band_log_ratios(
+        {"alpha": 400.0, "beta": 1.0, "theta": 0.5, "gamma": 0.2}
+    ) == (None, None)
+    assert processor._extract_band_log_ratios(
+        {"alpha": 1e9, "beta": 1e9, "theta": 1e9, "gamma": 1e9}
+    ) == (None, None)
+
+
+def test_all_zero_bands_still_ignored_but_negative_bands_are_kept():
+    processor = SignalProcessor(window_size=2)
+    assert processor._extract_band_log_ratios(
+        {"theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
+    ) == (None, None)
+    # A frame where one band is negative is valid data, not an empty frame.
+    focus_lr, _ = processor._extract_band_log_ratios(
+        {"theta": -0.2, "alpha": 0.1, "beta": 0.3, "gamma": 0.0}
+    )
+    assert focus_lr is not None
+
+
+def test_engaged_student_is_not_scored_as_stressed():
+    """Regression for the calibration bug: alpha is suppressed during focused
+    mental effort, so an engaged learner's calm score must still clear the
+    AdaptationEngine "stressed" threshold (calm_ratio < 0.35) -- otherwise
+    concentrating on a problem gets misread as distress and eases difficulty."""
+    processor = SignalProcessor(window_size=4)
+    engaged = {"theta": -0.10, "alpha": 0.10, "beta": 0.45, "gamma": 0.05}
+    features = None
+    for _ in range(4):
+        features = processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=740.0, channel_af7=760.0,
+                channel_af8=755.0, channel_tp10=745.0,
+            ),
+            engaged,
+        )
+    assert features["calm_score"] > 35.0
+    # ...while a genuinely aroused/stressed profile still drops below it.
+    stressed_processor = SignalProcessor(window_size=4)
+    stressed = {"theta": -0.05, "alpha": -0.20, "beta": 0.60, "gamma": 0.35}
+    stressed_features = None
+    for _ in range(4):
+        stressed_features = stressed_processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=740.0, channel_af7=760.0,
+                channel_af8=755.0, channel_tp10=745.0,
+            ),
+            stressed,
+        )
+    assert stressed_features["calm_score"] < 35.0
+    assert stressed_features["calm_score"] < features["calm_score"]
 
 
 def _quality_for(meta, window_size=4):

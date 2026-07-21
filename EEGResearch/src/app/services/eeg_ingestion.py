@@ -134,6 +134,11 @@ class SimulatedMuseIngestionAdapter:
     own calibrated log-ratio bounds, so the spectral-ratio path is exercised
     the same way it would be with a real headset.
 
+    Band powers are emitted in BELS, matching libMuse's ABSOLUTE band packets
+    and what SignalProcessor expects -- see get_ingestion_meta. This adapter
+    is a producer of those fields, so any change to how the processor
+    interprets them has to change this too.
+
     Note: SignalProcessor's focus ratio (beta / (alpha+theta)) and calm ratio
     (alpha / (beta+gamma)) share alpha and beta, so pushing focus toward its
     high end structurally requires beta > alpha, while pushing calm toward
@@ -197,21 +202,36 @@ class SimulatedMuseIngestionAdapter:
         )
 
     def get_ingestion_meta(self) -> dict[str, Any]:
-        # Derive band powers from the same hidden state driving the raw
-        # channel values, using SignalProcessor's own calibrated log-ratio
-        # bounds so the spectral path lands in a realistic range instead of
-        # saturating at 0 or 100 every tick. alpha/theta/gamma are picked
-        # first; beta is solved to hit the target focus log-ratio exactly,
-        # so focus_score responds cleanly to focus_state while calm
-        # naturally (and realistically) tapers as simulated focus rises.
-        alpha = 40.0 + self._calm_state * 20.0
-        theta = 4.0
-        gamma = 1.0
+        # Band powers are emitted in BELS (base-10 logarithms), matching what
+        # libMuse's ABSOLUTE band packets actually carry and what
+        # SignalProcessor now expects. Live Muse S captures put these roughly
+        # in -0.1 .. 0.85 B, so the values below stay in that range.
+        #
+        # Emitting linear magnitudes here (alpha ~40-60) while the processor
+        # exponentiates them produces 10**40-scale powers: the log-ratios come
+        # out around +-31 against bounds spanning ~1.6, so both spectral terms
+        # clamp and only the 25% amplitude term still moves. It also makes
+        # theta and gamma numerically negligible, which collapses focus to
+        # ln(beta/alpha) and calm to ln(alpha/beta) -- exact negations, so the
+        # two scores carry identical information and AdaptationEngine can no
+        # longer separate states.
+        #
+        # alpha/theta/gamma are picked first; beta is then solved IN LOG SPACE
+        # to hit the target focus log-ratio exactly, so focus_score responds
+        # cleanly to focus_state while calm tapers as simulated focus rises.
+        alpha = 0.10 + self._calm_state * 0.45
+        theta = 0.10
+        gamma = 0.05
         target_focus_log_ratio = self._FOCUS_BAND_GAIN * (
             SignalProcessor.FOCUS_LOG_RATIO_MIN
             + self._focus_state * (SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN)
         )
-        beta = math.exp(target_focus_log_ratio) * (alpha + theta)
+        # focus = ln(beta_p) - ln(alpha_p + theta_p), so
+        #   beta_p = exp(target) * (alpha_p + theta_p)
+        # and beta must be published as its base-10 log.
+        beta = math.log10(
+            math.exp(target_focus_log_ratio) * (10.0**alpha + 10.0**theta)
+        )
         return {
             "bridge_mode": "python_sim",
             # These intentionally stay false/empty regardless of self.connected:
@@ -226,7 +246,10 @@ class SimulatedMuseIngestionAdapter:
             "muse_devices": [],
             "active_muse_name": "",
             "firmware_version": "sim-1.0",
-            "delta": 4.0,
+            # Also Bels. delta is not used by either log-ratio, but it is
+            # persisted to cognitive_signals alongside the others, so it has to
+            # be on the same scale or stored sim rows are internally inconsistent.
+            "delta": 0.40,
             "theta": round(theta, 3),
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),

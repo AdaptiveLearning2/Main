@@ -74,6 +74,16 @@ public:
     BandPowers band_powers() const;
     /** Per-electrode fit/validity as reported by the headband itself. */
     ContactQuality contact_quality() const;
+    /**
+     * How many electrodes were averaged into the most recent band values.
+     * 4 means all were usable; a lower number means the rest were excluded as
+     * badly seated or invalid. 0 before any band packet has arrived.
+     */
+    int band_channels_used() const;
+    /** True once libMuse has delivered notch-filtered EEG (45-65Hz removed). */
+    bool notch_available() const;
+    /** Called by the data listener the first time a notch-filtered packet lands. */
+    void note_notch_available();
 
     /** BLE rescan: stop_listening + start_listening (matches GettingData32 Refresh). */
     void refresh_scan();
@@ -95,6 +105,8 @@ private:
     long long frame_counter_;
     BandPowers latest_bands_{};
     ContactQuality latest_contact_{};
+    int band_channels_used_{0};
+    std::atomic<bool> notch_available_{false};
 
 #if defined(ENABLE_LIBMUSE)
     class BridgeMuseListener;

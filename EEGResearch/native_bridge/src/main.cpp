@@ -69,6 +69,8 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     } else {
         o << "null";
     }
+    o << ",\"band_channels_used\":" << svc.band_channels_used()
+      << ",\"notch_filtered\":" << (svc.notch_available() ? "true" : "false");
     o << ",\"is_good\":";
     if (contact.has_is_good) {
         o << '[' << contact.is_good[0] << ',' << contact.is_good[1] << ','

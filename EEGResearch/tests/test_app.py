@@ -330,6 +330,40 @@ def test_signal_quality_takes_worse_of_fit_and_validity():
     assert features["signal_quality"] == "poor"
 
 
+def test_signal_quality_is_not_flipped_by_a_single_blink():
+    """IS_GOOD dips on eye blinks and muscle movement (libMuse documents this),
+    which briefly zeroes the frontal channels. A well-seated headband must not
+    drop out of "good" every time the student blinks."""
+    processor = SignalProcessor(window_size=8)
+    seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=740.0, channel_af7=760.0,
+        channel_af8=755.0, channel_tp10=745.0,
+    )
+    # Steady clean data, then one blink frame with both frontal channels bad.
+    for _ in range(6):
+        processor.update(sample, {**seated, "is_good": [1, 1, 1, 1]})
+    blink = processor.update(sample, {**seated, "is_good": [1, 0, 0, 1]})
+    assert blink["signal_quality"] == "good"
+
+
+def test_sustained_bad_data_still_degrades_quality():
+    # Smoothing must not hide a genuinely bad channel: enough consecutive bad
+    # frames should still pull the reported quality down.
+    processor = SignalProcessor(window_size=8)
+    seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=740.0, channel_af7=760.0,
+        channel_af8=755.0, channel_tp10=745.0,
+    )
+    features = None
+    for _ in range(10):
+        features = processor.update(sample, {**seated, "is_good": [1, 0, 0, 0]})
+    assert features["signal_quality"] != "good"
+
+
 def test_signal_quality_falls_back_when_contact_data_absent():
     # No headband contact data (older bridge, or simulator without it): the
     # legacy calm/confidence heuristic still applies rather than crashing.

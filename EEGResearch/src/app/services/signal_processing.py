@@ -28,12 +28,19 @@ class SignalProcessor:
 
     def __init__(self, window_size: int = 20) -> None:
         self.window: deque[EegSample] = deque(maxlen=window_size)
+        # IS_GOOD reports whether the last second of EEG was usable per channel,
+        # and libMuse notes it dips on eye blinks and muscle movement. Those are
+        # normal and constant, so the instantaneous value flickers -- smooth it
+        # over the same window rather than letting one blink downgrade the
+        # reported quality.
+        self._is_good_history: deque[float] = deque(maxlen=window_size)
 
     def reset(self) -> None:
         """Drop all buffered samples (e.g. after a signal-loss gap) so the next
         real reading warms back up cleanly instead of blending pre-gap and
         post-gap samples."""
         self.window.clear()
+        self._is_good_history.clear()
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -78,9 +85,15 @@ class SignalProcessor:
         good_channels: float | None = None
         if isinstance(is_good, list) and is_good:
             try:
-                good_channels = sum(1 for v in is_good if float(v) >= 1.0) / len(is_good)
+                instant = sum(1 for v in is_good if float(v) >= 1.0) / len(is_good)
             except (TypeError, ValueError):
-                good_channels = None
+                instant = None
+            if instant is not None:
+                # Average over the window so a blink (which briefly zeroes the
+                # frontal channels) doesn't flip the reported quality; sustained
+                # bad data still pulls the average down.
+                self._is_good_history.append(instant)
+                good_channels = fmean(self._is_good_history)
 
         fit_score: float | None = None
         if isinstance(hsi, list) and hsi:

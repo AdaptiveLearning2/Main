@@ -71,6 +71,7 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "bridge_mode",
         "muse_connected",
         "muse_discovered",
+        "bluetooth_enabled",
         "connection_state",
         "kind",
         "active_muse_name",
@@ -83,7 +84,7 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
     ):
         if key not in payload:
             continue
-        if key in {"muse_connected", "muse_discovered"}:
+        if key in {"muse_connected", "muse_discovered", "bluetooth_enabled"}:
             target[key] = bool(payload[key])
         elif key == "connection_state":
             v = payload[key]
@@ -204,6 +205,7 @@ class SimulatedMuseIngestionAdapter:
             # hardware paired -- the simulator has no real device to report.
             "muse_connected": False,
             "muse_discovered": False,
+            "bluetooth_enabled": True,
             "connection_state": -1,
             "muse_devices": [],
             "active_muse_name": "",
@@ -232,6 +234,7 @@ class TcpMuseBridgeAdapter:
             "bridge_mode": "unknown",
             "muse_connected": False,
             "muse_discovered": False,
+            "bluetooth_enabled": True,
             "connection_state": None,
             "muse_devices": [],
             "active_muse_name": "",

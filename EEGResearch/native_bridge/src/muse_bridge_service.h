@@ -61,6 +61,14 @@ public:
     /** Disconnect and drop the active Muse handle. */
     void disconnect_muse();
 
+    /**
+     * Whether the Windows Bluetooth radio itself is powered on (matches
+     * GettingData32's check_bluetooth_enabled/is_bluetooth_enabled). True
+     * when the radio state can't be determined, so this never blocks a scan
+     * on its own -- it's a diagnostic surfaced to callers, not a gate.
+     */
+    bool bluetooth_enabled() const;
+
 private:
     std::atomic<bool> running_;
     long long frame_counter_;
@@ -89,10 +97,13 @@ private:
     std::vector<std::string> muse_names_;
     std::string active_muse_name_;
     std::string firmware_version_;
+    std::atomic<bool> bluetooth_enabled_{true};
 
     void enqueue_frame(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     void update_band_power(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     void update_connection_state(interaxon::bridge::ConnectionState state);
     void rebuild_muse_name_list();
+    /** Re-queries the OS Bluetooth radio state; called on start() and refresh_scan(). */
+    void refresh_bluetooth_state();
 #endif
 };

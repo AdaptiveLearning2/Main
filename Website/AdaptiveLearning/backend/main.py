@@ -421,9 +421,24 @@ def join_class(payload: JoinClassRequest, request: Request):
     }).execute()
     return cls.data[0]
 
+def _verify_class_owner(class_id: str, user_id: str):
+    """Only the teacher who owns a class may read its roster or live data.
+
+    These endpoints query through the service-role client, which bypasses RLS,
+    so the database will not stop a caller on its own -- the check has to happen
+    here or not at all.
+    """
+    cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
+    if not cls.data:
+        raise HTTPException(404, "Class not found")
+    if cls.data["teacher_id"] != user_id:
+        raise HTTPException(403, "Not your class")
+
+
 @app.get("/api/classes/{class_id}/students")
 def class_students(class_id: str, request: Request):
-    get_user(request)
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
@@ -531,11 +546,9 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
     user = get_user(request)
-    cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
-    if not cls.data:
-        raise HTTPException(404, "Class not found")
-    if cls.data["teacher_id"] != user["id"] and user.get("user_metadata", {}).get("role") != "teacher":
-        raise HTTPException(403, "Not your class")
+    # Was: `owner != user AND role != "teacher"` -- which only rejected callers
+    # who were neither, so ANY teacher could read ANY class's live signals.
+    _verify_class_owner(class_id, user["id"])
 
     LIVE_WINDOW_SEC = 90
     STALE_AFTER_SEC = 600

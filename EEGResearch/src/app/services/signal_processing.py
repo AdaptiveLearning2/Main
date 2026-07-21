@@ -59,7 +59,12 @@ class SignalProcessor:
     CONTACT_SMOOTHING_SECONDS = 5.0
 
     def __init__(self, window_size: int = 20) -> None:
-        self.window: deque[EegSample] = deque(maxlen=window_size)
+        # Holds the good-channel values per admitted sample, not the raw
+        # EegSample: which electrodes were trustworthy is a property of the
+        # moment the sample arrived, so the mask has to be applied on the way
+        # in rather than recomputed later against whatever contact data is
+        # current. See _good_channel_values.
+        self.window: deque[list[float]] = deque(maxlen=window_size)
         # IS_GOOD reports whether the last second of EEG was usable per channel,
         # and libMuse notes it dips on eye blinks and muscle movement. Those are
         # normal and constant, so the instantaneous value flickers -- smooth it
@@ -245,6 +250,13 @@ class SignalProcessor:
         their own resting values removes that dependency, and also cancels part
         of any per-session contact offset, since the baseline is captured under
         the same contact conditions as the samples it is compared against.
+
+        Known limitation: this assumes the opening ~15s is representative of
+        rest. A learner who starts already engaged makes that engagement their
+        zero point, and subsequent genuine engagement then reads as neutral.
+        Validation so far is simulated only; confirming this against a real
+        seated capture, where the opening seconds are usually settling-in
+        rather than work, is the outstanding piece.
         """
         if self._baseline_ready:
             return
@@ -273,12 +285,57 @@ class SignalProcessor:
             return self._clamp01((raw - lo) / (hi - lo))
 
         # Centre on the baseline and spread by half the population range, so
-        # "at your own resting level" reads as 0.5 and a full population-width
-        # swing still saturates.
+        # "at your own resting level" reads as 0.5. Note this makes the
+        # baseline path twice as sensitive as population scaling: the score
+        # saturates at +-half the population range, not a full width. That is
+        # deliberate -- within-person variation is much narrower than the
+        # between-person spread the population bounds have to cover -- but it
+        # does mean the two paths are not interchangeable, and a session
+        # crossing over from one to the other will change gain at that point.
         half_span = (hi - lo) / 2.0
         if half_span <= 0:
             return 0.5
         return self._clamp01(0.5 + (raw - baseline) / (2.0 * half_span))
+
+    @staticmethod
+    def _good_channel_values(sample: EegSample, meta: dict[str, Any] | None) -> list[float]:
+        """The raw channel values the headband reports as usable.
+
+        Mirrors the mask the native bridge applies when averaging band powers
+        (update_band_power in muse_bridge_service.cpp): a channel counts when
+        IS_GOOD says the last second was usable AND HSI says the fit is at
+        least mediocre (<= 2; 0 means "not reported", which is not evidence of
+        a bad fit).
+
+        Without this the amplitude path averaged all four electrodes
+        unconditionally, so the exact scenario this PR exists for -- ear
+        contacts failing while the frontals read cleanly -- passed straight
+        through: _sample_is_usable only rejects a frame when *every* electrode
+        is bad. mean_spread is max-min across channels, which is maximally
+        sensitive to a railing electrode, and the amplitude term is 25% of the
+        blended scores and 32% of the confidence weight.
+
+        Falls back to all four whenever contact data is absent or would exclude
+        everything, so this never yields less data than the previous behaviour.
+        """
+        values = [sample.channel_tp9, sample.channel_af7, sample.channel_af8, sample.channel_tp10]
+        meta = meta or {}
+        is_good = meta.get("is_good")
+        hsi = meta.get("hsi")
+        has_is_good = isinstance(is_good, list) and len(is_good) == len(values)
+        has_hsi = isinstance(hsi, list) and len(hsi) == len(values)
+        if not has_is_good and not has_hsi:
+            return values
+        kept: list[float] = []
+        try:
+            for i, value in enumerate(values):
+                valid = (not has_is_good) or float(is_good[i]) >= 1.0
+                seated = (not has_hsi) or float(hsi[i]) <= 2.0
+                if valid and seated:
+                    kept.append(value)
+        except (TypeError, ValueError):
+            return values
+        return kept or values
 
     @staticmethod
     def _sample_is_usable(meta: dict[str, Any] | None) -> bool:
@@ -302,40 +359,63 @@ class SignalProcessor:
         # Never let filtering empty the window -- the feature maths below needs
         # at least one sample, and a run of bad frames should hold the last good
         # reading rather than fail.
-        if self.window and not self._sample_is_usable(bands):
+        usable = self._sample_is_usable(bands)
+        if self.window and not usable:
             self._samples_rejected += 1
         else:
-            self.window.append(sample)
+            # Store only the electrodes the headband vouches for, so a failed
+            # contact cannot skew mean level or spread for the whole window.
+            self.window.append(self._good_channel_values(sample, bands))
         all_values: list[float] = []
         per_sample_spreads: list[float] = []
         per_sample_means: list[float] = []
-        for item in self.window:
-            values = [item.channel_tp9, item.channel_af7, item.channel_af8, item.channel_tp10]
+        for values in self.window:
             all_values.extend(values)
-            per_sample_spreads.append(max(values) - min(values))
             per_sample_means.append(fmean(values))
+            # A spread needs at least two electrodes. With one good channel
+            # max-min is 0, which would score as a perfectly steady signal --
+            # fabricating "maximally calm" out of an almost-dead headband.
+            if len(values) >= 2:
+                per_sample_spreads.append(max(values) - min(values))
         mean_level = fmean(all_values)
-        mean_spread = fmean(per_sample_spreads)
+        mean_spread = fmean(per_sample_spreads) if per_sample_spreads else None
 
         focus_span = self.FOCUS_MAX_LEVEL - self.FOCUS_MIN_LEVEL
         focus_amp_ratio = self._clamp01((mean_level - self.FOCUS_MIN_LEVEL) / focus_span)
 
         calm_span = self.CALM_MAX_SPREAD - self.CALM_MIN_SPREAD
-        calm_amp_ratio = self._clamp01(1.0 - ((mean_spread - self.CALM_MIN_SPREAD) / calm_span))
+        calm_amp_ratio = (
+            None if mean_spread is None
+            else self._clamp01(1.0 - ((mean_spread - self.CALM_MIN_SPREAD) / calm_span))
+        )
 
         band_focus_raw, band_calm_raw = self._extract_band_log_ratios(bands)
         using_band_features = band_focus_raw is not None and band_calm_raw is not None
         if using_band_features:
-            self._collect_baseline(band_focus_raw, band_calm_raw)
+            # Gated on the same verdict as the window. The baseline used to
+            # ingest exactly the frames the window rejected, which is worse
+            # than the window pollution it mirrors: the baseline latches after
+            # BASELINE_SAMPLES and is never revisited, so one burst of artifact
+            # frames during warm-up skews every score for the rest of the
+            # session.
+            if usable:
+                self._collect_baseline(band_focus_raw, band_calm_raw)
             focus_band_ratio = self._score_against_baseline(band_focus_raw, "focus")
             calm_band_ratio = self._score_against_baseline(band_calm_raw, "calm")
             # Blend toward amplitude-derived values to preserve continuity during
             # transient band jitter while still prioritizing spectral features.
             focus_ratio = (0.75 * focus_band_ratio) + (0.25 * focus_amp_ratio)
-            calm_ratio = (0.75 * calm_band_ratio) + (0.25 * calm_amp_ratio)
+            # With no usable spread the amplitude term carries no information,
+            # so the spectral term takes full weight rather than blending in a
+            # value that was invented rather than measured.
+            calm_ratio = (
+                calm_band_ratio if calm_amp_ratio is None
+                else (0.75 * calm_band_ratio) + (0.25 * calm_amp_ratio)
+            )
         else:
             focus_ratio = focus_amp_ratio
-            calm_ratio = calm_amp_ratio
+            # Neutral rather than 1.0: no spread data is absence of evidence.
+            calm_ratio = 0.5 if calm_amp_ratio is None else calm_amp_ratio
 
         warmup_factor = len(self.window) / self.window.maxlen
         stability_std = pstdev(per_sample_means) if len(per_sample_means) > 1 else 0.0
@@ -360,4 +440,10 @@ class SignalProcessor:
             # verdict, "heuristic" when it did not. Consumers that act on
             # "poor" must check this -- see _signal_quality.
             "quality_basis": quality_basis,
+            # Diagnostics. Both are surfaced rather than kept internal so a
+            # session that scored oddly can be explained after the fact:
+            # how many frames the contact filter dropped, and how many
+            # electrodes the bridge averaged into the band values (4 = all).
+            "samples_rejected": self._samples_rejected,
+            "band_channels_used": (bands or {}).get("band_channels_used"),
         }

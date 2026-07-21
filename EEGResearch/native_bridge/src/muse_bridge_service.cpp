@@ -48,8 +48,11 @@ public:
             service_.enqueue_frame(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::EEG:
-            // Fall back to raw only while no notch-filtered packets are
-            // arriving, so a preset that doesn't emit them still produces data.
+            // Fall back to raw only while notch-filtered packets are actually
+            // arriving (within NOTCH_STALE_MS), so a preset that doesn't emit
+            // them still produces data -- and so does a session where they
+            // stop partway through, which a latch would have turned into a
+            // total loss of frames until reconnect.
             if (!service_.notch_available()) {
                 service_.enqueue_frame(packet);
             }
@@ -159,7 +162,7 @@ void MuseBridgeService::stop() {
         latest_bands_ = BandPowers{};
         latest_contact_ = ContactQuality{};
         band_channels_used_ = 0;
-        notch_available_.store(false);
+        last_notch_ms_.store(0);
         connected_ = false;
         last_connection_state_ = static_cast<int>(interaxon::bridge::ConnectionState::UNKNOWN);
     }
@@ -242,7 +245,7 @@ void MuseBridgeService::disconnect_muse() {
         latest_bands_ = BandPowers{};
         latest_contact_ = ContactQuality{};
         band_channels_used_ = 0;
-        notch_available_.store(false);
+        last_notch_ms_.store(0);
         connected_ = false;
         last_connection_state_ = static_cast<int>(interaxon::bridge::ConnectionState::DISCONNECTED);
     }
@@ -256,7 +259,7 @@ void MuseBridgeService::disconnect_muse() {
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
         muse->unregister_connection_listener(connection_listener_);
     }
@@ -308,12 +311,24 @@ ContactQuality MuseBridgeService::contact_quality() const {
 #endif
 }
 
+namespace {
+long long steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
+
 bool MuseBridgeService::notch_available() const {
-    return notch_available_.load();
+    const long long last = last_notch_ms_.load();
+    if (last == 0) {
+        return false;
+    }
+    return (steady_now_ms() - last) <= NOTCH_STALE_MS;
 }
 
 void MuseBridgeService::note_notch_available() {
-    notch_available_.store(true);
+    last_notch_ms_.store(steady_now_ms());
 }
 
 int MuseBridgeService::band_channels_used() const {
@@ -411,9 +426,11 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
     if (latest_contact_.has_is_good || latest_contact_.has_hsi) {
         for (size_t i = 0; i < per_channel.size(); ++i) {
             const bool valid_data = !latest_contact_.has_is_good || latest_contact_.is_good[i] >= 1.0;
-            // HSI: 1 good, 2 mediocre, 4 poor. 0 means "not reported".
+            // HSI: 1 good, 2 mediocre, 4 poor. 0 means "not reported", which
+            // is covered by <= 2.0 -- absence of a fit reading is not evidence
+            // of a bad fit, so it must not exclude the channel.
             const double fit = latest_contact_.hsi[i];
-            const bool seated = !latest_contact_.has_hsi || fit <= 0.0 || fit <= 2.0;
+            const bool seated = !latest_contact_.has_hsi || fit <= 2.0;
             if (valid_data && seated) {
                 sum += per_channel[i];
                 ++used;

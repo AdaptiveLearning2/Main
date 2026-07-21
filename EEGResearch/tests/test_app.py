@@ -651,6 +651,109 @@ def test_samples_without_contact_data_are_never_discarded():
     assert len(processor.window) == 3
 
 
+def test_baseline_ignores_the_frames_the_window_rejects():
+    """The baseline must be gated on the same usability verdict as the window.
+
+    Baselining a frame the window rejected is worse than the window pollution
+    it mirrors: the baseline latches after BASELINE_SAMPLES and is never
+    revisited, so artifacts during warm-up shift every score for the rest of
+    the session rather than for one window length.
+    """
+    good = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
+    bad = {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
+
+    clean = SignalProcessor(window_size=8)
+    while not clean._baseline_ready:
+        clean.update(_sample(), good)
+
+    polluted = SignalProcessor(window_size=8)
+    i = 0
+    while not polluted._baseline_ready:
+        # Every third frame is a fully-invalid artifact at a wildly different
+        # amplitude -- the same thing the window already refuses.
+        polluted.update(_sample(5000.0) if i % 3 == 2 else _sample(),
+                        bad if i % 3 == 2 else good)
+        i += 1
+
+    assert polluted._samples_rejected > 0, "test must actually exercise rejection"
+    assert polluted._baseline_focus_mean == pytest.approx(clean._baseline_focus_mean, abs=1e-9)
+    assert polluted._baseline_calm_mean == pytest.approx(clean._baseline_calm_mean, abs=1e-9)
+
+    # The observable consequence: an identical good frame must score the same.
+    c = clean.update(_sample(), good)
+    p = polluted.update(_sample(), good)
+    assert p["focus_score"] == pytest.approx(c["focus_score"], abs=0.01)
+    assert p["calm_score"] == pytest.approx(c["calm_score"], abs=0.01)
+
+
+def test_amplitude_path_excludes_electrodes_the_headband_flagged():
+    """_sample_is_usable only rejects when *every* electrode is bad, so the
+    motivating scenario -- ear contacts failing while the frontals read
+    cleanly -- reaches the amplitude maths. mean_spread is max-min across
+    channels, so one railing electrode dominates it, and the amplitude term is
+    25% of the blended scores and 32% of the confidence weight."""
+    def ears(tp9, tp10):
+        # Identical clean frontals; only the two flagged ear electrodes differ.
+        return EegSample(
+            timestamp=datetime.now(timezone.utc),
+            channel_tp9=tp9, channel_af7=720.0, channel_af8=715.0, channel_tp10=tp10,
+        )
+
+    flagged_meta = {**_ENGAGED_BANDS, "is_good": [0, 1, 1, 0], "hsi": [4, 1, 1, 4]}
+    unflagged_meta = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
+
+    def run(sample, meta):
+        processor = SignalProcessor(window_size=8)
+        for _ in range(8):
+            features = processor.update(sample, meta)
+        return processor, features
+
+    # Two different sets of readings on the flagged ear electrodes. Kept inside
+    # CALM_MIN_SPREAD..CALM_MAX_SPREAD rather than fully railing, so the
+    # unflagged control below lands on distinct scores instead of both clamping
+    # to 0 -- a railing electrode saturates the calm term outright, which is a
+    # larger error than this measures, not a smaller one.
+    proc_a, a = run(ears(730.0, 700.0), flagged_meta)
+    _, b = run(ears(800.0, 650.0), flagged_meta)
+
+    # The frames were admitted (not all-bad), but only the two vouched-for
+    # electrodes were stored, so what the ears read cannot matter at all.
+    assert len(proc_a.window) == 8
+    assert len(proc_a.window[0]) == 2
+    for key in ("focus_score", "calm_score", "confidence"):
+        assert a[key] == pytest.approx(b[key], abs=0.01), f"{key} moved with a flagged electrode"
+
+    # Guard against the assertion above passing vacuously: with the same two
+    # readings *unflagged*, the scores must diverge -- which is the old
+    # behaviour, and the size of the error the mask prevents.
+    _, a_raw = run(ears(730.0, 700.0), unflagged_meta)
+    _, b_raw = run(ears(800.0, 650.0), unflagged_meta)
+    assert abs(a_raw["calm_score"] - b_raw["calm_score"]) > 5.0
+
+
+def test_single_good_electrode_does_not_fabricate_perfect_calm():
+    """With one usable channel, max-min is 0, which the calm amplitude term
+    would read as a perfectly steady signal -- inventing "maximally calm" from
+    an almost-dead headband. Absence of a spread reading is not evidence."""
+    one_good = {"is_good": [0, 1, 0, 0], "hsi": [4, 1, 4, 4]}
+    processor = SignalProcessor(window_size=4)
+    for _ in range(4):
+        features = processor.update(_sample(), one_good)  # no band data
+    assert len(processor.window[0]) == 1
+    assert features["calm_score"] == pytest.approx(50.0, abs=0.01)
+
+
+def test_diagnostics_are_surfaced_in_the_feature_payload():
+    processor = SignalProcessor(window_size=4)
+    processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]})
+    features = processor.update(
+        _sample(5000.0),
+        {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0], "band_channels_used": 2},
+    )
+    assert features["samples_rejected"] == 1
+    assert features["band_channels_used"] == 2
+
+
 def test_scores_center_on_baseline_once_it_is_established():
     """After the baseline period, holding steady at the learner's own resting
     level should read mid-scale rather than wherever fixed population bounds

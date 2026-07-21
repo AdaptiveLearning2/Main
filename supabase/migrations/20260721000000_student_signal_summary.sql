@@ -10,6 +10,15 @@
 -- These tables have separate user_id and ts indexes, but every query here
 -- filters on both at once ("this student, since this date"). A composite index
 -- lets that be a single range scan rather than combining two indexes.
+--
+-- Operational note: these are plain CREATE INDEX, so each takes a brief
+-- ACCESS EXCLUSIVE lock on its table while building -- writes to
+-- cognitive_signals will block for the duration. CONCURRENTLY would avoid
+-- that but cannot be used here: Supabase runs each migration inside a
+-- transaction, and CREATE INDEX CONCURRENTLY is not allowed in one. At current
+-- table sizes the build is short; if these tables grow large before this is
+-- applied to production, build the indexes manually with CONCURRENTLY outside
+-- a transaction first, and the IF NOT EXISTS here will then no-op.
 CREATE INDEX IF NOT EXISTS "cog_user_ts_idx"
   ON "public"."cognitive_signals" USING "btree" ("user_id", "ts" DESC);
 
@@ -45,16 +54,21 @@ AS $$
     SELECT now() - (GREATEST(p_days, 1) || ' days')::interval AS since
   ),
   cog AS (
+    -- count(c.focus), not count(*): a row with a NULL focus contributes
+    -- nothing to avg(), and since #18/#20 the pipeline deliberately writes
+    -- rows with NULL measurements when electrode contact is bad (the row is
+    -- kept so the session timeline stays intact). Counting those would report
+    -- a nonzero sample count beside a NULL average.
     SELECT avg(c.focus)      AS focus,
            avg(c.stress)     AS stress,
            avg(c.engagement) AS engagement,
-           count(*)          AS n
+           count(c.focus)    AS n
     FROM cognitive_signals c, bounds b
     WHERE c.user_id = p_student_id AND c.ts >= b.since
   ),
   fac AS (
-    SELECT avg(f.attention) AS attention,
-           count(*)         AS n
+    SELECT avg(f.attention)  AS attention,
+           count(f.attention) AS n
     FROM face_signals f, bounds b
     WHERE f.user_id = p_student_id AND f.ts >= b.since
   ),
@@ -66,6 +80,58 @@ AS $$
   SELECT cog.focus, cog.stress, cog.engagement, fac.attention,
          ses.n, cog.n, fac.n
   FROM cog, fac, ses;
+$$;
+
+-- 3. Batch variant -----------------------------------------------------------
+-- Same aggregate for many students in one round-trip. The single-student
+-- function above removes the row transfer but not the N round-trips when a
+-- parent dashboard calls it once per child; this removes both.
+CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
+  "p_student_ids" "uuid"[],
+  "p_days" integer DEFAULT 7
+)
+RETURNS TABLE (
+  "student_id" "uuid",
+  "focus" double precision,
+  "stress" double precision,
+  "engagement" double precision,
+  "face_attention" double precision,
+  "sessions" bigint,
+  "cognitive_samples" bigint,
+  "face_samples" bigint
+)
+LANGUAGE "sql"
+STABLE
+AS $$
+  -- Explicit CROSS JOIN, not a comma: comma binds looser than JOIN, so with
+  -- "FROM ids, bounds b LEFT JOIN LATERAL (...)" the lateral subquery would
+  -- only see b and could not reference ids.sid.
+  SELECT ids.sid,
+         cog.focus, cog.stress, cog.engagement, fac.attention,
+         ses.n, cog.n, fac.n
+  FROM (SELECT DISTINCT u.sid FROM unnest(p_student_ids) AS u(sid)) ids
+  CROSS JOIN (
+    SELECT now() - (GREATEST(p_days, 1) || ' days')::interval AS since
+  ) b
+  LEFT JOIN LATERAL (
+    SELECT avg(c.focus)      AS focus,
+           avg(c.stress)     AS stress,
+           avg(c.engagement) AS engagement,
+           count(c.focus)    AS n
+    FROM cognitive_signals c
+    WHERE c.user_id = ids.sid AND c.ts >= b.since
+  ) cog ON true
+  LEFT JOIN LATERAL (
+    SELECT avg(f.attention)   AS attention,
+           count(f.attention) AS n
+    FROM face_signals f
+    WHERE f.user_id = ids.sid AND f.ts >= b.since
+  ) fac ON true
+  LEFT JOIN LATERAL (
+    SELECT count(*) AS n
+    FROM sessions s
+    WHERE s.user_id = ids.sid AND s.started_at >= b.since
+  ) ses ON true;
 $$;
 
 -- Lock execution down to the service role the backend uses.
@@ -85,5 +151,12 @@ REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM P
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer) FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."student_signal_summary"("uuid", integer) TO "service_role";
+
+-- Same treatment for the batch variant. Easy to forget on a second function
+-- added later, which is exactly how one ends up anon-callable.
+REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM "anon";
+REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) FROM "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer) TO "service_role";
 
 NOTIFY pgrst, 'reload schema';

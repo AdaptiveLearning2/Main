@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os, requests, random, string, threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -75,8 +75,19 @@ def _avg(values):
     return round(sum(nums) / len(nums), 2)
 
 
+def _utc_now() -> datetime:
+    """Timezone-aware UTC.
+
+    datetime.utcnow() is deprecated in 3.12 and returns a *naive* datetime,
+    which compares wrongly against the timestamptz columns these queries filter
+    on. The rest of this module still uses utcnow() in older endpoints; new
+    code should use this instead of spreading the pattern further.
+    """
+    return datetime.now(timezone.utc)
+
+
 def _iso_days_ago(days: int = 7) -> str:
-    return (datetime.utcnow() - timedelta(days=days)).isoformat()
+    return (_utc_now() - timedelta(days=days)).isoformat()
 
 
 def _topic_breakdown(student_id: str):
@@ -111,25 +122,58 @@ def _signal_summary(student_id: str, days: int = 7) -> dict:
     list that loads every visit. This returns the same headline figures without
     transferring any rows -- see the student_signal_summary migration.
     """
-    empty = {"focus": None, "stress": None, "engagement": None,
-             "face_attention": None, "sessions": 0}
     try:
         res = supabase.rpc("student_signal_summary",
                            {"p_student_id": student_id, "p_days": days}).execute()
     except Exception as e:
         print(f"[signal_summary] {e}")
-        return empty
+        return _EMPTY_SUMMARY.copy()
     rows = res.data or []
     row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
+    return _shape_summary(row)
+
+
+_EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
+                  "face_attention": None, "sessions": 0,
+                  "cognitive_samples": 0, "face_samples": 0}
+
+
+def _shape_summary(row) -> dict:
     if not row:
-        return empty
+        return _EMPTY_SUMMARY.copy()
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
         "engagement": row.get("engagement"),
         "face_attention": row.get("face_attention"),
         "sessions": row.get("sessions") or 0,
+        # Surfaced rather than dropped: an average of None next to a sample
+        # count of 0 means "nothing recorded", while None next to a nonzero
+        # count would mean "recorded but unusable". The SQL counts non-NULL
+        # measurements specifically so that distinction holds.
+        "cognitive_samples": row.get("cognitive_samples") or 0,
+        "face_samples": row.get("face_samples") or 0,
     }
+
+
+def _signal_summaries(student_ids: list[str], days: int = 7) -> dict[str, dict]:
+    """Headline averages for many students in one round-trip.
+
+    The single-student RPC removes the row transfer but still costs one
+    round-trip per child on a dashboard that loads every visit.
+    """
+    if not student_ids:
+        return {}
+    try:
+        res = supabase.rpc("student_signal_summary_many",
+                           {"p_student_ids": student_ids, "p_days": days}).execute()
+    except Exception as e:
+        print(f"[signal_summaries] {e}")
+        return {}
+    rows = res.data or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    return {str(r.get("student_id")): _shape_summary(r) for r in rows if r.get("student_id")}
 
 
 def _weekly_signal_report(student_id: str, days: int = 7):
@@ -140,48 +184,75 @@ def _weekly_signal_report(student_id: str, days: int = 7):
     """
     since = _iso_days_ago(days)
 
-    def _fetch(table: str, ts_col: str, limit: int):
+    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool]:
+        """Rows (newest first) plus whether the server withheld any.
+
+        Truncation is detected from an exact count rather than from
+        len(rows) >= limit. PostgREST applies its own db-max-rows ceiling
+        (commonly 1000) on top of our .limit(), so a smaller server cap would
+        silently trim the result while len(rows) never reached _REPORT_ROW_CAP
+        -- leaving truncated=False and the whole guard disabled. Comparing
+        against the count the server reports works whichever limit binds.
+        """
         try:
-            return supabase.table(table).select("*") \
+            res = supabase.table(table).select("*", count="exact") \
                 .eq("user_id", student_id).gte(ts_col, since) \
-                .order(ts_col, desc=True).limit(limit).execute().data or []
+                .order(ts_col, desc=True).limit(limit).execute()
+            rows = res.data or []
+            total = getattr(res, "count", None)
+            # count=None means the client/server didn't report one; fall back
+            # to the length heuristic rather than claiming nothing was cut.
+            was_cut = (total > len(rows)) if isinstance(total, int) else len(rows) >= limit
+            return rows, was_cut
         except Exception as e:
             print(f"[weekly_report:{table}] {e}")
-            return []
+            return [], False
 
-    cog = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    face = _fetch("face_signals", "ts", _REPORT_ROW_CAP)
-    sessions = _fetch("sessions", "started_at", 100)
+    cog, cog_cut = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP)
+    sessions, _ = _fetch("sessions", "started_at", 100)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
     # back empty and would be reported as "no activity" rather than "not
-    # retrieved". Only build buckets for days actually covered by the data, and
-    # tell the caller when the window was clipped, so the UI can say so instead
-    # of drawing a misleading flat line.
-    truncated = len(cog) >= _REPORT_ROW_CAP or len(face) >= _REPORT_ROW_CAP
-    oldest_ts = min(
-        [str(r.get("ts", "")) for r in cog if r.get("ts")]
-        + [str(r.get("ts", "")) for r in face if r.get("ts")],
-        default="",
-    )
+    # retrieved".
+    #
+    # Tracked per table, because the cap is per table. Taking the oldest
+    # timestamp across both and a single OR'd truncation flag got the mixed
+    # case wrong: when cognitive was cut and face was not, the older face rows
+    # held oldest_ts back, so no days were skipped and the trimmed cognitive
+    # days rendered as None -- displayed to parents as "no activity", the exact
+    # confusion this guard exists to prevent.
+    def _oldest(rows: list, ts_col: str) -> str:
+        return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
+
+    truncated = cog_cut or face_cut
+    cog_oldest_day = _oldest(cog, "ts")[:10]
+    face_oldest_day = _oldest(face, "ts")[:10]
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
 
     daily = []
     for i in range(days - 1, -1, -1):
-        day = (datetime.utcnow() - timedelta(days=i)).date().isoformat()
-        if truncated and oldest_ts and day < oldest_ts[:10]:
-            continue  # older than what the cap let us retrieve
+        day = (_utc_now() - timedelta(days=i)).date().isoformat()
+        # "We could not retrieve this day", judged per table.
+        cog_missing = bool(cog_cut and cog_oldest_day and day < cog_oldest_day)
+        face_missing = bool(face_cut and face_oldest_day and day < face_oldest_day)
+        if cog_missing and face_missing:
+            continue  # nothing retrievable for this day at all
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
         daily.append({
             "date": day,
-            "focus": _avg([r.get("focus") for r in day_cog]),
-            "stress": _avg([r.get("stress") for r in day_cog]),
-            "engagement": _avg([r.get("engagement") for r in day_cog]),
-            "attention": _avg([r.get("attention") for r in day_face]),
+            "focus": None if cog_missing else _avg([r.get("focus") for r in day_cog]),
+            "stress": None if cog_missing else _avg([r.get("stress") for r in day_cog]),
+            "engagement": None if cog_missing else _avg([r.get("engagement") for r in day_cog]),
+            "attention": None if face_missing else _avg([r.get("attention") for r in day_face]),
             "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
+            # False means "the cap stopped us fetching this", which a null
+            # metric alone cannot distinguish from "nothing was recorded".
+            "cognitive_retrieved": not cog_missing,
+            "face_retrieved": not face_missing,
         })
 
     emotion_counts: dict[str, int] = {}
@@ -195,13 +266,18 @@ def _weekly_signal_report(student_id: str, days: int = 7):
     highest_stress = max([float(r["stress"]) for r in cog if r.get("stress") is not None], default=None)
     lowest_focus = min([float(r["focus"]) for r in cog if r.get("focus") is not None], default=None)
 
+    # The averages are 0..1 ratios, as stored. Interpolating them straight into
+    # a "%" sentence produced "average focus was 0.72%".
+    def _as_pct(ratio):
+        return round(float(ratio) * 100)
+
     bits = []
     if avg_focus is not None:
-        bits.append(f"average focus was {avg_focus}%")
+        bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
-        bits.append(f"average stress was {avg_stress}%")
+        bits.append(f"average stress was {_as_pct(avg_stress)}%")
     if avg_attention is not None:
-        bits.append(f"average face attention was {avg_attention}%")
+        bits.append(f"average face attention was {_as_pct(avg_attention)}%")
     summary = ("This week, " + ", ".join(bits) + ".") if bits else \
         "No EEG or facial recognition samples were recorded this week."
 
@@ -976,6 +1052,11 @@ def my_children(request: Request):
     user = get_user(request)
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
+    # One round-trip for every child's signal averages, rather than one per
+    # child inside the loop below. Note the rest of this loop is still a query
+    # per child (stats, sessions, performance, profile); this fixes the query
+    # added here, not the endpoint's overall shape.
+    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])])
     children = []
     for lnk in (links.data or []):
         cid = lnk["child_id"]
@@ -995,7 +1076,7 @@ def my_children(request: Request):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": _signal_summary(cid),
+            "signal_summary": summaries.get(str(cid)) or _EMPTY_SUMMARY.copy(),
         })
     return children
 

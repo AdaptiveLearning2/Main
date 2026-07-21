@@ -1,9 +1,23 @@
 import { Activity, Brain, Eye, Radio, Zap } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
-function fmt(value, suffix = '%') {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'N/A'
-  return `${Math.round(Number(value))}${suffix}`
+// Signal values cross the wire as 0..1 ratios -- that is what cognitive_signals
+// and face_signals store, and what /live and the parent dashboard tiles both
+// assume (Live.jsx's Gauge and Dashboard.jsx both scale by 100 at render).
+// Rendering them without scaling printed focus 0.72 as "1%", i.e. every metric
+// on this panel came out ~100x too small.
+function pct(ratio) {
+  if (ratio === null || ratio === undefined || Number.isNaN(Number(ratio))) return 'N/A'
+  return `${Math.round(Number(ratio) * 100)}%`
+}
+
+// Same scaling for chart series. Nulls must stay null rather than becoming 0:
+// a day with no retrievable data should leave a gap, not draw a line at the
+// floor claiming zero focus.
+function toPct(ratio) {
+  return ratio === null || ratio === undefined || Number.isNaN(Number(ratio))
+    ? null
+    : Number(ratio) * 100
 }
 
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
@@ -43,10 +57,10 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <Radio size={18} className="text-emerald-500" />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MiniMetric label="Focus" value={fmt(cog.focus)} icon={Brain} tone="emerald" />
-        <MiniMetric label="Stress" value={fmt(cog.stress)} icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={fmt(cog.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={fmt(face.attention)} icon={Eye} tone="sky" />
+        <MiniMetric label="Focus" value={pct(cog.focus)} icon={Brain} tone="emerald" />
+        <MiniMetric label="Stress" value={pct(cog.stress)} icon={Zap} tone="rose" />
+        <MiniMetric label="Engagement" value={pct(cog.engagement)} icon={Activity} tone="indigo" />
+        <MiniMetric label="Face Attention" value={pct(face.attention)} icon={Eye} tone="sky" />
       </div>
       <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
@@ -55,7 +69,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
-          <p className="font-bold text-gray-900 dark:text-white">{fmt(face.identity_confidence)}</p>
+          <p className="font-bold text-gray-900 dark:text-white">{pct(face.identity_confidence)}</p>
         </div>
       </div>
     </div>
@@ -66,10 +80,20 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const avg = report?.averages || {}
   const highlights = report?.highlights || {}
   const counts = report?.sample_counts || {}
+  // Scaled to percent to match the YAxis domain below. Left as 0..1 ratios,
+  // every series drew flat along the axis floor.
   const chartData = (report?.daily || []).map(d => ({
     ...d,
+    focus: toPct(d.focus),
+    stress: toPct(d.stress),
+    attention: toPct(d.attention),
     label: d.date ? d.date.slice(5) : '',
   }))
+  // Days the row cap kept us from retrieving, as opposed to days with no
+  // activity. Both render as a gap, so the difference has to be stated.
+  const unretrieved = (report?.daily || []).filter(
+    d => d.cognitive_retrieved === false || d.face_retrieved === false
+  ).length
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -79,10 +103,10 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <MiniMetric label="Avg Focus" value={fmt(avg.focus)} icon={Brain} tone="emerald" />
-        <MiniMetric label="Avg Stress" value={fmt(avg.stress)} icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={fmt(avg.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={fmt(avg.face_attention)} icon={Eye} tone="sky" />
+        <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
+        <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
+        <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
+        <MiniMetric label="Face Attention" value={pct(avg.face_attention)} icon={Eye} tone="sky" />
         <MiniMetric label="Sessions" value={counts.sessions ?? 0} icon={Radio} tone="amber" />
       </div>
 
@@ -110,11 +134,11 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       <div className="mt-4 grid md:grid-cols-3 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Highest Stress</p>
-          <p className="font-bold text-gray-900 dark:text-white">{fmt(highlights.highest_stress)}</p>
+          <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.highest_stress)}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Lowest Focus</p>
-          <p className="font-bold text-gray-900 dark:text-white">{fmt(highlights.lowest_focus)}</p>
+          <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.lowest_focus)}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Dominant Emotion</p>
@@ -126,6 +150,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {report?.truncated && (
         <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
           Showing the most recent samples only — earlier days in this range exceeded the retrieval limit.
+          {unretrieved > 0 && ` ${unretrieved} ${unretrieved === 1 ? 'day is' : 'days are'} shown as a gap because the data could not be retrieved, not because there was no activity.`}
         </p>
       )}
     </div>

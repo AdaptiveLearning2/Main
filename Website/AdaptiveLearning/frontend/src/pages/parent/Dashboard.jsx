@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame } from 'lucide-react'
+import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
@@ -88,6 +88,30 @@ export default function ParentDashboard() {
                     </div>
                   ))}
                 </div>
+
+                {/* Weekly signal averages. Rendered only when the child has
+                    actually recorded signals -- an all-"N/A" row reads as
+                    "something is broken" rather than "nothing recorded yet". */}
+                {child.signal_summary && (child.signal_summary.sessions > 0 || child.signal_summary.focus != null) && (
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800">
+                    {[
+                      { icon: Brain,    label: 'Weekly Focus',  value: child.signal_summary.focus,          color: 'text-emerald-600' },
+                      { icon: Zap,      label: 'Weekly Stress', value: child.signal_summary.stress,         color: 'text-rose-600' },
+                      { icon: Eye,      label: 'Face Attention', value: child.signal_summary.face_attention, color: 'text-sky-600' },
+                      { icon: Activity, label: 'Sessions',      value: child.signal_summary.sessions, raw: true, color: 'text-amber-600' },
+                    ].map(item => (
+                      <div key={item.label} className="rounded-2xl bg-slate-50 dark:bg-gray-800 p-4">
+                        <item.icon size={17} className={`${item.color} mb-2`} />
+                        <p className={`text-xl font-black ${item.color}`}>
+                          {item.raw
+                            ? (item.value ?? 0)
+                            : (item.value != null ? `${Math.round(item.value * 100)}%` : 'N/A')}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.label}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {/* recent sessions */}
                 {child.sessions?.length > 0 && (

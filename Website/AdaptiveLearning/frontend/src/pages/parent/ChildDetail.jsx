@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
+import { WeeklySignalReport, LiveSignalSummary } from '../../components/signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -13,6 +14,8 @@ export default function ChildDetail() {
   const [perf, setPerf]           = useState([])
   const [loading, setLoading]     = useState(true)
   const [name, setName]           = useState('Child')
+  const [signalReport, setSignalReport] = useState(null)
+  const [signalError, setSignalError]   = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -25,6 +28,17 @@ export default function ChildDetail() {
       setPerf(p || [])
       setLoading(false)
     }).catch(() => setLoading(false))
+
+    // Fetched separately from the Promise.all above: this is the newest and
+    // heaviest query, and a failure here shouldn't blank the whole page when
+    // the academic stats loaded fine.
+    apiFetch(`/api/students/${id}/weekly-report`)
+      .then(r => { setSignalReport(r); setSignalError(null) })
+      // Tracked separately from "no report": a failed request renders
+      // identically to a quiet week otherwise, and telling a parent their
+      // child had no activity when the request just failed is worse than
+      // saying nothing. Same distinction #16 established for ClassDetail.
+      .catch(err => { setSignalReport(null); setSignalError(err.message || 'Could not load signal report') })
 
     // also try to get name from children list
     apiFetch('/api/parent/children').then(children => {
@@ -70,6 +84,22 @@ export default function ChildDetail() {
               </motion.div>
             ))}
           </div>
+
+          {/* Only rendered once the report loads -- the panels would otherwise
+              show a full grid of "N/A" and read as "no activity" rather than
+              "still loading". */}
+          {signalError && (
+            <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>
+              <p className="text-xs text-gray-400 mt-1">{signalError}</p>
+            </div>
+          )}
+          {signalReport && (
+            <div className="grid lg:grid-cols-2 gap-6">
+              <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
+              <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
+            </div>
+          )}
 
           <div className="grid lg:grid-cols-2 gap-6">
             {/* topic performance */}

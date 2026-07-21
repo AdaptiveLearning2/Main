@@ -92,4 +92,13 @@ If `StartStreaming` returns `rc=3` (BadStateError: "headband was already streami
 
 ## Build Requirements (ENABLE_LIBMUSE builds)
 
-- A Windows SDK with in-box C++/WinRT headers (`10.0.19041.0` or newer; anything installed alongside a recent Visual Studio already qualifies) — used for the `bluetooth_enabled` radio-state check. No NuGet package needed; CMake links `WindowsApp.lib` directly.
+- A Windows SDK and Visual Studio with the **Desktop development with C++** workload.
+- C++/WinRT (used for the `bluetooth_enabled` radio-state check) **must be version-matched to libMuse**. `libmuse-wrt.lib` was built against C++/WinRT `2.0.240405.15` — the version pinned in `examples/GettingData32/packages.config` — and C++/WinRT embeds `#pragma detect_mismatch` guards on its version, so mixing versions is a hard link error, not a warning:
+
+  ```
+  error LNK2038: mismatch detected for 'C++/WinRT version':
+    value '2.0.240405.15' doesn't match value '2.0.250303.1' in main.obj
+  fatal error LNK1319: 12 mismatches detected
+  ```
+
+  The in-box C++/WinRT headers that ship with a recent Windows SDK are **newer than this** and will fail exactly that way. CMake therefore generates a version-matched projection at configure time using the `cppwinrt.exe` vendored with the libMuse SDK (`examples/packages/Microsoft.Windows.CppWinRT.2.0.240405.15/bin/`) and puts it ahead of the system include path. Nothing to install — but the SDK's `examples/packages/` directory does need to be present, and if libMuse is ever upgraded, this pinned version has to move with it.

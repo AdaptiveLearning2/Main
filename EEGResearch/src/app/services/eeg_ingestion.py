@@ -81,10 +81,26 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "alpha",
         "beta",
         "gamma",
+        "hsi",
+        "is_good",
     ):
         if key not in payload:
             continue
-        if key in {"muse_connected", "muse_discovered", "bluetooth_enabled"}:
+        if key in {"hsi", "is_good"}:
+            # Per-electrode contact quality from libMuse: 4 floats, or null
+            # when the headband hasn't reported that packet type yet.
+            v = payload[key]
+            if v is None:
+                target[key] = None
+                continue
+            if not isinstance(v, list):
+                continue
+            try:
+                target[key] = [float(x) for x in v]
+            except (TypeError, ValueError):
+                # Ignore malformed values from bridge and keep prior metadata.
+                continue
+        elif key in {"muse_connected", "muse_discovered", "bluetooth_enabled"}:
             target[key] = bool(payload[key])
         elif key == "connection_state":
             v = payload[key]
@@ -215,6 +231,11 @@ class SimulatedMuseIngestionAdapter:
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),
             "gamma": round(gamma, 3),
+            # Simulated electrode contact: report a good fit on all four
+            # channels so the simulator exercises the same signal-quality path
+            # as real hardware instead of looking like a headband that isn't on.
+            "hsi": [1.0, 1.0, 1.0, 1.0],
+            "is_good": [1.0, 1.0, 1.0, 1.0],
         }
 
     def send_bridge_command(self, _payload: dict[str, Any]) -> None:
@@ -244,6 +265,10 @@ class TcpMuseBridgeAdapter:
             "alpha": 0.0,
             "beta": 0.0,
             "gamma": 0.0,
+            # None until the headband reports HSI_PRECISION / IS_GOOD, so
+            # "not reported yet" stays distinguishable from a real reading.
+            "hsi": None,
+            "is_good": None,
         }
         self._ingestion_lock = threading.Lock()
         self._write_lock = threading.Lock()

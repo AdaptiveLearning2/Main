@@ -314,6 +314,149 @@ def test_signal_processor_uses_band_features_when_available():
     assert high_calm["calm_score"] > low_calm["calm_score"]
 
 
+def _quality_for(meta, window_size=4):
+    """Run a steady, well-formed sample through the processor and return the
+    resulting signal_quality for the given ingestion metadata."""
+    processor = SignalProcessor(window_size=window_size)
+    features = None
+    for _ in range(window_size):
+        features = processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=700.0,
+                channel_af7=705.0,
+                channel_af8=702.0,
+                channel_tp10=698.0,
+            ),
+            meta,
+        )
+    return features
+
+
+# An engaged, eyes-open student: beta dominant, alpha suppressed. This is the
+# normal state while working through problems, and it drives calm_ratio below
+# the legacy "degraded" gate -- so signal_quality must come from electrode
+# contact, not calmness, or a perfectly-fitted headband reports "poor".
+_ENGAGED_BANDS = {"alpha": 20.0, "beta": 40.0, "theta": 5.0, "gamma": 5.0}
+
+
+def test_signal_quality_uses_electrode_contact_not_calmness():
+    good = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 1, 1, 1]})
+    # Regression guard: calm is genuinely low here (alpha suppressed), which is
+    # exactly the case the old calm-based rule mis-reported as "poor".
+    assert good["calm_score"] < 30.0
+    assert good["signal_quality"] == "good"
+
+    poor = _quality_for({**_ENGAGED_BANDS, "hsi": [4, 4, 4, 4], "is_good": [0, 0, 0, 0]})
+    assert poor["signal_quality"] == "poor"
+
+
+def test_signal_quality_degrades_as_electrode_fit_worsens():
+    one_mediocre = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 2]})
+    two_mediocre = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 2, 2]})
+    assert one_mediocre["signal_quality"] == "good"
+    assert two_mediocre["signal_quality"] == "degraded"
+
+
+def test_signal_quality_takes_worse_of_fit_and_validity():
+    # Electrodes seated well (hsi all good) but most channels reporting bad
+    # data -- the noisy signal must win over the optimistic fit reading.
+    features = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 0, 0, 0]})
+    assert features["signal_quality"] == "poor"
+
+
+def test_signal_quality_is_not_flipped_by_a_single_blink():
+    """IS_GOOD dips on eye blinks and muscle movement (libMuse documents this),
+    which briefly zeroes the frontal channels. A well-seated headband must not
+    drop out of "good" every time the student blinks."""
+    processor = SignalProcessor(window_size=8)
+    seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=740.0, channel_af7=760.0,
+        channel_af8=755.0, channel_tp10=745.0,
+    )
+    # Steady clean data, then one blink frame with both frontal channels bad.
+    for _ in range(6):
+        processor.update(sample, {**seated, "is_good": [1, 1, 1, 1]})
+    blink = processor.update(sample, {**seated, "is_good": [1, 0, 0, 1]})
+    assert blink["signal_quality"] == "good"
+
+
+def test_sustained_bad_data_still_degrades_quality():
+    # Smoothing must not hide a genuinely bad channel: enough consecutive bad
+    # frames should still pull the reported quality down.
+    processor = SignalProcessor(window_size=8)
+    seated = {**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1]}
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=740.0, channel_af7=760.0,
+        channel_af8=755.0, channel_tp10=745.0,
+    )
+    features = None
+    for _ in range(10):
+        features = processor.update(sample, {**seated, "is_good": [1, 0, 0, 0]})
+    assert features["signal_quality"] != "good"
+
+
+def test_signal_quality_falls_back_when_contact_data_absent():
+    # Older bridge with no HSI/IS_GOOD: the legacy calm/confidence heuristic
+    # applies, and must be labelled as such so callers don't mistake its
+    # verdict for a statement about the electrodes.
+    explicit_none = _quality_for({**_ENGAGED_BANDS, "hsi": None, "is_good": None})
+    absent = _quality_for(_ENGAGED_BANDS)
+    assert explicit_none["signal_quality"] == absent["signal_quality"]
+    assert explicit_none["quality_basis"] == "heuristic"
+    assert absent["quality_basis"] == "heuristic"
+    # And specifically: an engaged learner trips the heuristic's calm gate, so
+    # it reports "poor" for a perfectly good signal. This is exactly why
+    # quality_basis exists -- see the persistence guard in eeg_poller.
+    assert absent["signal_quality"] == "poor"
+
+
+def test_heuristic_poor_is_distinguishable_from_contact_poor():
+    """Regression guard for the old-bridge path.
+
+    Both report "poor", but only one means the electrodes are bad. Consumers
+    gate data collection on this distinction; collapsing it would make an
+    outdated bridge silently record nothing for an entire session.
+    """
+    heuristic = _quality_for(_ENGAGED_BANDS)
+    contact = _quality_for({**_ENGAGED_BANDS, "hsi": [4, 4, 4, 4], "is_good": [0, 0, 0, 0]})
+    assert heuristic["signal_quality"] == contact["signal_quality"] == "poor"
+    assert heuristic["quality_basis"] == "heuristic"
+    assert contact["quality_basis"] == "contact"
+
+
+def test_signal_quality_ignores_malformed_contact_values():
+    # Garbage in the contact fields must not be read as a contact verdict:
+    # falling through to the heuristic is correct, silently treating it as
+    # "contact says poor" would gate persistence on nonsense.
+    features = _quality_for({**_ENGAGED_BANDS, "hsi": ["x", None], "is_good": "nope"})
+    assert features["quality_basis"] == "heuristic"
+    assert features["signal_quality"] == _quality_for(_ENGAGED_BANDS)["signal_quality"]
+
+
+def test_a_single_hsi_blip_does_not_drop_quality_to_poor():
+    """HSI is smoothed on the same basis as IS_GOOD.
+
+    Previously fit_score was instantaneous while good_channels was smoothed,
+    and quality took the worse of the two -- so one bad HSI frame bypassed the
+    smoothing entirely and dropped straight to poor.
+    """
+    processor = SignalProcessor(window_size=8)
+    seated = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=740.0, channel_af7=760.0,
+        channel_af8=755.0, channel_tp10=745.0,
+    )
+    for _ in range(6):
+        processor.update(sample, {**seated, "hsi": [1, 1, 1, 1]})
+    blip = processor.update(sample, {**seated, "hsi": [4, 4, 4, 4]})
+    assert blip["signal_quality"] == "good"
+
+
 def test_signal_processor_reset_clears_window():
     processor = SignalProcessor(window_size=4)
     processor.update(

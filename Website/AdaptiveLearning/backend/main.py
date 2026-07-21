@@ -103,6 +103,35 @@ def _topic_breakdown(student_id: str):
     return out
 
 
+def _signal_summary(student_id: str, days: int = 7) -> dict:
+    """Just the headline averages, aggregated in Postgres.
+
+    The full report pulls thousands of raw signal rows to compute a handful of
+    numbers, which is fine for one student on a detail page and wasteful on a
+    list that loads every visit. This returns the same headline figures without
+    transferring any rows -- see the student_signal_summary migration.
+    """
+    empty = {"focus": None, "stress": None, "engagement": None,
+             "face_attention": None, "sessions": 0}
+    try:
+        res = supabase.rpc("student_signal_summary",
+                           {"p_student_id": student_id, "p_days": days}).execute()
+    except Exception as e:
+        print(f"[signal_summary] {e}")
+        return empty
+    rows = res.data or []
+    row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
+    if not row:
+        return empty
+    return {
+        "focus": row.get("focus"),
+        "stress": row.get("stress"),
+        "engagement": row.get("engagement"),
+        "face_attention": row.get("face_attention"),
+        "sessions": row.get("sessions") or 0,
+    }
+
+
 def _weekly_signal_report(student_id: str, days: int = 7):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
@@ -963,6 +992,10 @@ def my_children(request: Request):
             "stats":       stats,
             "sessions":    sess_res.data or [],
             "performance": perf_res.data or [],
+            # Headline signal averages only. Deliberately not the full weekly
+            # report: that pulls thousands of raw rows per child, and this runs
+            # on a dashboard that loads every visit.
+            "signal_summary": _signal_summary(cid),
         })
     return children
 

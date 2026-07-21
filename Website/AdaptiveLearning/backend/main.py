@@ -318,7 +318,7 @@ def my_stats(request: Request):
 
 @app.get("/api/stats/student/{student_id}")
 def student_stats(student_id: str, request: Request):
-    get_user(request)
+    _verify_can_view_student(get_user(request), student_id)
     res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
     if not res.data:
         return {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
@@ -326,13 +326,13 @@ def student_stats(student_id: str, request: Request):
 
 @app.get("/api/sessions/student/{student_id}")
 def student_sessions(student_id: str, request: Request):
-    get_user(request)
+    _verify_can_view_student(get_user(request), student_id)
     res = supabase.table("sessions").select("*").eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
     return res.data or []
 
 @app.get("/api/performance/student/{student_id}")
 def student_performance(student_id: str, request: Request):
-    get_user(request)
+    _verify_can_view_student(get_user(request), student_id)
     res = supabase.table("user_math_performance") \
         .select("*, math_topics(topic_name)") \
         .eq("user_id", student_id).execute()
@@ -421,9 +421,69 @@ def join_class(payload: JoinClassRequest, request: Request):
     }).execute()
     return cls.data[0]
 
+def _verify_class_owner(class_id: str, user_id: str):
+    """Only the teacher who owns a class may read its roster or live data.
+
+    These endpoints query through the service-role client, which bypasses RLS,
+    so the database will not stop a caller on its own -- the check has to happen
+    here or not at all.
+    """
+    # .single() raises rather than returning empty when the row is missing, so
+    # a bogus id has to be caught here or it surfaces as a 500 instead of a 404.
+    try:
+        cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
+    except Exception:
+        raise HTTPException(404, "Class not found")
+    if not cls.data:
+        raise HTTPException(404, "Class not found")
+    if cls.data["teacher_id"] != user_id:
+        raise HTTPException(403, "Not your class")
+
+
+def _can_view_student(viewer: dict, student_id: str) -> bool:
+    """Whether `viewer` is allowed to see this student's data.
+
+    Three legitimate relationships: the student themselves, a teacher of a class
+    the student is enrolled in, or a linked parent. Everything reachable through
+    this check is queried with the service-role client, so RLS is not a backstop.
+    """
+    uid = viewer["id"]
+    if uid == student_id:
+        return True
+
+    # Teacher of any class this student belongs to.
+    try:
+        classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
+        class_ids = [c["id"] for c in classes]
+        if class_ids:
+            member = supabase.table("class_memberships").select("id") \
+                .in_("class_id", class_ids).eq("student_id", student_id).limit(1).execute().data or []
+            if member:
+                return True
+    except Exception as e:
+        print(f"[can_view_student:teacher] {e}")
+
+    # Linked parent.
+    try:
+        link = supabase.table("parent_child_links").select("id") \
+            .eq("parent_id", uid).eq("child_id", student_id).limit(1).execute().data or []
+        if link:
+            return True
+    except Exception as e:
+        print(f"[can_view_student:parent] {e}")
+
+    return False
+
+
+def _verify_can_view_student(viewer: dict, student_id: str):
+    if not _can_view_student(viewer, student_id):
+        raise HTTPException(403, "You do not have access to this student")
+
+
 @app.get("/api/classes/{class_id}/students")
 def class_students(class_id: str, request: Request):
-    get_user(request)
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
@@ -515,7 +575,18 @@ def ingest_face(payload: FaceBatch, request: Request):
 
 @app.get("/api/signals/session/{session_id}")
 def session_signals(session_id: str, request: Request, since: str | None = None):
-    get_user(request)
+    # This returns raw EEG and facial-emotion samples for a session, so resolve
+    # whose session it is and apply the same access rule as the student-scoped
+    # endpoints rather than trusting any authenticated caller.
+    user = get_user(request)
+    try:
+        sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
+    except Exception:
+        raise HTTPException(404, "Session not found")
+    if not sess.data:
+        raise HTTPException(404, "Session not found")
+    _verify_can_view_student(user, sess.data["user_id"])
+
     cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
     fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
     if since:
@@ -531,11 +602,9 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
     user = get_user(request)
-    cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
-    if not cls.data:
-        raise HTTPException(404, "Class not found")
-    if cls.data["teacher_id"] != user["id"] and user.get("user_metadata", {}).get("role") != "teacher":
-        raise HTTPException(403, "Not your class")
+    # Was: `owner != user AND role != "teacher"` -- which only rejected callers
+    # who were neither, so ANY teacher could read ANY class's live signals.
+    _verify_class_owner(class_id, user["id"])
 
     LIVE_WINDOW_SEC = 90
     STALE_AFTER_SEC = 600

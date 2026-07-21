@@ -634,7 +634,13 @@ export default function Adaptive() {
                 const policy  = snap?.question_policy || {}
                 const ing     = muse?.ingestion  || snap?.ingestion || {}
                 const museSvcRunning = muse?.running
-                const noSignal = feat.signal_quality === 'no_signal'
+                // Scores are only meaningful when the electrodes are actually
+                // reading the scalp. "poor" means libMuse reports the fit or the
+                // data itself as bad -- focus/calm are still computed from that
+                // garbage and look like confident numbers (a headband with two
+                // dead electrodes happily reports "84.8% focus"), so blank them
+                // out the same way a total signal loss is blanked.
+                const untrusted = feat.signal_quality === 'no_signal' || feat.signal_quality === 'poor'
 
                 const pct = v => v == null ? '—' : `${Math.round(typeof v === 'number' && v > 1 ? v : v * 100)}%`
                 const bar = (v, color) => {
@@ -706,20 +712,20 @@ export default function Adaptive() {
                     {/* Row 2 — scores */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{noSignal ? '—' : pct(feat.focus_score)}</span></p>
-                        {bar(noSignal ? null : feat.focus_score, 'bg-blue-500')}
+                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{untrusted ? '—' : pct(feat.focus_score)}</span></p>
+                        {bar(untrusted ? null : feat.focus_score, 'bg-blue-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{noSignal ? '—' : pct(feat.calm_score)}</span></p>
-                        {bar(noSignal ? null : feat.calm_score, 'bg-emerald-500')}
+                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{untrusted ? '—' : pct(feat.calm_score)}</span></p>
+                        {bar(untrusted ? null : feat.calm_score, 'bg-emerald-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{noSignal ? '—' : pct(feat.confidence)}</span></p>
-                        {bar(noSignal ? null : feat.confidence, 'bg-violet-500')}
+                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
+                        {bar(untrusted ? null : feat.confidence, 'bg-violet-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !noSignal ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
-                        {bar(feat.calm_score != null && !noSignal ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
+                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !untrusted ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
+                        {bar(feat.calm_score != null && !untrusted ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
                       </div>
                     </div>
 

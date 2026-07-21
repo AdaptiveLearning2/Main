@@ -17,6 +17,9 @@ class FeatureData(BaseModel):
     calm_score: float
     confidence: float
     signal_quality: Literal["good", "degraded", "poor", "no_signal"]
+    # Whether signal_quality came from the headband's electrode data
+    # ("contact") or the legacy calm-based fallback ("heuristic").
+    quality_basis: Literal["contact", "heuristic"] | None = None
 
 
 class StateData(BaseModel):

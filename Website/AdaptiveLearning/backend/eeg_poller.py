@@ -64,8 +64,21 @@ class _Poller(threading.Thread):
                         # "we were recording but couldn't measure" is different
                         # from "no session happened" -- but null the measurements
                         # rather than persisting numbers computed from electrodes
-                        # the headband says are bad. _avg() skips None, so the
-                        # reports handle these rows correctly.
+                        # the headband says are bad.
+                        #
+                        # Every consumer of these columns must therefore handle
+                        # null. Checked at the time of writing: the teacher live
+                        # view gauges render "-" for null, and
+                        # LLM_topic_decider.get_session_eeg_state filters
+                        # `is not None` and bails when nothing usable remains.
+                        #
+                        # Side effect worth knowing: class_live derives session
+                        # staleness from the newest cognitive_signals row's ts.
+                        # Skipping rows entirely would let a badly-seated
+                        # headband age a session out after STALE_AFTER_SEC;
+                        # writing null rows keeps it alive, which is the
+                        # intended behaviour -- the student is still working,
+                        # we just can't measure them -- but it is a change.
                         for k in ("focus", "stress", "engagement",
                                   "alpha", "beta", "theta", "delta", "gamma"):
                             row[k] = None

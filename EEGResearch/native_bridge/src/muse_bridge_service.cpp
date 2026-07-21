@@ -48,9 +48,9 @@ public:
             service_.enqueue_frame(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::EEG:
-            // Fall back to raw only while notch-filtered packets are actually
-            // arriving (within NOTCH_STALE_MS), so a preset that doesn't emit
-            // them still produces data -- and so does a session where they
+            // Fall back to raw only while notch-filtered packets are NOT
+            // arriving (none within NOTCH_STALE_MS), so a preset that doesn't
+            // emit them still produces data -- and so does a session where they
             // stop partway through, which a latch would have turned into a
             // total loss of frames until reconnect.
             if (!service_.notch_available()) {

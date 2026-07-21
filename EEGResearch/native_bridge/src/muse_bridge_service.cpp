@@ -50,6 +50,10 @@ public:
         case interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE:
             service_.update_band_power(packet);
             break;
+        case interaxon::bridge::MuseDataPacketType::HSI_PRECISION:
+        case interaxon::bridge::MuseDataPacketType::IS_GOOD:
+            service_.update_contact_quality(packet);
+            break;
         default:
             break;
         }
@@ -122,6 +126,8 @@ void MuseBridgeService::stop() {
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
             muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
             muse->unregister_connection_listener(connection_listener_);
         }
     }
@@ -191,6 +197,10 @@ bool MuseBridgeService::connect_named(const std::string& name) {
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+    // Electrode fit/validity reported by the headband itself -- the correct
+    // basis for "signal quality", as opposed to inferring it from calmness.
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -226,6 +236,8 @@ void MuseBridgeService::disconnect_muse() {
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
         muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
+        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
         muse->unregister_connection_listener(connection_listener_);
     }
 #endif
@@ -264,6 +276,15 @@ BandPowers MuseBridgeService::band_powers() const {
     return latest_bands_;
 #else
     return BandPowers{};
+#endif
+}
+
+ContactQuality MuseBridgeService::contact_quality() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return latest_contact_;
+#else
+    return ContactQuality{};
 #endif
 }
 
@@ -355,6 +376,26 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
         break;
     default:
         break;
+    }
+}
+
+void MuseBridgeService::update_contact_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
+    // Both HSI_PRECISION and IS_GOOD carry one value per EEG electrode and use
+    // the same channel mapping as an EEG packet, so read them the same way.
+    const std::array<double, 4> values{{
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG1),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG2),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG3),
+        packet->get_eeg_channel_value(interaxon::bridge::Eeg::EEG4),
+    }};
+
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (packet->packet_type() == interaxon::bridge::MuseDataPacketType::HSI_PRECISION) {
+        latest_contact_.hsi = values;
+        latest_contact_.has_hsi = true;
+    } else {
+        latest_contact_.is_good = values;
+        latest_contact_.has_is_good = true;
     }
 }
 

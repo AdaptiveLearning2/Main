@@ -56,6 +56,65 @@ class SignalProcessor:
         calm_log_ratio = log(alpha + self.EPSILON) - log(beta + gamma + self.EPSILON)
         return (focus_log_ratio, calm_log_ratio)
 
+    def _signal_quality(
+        self, meta: dict[str, Any] | None, confidence_ratio: float, calm_ratio: float
+    ) -> str:
+        """How trustworthy the EEG signal is -- i.e. how well the electrodes are
+        seated -- which is a separate question from whether the wearer is calm.
+
+        Prefers the headband's own HSI_PRECISION (per-channel fit: 1 good,
+        2 mediocre, 4 poor) and IS_GOOD (per-channel validity) when the bridge
+        reports them. Falls back to the older calm/confidence heuristic only
+        when they're unavailable (no headband, or a bridge that predates them).
+
+        The fallback is known to under-report: it gates on calm_ratio, which is
+        driven by alpha/(beta+gamma), and alpha is suppressed in an alert,
+        eyes-open student -- so a perfectly-fitted headband on a focused
+        learner reports "poor". That's why real contact data is preferred.
+        """
+        hsi = (meta or {}).get("hsi")
+        is_good = (meta or {}).get("is_good")
+
+        good_channels: float | None = None
+        if isinstance(is_good, list) and is_good:
+            try:
+                good_channels = sum(1 for v in is_good if float(v) >= 1.0) / len(is_good)
+            except (TypeError, ValueError):
+                good_channels = None
+
+        fit_score: float | None = None
+        if isinstance(hsi, list) and hsi:
+            try:
+                # Map 1 -> 1.0 (good), 2 -> 0.5 (mediocre), 4 -> 0.0 (poor);
+                # ignore 0, which means "not reported for this channel".
+                rated = [float(v) for v in hsi if float(v) > 0.0]
+                if rated:
+                    fit_score = sum(
+                        1.0 if v <= 1.0 else (0.5 if v <= 2.0 else 0.0) for v in rated
+                    ) / len(rated)
+            except (TypeError, ValueError):
+                fit_score = None
+
+        if fit_score is None and good_channels is None:
+            # No contact data available -- fall back to the legacy heuristic.
+            if confidence_ratio >= 0.75 and calm_ratio >= 0.55:
+                return "good"
+            if confidence_ratio >= 0.45 and calm_ratio >= 0.3:
+                return "degraded"
+            return "poor"
+
+        # Use whichever signals are present; when both are, take the worse of
+        # the two so a channel that's seated but noisy still counts against us.
+        parts = [p for p in (fit_score, good_channels) if p is not None]
+        contact = min(parts)
+        # 0.8 keeps "good" at "at most one of four electrodes is mediocre"
+        # (0.875); two mediocre channels (0.75) drops to degraded.
+        if contact >= 0.8:
+            return "good"
+        if contact >= 0.4:
+            return "degraded"
+        return "poor"
+
     def update(self, sample: EegSample, bands: dict[str, Any] | None = None) -> dict[str, float]:
         self.window.append(sample)
         all_values: list[float] = []
@@ -103,12 +162,7 @@ class SignalProcessor:
         focus_score = focus_ratio * 100.0
         calm_score = calm_ratio * 100.0
         confidence = confidence_ratio * 100.0
-        if confidence_ratio >= 0.75 and calm_ratio >= 0.55:
-            signal_quality = "good"
-        elif confidence_ratio >= 0.45 and calm_ratio >= 0.3:
-            signal_quality = "degraded"
-        else:
-            signal_quality = "poor"
+        signal_quality = self._signal_quality(bands, confidence_ratio, calm_ratio)
         return {
             "focus_score": round(focus_score, 3),
             "calm_score": round(calm_score, 3),

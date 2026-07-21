@@ -279,6 +279,71 @@ def test_signal_processor_uses_band_features_when_available():
     assert high_calm["calm_score"] > low_calm["calm_score"]
 
 
+def _quality_for(meta, window_size=4):
+    """Run a steady, well-formed sample through the processor and return the
+    resulting signal_quality for the given ingestion metadata."""
+    processor = SignalProcessor(window_size=window_size)
+    features = None
+    for _ in range(window_size):
+        features = processor.update(
+            EegSample(
+                timestamp=datetime.now(timezone.utc),
+                channel_tp9=700.0,
+                channel_af7=705.0,
+                channel_af8=702.0,
+                channel_tp10=698.0,
+            ),
+            meta,
+        )
+    return features
+
+
+# An engaged, eyes-open student: beta dominant, alpha suppressed. This is the
+# normal state while working through problems, and it drives calm_ratio below
+# the legacy "degraded" gate -- so signal_quality must come from electrode
+# contact, not calmness, or a perfectly-fitted headband reports "poor".
+_ENGAGED_BANDS = {"alpha": 20.0, "beta": 40.0, "theta": 5.0, "gamma": 5.0}
+
+
+def test_signal_quality_uses_electrode_contact_not_calmness():
+    good = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 1, 1, 1]})
+    # Regression guard: calm is genuinely low here (alpha suppressed), which is
+    # exactly the case the old calm-based rule mis-reported as "poor".
+    assert good["calm_score"] < 30.0
+    assert good["signal_quality"] == "good"
+
+    poor = _quality_for({**_ENGAGED_BANDS, "hsi": [4, 4, 4, 4], "is_good": [0, 0, 0, 0]})
+    assert poor["signal_quality"] == "poor"
+
+
+def test_signal_quality_degrades_as_electrode_fit_worsens():
+    one_mediocre = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 2]})
+    two_mediocre = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 2, 2]})
+    assert one_mediocre["signal_quality"] == "good"
+    assert two_mediocre["signal_quality"] == "degraded"
+
+
+def test_signal_quality_takes_worse_of_fit_and_validity():
+    # Electrodes seated well (hsi all good) but most channels reporting bad
+    # data -- the noisy signal must win over the optimistic fit reading.
+    features = _quality_for({**_ENGAGED_BANDS, "hsi": [1, 1, 1, 1], "is_good": [1, 0, 0, 0]})
+    assert features["signal_quality"] == "poor"
+
+
+def test_signal_quality_falls_back_when_contact_data_absent():
+    # No headband contact data (older bridge, or simulator without it): the
+    # legacy calm/confidence heuristic still applies rather than crashing.
+    explicit_none = _quality_for({**_ENGAGED_BANDS, "hsi": None, "is_good": None})
+    absent = _quality_for(_ENGAGED_BANDS)
+    assert explicit_none["signal_quality"] == absent["signal_quality"]
+    assert absent["signal_quality"] in {"good", "degraded", "poor"}
+
+
+def test_signal_quality_ignores_malformed_contact_values():
+    features = _quality_for({**_ENGAGED_BANDS, "hsi": ["x", None], "is_good": "nope"})
+    assert features["signal_quality"] in {"good", "degraded", "poor"}
+
+
 def test_signal_processor_reset_clears_window():
     processor = SignalProcessor(window_size=4)
     processor.update(

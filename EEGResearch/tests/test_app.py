@@ -220,13 +220,48 @@ def test_enrich_ingestion_dict_excludes_band_fields():
     assert ing["connection_state_name"] == "connected"
 
 
+class _ReaderThreadStub:
+    """Stand-in for TcpMuseBridgeAdapter's reader thread.
+
+    read_sample() calls is_alive() on the timeout path (to detect a bridge that
+    dropped) and disconnect() joins the thread, so a bare object() is not
+    enough to stand in for one.
+    """
+
+    def __init__(self, alive=True):
+        self._alive = alive
+        self.joined = False
+
+    def is_alive(self):
+        return self._alive
+
+    def join(self, timeout=None):
+        self.joined = True
+
+
 def test_tcp_bridge_read_sample_times_out_instead_of_blocking_forever():
     adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=8765, timeout_seconds=1)
-    adapter._reader_thread = object()  # mark adapter as "connected" for this unit test
+    # Reader alive but no data arriving: should time out, not block forever,
+    # and should leave the connection in place for the next poll.
+    adapter._reader_thread = _ReaderThreadStub(alive=True)
     started = time.monotonic()
     with pytest.raises(RuntimeError, match="No EEG sample received from bridge"):
         adapter.read_sample()
     assert time.monotonic() - started < 2.0
+    assert adapter._reader_thread is not None
+
+
+def test_tcp_bridge_read_sample_resets_connection_when_reader_died():
+    # Reader thread has exited (bridge disconnected): read_sample() should
+    # still raise a recoverable error, but also tear the connection down so the
+    # next call reconnects instead of waiting on a queue nothing is feeding.
+    adapter = TcpMuseBridgeAdapter(host="127.0.0.1", port=8765, timeout_seconds=1)
+    stub = _ReaderThreadStub(alive=False)
+    adapter._reader_thread = stub
+    with pytest.raises(RuntimeError, match="No EEG sample received from bridge"):
+        adapter.read_sample()
+    assert stub.joined
+    assert adapter._reader_thread is None
 
 
 def test_signal_processor_muse_range_produces_non_saturated_features():

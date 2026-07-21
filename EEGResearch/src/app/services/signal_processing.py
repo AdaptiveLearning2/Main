@@ -46,6 +46,11 @@ class SignalProcessor:
     CALM_LOG_RATIO_MAX = 0.470  # ln(1.60)
     EPSILON = 1e-6
 
+    # Samples of usable band data collected at the start of a session before
+    # scores switch from the fixed population bounds to this learner's own
+    # baseline. At the default 4Hz stream rate this is roughly 15 seconds.
+    BASELINE_SAMPLES = 60
+
     def __init__(self, window_size: int = 20) -> None:
         self.window: deque[EegSample] = deque(maxlen=window_size)
         # IS_GOOD reports whether the last second of EEG was usable per channel,
@@ -54,6 +59,15 @@ class SignalProcessor:
         # over the same window rather than letting one blink downgrade the
         # reported quality.
         self._is_good_history: deque[float] = deque(maxlen=window_size)
+        # Diagnostic: how many frames were kept out of the window as unusable.
+        self._samples_rejected = 0
+        # Per-session baseline: scores are relative to this learner's own
+        # resting values rather than fixed population constants.
+        self._baseline_focus: list[float] = []
+        self._baseline_calm: list[float] = []
+        self._baseline_focus_mean: float | None = None
+        self._baseline_calm_mean: float | None = None
+        self._baseline_ready = False
 
     def reset(self) -> None:
         """Drop all buffered samples (e.g. after a signal-loss gap) so the next
@@ -61,6 +75,15 @@ class SignalProcessor:
         post-gap samples."""
         self.window.clear()
         self._is_good_history.clear()
+        self._samples_rejected = 0
+        # Baseline is per-session: a gap long enough to reset the window means
+        # contact conditions likely changed, so the old baseline no longer
+        # describes the signal we're about to score against it.
+        self._baseline_focus.clear()
+        self._baseline_calm.clear()
+        self._baseline_focus_mean = None
+        self._baseline_calm_mean = None
+        self._baseline_ready = False
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -166,8 +189,76 @@ class SignalProcessor:
             return "degraded"
         return "poor"
 
+    def _collect_baseline(self, focus_raw: float, calm_raw: float) -> None:
+        """Accumulate the opening samples of a session as that person's baseline.
+
+        Absolute EEG amplitudes and band ratios vary enormously between people
+        (skull thickness, hair, electrode placement), so fixed population bounds
+        can only ever be roughly right for anyone. Scoring each learner against
+        their own resting values removes that dependency, and also cancels part
+        of any per-session contact offset, since the baseline is captured under
+        the same contact conditions as the samples it is compared against.
+        """
+        if self._baseline_ready:
+            return
+        self._baseline_focus.append(focus_raw)
+        self._baseline_calm.append(calm_raw)
+        if len(self._baseline_focus) >= self.BASELINE_SAMPLES:
+            self._baseline_focus_mean = fmean(self._baseline_focus)
+            self._baseline_calm_mean = fmean(self._baseline_calm)
+            self._baseline_ready = True
+
+    def _score_against_baseline(self, raw: float, which: str) -> float:
+        """Map a log-ratio to 0..1 relative to this session's baseline.
+
+        Falls back to the fixed population bounds until enough baseline samples
+        have been collected, so a session still produces usable (if less well
+        calibrated) scores from its first moments rather than nothing.
+        """
+        if which == "focus":
+            baseline = self._baseline_focus_mean
+            lo, hi = self.FOCUS_LOG_RATIO_MIN, self.FOCUS_LOG_RATIO_MAX
+        else:
+            baseline = self._baseline_calm_mean
+            lo, hi = self.CALM_LOG_RATIO_MIN, self.CALM_LOG_RATIO_MAX
+
+        if not self._baseline_ready or baseline is None:
+            return self._clamp01((raw - lo) / (hi - lo))
+
+        # Centre on the baseline and spread by half the population range, so
+        # "at your own resting level" reads as 0.5 and a full population-width
+        # swing still saturates.
+        half_span = (hi - lo) / 2.0
+        if half_span <= 0:
+            return 0.5
+        return self._clamp01(0.5 + (raw - baseline) / (2.0 * half_span))
+
+    @staticmethod
+    def _sample_is_usable(meta: dict[str, Any] | None) -> bool:
+        """False when the headband reports every electrode as invalid.
+
+        IS_GOOD drops on blinks and movement, so an unusable frame is normal and
+        transient -- but admitting it into the rolling window skews mean level,
+        spread and stability for the whole window length afterwards (5s at the
+        default size). Better to leave the window holding the last known-good
+        samples than to average an artifact into it.
+        """
+        is_good = (meta or {}).get("is_good")
+        if not isinstance(is_good, list) or not is_good:
+            return True  # no contact data -- can't judge, so don't discard
+        try:
+            return any(float(v) >= 1.0 for v in is_good)
+        except (TypeError, ValueError):
+            return True
+
     def update(self, sample: EegSample, bands: dict[str, Any] | None = None) -> dict[str, float]:
-        self.window.append(sample)
+        # Never let filtering empty the window -- the feature maths below needs
+        # at least one sample, and a run of bad frames should hold the last good
+        # reading rather than fail.
+        if self.window and not self._sample_is_usable(bands):
+            self._samples_rejected += 1
+        else:
+            self.window.append(sample)
         all_values: list[float] = []
         per_sample_spreads: list[float] = []
         per_sample_means: list[float] = []
@@ -188,12 +279,9 @@ class SignalProcessor:
         band_focus_raw, band_calm_raw = self._extract_band_log_ratios(bands)
         using_band_features = band_focus_raw is not None and band_calm_raw is not None
         if using_band_features:
-            focus_band_ratio = self._clamp01(
-                (band_focus_raw - self.FOCUS_LOG_RATIO_MIN) / (self.FOCUS_LOG_RATIO_MAX - self.FOCUS_LOG_RATIO_MIN)
-            )
-            calm_band_ratio = self._clamp01(
-                (band_calm_raw - self.CALM_LOG_RATIO_MIN) / (self.CALM_LOG_RATIO_MAX - self.CALM_LOG_RATIO_MIN)
-            )
+            self._collect_baseline(band_focus_raw, band_calm_raw)
+            focus_band_ratio = self._score_against_baseline(band_focus_raw, "focus")
+            calm_band_ratio = self._score_against_baseline(band_calm_raw, "calm")
             # Blend toward amplitude-derived values to preserve continuity during
             # transient band jitter while still prioritizing spectral features.
             focus_ratio = (0.75 * focus_band_ratio) + (0.25 * focus_amp_ratio)

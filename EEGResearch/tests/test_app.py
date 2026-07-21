@@ -457,6 +457,82 @@ def test_signal_quality_ignores_malformed_contact_values():
     assert features["signal_quality"] in {"good", "degraded", "poor"}
 
 
+def _sample(level=740.0):
+    return EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=level, channel_af7=level + 20,
+        channel_af8=level + 15, channel_tp10=level + 5,
+    )
+
+
+def test_unusable_samples_are_kept_out_of_the_rolling_window():
+    """A frame where every electrode reports bad data would otherwise skew the
+    window's mean/spread/stability for its whole length afterwards."""
+    processor = SignalProcessor(window_size=8)
+    processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]})
+    assert len(processor.window) == 1
+
+    # Wildly different amplitude, flagged entirely invalid -- must not be stored.
+    processor.update(_sample(5000.0), {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0]})
+    assert len(processor.window) == 1
+
+    # A partially-good frame is still real data and should be kept.
+    processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [0, 1, 1, 0]})
+    assert len(processor.window) == 2
+
+
+def test_window_filtering_never_empties_the_window():
+    # The feature maths needs at least one sample; a run of bad frames must
+    # hold the last known-good reading rather than leaving nothing to compute.
+    processor = SignalProcessor(window_size=4)
+    for _ in range(6):
+        features = processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0]})
+    assert len(processor.window) >= 1
+    assert features["focus_score"] is not None
+
+
+def test_samples_without_contact_data_are_never_discarded():
+    processor = SignalProcessor(window_size=8)
+    for _ in range(3):
+        processor.update(_sample(), _ENGAGED_BANDS)  # no is_good key at all
+    assert len(processor.window) == 3
+
+
+def test_scores_center_on_baseline_once_it_is_established():
+    """After the baseline period, holding steady at the learner's own resting
+    level should read mid-scale rather than wherever fixed population bounds
+    happen to place that individual."""
+    processor = SignalProcessor(window_size=8)
+    steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
+    features = None
+    for _ in range(SignalProcessor.BASELINE_SAMPLES + 5):
+        features = processor.update(_sample(), steady)
+    assert processor._baseline_ready is True
+    # Band term is centred at 0.5; the blend with the amplitude term keeps the
+    # final score near mid-scale rather than pinned to an extreme.
+    assert 25.0 < features["focus_score"] < 75.0
+    assert 25.0 < features["calm_score"] < 75.0
+
+
+def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
+    processor = SignalProcessor(window_size=8)
+    features = processor.update(_sample(), {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]})
+    assert processor._baseline_ready is False
+    # Still produces a usable score from the very first sample.
+    assert 0.0 <= features["focus_score"] <= 100.0
+
+
+def test_reset_clears_the_session_baseline():
+    processor = SignalProcessor(window_size=8)
+    steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
+    for _ in range(SignalProcessor.BASELINE_SAMPLES + 1):
+        processor.update(_sample(), steady)
+    assert processor._baseline_ready is True
+    processor.reset()
+    assert processor._baseline_ready is False
+    assert processor._baseline_focus_mean is None
+
+
 def test_signal_processor_reset_clears_window():
     processor = SignalProcessor(window_size=4)
     processor.update(

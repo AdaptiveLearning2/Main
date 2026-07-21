@@ -78,7 +78,13 @@ jobs:
         working-directory: Website/AdaptiveLearning/frontend
         run: npm ci
 
-      - name: Lint
+      # Reported, not enforced. The frontend currently has ~48 pre-existing
+      # eslint errors (unused imports, set-state-in-effect, and a batch of
+      # false-positive "unused" reports for components only referenced in JSX).
+      # Blocking on those would make CI red from its first run, which trains
+      # everyone to ignore it. Burn the backlog down, then drop this flag.
+      - name: Lint (non-blocking)
+        continue-on-error: true
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
 

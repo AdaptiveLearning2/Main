@@ -39,21 +39,38 @@ class _Poller(threading.Thread):
 
             if data and data.get("timestamp") and data["timestamp"] != self.last_ts:
                 self.last_ts = data["timestamp"]
-                signal_quality = (data.get("features") or {}).get("signal_quality")
-                if signal_quality in ("no_signal", "poor"):
-                    # no_signal: the EEG service has no data at all this cycle
-                    #   (headset disconnected), and reports zeroed scores.
-                    # poor: data is flowing but libMuse reports the electrode fit
-                    #   or the data itself as bad. focus/calm are still computed
-                    #   from it and look like confident numbers -- a headband with
-                    #   two dead electrodes reports "84.8% focus" -- so persisting
-                    #   them would quietly corrupt the teacher/parent analytics
-                    #   built on this table.
-                    # Either way, don't write measurements we know are wrong.
+                features = data.get("features") or {}
+                signal_quality = features.get("signal_quality")
+                # Only "poor" backed by the headband's own electrode data means
+                # the electrodes are actually bad. A "poor" from the legacy
+                # calm-based heuristic (older bridge with no HSI/IS_GOOD) says
+                # nothing about contact -- it reports poor for any focused
+                # student -- so treating it as bad contact would silently
+                # disable data collection for an entire session.
+                contact_poor = (
+                    signal_quality == "poor"
+                    and features.get("quality_basis") == "contact"
+                )
+
+                if signal_quality == "no_signal":
+                    # No data at all this cycle (headset disconnected); the
+                    # service reports zeroed scores. Nothing to record.
                     if loops <= 3 or loops % 10 == 0:
-                        print(f">>> [eeg-poller] loop={loops} {signal_quality}, skipping insert", flush=True)
+                        print(f">>> [eeg-poller] loop={loops} no_signal, skipping insert", flush=True)
                 else:
                     row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
+                    if contact_poor:
+                        # Keep the row so the session's timeline stays intact --
+                        # "we were recording but couldn't measure" is different
+                        # from "no session happened" -- but null the measurements
+                        # rather than persisting numbers computed from electrodes
+                        # the headband says are bad. _avg() skips None, so the
+                        # reports handle these rows correctly.
+                        for k in ("focus", "stress", "engagement",
+                                  "alpha", "beta", "theta", "delta", "gamma"):
+                            row[k] = None
+                        if loops <= 3 or loops % 10 == 0:
+                            print(f">>> [eeg-poller] loop={loops} poor contact, inserting null measurements", flush=True)
                     try:
                         res = self.supabase.table("cognitive_signals").insert(row).execute()
                         self.samples += 1

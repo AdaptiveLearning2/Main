@@ -640,7 +640,13 @@ export default function Adaptive() {
                 // garbage and look like confident numbers (a headband with two
                 // dead electrodes happily reports "84.8% focus"), so blank them
                 // out the same way a total signal loss is blanked.
-                const untrusted = feat.signal_quality === 'no_signal' || feat.signal_quality === 'poor'
+                // Blank the scores only when we know they're untrustworthy:
+                // no data at all, or the headband itself reporting bad
+                // electrodes. A "poor" from the legacy calm-based heuristic
+                // (older bridge with no contact data) reports poor for any
+                // focused student, so blanking on that would hide every score.
+                const untrusted = feat.signal_quality === 'no_signal' ||
+                  (feat.signal_quality === 'poor' && feat.quality_basis === 'contact')
 
                 const pct = v => v == null ? '—' : `${Math.round(typeof v === 'number' && v > 1 ? v : v * 100)}%`
                 const bar = (v, color) => {

@@ -6,8 +6,11 @@ import requests
 from typing import Optional
 
 EEG_API_URL     = os.getenv("EEG_API_URL", "http://127.0.0.1:8001")
-EEG_API_TOKEN   = os.getenv("EEG_API_TOKEN", "learner-token-123")
-EEG_ADMIN_TOKEN = os.getenv("EEG_ADMIN_TOKEN", "admin-token-123")
+EEG_API_TOKEN   = os.getenv("EEG_API_TOKEN")
+EEG_ADMIN_TOKEN = os.getenv("EEG_ADMIN_TOKEN")
+
+if not EEG_API_TOKEN or not EEG_ADMIN_TOKEN:
+    raise RuntimeError("Missing EEG_API_TOKEN or EEG_ADMIN_TOKEN environment variable")
 
 _LEARNER = {"Authorization": f"Bearer {EEG_API_TOKEN}"}
 _ADMIN   = {"Authorization": f"Bearer {EEG_ADMIN_TOKEN}"}

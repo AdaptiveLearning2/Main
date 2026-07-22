@@ -89,7 +89,7 @@ jobs:
           fi
 
   frontend-build:
-    name: Frontend build & lint
+    name: Frontend tests, build & lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +113,13 @@ jobs:
         continue-on-error: true
         working-directory: Website/AdaptiveLearning/frontend
         run: npm run lint
+
+      # Blocking, unlike lint. These start green and cover behaviour that has
+      # already regressed once (percent scaling on the parent report, the
+      # ClassDetail render crashes), so there is no backlog to burn down first.
+      - name: Test
+        working-directory: Website/AdaptiveLearning/frontend
+        run: npm test
 
       - name: Build
         working-directory: Website/AdaptiveLearning/frontend

@@ -1,11 +1,9 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { LiveSignalSummary, WeeklySignalReport } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
 // face_signals store. Rendering them unscaled printed focus 0.72 as "1%", so
-// every metric on this panel came out ~100x too small (PR #22). These tests
-// pin the scaling in both directions: the right number present, and the
-// unscaled one absent.
+// every metric on this panel came out ~100x too small (PR #22).
 
 const report = {
   days: 7,
@@ -24,33 +22,42 @@ const report = {
   truncated: false,
 }
 
+// Every metric renders its label and value as sibling <p>s in one wrapper, so
+// scoping to the label's parent pins label -> value. Asserting that a number
+// appears somewhere on the panel would pass even if it appeared in the wrong
+// tile, and would encode fixture assumptions rather than component behaviour.
+const metric = (label) => within(screen.getByText(label).parentElement)
+
 describe('WeeklySignalReport', () => {
-  it('renders 0..1 ratios as percentages', () => {
+  it('renders each average as a percentage in its own tile', () => {
     render(<WeeklySignalReport report={report} />)
-    expect(screen.getByText('72%')).toBeInTheDocument()
-    expect(screen.getByText('31%')).toBeInTheDocument()
-    expect(screen.getByText('85%')).toBeInTheDocument()
+    // With the bug these read 1%, 0%, 1% and 1% respectively.
+    expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
+    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+    expect(metric('Engagement').getByText('64%')).toBeInTheDocument()
+    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
   })
 
-  it('does not render the unscaled ratio', () => {
-    // The original bug: Math.round(0.72) -> "1%". Asserting the correct value
-    // alone would not catch it, because "1%" and "72%" can both be present in
-    // a panel with several metrics.
+  it('renders each highlight as a percentage in its own tile', () => {
     render(<WeeklySignalReport report={report} />)
-    expect(screen.queryByText('1%')).not.toBeInTheDocument()
-    expect(screen.queryByText('0%')).not.toBeInTheDocument()
-  })
-
-  it('shows N/A rather than a number when a metric is missing', () => {
-    const partial = { ...report, averages: { ...report.averages, focus: null } }
-    render(<WeeklySignalReport report={partial} />)
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
+    expect(metric('Highest Stress').getByText('91%')).toBeInTheDocument()
+    expect(metric('Lowest Focus').getByText('12%')).toBeInTheDocument()
+    expect(metric('Dominant Emotion').getByText('neutral')).toBeInTheDocument()
   })
 
   it('renders the session count raw, not as a percentage', () => {
     // Sessions is a count, so it deliberately bypasses the percent formatter.
     render(<WeeklySignalReport report={report} />)
-    expect(screen.getByText('5')).toBeInTheDocument()
+    expect(metric('Sessions').getByText('5')).toBeInTheDocument()
+    expect(metric('Sessions').queryByText('500%')).not.toBeInTheDocument()
+  })
+
+  it('shows N/A in the affected tile when a metric is missing', () => {
+    const partial = { ...report, averages: { ...report.averages, focus: null } }
+    render(<WeeklySignalReport report={partial} />)
+    expect(metric('Avg Focus').getByText('N/A')).toBeInTheDocument()
+    // Its neighbours are unaffected.
+    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
   })
 
   it('explains that gaps are unretrieved data, not absence of activity', () => {
@@ -75,14 +82,15 @@ describe('WeeklySignalReport', () => {
 describe('LiveSignalSummary', () => {
   it('scales the latest reading to percentages', () => {
     render(<LiveSignalSummary report={report} />)
-    expect(screen.getByText('72%')).toBeInTheDocument()
-    expect(screen.getByText('93%')).toBeInTheDocument() // identity confidence
-    expect(screen.queryByText('1%')).not.toBeInTheDocument()
+    expect(metric('Focus').getByText('72%')).toBeInTheDocument()
+    expect(metric('Stress').getByText('31%')).toBeInTheDocument()
+    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
+    expect(metric('Identity Confidence').getByText('93%')).toBeInTheDocument()
   })
 
   it('survives a report with no latest reading', () => {
     render(<LiveSignalSummary report={{}} />)
-    expect(screen.getAllByText('N/A').length).toBeGreaterThan(0)
-    expect(screen.getByText('No data')).toBeInTheDocument()
+    expect(metric('Focus').getByText('N/A')).toBeInTheDocument()
+    expect(metric('Facial Emotion').getByText('No data')).toBeInTheDocument()
   })
 })

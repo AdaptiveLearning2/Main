@@ -16,3 +16,8 @@ package.json
 # everywhere, so the extra coverage buys nothing.
 .venv/
 venv/
+
+# Coverage output. `npm run test:coverage` writes 66 files here, and without
+# this they all land in git status as untracked -- the same shape of gap that
+# put a 4899-file virtualenv in this repo above.
+coverage/

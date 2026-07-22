@@ -17,22 +17,23 @@ afterEach(() => {
 // Filtered rather than silenced wholesale: anything that is not this one known
 // message still reaches the console, so a real warning cannot hide behind it.
 // If ResponsiveContainer is ever given explicit dimensions, delete this.
+//
+// console.warn only, deliberately. recharts emits this on warn (measured: 5
+// times per suite, never once on error), and console.error is where React
+// reports things worth seeing -- act() warnings, missing keys, error-boundary
+// output. Patching a channel the filter never fires on would be surface with
+// no purpose and some risk.
 const RECHARTS_SIZE_WARNING = 'width(-1) and height(-1)'
 let realWarn
-let realError
 
 beforeAll(() => {
   realWarn = console.warn
-  realError = console.error
-  const passThrough = (original) => (...args) => {
+  console.warn = (...args) => {
     if (typeof args[0] === 'string' && args[0].includes(RECHARTS_SIZE_WARNING)) return
-    original(...args)
+    realWarn(...args)
   }
-  console.warn = passThrough(realWarn)
-  console.error = passThrough(realError)
 })
 
 afterAll(() => {
   console.warn = realWarn
-  console.error = realError
 })

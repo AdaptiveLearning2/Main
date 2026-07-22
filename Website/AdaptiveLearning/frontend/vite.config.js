@@ -15,5 +15,10 @@ export default defineConfig({
     // Tailwind directives are meaningless here and parsing them only costs time.
     css: false,
     include: ['src/**/*.{test,spec}.{js,jsx}'],
+    // No coverage thresholds on purpose. `npm run test:coverage` is
+    // informational and cannot fail the build: this suite is a floor (two
+    // components), and a threshold set to today's number would either be
+    // meaninglessly low or block every PR that adds a file. Add one once
+    // coverage reflects a deliberate target rather than a starting point.
   },
 })

@@ -23,12 +23,14 @@ function renderAt(id = CLASS_ID) {
   )
 }
 
-// Resolves the two calls loadData() makes, in order.
+// Resolves by URL rather than by call order. mockResolvedValueOnce chains bind
+// to the sequence the two calls happen to be made in, so reordering them inside
+// loadData would silently swap the fixtures instead of failing.
 function mockLoad(classes, students) {
   apiFetch.mockReset()
-  apiFetch
-    .mockResolvedValueOnce(classes)
-    .mockResolvedValueOnce(students)
+  apiFetch.mockImplementation((url) =>
+    Promise.resolve(String(url).includes('/students') ? students : classes),
+  )
 }
 
 it('renders a class with students', async () => {

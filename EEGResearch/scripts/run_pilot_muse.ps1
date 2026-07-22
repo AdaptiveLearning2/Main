@@ -4,8 +4,8 @@ param(
     [int]$ApiPort = 8000,
     [ValidateRange(1, 65535)]
     [int]$BridgePort = 8765,
-    [string]$LearnerToken = "learner-token-123",
-    [string]$AdminToken = "admin-token-123",
+    [string]$LearnerToken = $env:API_TOKEN,
+    [string]$AdminToken = $env:ADMIN_TOKEN,
     [ValidateSet("Release", "Debug")]
     [string]$BridgeConfiguration = "Release",
     [ValidateRange(1, 600)]
@@ -31,6 +31,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($LearnerToken)) {
+    throw "LearnerToken not set. Pass -LearnerToken or set `$env:API_TOKEN before running this script."
+}
+if ([string]::IsNullOrWhiteSpace($AdminToken)) {
+    throw "AdminToken not set. Pass -AdminToken or set `$env:ADMIN_TOKEN before running this script."
+}
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"

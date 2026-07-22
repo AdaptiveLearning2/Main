@@ -28,9 +28,12 @@ This launches (in order): Ollama, C++ Muse bridge (:8765), EEGResearch (:8001), 
 
 ## Session Operations
 
+Assumes `$env:API_TOKEN`/`$env:ADMIN_TOKEN` are set to the same values as `.env` (see Pre-Flight
+Checks above) -- these are required, not defaulted, so requests fail with 401 if unset or wrong.
+
 ```powershell
-$hAdmin = @{ Authorization = "Bearer admin-token-123" }
-$hLearner = @{ Authorization = "Bearer learner-token-123" }
+$hAdmin = @{ Authorization = "Bearer $env:ADMIN_TOKEN" }
+$hLearner = @{ Authorization = "Bearer $env:API_TOKEN" }
 $base = "http://127.0.0.1:8001"
 
 # Start session
@@ -43,7 +46,7 @@ Invoke-RestMethod -Method Get -Uri "$base/api/v1/state" -Headers $hLearner | Con
 Invoke-RestMethod -Method Get -Uri "$base/api/v1/muse/status" -Headers $hLearner | ConvertTo-Json -Depth 4
 
 # WebSocket live stream
-# ws://127.0.0.1:8001/ws/live?token=learner-token-123
+# ws://127.0.0.1:8001/ws/live?token=<value of $env:API_TOKEN>
 
 # Stop session
 Invoke-RestMethod -Method Post -Uri "$base/api/v1/session/stop" -Headers $hAdmin

@@ -1,3 +1,12 @@
 node_modules/
 package-lock.json
 package.json
+
+# Virtualenvs. Rooted here rather than per-subproject because
+# Website/AdaptiveLearning/backend/.venv was missed by the per-directory rules
+# and ended up committed -- 4899 files / 55.7MB, including platform-specific
+# binaries (python.exe, .pyd) that are wrong for anyone on another OS.
+.venv/
+venv/
+env/
+ENV/

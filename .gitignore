@@ -1,3 +1,18 @@
 node_modules/
 package-lock.json
 package.json
+
+# Virtualenvs. Placed in the top-level .gitignore rather than per-subproject
+# because Website/AdaptiveLearning/backend/.venv was missed by the per-directory
+# rules and ended up committed -- 4899 files / 55.7MB, including
+# platform-specific binaries (python.exe, .pyd) that are wrong for anyone on
+# another OS.
+#
+# The patterns are unanchored (no leading slash) so they match at any depth,
+# which is the point -- a venv created in any subproject is covered.
+#
+# Deliberately only these two names. A broader "env/" would also swallow a
+# future config directory called env, and this repo's convention is .venv
+# everywhere, so the extra coverage buys nothing.
+.venv/
+venv/

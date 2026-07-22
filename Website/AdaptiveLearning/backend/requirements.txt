@@ -1,11 +1,29 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-supabase
-requests
-openai
-flask
-flask_cors
-ollama
-sympy
-pytest
+# Pinned to the versions verified working on 2026-07-22 (Python 3.12).
+#
+# Previously unpinned, so every fresh venv resolved to whatever was current --
+# which is how the pydantic and sympy mismatches during setup happened. Direct
+# dependencies only: transitive versions are still resolved by pip, but each of
+# these constrains its own subtree (fastapi pins a starlette range, supabase
+# pins its postgrest/realtime siblings, and so on).
+#
+# Deliberately not a full `pip freeze`: CI installs this file on ubuntu while
+# development happens on Windows, and a freeze taken on either one bakes in
+# platform-specific resolution (uvicorn[standard] pulls uvloop on Linux but not
+# Windows). Every package below is cross-platform.
+#
+# To upgrade: bump a pin, rebuild the venv, run `python -m pytest tests/`.
+
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+python-dotenv==1.2.2
+supabase==2.31.0
+requests==2.34.2
+openai==2.46.0
+flask==3.1.3
+flask_cors==6.0.5
+ollama==0.6.2
+sympy==1.14.0
+
+# Test-only, but installed by CI from this same file -- there is no separate
+# dev requirements file for the backend yet.
+pytest==9.1.1

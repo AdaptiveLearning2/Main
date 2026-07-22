@@ -16,7 +16,8 @@
     11. POST /api/v1/session/stop (admin) and stop child processes when -StartBridge / -StartServer (unless -NoCleanup)
 
 .EXAMPLE
-    # API and bridge already running; only run checks (default tokens, skip pytest):
+    # API and bridge already running; only run checks (tokens from $env:API_TOKEN /
+    # $env:ADMIN_TOKEN, skip pytest):
     .\scripts\run_muse_stack_smoke.ps1 -SkipPytest
 
 .EXAMPLE
@@ -29,8 +30,8 @@
 #>
 param(
     [string]$BaseUrl = "http://127.0.0.1:8000",
-    [string]$LearnerToken = "learner-token-123",
-    [string]$AdminToken = "admin-token-123",
+    [string]$LearnerToken = $env:API_TOKEN,
+    [string]$AdminToken = $env:ADMIN_TOKEN,
     [string]$MuseName = "",
     [ValidateSet("Release", "Debug")]
     [string]$BridgeConfiguration = "Release",
@@ -47,6 +48,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($LearnerToken)) {
+    throw "LearnerToken not set. Pass -LearnerToken or set `$env:API_TOKEN before running this script."
+}
+if ([string]::IsNullOrWhiteSpace($AdminToken)) {
+    throw "AdminToken not set. Pass -AdminToken or set `$env:ADMIN_TOKEN before running this script."
+}
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"

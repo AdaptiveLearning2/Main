@@ -24,6 +24,8 @@ jobs:
         working-directory: EEGResearch
         env:
           EEG_SOURCE: sim
+          API_TOKEN: dummy-learner-token-for-ci
+          ADMIN_TOKEN: dummy-admin-token-for-ci
         run: pytest
 
   native-bridge-build:

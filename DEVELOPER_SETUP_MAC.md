@@ -82,7 +82,9 @@ cd ~/AdaptiveLearning/EEGResearch
 cp .env.example .env
 ```
 
-The defaults in `.env.example` work for simulator mode — no changes needed.
+Simulator mode needs no other changes, but `API_TOKEN` and `ADMIN_TOKEN` are required — the app
+fails to start without them, rather than falling back to a guessable default. Set real values for
+both before continuing.
 
 ---
 
@@ -116,7 +118,7 @@ curl http://localhost:8000/healthz
 curl http://localhost:8001/healthz
 
 # EEG state (start a session in the UI first)
-curl -H "Authorization: Bearer learner-token-123" http://localhost:8001/api/v1/state
+curl -H "Authorization: Bearer $(grep '^API_TOKEN=' EEGResearch/.env | cut -d= -f2)" http://localhost:8001/api/v1/state
 ```
 
 ---

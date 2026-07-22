@@ -96,7 +96,9 @@ cd C:\AdaptiveLearning\EEGResearch
 Copy-Item .env.example .env
 ```
 
-The defaults work for simulator mode. No changes needed unless using a live headband (see section 4).
+Simulator mode needs no other changes, but `API_TOKEN` and `ADMIN_TOKEN` are required — the app
+fails to start without them, rather than falling back to a guessable default. Set real values for
+both before continuing.
 
 ---
 
@@ -129,7 +131,8 @@ Invoke-RestMethod http://localhost:8000/healthz
 Invoke-RestMethod http://localhost:8001/healthz
 
 # EEG state (start a session in the UI first)
-$h = @{ Authorization = "Bearer learner-token-123" }
+$apiToken = (Select-String -Path EEGResearch\.env -Pattern '^API_TOKEN=(.*)$').Matches[0].Groups[1].Value
+$h = @{ Authorization = "Bearer $apiToken" }
 Invoke-RestMethod http://localhost:8001/api/v1/state -Headers $h | ConvertTo-Json -Depth 4
 ```
 

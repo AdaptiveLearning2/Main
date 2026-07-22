@@ -4,8 +4,8 @@ param(
     [int]$ApiPort = 8001,
     [ValidateRange(1, 65535)]
     [int]$BridgePort = 8765,
-    [string]$LearnerToken = "learner-token-123",
-    [string]$AdminToken = "admin-token-123",
+    [string]$LearnerToken = $env:API_TOKEN,
+    [string]$AdminToken = $env:ADMIN_TOKEN,
     [ValidateSet("Release", "Debug")]
     [string]$BridgeConfiguration = "Release",
     [switch]$ConnectBeforeGui,
@@ -17,6 +17,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($LearnerToken)) {
+    throw "LearnerToken not set. Pass -LearnerToken or set `$env:API_TOKEN before running this script."
+}
+if ([string]::IsNullOrWhiteSpace($AdminToken)) {
+    throw "AdminToken not set. Pass -AdminToken or set `$env:ADMIN_TOKEN before running this script."
+}
 
 $runBridgeScript = Join-Path $PSScriptRoot "run_native_bridge.ps1"
 $runPilotScript = Join-Path $PSScriptRoot "run_pilot_muse.ps1"

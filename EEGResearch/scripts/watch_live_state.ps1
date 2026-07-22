@@ -2,12 +2,17 @@ param(
     [string]$HostName = "127.0.0.1",
     [ValidateRange(1, 65535)]
     [int]$Port = 8000,
-    [string]$LearnerToken = "learner-token-123",
+    [string]$LearnerToken = $env:API_TOKEN,
     [ValidateRange(100, 600000)]
     [int]$IntervalMs = 5000
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($LearnerToken)) {
+    throw "LearnerToken not set. Pass -LearnerToken or set `$env:API_TOKEN before running this script."
+}
+
 $stateUrl = "http://$HostName`:$Port/api/v1/state"
 $headers = @{ Authorization = "Bearer $LearnerToken" }
 

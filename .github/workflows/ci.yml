@@ -60,9 +60,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # requirements-dev.txt, not requirements.txt: it pulls in the runtime
+      # requirements via `-r` and adds pytest, which the test step below needs.
       - name: Install dependencies
         working-directory: Website/AdaptiveLearning/backend
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Import sanity check
         working-directory: Website/AdaptiveLearning/backend

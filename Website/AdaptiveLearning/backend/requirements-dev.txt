@@ -1,0 +1,18 @@
+# Development and test dependencies.
+#
+# Pulls in the runtime requirements too, so this one file is enough to set up a
+# working dev environment:
+#
+#     pip install -r requirements-dev.txt
+#
+# The start scripts install requirements.txt only, so a venv created by
+# start.ps1 / start.sh will not have pytest -- install this file on top of it
+# before running the test suite.
+#
+# Pinned for the same reason as requirements.txt: an unpinned test runner drifts
+# independently of the code under it, and a suite that passes locally but fails
+# in CI on a pytest major bump is a bad way to find that out.
+
+-r requirements.txt
+
+pytest==9.1.1

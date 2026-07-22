@@ -2,7 +2,7 @@
 
 Things to confirm **in the running application** that the automated suites cannot cover.
 
-Covers every merged PR through #24 (`afd855c`). Written 2026-07-22.
+Covers every merged PR through #25 (`10ae0aa`). Written 2026-07-22.
 
 ## Why this exists
 
@@ -10,8 +10,8 @@ The test suites are real but narrow, and it is worth knowing exactly where they 
 
 | Suite | Count | Blind spot |
 |---|---|---|
-| `Website/AdaptiveLearning/backend` | 22 | Runs against a **fake Supabase**. No RLS, no real policies, no service-role behaviour. |
-| `EEGResearch` | 57 | Runs with `EEG_SOURCE=sim`. **No hardware** — nothing about real electrode contact is exercised. |
+| `Website/AdaptiveLearning/backend` | 30 | Runs against a **fake Supabase**. No RLS, no real policies, no service-role behaviour. |
+| `EEGResearch` | 60 | Runs with `EEG_SOURCE=sim`. **No hardware** — nothing about real electrode contact is exercised. |
 | `frontend` | 13 | Covers **two components** (`SignalPanel`, `ClassDetail`) out of 38. |
 | `native-bridge-build` | — | Compiles with `ENABLE_LIBMUSE=OFF`, so **none** of the libMuse packet handling is built, let alone run. |
 
@@ -19,12 +19,32 @@ So: access control is tested against a database that does not enforce anything, 
 
 ---
 
-## 1. Smoke — the stack starts (#1)
+## 1. Smoke — the stack starts (#1, #23, #25)
 
+> **Read this before anything else.** As of #25 the EEG service has **no default
+> tokens**. `API_TOKEN` and `ADMIN_TOKEN` are required and the service will not
+> start without them. Any machine whose `EEGResearch/.env` predates #25 — including
+> a second machine of your own, and every teammate's — will fail to start until
+> those are set. This is intended (the old defaults were `learner-token-123` /
+> `admin-token-123`, committed in a git repo and therefore known to anyone who had
+> seen the code), but it *will* look like a broken build to whoever hits it first.
+
+- [ ] `EEGResearch/.env` has `API_TOKEN` and `ADMIN_TOKEN` set to real generated values
+- [ ] `Website/AdaptiveLearning/backend/.env` has `EEG_API_TOKEN` / `EEG_ADMIN_TOKEN` **matching** the two above — they are the same secrets, and the backend authenticates to the sidecar as a client
 - [ ] `.\start.ps1` completes with no Python version mismatch and no `pydantic_core` error
 - [ ] Four services reachable: frontend `:5173`, website backend `:8000`, EEGResearch `:8001`, bridge `:8765`
 - [ ] `.\start.ps1 -muse` reaches the native bridge without hanging
 - [ ] A fresh clone works: `.venv` is no longer committed (#23), so the venv must build from `requirements.txt` on a machine that has never run this repo
+
+Deliberate failure modes worth confirming once, so they are recognised rather than debugged:
+
+- [ ] **Unset `API_TOKEN` and start EEGResearch** → fails immediately with a validation error naming the field, not a confusing runtime 401 later
+- [ ] **Unset `EEG_API_TOKEN` and start the website backend** → still boots (it treats the sidecar as optional), but any EEG call raises `Missing EEG_API_TOKEN environment variable` rather than silently reporting the sidecar as unavailable
+- [ ] **Run a script from `EEGResearch/scripts/` with no tokens set** → throws a message naming the variable to set, rather than failing with a 401
+
+The middle one is the subtle case: a missing token is a **permanent** misconfiguration,
+whereas a stopped sidecar is transient. They used to be indistinguishable — both
+surfaced as "EEG unavailable" — so the config error could hide indefinitely.
 
 ## 2. Access control — **needs two teacher accounts** (#15, #9)
 
@@ -112,6 +132,12 @@ longer than ~2 minutes as confounded.
 
 These merged PRs have no user-facing surface: **#17** (test fix), **#21** (CI),
 **#23** (venv untracking), **#24** (test framework). Confirmed by CI, not by clicking.
+
+**#25** is a partial exception. Its auth changes are covered by tests (60 in
+EEGResearch, including a regression test that sends a raw non-ASCII header and
+asserts 401 — that specific case is unreachable from any Python client, since
+httpx refuses to send non-ASCII header values). What tests cannot cover is the
+*configuration* consequence, which is why section 1 grew rather than this list.
 
 ## Calibration caveat
 

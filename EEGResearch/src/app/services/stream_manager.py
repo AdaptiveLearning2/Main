@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 class StreamManager:
     CONTRACT_VERSION = "1.1.0"
+    # Upper bound on samples drained from the adapter in one tick. Matches
+    # TcpMuseBridgeAdapter.EEG_QUEUE_MAXSIZE so a full queue can always be
+    # caught up in a single drain rather than trailing behind tick after tick.
+    DRAIN_MAX_BATCH = 2048
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -66,7 +70,13 @@ class StreamManager:
             try:
                 # Adapter reads can block (especially TCP bridge mode before first EEG frame),
                 # so move them off the event loop thread to keep API endpoints responsive.
-                sample = await asyncio.to_thread(self.adapter.read_sample)
+                # Adapters backed by a queue (TcpMuseBridgeAdapter) support draining every
+                # frame buffered since the last tick; others (SimulatedMuseIngestionAdapter)
+                # only ever produce one sample per read, so fall back to that.
+                if hasattr(self.adapter, "drain_samples"):
+                    samples = await asyncio.to_thread(self.adapter.drain_samples, self.DRAIN_MAX_BATCH)
+                else:
+                    samples = [await asyncio.to_thread(self.adapter.read_sample)]
                 # Metadata access can also block (e.g., lock contention in TCP adapter),
                 # so keep it off the event loop thread as well.
                 raw_meta = (
@@ -88,7 +98,14 @@ class StreamManager:
                 continue
 
             try:
-                features = self.processor.update(sample, raw_meta)
+                # Feed every drained frame through the processor so its rolling
+                # window sees the real signal instead of one frame per tick, but
+                # only publish the payload built from the most recent sample.
+                features: dict[str, Any] = {}
+                for drained_sample in samples:
+                    features = self.processor.update(drained_sample, raw_meta)
+                features["batch_size"] = len(samples)
+                sample = samples[-1]
                 state = self.adaptation.infer_state(features)
                 policy = self.adaptation.next_question_policy(state)
                 self.latest_payload = {
@@ -110,7 +127,7 @@ class StreamManager:
                     },
                     "question_policy": policy,
                 }
-                self.samples_processed += 1
+                self.samples_processed += len(samples)
             except Exception as exc:
                 # A real sample was read successfully, so this is a bug in the
                 # processing pipeline (not a signal-loss condition) -- log and

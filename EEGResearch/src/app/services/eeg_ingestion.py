@@ -277,6 +277,11 @@ class SimulatedMuseIngestionAdapter:
 class TcpMuseBridgeAdapter:
     """Reads normalized samples from a native bridge over localhost TCP."""
 
+    # Bound the queue so a stalled consumer can't grow it without limit.
+    # Mirrors the native bridge's own drop-oldest policy at the same size
+    # (eeg_queue_ cap in muse_bridge_service.cpp).
+    EEG_QUEUE_MAXSIZE = 2048
+
     def __init__(self, host: str, port: int, timeout_seconds: int) -> None:
         self.host = host
         self.port = port
@@ -306,9 +311,23 @@ class TcpMuseBridgeAdapter:
         }
         self._ingestion_lock = threading.Lock()
         self._write_lock = threading.Lock()
-        self._eeg_queue: queue.Queue[EegSample] = queue.Queue()
+        self._eeg_queue: queue.Queue[EegSample] = queue.Queue(maxsize=self.EEG_QUEUE_MAXSIZE)
         self._reader_stop = threading.Event()
         self._reader_thread: threading.Thread | None = None
+
+    def _enqueue_sample(self, sample: EegSample) -> None:
+        """Push onto the bounded queue, dropping the oldest sample instead of
+        blocking a full queue -- same drop-oldest policy as the native bridge,
+        just enforced here instead of assuming the consumer always keeps up."""
+        while True:
+            try:
+                self._eeg_queue.put_nowait(sample)
+                return
+            except queue.Full:
+                try:
+                    self._eeg_queue.get_nowait()
+                except queue.Empty:
+                    pass
 
     def _reader_loop(self) -> None:
         assert self._stream is not None
@@ -335,7 +354,7 @@ class TcpMuseBridgeAdapter:
                 sample = parse_bridge_message(payload)
             except (ValueError, TypeError, KeyError):
                 continue
-            self._eeg_queue.put(sample)
+            self._enqueue_sample(sample)
 
     def _try_connect(self) -> bool:
         """Attempt one TCP connection. Returns True on success, False if bridge not up yet."""
@@ -397,7 +416,10 @@ class TcpMuseBridgeAdapter:
                 break
         self._reader_stop.clear()
 
-    def read_sample(self) -> EegSample:
+    def drain_samples(self, max_batch: int) -> list[EegSample]:
+        """Return every queued sample, up to max_batch. Blocks only when the
+        queue is empty (same wait/reconnect behaviour read_sample used to have
+        on its own get() call), then drains the rest without blocking."""
         # If not connected, try to connect now (bridge may have started since last attempt).
         if not self._reader_thread:
             if not self._try_connect():
@@ -408,12 +430,22 @@ class TcpMuseBridgeAdapter:
         # surface a recoverable error so the stream loop can keep running.
         timeout_s = max(0.1, float(self.timeout_seconds))
         try:
-            return self._eeg_queue.get(timeout=timeout_s)
+            first = self._eeg_queue.get(timeout=timeout_s)
         except queue.Empty as e:
             # Reader thread died (bridge disconnected) — reset so next call retries.
             if self._reader_thread and not self._reader_thread.is_alive():
                 self.disconnect()
             raise RuntimeError(f"No EEG sample received from bridge within {timeout_s:.1f}s") from e
+        samples = [first]
+        while len(samples) < max_batch:
+            try:
+                samples.append(self._eeg_queue.get_nowait())
+            except queue.Empty:
+                break
+        return samples
+
+    def read_sample(self) -> EegSample:
+        return self.drain_samples(1)[0]
 
     def get_ingestion_meta(self) -> dict[str, Any]:
         with self._ingestion_lock:

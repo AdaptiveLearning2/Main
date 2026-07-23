@@ -11,12 +11,21 @@ import eeg_client
 POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 
 
+class DeviceClaimedError(Exception):
+    """Raised when a device is already claimed by another user's live poller."""
+
+    def __init__(self, device_id: str):
+        self.device_id = device_id
+        super().__init__(f"Device {device_id!r} is already in use by another user")
+
+
 class _Poller(threading.Thread):
-    def __init__(self, supabase, user_id: str, session_id: str):
+    def __init__(self, supabase, user_id: str, session_id: str, device_id: str):
         super().__init__(daemon=True)
         self.supabase   = supabase
         self.user_id    = user_id
         self.session_id = session_id
+        self.device_id  = device_id
         self._stop      = threading.Event()
         self.last_ts    = None
         self.samples    = 0
@@ -124,18 +133,28 @@ _active: Dict[str, _Poller] = {}
 _lock = threading.Lock()
 
 
-def start(supabase, user_id: str, session_id: str) -> dict:
-    print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]}", flush=True)
+def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
+    print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
             print(f"=== already running for this session", flush=True)
             return {"running": True, "already": True}
+        # The sidecar is a single shared stream: two different users polling
+        # it concurrently would each attribute the *same* physical device's
+        # readings to their own session. Same-user restarts (below) are fine
+        # -- that's just the user switching sessions/devices -- but a live
+        # poller some other user still owns must block us instead of quietly
+        # sharing the stream.
+        for sid, p in _active.items():
+            if p.device_id == device_id and p.user_id != user_id and p.is_alive():
+                print(f"=== device claimed by another user (session={sid[:8]})", flush=True)
+                raise DeviceClaimedError(device_id)
         for sid, p in list(_active.items()):
             if p.user_id == user_id:
                 print(f"=== stopping previous poller for same user (session={sid[:8]})", flush=True)
                 p.stop()
                 _active.pop(sid, None)
-        p = _Poller(supabase, user_id, session_id)
+        p = _Poller(supabase, user_id, session_id, device_id)
         p.start()
         _active[session_id] = p
         return {"running": True, "already": False}

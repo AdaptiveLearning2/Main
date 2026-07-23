@@ -99,6 +99,24 @@ def get_muse_status() -> dict:
         return {"available": False}
 
 
+DEFAULT_DEVICE_ID = "default"
+
+
+def current_device_id() -> str:
+    """Identifies the physical device the sidecar is currently bound to.
+
+    The sidecar only ever holds one connection (real headband or simulator)
+    at a time, so this is what eeg_poller uses to tell whether two different
+    users are trying to claim the same underlying stream. Falls back to a
+    fixed id when no named device is reported (e.g. simulator mode) so that
+    "one session per device" still degrades to "one session, period" rather
+    than silently disabling the check.
+    """
+    status = get_muse_status()
+    name = (status.get("ingestion") or {}).get("active_muse_name")
+    return name or DEFAULT_DEVICE_ID
+
+
 def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
     """Convert EEG service payload → cognitive_signals row.
 

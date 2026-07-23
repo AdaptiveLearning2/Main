@@ -80,13 +80,16 @@ export default function Adaptive() {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
+  const creating = useRef(null)
 
- const getOrCreateSession = async () => {
+  const getOrCreateSession = async () => {
     if (sessionId) return sessionId
-    const session = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
-    setSessionId(session.id)
-    return session.id
-}
+    if (creating.current) return creating.current
+    creating.current = apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
+      .then(s => { setSessionId(s.id); return s.id })
+      .finally(() => { creating.current = null })
+    return creating.current
+  }
 
   // poll EEG status while connected
   useEffect(() => {
@@ -255,7 +258,7 @@ export default function Adaptive() {
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
       else                              params.set('grade', grade)
-      params.set('session_id', sessionId)
+      params.set('session_id', activeSessionId)
 
       const json = await apiFetch(`/api/generate-question?${params.toString()}`)
       if (!json?.question_text) throw new Error('Invalid response')

@@ -486,14 +486,14 @@ def start_session(payload: StartSessionRequest, request: Request):
     for s in stale_open:
         eeg_poller.stop(s["id"])
         supabase.table("sessions").update(
-            {"ended_at": datetime.utcnow().isoformat()}
+            {"ended_at": _utc_now().isoformat()}
         ).eq("id", s["id"]).execute()
 
 
     obj  = {
         "user_id":            user["id"],
         "title":              payload.title or "Practice Session",
-        "started_at":         datetime.utcnow().isoformat(),
+        "started_at":         _utc_now().isoformat(),
         "questions_answered": 0,
         "correct_answers":    0,
     }

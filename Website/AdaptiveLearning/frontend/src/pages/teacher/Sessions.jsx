@@ -23,6 +23,7 @@ export default function Sessions() {
   const [students, setStudents] = useState([])
   const [sessionsByStudent, setSessionsByStudent] = useState({})
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     apiFetch('/api/classes').then(rows => {
@@ -52,6 +53,10 @@ export default function Sessions() {
     (sessionsByStudent[s.user_id] || []).map(sess => ({ ...sess, _student: s }))
   ).sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
 
+  const filteredRows = allRows.filter(s =>
+    (s._student?.name || '').toLowerCase().includes(search.trim().toLowerCase())
+  )
+
   return (
     <div className="p-6 lg:p-8 pb-12">
       <div className="mb-6 flex items-end justify-between flex-wrap gap-4">
@@ -62,13 +67,22 @@ export default function Sessions() {
           <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">All past and current learning sessions in this class. Click into any to see cognitive replay.</p>
         </div>
         {classes.length > 0 && (
-          <select value={classId} onChange={e => setClassId(e.target.value)}
-            className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white">
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Filter by student name..."
+              className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white w-48"
+            />
+            <select value={classId} onChange={e => setClassId(e.target.value)}
+              className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white">
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
         )}
       </div>
-
+        
       {loading ? (
         <div className="space-y-2">{[1,2,3,4].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
       ) : allRows.length === 0 ? (
@@ -76,6 +90,11 @@ export default function Sessions() {
           <div className="text-6xl mb-3">📭</div>
           <p className="font-black text-gray-900 dark:text-white">No sessions yet</p>
           <p className="text-sm text-gray-500 mt-1">When students start practicing, sessions will show here.</p>
+        </div>
+      ) : filteredRows.length === 0 ? (
+        <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+          <div className="text-6xl mb-3">🔍</div>
+          <p className="font-black text-gray-900 dark:text-white">No sessions match "{search}"</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
@@ -86,7 +105,7 @@ export default function Sessions() {
             <div className="col-span-2">Progress</div>
             <div className="col-span-2 text-right">Status</div>
           </div>
-          {allRows.map((s, i) => {
+          {filteredRows.map((s, i) => {
             const live = !s.ended_at
             const acc  = (s.questions_answered || 0) > 0
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null

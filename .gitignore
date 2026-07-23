@@ -21,3 +21,9 @@ venv/
 # this they all land in git status as untracked -- the same shape of gap that
 # put a 4899-file virtualenv in this repo above.
 coverage/
+
+# Personal manual-QA working document -- deliberately not part of the shared
+# repo. Anchored with a leading slash, unlike the rules above: this is one
+# specific file at the repository root, not a name that should match at any
+# depth.
+/MANUAL_QA_CHECKLIST.md

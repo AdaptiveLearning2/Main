@@ -476,10 +476,24 @@ def generate_question(
 @app.post("/api/sessions/start")
 def start_session(payload: StartSessionRequest, request: Request):
     user = get_user(request)
+
+    # Close any previous open sessions for user before opening a new one.
+    # without this a student who closes the tab without actually ending the session
+    # leaves a stale open session behind.
+
+    stale_open = supabase.table("sessions").select("id") \
+        .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
+    for s in stale_open:
+        eeg_poller.stop(s["id"])
+        supabase.table("sessions").update(
+            {"ended_at": _utc_now().isoformat()}
+        ).eq("id", s["id"]).execute()
+
+
     obj  = {
         "user_id":            user["id"],
         "title":              payload.title or "Practice Session",
-        "started_at":         datetime.utcnow().isoformat(),
+        "started_at":         _utc_now().isoformat(),
         "questions_answered": 0,
         "correct_answers":    0,
     }

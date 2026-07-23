@@ -80,20 +80,16 @@ export default function Adaptive() {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
-  // start a session
-  useEffect(() => {
-    let r
-    ;(async () => {
-      try {
-        const session = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
-        setSessionId(session.id)
-        r = createSignalRecorder({ sessionId: session.id })
-        setRecorder(r)
-        window.AL_currentSessionId = session.id
-      } catch {}
-    })()
-    return () => { r?.stop() }
-  }, [])
+  const creating = useRef(null)
+
+  const getOrCreateSession = async () => {
+    if (sessionId) return sessionId
+    if (creating.current) return creating.current
+    creating.current = apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Adaptive Session' } })
+      .then(s => { setSessionId(s.id); return s.id })
+      .finally(() => { creating.current = null })
+    return creating.current
+  }
 
   // poll EEG status while connected
   useEffect(() => {
@@ -137,9 +133,11 @@ export default function Adaptive() {
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
   const toggleHeadband = async () => {
-    if (!recorder || !sessionId) {
-      alert('Session not ready yet — wait 2 seconds and try again.')
-      return
+    const activeSessionId = await getOrCreateSession()
+    if (!recorder) {
+      const r = createSignalRecorder({ sessionId: activeSessionId })
+      setRecorder(r)
+      window.AL_currentSessionId = activeSessionId
     }
 
     // — Disconnect —
@@ -255,10 +253,12 @@ export default function Adaptive() {
     setPhase('loading'); setError(false)
     try {
       await sendAccuracyToBackend()
+      const activeSessionId = await getOrCreateSession()
+
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)
       else                              params.set('grade', grade)
-      if (sessionId) params.set('session_id', sessionId)
+      params.set('session_id', activeSessionId)
 
       const json = await apiFetch(`/api/generate-question?${params.toString()}`)
       if (!json?.question_text) throw new Error('Invalid response')

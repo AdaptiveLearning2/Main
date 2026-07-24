@@ -1003,8 +1003,19 @@ def eeg_health():
     alive = eeg_client.is_alive()
     if not alive:
         return {"available": False, "url": eeg_client.EEG_API_URL}
-    return {"available": True, "url": eeg_client.EEG_API_URL,
-            "muse": eeg_client.get_muse_status()}
+    # is_alive() hits the sidecar's unauthenticated /healthz, so a reachable
+    # sidecar tells us nothing about auth. get_muse_status() needs the learner
+    # token and raises (by design -- see eeg_client.get_state) when it is
+    # missing or misconfigured. That is a configuration error, not an outage,
+    # but this is a health check: it must report the problem, not 500 on it.
+    # Return unavailable with the reason so the frontend degrades exactly as it
+    # does for an outage while a developer sees the cause instead of a bare
+    # stack trace in the logs.
+    try:
+        muse = eeg_client.get_muse_status()
+    except RuntimeError as e:
+        return {"available": False, "url": eeg_client.EEG_API_URL, "error": str(e)}
+    return {"available": True, "url": eeg_client.EEG_API_URL, "muse": muse}
 
 @app.post("/api/eeg/start")
 def eeg_start(payload: EegSessionRequest, request: Request):

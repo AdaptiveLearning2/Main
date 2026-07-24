@@ -340,8 +340,12 @@ export default function Adaptive() {
             )}
           </p>
         </div>
+        {/* Not gated on sessionId: toggleHeadband creates the session lazily via
+            getOrCreateSession() on click. #27 moved session creation off page-load
+            (to stop double-registering history) but left a !sessionId guard here, so
+            the button that creates the session was disabled until one existed. */}
         <button onClick={toggleHeadband}
-          disabled={!headband.available || !sessionId || ['starting','scanning','connecting'].includes(headband.phase)}
+          disabled={!headband.available || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
             headband.connected ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}>

@@ -154,6 +154,10 @@ class StreamManager:
                 "calm_score": 0.0,
                 "confidence": 0.0,
                 "signal_quality": "no_signal",
+                # 0 samples drained/processed this tick. Present (not omitted)
+                # so the features shape is identical on signal and no-signal
+                # ticks, and consumers never have to special-case its absence.
+                "batch_size": 0,
             },
             "state": {
                 "label": "no_signal",

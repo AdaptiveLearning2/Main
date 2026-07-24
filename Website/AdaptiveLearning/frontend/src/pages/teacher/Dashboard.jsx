@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap } from 'lucide-react'
+import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { toast } from 'sonner'
 
 function StatCard({ icon: Icon, title, value, sub, color, delay }) {
   return (
@@ -28,6 +29,8 @@ function StatCard({ icon: Icon, title, value, sub, color, delay }) {
   )
 }
 
+
+
 export default function TeacherDashboard() {
   const { user } = useAuth()
   const [questions, setQuestions] = useState([])
@@ -44,15 +47,57 @@ export default function TeacherDashboard() {
   const medium = questions.filter(q => q.difficulty === 'medium').length
   const hard   = questions.filter(q => q.difficulty === 'hard').length
 
-  const CARDS = [
-    { icon: HelpCircle, title: 'Total Questions', value: loading ? '...' : questions.length, sub: 'in question bank',    color: 'bg-gradient-to-br from-violet-500 to-purple-600',  delay: 0.1 },
-    { icon: BarChart3,  title: 'Easy',            value: loading ? '...' : easy,             sub: 'easy questions',      color: 'bg-gradient-to-br from-green-500 to-emerald-600',   delay: 0.2 },
-    { icon: BarChart3,  title: 'Medium',           value: loading ? '...' : medium,           sub: 'medium questions',    color: 'bg-gradient-to-br from-amber-500 to-orange-500',    delay: 0.3 },
-    { icon: BarChart3,  title: 'Hard',             value: loading ? '...' : hard,             sub: 'hard questions',      color: 'bg-gradient-to-br from-rose-500 to-red-600',        delay: 0.4 },
-  ]
 
+
+  const [classes, setClasses] = useState([])
+  const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak, studentCount }
+  const [classesLoading, setClassesLoading] = useState(true)
+  const headcount = (c) => c.class_memberships?.[0]?.count ?? 0
+  const totalStudents = classes.reduce((sum, c) => sum + headcount(c), 0)
+
+  useEffect(() => {
+    apiFetch('/api/classes').then(async (rows) => {
+      setClasses(rows || [])
+      const averages = {}
+      await Promise.all((rows || []).map(async (c) => {
+        try {
+          const students = await apiFetch(`/api/classes/${c.id}/students`)
+          const withAttempts = (students || []).filter(s => (s.total_questions || 0) > 0)
+          const avgAccuracy = withAttempts.length
+            ? Math.round(
+                withAttempts.reduce((sum, s) => sum + (s.total_correct / s.total_questions) * 100, 0)
+                / withAttempts.length
+              )
+            : null
+          const avgStreak = (students || []).length
+            ? Math.round((students || []).reduce((sum, s) => sum + (s.current_streak || 0), 0) / students.length)
+            : 0
+          averages[c.id] = { avgAccuracy, avgStreak, studentCount: (students || []).length }
+        } catch {
+          averages[c.id] = { avgAccuracy: null, avgStreak: 0, studentCount: 0 }
+        }
+      }))
+      setClassAverages(averages)
+      setClassesLoading(false)
+    }).catch(() => setClassesLoading(false))
+  }, [])
   const recentQuestions = questions.slice(0, 5)
 
+  const CARDS = [
+    { icon: HelpCircle, title: 'Total Questions', value: loading ? '...' : questions.length, sub: 'in question bank', color: 'bg-gradient-to-br from-violet-500 to-purple-600', delay: 0.1 },
+    { icon: Users,       title: 'Classes',         value: classesLoading ? '...' : classes.length, sub: 'you teach',   color: 'bg-gradient-to-br from-indigo-500 to-blue-600',   delay: 0.2 },
+    { icon: Users,       title: 'Total Students',  value: classesLoading ? '...' : totalStudents,   sub: 'enrolled',    color: 'bg-gradient-to-br from-emerald-500 to-green-600', delay: 0.3 },
+  ]
+
+  const [copiedId, setCopiedId] = useState(null)
+
+  function copyCode(code, id, e) {
+    e.stopPropagation()
+    navigator.clipboard.writeText(code)
+    setCopiedId(id)
+    toast.success(`Copied code: ${code}`)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
       {/* header */}
@@ -71,11 +116,93 @@ export default function TeacherDashboard() {
           </motion.div>
         </Link>
       </motion.div>
-
       {/* stat cards */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
         {CARDS.map(c => <StatCard key={c.title} {...c} />)}
       </div>
+      {/* Your Classes */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-black text-gray-900 dark:text-white">Your Classes</h2>
+          <Link to="/teacher/classes" className="text-xs text-violet-600 dark:text-violet-400 font-bold hover:underline flex items-center gap-0.5">
+            Manage <ArrowUpRight size={12} />
+          </Link>
+        </div>
+
+        {classesLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {[1,2,3].map(i => <div key={i} className="h-28 bg-gray-100 dark:bg-gray-800 rounded-2xl animate-pulse" />)}
+          </div>
+        ) : classes.length === 0 ? (
+          <div className="text-center py-10 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+            <p className="text-4xl mb-2">🏫</p>
+            <p className="font-black text-gray-900 dark:text-white mb-1">No classes yet</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Create your first class to start tracking students.</p>
+            <Link to="/teacher/classes" className="inline-flex items-center gap-2 bg-violet-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow hover:bg-violet-700 transition">
+              <Users size={16} /> Create a Class
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {classes.map(c => (
+              <div key={c.id} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
+                <p className="font-black text-gray-900 dark:text-white mb-1 truncate">{c.name}</p>
+                {c.grade_level && <p className="text-xs text-gray-400 mb-3">{c.grade_level}</p>}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Join code</p>
+                    <p className="font-mono font-black text-violet-600 dark:text-violet-400 text-lg tracking-widest">{c.join_code}
+                    <button onClick={(e) => copyCode(c.join_code, c.id, e)}
+                        className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
+                        {copiedId === c.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
+                      </button></p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xl font-black text-gray-900 dark:text-white">{headcount(c)}</p>
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">students</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </motion.div>
+        {/* class averages */}
+        {classes.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+            <h2 className="text-lg font-black text-gray-900 dark:text-white mb-3">Class Averages</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              {classes.map(c => {
+                const avg = classAverages[c.id]
+                return (
+                  <div key={c.id} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
+                    <p className="font-black text-gray-900 dark:text-white mb-3">{c.name}</p>
+                    {classesLoading || !avg ? (
+                      <div className="h-10 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div>
+                          <p className="text-xl font-black text-violet-600">
+                            {avg.avgAccuracy === null ? '—' : `${avg.avgAccuracy}%`}
+                          </p>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Avg accuracy</p>
+                        </div>
+                        <div>
+                          <p className="text-xl font-black text-amber-600">{avg.avgStreak}</p>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Avg streak</p>
+                        </div>
+                        <div>
+                          <p className="text-xl font-black text-emerald-600">{avg.studentCount}</p>
+                          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Students</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </motion.div>
+        )}
 
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-4">
@@ -129,7 +256,7 @@ export default function TeacherDashboard() {
             ))}
           </motion.div>
         </div>
-
+        
         {/* recent questions */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm h-fit">
@@ -139,6 +266,7 @@ export default function TeacherDashboard() {
               All <ArrowUpRight size={12} />
             </Link>
           </div>
+        
           {loading ? (
             <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />)}</div>
           ) : recentQuestions.length === 0 ? (

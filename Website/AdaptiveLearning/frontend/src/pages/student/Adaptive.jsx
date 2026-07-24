@@ -160,7 +160,7 @@ export default function Adaptive() {
       // 1. Start the backend EEG poller
       setHeadband(s => ({ ...s, phase: 'starting' }))
       const res = await recorder.start()
-      if (!res?.ok && !res?.running) throw new Error('Could not start EEG session')
+      if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
 
       // 2. Disconnect any previous session so the headband isn't stuck in streaming state
       //    (causes BadStateError on the next connect if skipped)

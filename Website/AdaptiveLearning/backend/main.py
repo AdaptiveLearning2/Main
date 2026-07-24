@@ -1019,7 +1019,15 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(400, "Session already ended")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
-    out = eeg_poller.start(supabase, user["id"], payload.session_id)
+    device_id = eeg_client.current_device_id()
+    try:
+        out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
+    except eeg_poller.DeviceClaimedError:
+        raise HTTPException(
+            409,
+            "This headband is already recording for another user. "
+            "Ask them to disconnect before pairing here.",
+        )
     return {"ok": True, **out}
 
 @app.post("/api/eeg/stop")

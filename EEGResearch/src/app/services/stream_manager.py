@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 class StreamManager:
     CONTRACT_VERSION = "1.1.0"
+    # Upper bound on samples drained from the adapter in one tick. Matches
+    # TcpMuseBridgeAdapter.EEG_QUEUE_MAXSIZE so a full queue can always be
+    # caught up in a single drain rather than trailing behind tick after tick.
+    DRAIN_MAX_BATCH = 2048
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -66,7 +70,13 @@ class StreamManager:
             try:
                 # Adapter reads can block (especially TCP bridge mode before first EEG frame),
                 # so move them off the event loop thread to keep API endpoints responsive.
-                sample = await asyncio.to_thread(self.adapter.read_sample)
+                # Adapters backed by a queue (TcpMuseBridgeAdapter) support draining every
+                # frame buffered since the last tick; others (SimulatedMuseIngestionAdapter)
+                # only ever produce one sample per read, so fall back to that.
+                if hasattr(self.adapter, "drain_samples"):
+                    samples = await asyncio.to_thread(self.adapter.drain_samples, self.DRAIN_MAX_BATCH)
+                else:
+                    samples = [await asyncio.to_thread(self.adapter.read_sample)]
                 # Metadata access can also block (e.g., lock contention in TCP adapter),
                 # so keep it off the event loop thread as well.
                 raw_meta = (
@@ -88,7 +98,22 @@ class StreamManager:
                 continue
 
             try:
+                # Feed only the freshest drained sample through the processor.
+                # SignalProcessor's rolling window and per-session baseline
+                # (window_size, BASELINE_SAMPLES) are calibrated in *ticks*, not
+                # raw samples -- one processor.update() call per tick is the
+                # invariant those constants assume. Calling update() once per
+                # drained sample broke that: at the bridge's native rate a
+                # single tick can carry dozens of samples sharing the same
+                # raw_meta (fetched once per tick, see above), so the baseline
+                # would latch after one tick instead of ~15s, and the window
+                # would span milliseconds instead of ~5s. Draining the queue
+                # every tick already fixes the original bug (unbounded backlog
+                # / ever-staler reads); it doesn't require re-processing every
+                # buffered sample, just always processing the newest one.
+                sample = samples[-1]
                 features = self.processor.update(sample, raw_meta)
+                features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
                 policy = self.adaptation.next_question_policy(state)
                 self.latest_payload = {
@@ -110,7 +135,7 @@ class StreamManager:
                     },
                     "question_policy": policy,
                 }
-                self.samples_processed += 1
+                self.samples_processed += len(samples)
             except Exception as exc:
                 # A real sample was read successfully, so this is a bug in the
                 # processing pipeline (not a signal-loss condition) -- log and
@@ -129,6 +154,10 @@ class StreamManager:
                 "calm_score": 0.0,
                 "confidence": 0.0,
                 "signal_quality": "no_signal",
+                # 0 samples drained/processed this tick. Present (not omitted)
+                # so the features shape is identical on signal and no-signal
+                # ticks, and consumers never have to special-case its absence.
+                "batch_size": 0,
             },
             "state": {
                 "label": "no_signal",

@@ -992,8 +992,14 @@ def eeg_debug(request: Request):
     get_user(request)
     if not eeg_client.is_alive():
         return {"available": False}
-    snapshot = eeg_client.get_state(timeout=1.5)
-    muse     = eeg_client.get_muse_status()
+    # Same as eeg_health: a missing/misconfigured token makes get_state and
+    # get_muse_status raise (by design), which would otherwise surface here as a
+    # bare 500. Report it instead so the two EEG endpoints behave alike.
+    try:
+        snapshot = eeg_client.get_state(timeout=1.5)
+        muse     = eeg_client.get_muse_status()
+    except RuntimeError as e:
+        return {"available": False, "error": str(e)}
     return {"available": True, "snapshot": snapshot, "muse": muse}
 
 

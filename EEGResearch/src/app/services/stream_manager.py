@@ -98,14 +98,22 @@ class StreamManager:
                 continue
 
             try:
-                # Feed every drained frame through the processor so its rolling
-                # window sees the real signal instead of one frame per tick, but
-                # only publish the payload built from the most recent sample.
-                features: dict[str, Any] = {}
-                for drained_sample in samples:
-                    features = self.processor.update(drained_sample, raw_meta)
-                features["batch_size"] = len(samples)
+                # Feed only the freshest drained sample through the processor.
+                # SignalProcessor's rolling window and per-session baseline
+                # (window_size, BASELINE_SAMPLES) are calibrated in *ticks*, not
+                # raw samples -- one processor.update() call per tick is the
+                # invariant those constants assume. Calling update() once per
+                # drained sample broke that: at the bridge's native rate a
+                # single tick can carry dozens of samples sharing the same
+                # raw_meta (fetched once per tick, see above), so the baseline
+                # would latch after one tick instead of ~15s, and the window
+                # would span milliseconds instead of ~5s. Draining the queue
+                # every tick already fixes the original bug (unbounded backlog
+                # / ever-staler reads); it doesn't require re-processing every
+                # buffered sample, just always processing the newest one.
                 sample = samples[-1]
+                features = self.processor.update(sample, raw_meta)
+                features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
                 policy = self.adaptation.next_question_policy(state)
                 self.latest_payload = {

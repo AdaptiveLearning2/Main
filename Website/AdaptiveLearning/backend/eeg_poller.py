@@ -26,7 +26,13 @@ class _Poller(threading.Thread):
         self.user_id    = user_id
         self.session_id = session_id
         self.device_id  = device_id
-        self._stop      = threading.Event()
+        # Named _stop_event, not _stop: threading.Thread itself uses a private
+        # method named _stop() internally (called from _wait_for_tstate_lock,
+        # which is_alive()/join() hit once the thread has actually finished).
+        # An attribute here named _stop shadows that method, so the internal
+        # call becomes "call this Event instance" -> TypeError: 'Event' object
+        # is not callable, raised from is_alive()/join() on a finished thread.
+        self._stop_event = threading.Event()
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
@@ -40,7 +46,7 @@ class _Poller(threading.Thread):
             print(f"!!! [eeg-poller] could not start eeg session: {e}", flush=True)
 
         loops = 0
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             loops += 1
             data = eeg_client.get_state()
             if loops <= 3 or loops % 10 == 0:
@@ -126,7 +132,7 @@ class _Poller(threading.Thread):
         print(f"<<< [eeg-poller] STOPPED user={self.user_id[:8]} session={self.session_id[:8]} samples={self.samples} errors={self.errors}", flush=True)
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
 
 _active: Dict[str, _Poller] = {}

@@ -1100,3 +1100,72 @@ def test_stream_manager_loop_does_not_block_event_loop_on_get_ingestion_meta():
 
     ticks = asyncio.run(run_case())
     assert ticks > 0
+
+
+def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window():
+    """Regression: stream_manager._loop used to call processor.update() once
+    per drained sample instead of once per tick. SignalProcessor.window
+    (window_size) and the per-session baseline (BASELINE_SAMPLES) are
+    calibrated in *ticks*, not raw samples -- draining dozens of samples in a
+    single tick (all sharing the one raw_meta fetched for that tick, since
+    band metadata is fetched once per tick, not once per drained sample)
+    collapsed the ~15s baseline warmup and ~5s window into a single tick,
+    latching the baseline on one band reading instead of a real resting-state
+    average. Feeding only the freshest drained sample per tick keeps
+    processor.update() at its designed one-call-per-tick cadence regardless
+    of how many samples the adapter buffered.
+    """
+    batch_size = 64
+
+    class BatchAdapter:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def connect(self) -> None:
+            pass
+
+        def disconnect(self) -> None:
+            pass
+
+        def drain_samples(self, max_batch: int):
+            samples = []
+            for _ in range(batch_size):
+                self._n += 1
+                samples.append(
+                    EegSample(
+                        timestamp=datetime.now(timezone.utc),
+                        channel_tp9=700.0 + self._n,
+                        channel_af7=700.0 + self._n,
+                        channel_af8=700.0 + self._n,
+                        channel_tp10=700.0 + self._n,
+                    )
+                )
+            return samples
+
+        def get_ingestion_meta(self):
+            # Same values for the whole tick, as the real adapters do --
+            # metadata is fetched once per tick, not once per drained sample.
+            return {"alpha": 0.30, "beta": 0.20, "theta": 0.10, "gamma": 0.05}
+
+    async def run_case():
+        manager = stream_manager.__class__()
+        manager.adapter = BatchAdapter()
+        manager.running = True
+        loop_task = asyncio.create_task(manager._loop())
+        await asyncio.sleep(0.08)
+        manager.running = False
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        return manager
+
+    manager = asyncio.run(run_case())
+    # A tick's worth of drained samples must count as ONE tick toward the
+    # window/baseline, not `batch_size` of them.
+    assert len(manager.processor.window) < batch_size
+    assert len(manager.processor._baseline_focus) < batch_size
+    assert not manager.processor._baseline_ready
+    # But the full batch is still visible for diagnostics.
+    assert manager.latest_payload["features"]["batch_size"] == batch_size

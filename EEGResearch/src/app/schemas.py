@@ -20,10 +20,13 @@ class FeatureData(BaseModel):
     # Whether signal_quality came from the headband's electrode data
     # ("contact") or the legacy calm-based fallback ("heuristic").
     quality_basis: Literal["contact", "heuristic"] | None = None
-    # Diagnostics: frames dropped by the contact filter this session, and how
-    # many electrodes the bridge averaged into the band values (4 = all).
+    # Diagnostics: frames dropped by the contact filter this session, how many
+    # electrodes the bridge averaged into the band values (4 = all), and how
+    # many samples were drained from the bridge queue this tick (0 on a
+    # no-signal tick).
     samples_rejected: int | None = None
     band_channels_used: int | None = None
+    batch_size: int | None = None
 
 
 class StateData(BaseModel):

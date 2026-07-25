@@ -47,7 +47,7 @@ export default function TeacherDashboard() {
 
 
   const [classes, setClasses] = useState([])
-  const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak, studentCount }
+  const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak }
   const [classesLoading, setClassesLoading] = useState(true)
   const headcount = (c) => c.class_memberships?.[0]?.count ?? 0
   const totalStudents = classes.reduce((sum, c) => sum + headcount(c), 0)
@@ -69,9 +69,9 @@ export default function TeacherDashboard() {
           const avgStreak = (students || []).length
             ? Math.round((students || []).reduce((sum, s) => sum + (s.current_streak || 0), 0) / students.length)
             : 0
-          averages[c.id] = { avgAccuracy, avgStreak, studentCount: (students || []).length }
+          averages[c.id] = { avgAccuracy, avgStreak }
         } catch {
-          averages[c.id] = { avgAccuracy: null, avgStreak: 0, studentCount: 0 }
+          averages[c.id] = { avgAccuracy: null, avgStreak: 0 }
         }
       }))
       setClassAverages(averages)

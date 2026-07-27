@@ -54,6 +54,7 @@ class InterpretedEegData(BaseModel):
     """Interpreted EEG snapshot; optional device/ingestion metadata for pilot visibility."""
 
     contract_version: str
+    device_id: str
     timestamp: str
     channels: ChannelData
     features: FeatureData

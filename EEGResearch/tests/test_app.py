@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import time
 from datetime import datetime, timezone
 
-from src.app.config import get_settings
+from src.app.config import DeviceConfig, get_settings, parse_eeg_devices
 from src.app.main import app, stream_manager
 from src.app.models import EegSample
 from src.app.services.adaptation import AdaptationEngine
@@ -19,6 +19,16 @@ from src.app.services.eeg_ingestion import (
     parse_bridge_message,
 )
 from src.app.services.signal_processing import SignalProcessor
+from src.app.services.stream_manager import DeviceSession
+
+
+def _make_session(device_id: str = "test-device") -> DeviceSession:
+    settings = get_settings()
+    return DeviceSession(
+        device_id,
+        settings,
+        DeviceConfig(device_id=device_id, kind=settings.eeg_source, host=settings.muse_bridge_host, port=settings.muse_bridge_port),
+    )
 
 
 def test_healthz():
@@ -65,8 +75,9 @@ def test_state_endpoint_serializes_no_signal_payload():
     client = TestClient(app)
     settings = get_settings()
     learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
-    previous_payload = stream_manager.latest_payload
-    stream_manager.latest_payload = stream_manager._no_signal_payload()
+    default_session = stream_manager.session()
+    previous_payload = default_session.latest_payload
+    default_session.latest_payload = default_session._no_signal_payload()
     try:
         r = client.get("/api/v1/state", headers=learner_headers)
         assert r.status_code == 200
@@ -76,7 +87,7 @@ def test_state_endpoint_serializes_no_signal_payload():
         assert body["data"]["features"]["focus_score"] == 0.0
         assert body["data"]["state"]["label"] == "no_signal"
     finally:
-        stream_manager.latest_payload = previous_payload
+        default_session.latest_payload = previous_payload
 
 
 def test_muse_refresh_returns_ok_false_when_not_tcp_muse():
@@ -119,7 +130,7 @@ def test_session_lifecycle_and_state():
                     break
                 time.sleep(0.05)
             assert data is not None
-            assert data["contract_version"] == "1.1.0"
+            assert data["contract_version"] == "1.2.0"
             assert "state" in data
             assert "question_policy" in data
             assert "bands" in data
@@ -872,7 +883,7 @@ def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
 
 
 def test_stream_manager_no_signal_payload_zeroes_scores():
-    manager = stream_manager.__class__()
+    manager = _make_session()
     payload = manager._no_signal_payload()
     assert payload["features"]["focus_score"] == 0.0
     assert payload["features"]["calm_score"] == 0.0
@@ -894,7 +905,7 @@ def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():
             raise RuntimeError("no data")
 
     async def run_case():
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = FailingAdapter()
         manager.processor.update(
             EegSample(
@@ -928,7 +939,7 @@ def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():
 
 def test_stream_manager_stop_zeroes_stale_scores_instead_of_freezing_them():
     async def run_case():
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = SimulatedMuseIngestionAdapter()
         await manager.start()
         # Let a couple of real samples land so latest_payload has non-zero scores.
@@ -953,7 +964,7 @@ def test_snapshot_zeroes_bands_on_no_signal_instead_of_stale_adapter_meta():
     # Bands display kept showing stale non-zero values after a disconnect
     # even though focus/calm/confidence correctly zeroed out.
     async def run_case():
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = SimulatedMuseIngestionAdapter()
         await manager.start()
         for _ in range(5):
@@ -990,7 +1001,7 @@ def test_stream_manager_start_does_not_block_event_loop_on_connect():
             raise RuntimeError("no data")
 
     async def run_case() -> int:
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = BlockingConnectAdapter()
         ticks = 0
         keep_ticking = True
@@ -1026,7 +1037,7 @@ def test_stream_manager_stop_does_not_block_event_loop_on_disconnect():
             raise RuntimeError("no data")
 
     async def run_case() -> int:
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = BlockingDisconnectAdapter()
         manager.running = True
         ticks = 0
@@ -1073,7 +1084,7 @@ def test_stream_manager_loop_does_not_block_event_loop_on_get_ingestion_meta():
             return {"alpha": 1.0, "beta": 1.0, "theta": 1.0, "gamma": 1.0}
 
     async def run_case() -> int:
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = BlockingMetaAdapter()
         manager.running = True
         ticks = 0
@@ -1148,7 +1159,7 @@ def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window
             return {"alpha": 0.30, "beta": 0.20, "theta": 0.10, "gamma": 0.05}
 
     async def run_case():
-        manager = stream_manager.__class__()
+        manager = _make_session()
         manager.adapter = BatchAdapter()
         manager.running = True
         loop_task = asyncio.create_task(manager._loop())
@@ -1169,3 +1180,92 @@ def test_stream_manager_loop_batch_drain_does_not_recalibrate_baseline_or_window
     assert not manager.processor._baseline_ready
     # But the full batch is still visible for diagnostics.
     assert manager.latest_payload["features"]["batch_size"] == batch_size
+
+
+# ─── device registry (multi-headband) ───────────────────────────────────
+
+
+def test_parse_eeg_devices_defaults_to_single_default_device_when_unset():
+    settings = get_settings().model_copy(update={"eeg_devices": ""})
+    devices = parse_eeg_devices(settings)
+    assert set(devices) == {"default"}
+    assert devices["default"].kind == settings.eeg_source.lower().strip()
+    assert devices["default"].host == settings.muse_bridge_host
+    assert devices["default"].port == settings.muse_bridge_port
+
+
+def test_parse_eeg_devices_parses_multi_entry_with_and_without_port_override():
+    settings = get_settings().model_copy(
+        update={"eeg_devices": "seat1:muse@8766,seat2:muse@192.168.1.5:8767,seat3:sim"}
+    )
+    devices = parse_eeg_devices(settings)
+    assert set(devices) == {"seat1", "seat2", "seat3"}
+    assert devices["seat1"].kind == "muse"
+    assert devices["seat1"].host == settings.muse_bridge_host
+    assert devices["seat1"].port == 8766
+    assert devices["seat2"].host == "192.168.1.5"
+    assert devices["seat2"].port == 8767
+    assert devices["seat3"].kind == "sim"
+
+
+def test_parse_eeg_devices_rejects_malformed_entries():
+    with pytest.raises(ValueError):
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1"}))
+    with pytest.raises(ValueError):
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1:not-a-kind"}))
+    with pytest.raises(ValueError):
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1:sim,seat1:sim"}))
+
+
+def test_list_devices_endpoint_shape():
+    client = TestClient(app)
+    settings = get_settings()
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    r = client.get("/api/v1/devices", headers=learner_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["data"], list)
+    assert any(d["device_id"] == "default" for d in body["data"])
+    entry = next(d for d in body["data"] if d["device_id"] == "default")
+    assert "running" in entry
+    assert "kind" in entry
+    assert "connection_state_name" in entry
+
+
+def test_list_devices_requires_auth():
+    client = TestClient(app)
+    assert client.get("/api/v1/devices").status_code == 401
+
+
+def test_unknown_device_id_returns_404_across_endpoints():
+    client = TestClient(app)
+    settings = get_settings()
+    admin_headers = {"Authorization": f"Bearer {settings.admin_token}"}
+    learner_headers = {"Authorization": f"Bearer {settings.api_token}"}
+    assert client.get("/api/v1/state", params={"device_id": "nope"}, headers=learner_headers).status_code == 404
+    assert client.get("/api/v1/muse/status", params={"device_id": "nope"}, headers=learner_headers).status_code == 404
+    assert client.post("/api/v1/session/start", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
+    assert client.post("/api/v1/muse/refresh", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
+
+
+def test_two_sim_devices_run_independently():
+    async def run_case():
+        manager_a = _make_session("dev-a")
+        manager_b = _make_session("dev-b")
+        manager_a.adapter = SimulatedMuseIngestionAdapter()
+        manager_b.adapter = SimulatedMuseIngestionAdapter()
+        await manager_a.start()
+        await manager_b.start()
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        await manager_a.stop()
+        await manager_b.stop()
+        return manager_a, manager_b
+
+    manager_a, manager_b = asyncio.run(run_case())
+    assert manager_a.samples_processed > 0
+    assert manager_b.samples_processed > 0
+    # Independent counters -- stopping one doesn't touch the other's tally.
+    assert manager_a.device_id == "dev-a"
+    assert manager_b.device_id == "dev-b"

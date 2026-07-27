@@ -2,27 +2,41 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from src.app.config import get_settings
+from src.app.config import DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
 from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
 
+CONTRACT_VERSION = "1.2.0"
 
-class StreamManager:
-    CONTRACT_VERSION = "1.1.0"
+
+class UnknownDeviceError(KeyError):
+    """Raised when a device_id doesn't match any device in the registry."""
+
+
+class DeviceSession:
+    """Owns one physical EEG stream: adapter, processor, adaptation engine, and the
+    background polling loop. One instance per entry in the device registry."""
+
+    CONTRACT_VERSION = CONTRACT_VERSION
     # Upper bound on samples drained from the adapter in one tick. Matches
     # TcpMuseBridgeAdapter.EEG_QUEUE_MAXSIZE so a full queue can always be
     # caught up in a single drain rather than trailing behind tick after tick.
     DRAIN_MAX_BATCH = 2048
 
-    def __init__(self) -> None:
-        self.settings = get_settings()
-        self.adapter = build_ingestion_adapter(self.settings)
+    def __init__(self, device_id: str, settings: Settings, device_config: DeviceConfig) -> None:
+        self.device_id = device_id
+        self.settings = settings
+        self.device_config = device_config
+        self.adapter = build_ingestion_adapter(
+            settings, kind=device_config.kind, host=device_config.host, port=device_config.port
+        )
         self.processor = SignalProcessor()
         self.adaptation = AdaptationEngine()
         self.latest_payload: dict[str, Any] = {}
@@ -90,7 +104,10 @@ class StreamManager:
                 # reading frozen in place, and reset the processor/adaptation state so
                 # real scores don't resume by blending pre-gap and post-gap samples.
                 self.errors_seen += 1
-                logger.debug("EEG read failed, reporting no signal: %s: %s", type(exc).__name__, exc)
+                logger.debug(
+                    "EEG read failed for device %s, reporting no signal: %s: %s",
+                    self.device_id, type(exc).__name__, exc,
+                )
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
                 self.latest_payload = self._no_signal_payload()
@@ -118,6 +135,7 @@ class StreamManager:
                 policy = self.adaptation.next_question_policy(state)
                 self.latest_payload = {
                     "contract_version": self.CONTRACT_VERSION,
+                    "device_id": self.device_id,
                     "timestamp": sample.timestamp.isoformat(),
                     "channels": {
                         "tp9": sample.channel_tp9,
@@ -141,12 +159,16 @@ class StreamManager:
                 # processing pipeline (not a signal-loss condition) -- log and
                 # skip this tick without touching signal-loss state.
                 self.errors_seen += 1
-                logger.warning("EEG sample processing failed: %s: %s", type(exc).__name__, exc)
+                logger.warning(
+                    "EEG sample processing failed for device %s: %s: %s",
+                    self.device_id, type(exc).__name__, exc,
+                )
             await asyncio.sleep(period)
 
     def _no_signal_payload(self) -> dict[str, Any]:
         return {
             "contract_version": self.CONTRACT_VERSION,
+            "device_id": self.device_id,
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "channels": {"tp9": 0.0, "af7": 0.0, "af8": 0.0, "tp10": 0.0},
             "features": {
@@ -175,10 +197,11 @@ class StreamManager:
     def snapshot(self) -> dict[str, Any]:
         out = dict(self.latest_payload)
         out.setdefault("contract_version", self.CONTRACT_VERSION)
+        out.setdefault("device_id", self.device_id)
         no_signal = out.get("features", {}).get("signal_quality") == "no_signal"
         if hasattr(self.adapter, "get_ingestion_meta"):
             raw_meta = self.adapter.get_ingestion_meta()
-            ing = enrich_ingestion_dict(self.settings, raw_meta)
+            ing = enrich_ingestion_dict(self.settings, raw_meta, source=self.device_config.kind)
             out["ingestion"] = ing
             if no_signal:
                 # Adapters cache their last-known band values and don't reset
@@ -199,6 +222,7 @@ class StreamManager:
     def metrics(self) -> dict[str, int | bool]:
         return {
             "contract_version": self.CONTRACT_VERSION,
+            "device_id": self.device_id,
             "running": self.running,
             "samples_processed": self.samples_processed,
             "errors_seen": self.errors_seen,
@@ -219,5 +243,68 @@ class StreamManager:
 
     def muse_ingestion_snapshot(self) -> dict[str, Any]:
         if hasattr(self.adapter, "get_ingestion_meta"):
-            return enrich_ingestion_dict(self.settings, self.adapter.get_ingestion_meta())
-        return enrich_ingestion_dict(self.settings, {})
+            return enrich_ingestion_dict(self.settings, self.adapter.get_ingestion_meta(), source=self.device_config.kind)
+        return enrich_ingestion_dict(self.settings, {}, source=self.device_config.kind)
+
+
+class StreamManager:
+    """Registry of DeviceSessions, keyed by device_id. Single-device deployments
+    (no EEG_DEVICES set) get exactly one session named "default" and every method
+    below defaults to it, so existing callers that never pass a device_id see no
+    behavior change."""
+
+    CONTRACT_VERSION = CONTRACT_VERSION
+    DEFAULT_DEVICE_ID = "default"
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self._lock = threading.Lock()
+        device_configs = parse_eeg_devices(self.settings)
+        self._sessions: dict[str, DeviceSession] = {
+            device_id: DeviceSession(device_id, self.settings, cfg) for device_id, cfg in device_configs.items()
+        }
+
+    def session(self, device_id: str = DEFAULT_DEVICE_ID) -> DeviceSession:
+        """Return the DeviceSession for device_id, or raise UnknownDeviceError."""
+        with self._lock:
+            session = self._sessions.get(device_id)
+        if session is None:
+            raise UnknownDeviceError(device_id)
+        return session
+
+    async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        await self.session(device_id).start()
+
+    async def stop(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
+        await self.session(device_id).stop()
+
+    def snapshot(self, device_id: str = DEFAULT_DEVICE_ID) -> dict[str, Any]:
+        return self.session(device_id).snapshot()
+
+    def metrics(self, device_id: str = DEFAULT_DEVICE_ID) -> dict[str, int | bool]:
+        return self.session(device_id).metrics()
+
+    def send_muse_bridge_command(self, device_id: str, cmd: str, **kwargs: Any) -> dict[str, Any]:
+        return self.session(device_id).send_muse_bridge_command(cmd, **kwargs)
+
+    def muse_ingestion_snapshot(self, device_id: str = DEFAULT_DEVICE_ID) -> dict[str, Any]:
+        return self.session(device_id).muse_ingestion_snapshot()
+
+    def is_running(self, device_id: str = DEFAULT_DEVICE_ID) -> bool:
+        return self.session(device_id).running
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        with self._lock:
+            sessions = list(self._sessions.values())
+        out = []
+        for session in sessions:
+            ingestion = session.muse_ingestion_snapshot()
+            out.append(
+                {
+                    "device_id": session.device_id,
+                    "kind": session.device_config.kind,
+                    "running": session.running,
+                    "connection_state_name": ingestion.get("connection_state_name", "n/a"),
+                }
+            )
+        return out

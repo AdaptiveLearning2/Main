@@ -383,6 +383,7 @@ class UpdateProfileRequest(BaseModel):
 
 class EegSessionRequest(BaseModel):
     session_id: str
+    device_id: str | None = None
 
 
 # ─── profiles ────────────────────────────────────────────────────────────
@@ -951,13 +952,14 @@ def class_live(class_id: str, request: Request):
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
 
 @app.post("/api/eeg/muse/refresh")
-def eeg_muse_refresh(request: Request):
+def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
     get_user(request)
+    device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
-        return eeg_client.muse_refresh()
+        return eeg_client.muse_refresh(device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
 
@@ -966,28 +968,38 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     """Connect to a specific Muse headband by name."""
     get_user(request)
     name = (body.get("name") or "").strip()
+    device_id = body.get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not name:
         raise HTTPException(400, "Device name required")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
-        return eeg_client.muse_connect(name)
+        return eeg_client.muse_connect(name, device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
 
 @app.post("/api/eeg/muse/disconnect")
-def eeg_muse_disconnect(request: Request):
+def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     """Tell the native bridge to disconnect from the current headband."""
     get_user(request)
+    device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
-        return eeg_client.muse_disconnect()
+        return eeg_client.muse_disconnect(device_id)
     except Exception as e:
         raise HTTPException(502, f"Bridge error: {e}")
 
+@app.get("/api/eeg/devices")
+def eeg_devices(request: Request):
+    """List the sidecar's registered devices (seats), for the frontend picker."""
+    get_user(request)
+    if not eeg_client.is_alive():
+        return {"available": False, "devices": []}
+    return {"available": True, "devices": eeg_client.list_devices()}
+
 @app.get("/api/eeg/debug")
-def eeg_debug(request: Request):
+def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
     get_user(request)
     if not eeg_client.is_alive():
@@ -996,8 +1008,8 @@ def eeg_debug(request: Request):
     # get_muse_status raise (by design), which would otherwise surface here as a
     # bare 500. Report it instead so the two EEG endpoints behave alike.
     try:
-        snapshot = eeg_client.get_state(timeout=1.5)
-        muse     = eeg_client.get_muse_status()
+        snapshot = eeg_client.get_state(device_id, timeout=1.5)
+        muse     = eeg_client.get_muse_status(device_id)
     except RuntimeError as e:
         return {"available": False, "error": str(e)}
     return {"available": True, "snapshot": snapshot, "muse": muse}
@@ -1036,7 +1048,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(400, "Session already ended")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
-    device_id = eeg_client.current_device_id()
+    device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
     except eeg_poller.DeviceClaimedError:
@@ -1057,11 +1069,11 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
     return {"ok": True, **eeg_poller.stop(payload.session_id)}
 
 @app.get("/api/eeg/status")
-def eeg_status(request: Request):
+def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     user = get_user(request)
     return {
         "service": eeg_client.is_alive(),
-        "muse":    eeg_client.get_muse_status(),
+        "muse":    eeg_client.get_muse_status(device_id),
         "poller":  eeg_poller.status(user["id"]),
     }
 

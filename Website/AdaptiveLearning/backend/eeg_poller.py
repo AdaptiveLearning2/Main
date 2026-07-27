@@ -38,9 +38,9 @@ class _Poller(threading.Thread):
         self.errors     = 0
 
     def run(self):
-        print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]}", flush=True)
+        print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]} device={self.device_id}", flush=True)
         try:
-            r = eeg_client.start_session()
+            r = eeg_client.start_session(self.device_id)
             print(f">>> [eeg-poller] sidecar session/start -> {r}", flush=True)
         except Exception as e:
             print(f"!!! [eeg-poller] could not start eeg session: {e}", flush=True)
@@ -48,7 +48,7 @@ class _Poller(threading.Thread):
         loops = 0
         while not self._stop_event.is_set():
             loops += 1
-            data = eeg_client.get_state()
+            data = eeg_client.get_state(self.device_id)
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
 
@@ -111,20 +111,22 @@ class _Poller(threading.Thread):
             time.sleep(POLL_INTERVAL)
 
         try:
-            # The EEGResearch sidecar is a single shared stream, not one per
-            # session. Hold _lock across the whole check-then-stop sequence
-            # (not just the _active read) so start() -- which also holds
-            # _lock while registering a new poller and spawning its thread
-            # -- can't register a replacement in the gap between our check
-            # and the actual stop_session() call. Without this, a rapid
-            # disconnect+reconnect could have this thread kill the stream
+            # Each device_id (seat) is its own independent sidecar stream now, so
+            # only another poller *on the same device* keeps it alive. Hold _lock
+            # across the whole check-then-stop sequence (not just the _active read)
+            # so start() -- which also holds _lock while registering a new poller
+            # and spawning its thread -- can't register a replacement in the gap
+            # between our check and the actual stop_session() call. Without this, a
+            # rapid disconnect+reconnect could have this thread kill the stream
             # right after a new poller started depending on it.
             with _lock:
-                stream_still_needed = any(p.is_alive() for p in _active.values())
+                stream_still_needed = any(
+                    p.is_alive() for p in _active.values() if p.device_id == self.device_id
+                )
                 if stream_still_needed:
-                    print(">>> [eeg-poller] another poller is active, leaving sidecar stream running", flush=True)
+                    print(f">>> [eeg-poller] another poller is active on device={self.device_id}, leaving sidecar stream running", flush=True)
                 else:
-                    r = eeg_client.stop_session()
+                    r = eeg_client.stop_session(self.device_id)
                     print(f">>> [eeg-poller] sidecar session/stop -> {r}", flush=True)
         except Exception as e:
             print(f"!!! [eeg-poller] could not stop eeg session: {e}", flush=True)
@@ -193,6 +195,7 @@ def status(user_id: str) -> dict:
                 return {
                     "running":    True,
                     "session_id": sid,
+                    "device_id":  p.device_id,
                     "samples":    p.samples,
                     "errors":     p.errors,
                     "last_ts":    p.last_ts,

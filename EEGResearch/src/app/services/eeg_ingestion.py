@@ -32,11 +32,15 @@ def connection_state_name(code: int | None) -> str:
     return CONNECTION_STATE_NAMES.get(code, f"other({code})")
 
 
-def enrich_ingestion_dict(settings: Settings, meta: dict[str, Any]) -> dict[str, Any]:
-    """Normalize ingestion metadata for the API (includes human-readable connection state)."""
+def enrich_ingestion_dict(settings: Settings, meta: dict[str, Any], source: str | None = None) -> dict[str, Any]:
+    """Normalize ingestion metadata for the API (includes human-readable connection state).
+
+    `source` overrides settings.eeg_source when reporting a specific device's own kind
+    (multi-device registry) rather than the global default.
+    """
     meta_no_bands = {k: v for k, v in meta.items() if k not in {"delta", "theta", "alpha", "beta", "gamma"}}
     out: dict[str, Any] = {
-        "eeg_source": settings.eeg_source.lower().strip(),
+        "eeg_source": (source or settings.eeg_source).lower().strip(),
         **meta_no_bands,
     }
     cs = out.get("connection_state")
@@ -452,12 +456,22 @@ class TcpMuseBridgeAdapter:
             return dict(self._ingestion_meta)
 
 
-def build_ingestion_adapter(settings: Settings):
-    source = settings.eeg_source.lower().strip()
+def build_ingestion_adapter(
+    settings: Settings,
+    *,
+    kind: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+):
+    """Build an ingestion adapter. `kind`/`host`/`port` override the global settings
+    for a specific device in a multi-device registry; omitted, this falls back to the
+    existing single-device EEG_SOURCE / MUSE_BRIDGE_HOST / MUSE_BRIDGE_PORT behavior.
+    """
+    source = (kind or settings.eeg_source).lower().strip()
     if source == "muse":
         return TcpMuseBridgeAdapter(
-            host=settings.muse_bridge_host,
-            port=settings.muse_bridge_port,
+            host=host or settings.muse_bridge_host,
+            port=port or settings.muse_bridge_port,
             timeout_seconds=settings.muse_bridge_timeout_seconds,
         )
     if source == "sim":

@@ -7,13 +7,13 @@ import { apiFetch } from '../../lib/api'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
-export default function ChildDetail() {
+export default function StudentReport() {
   const { id } = useParams()
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
   const [perf, setPerf]           = useState([])
   const [loading, setLoading]     = useState(true)
-  const [name, setName]           = useState('Child')
+  const [name, setName]           = useState('Student')
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
 
@@ -29,22 +29,9 @@ export default function ChildDetail() {
       setLoading(false)
     }).catch(() => setLoading(false))
 
-    // Fetched separately from the Promise.all above: this is the newest and
-    // heaviest query, and a failure here shouldn't blank the whole page when
-    // the academic stats loaded fine.
     apiFetch(`/api/students/${id}/weekly-report`)
-      .then(r => { setSignalReport(r); setSignalError(null) })
-      // Tracked separately from "no report": a failed request renders
-      // identically to a quiet week otherwise, and telling a parent their
-      // child had no activity when the request just failed is worse than
-      // saying nothing. Same distinction #16 established for ClassDetail.
+      .then(r => { setSignalReport(r); setSignalError(null); if (r?.student_name) setName(r.student_name) })
       .catch(err => { setSignalReport(null); setSignalError(err.message || 'Could not load signal report') })
-
-    // also try to get name from children list
-    apiFetch('/api/parent/children').then(children => {
-      const child = children.find(c => c.user_id === id)
-      if (child) setName(child.name)
-    }).catch(() => {})
   }, [id])
 
   const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
@@ -52,8 +39,8 @@ export default function ChildDetail() {
   return (
     <div className="p-6 lg:p-8 pb-12">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-        <Link to="/parent" className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-emerald-600 mb-3 transition font-semibold w-fit">
-          <ArrowLeft size={16} /> Back to Dashboard
+        <Link to="/teacher/classes" className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-violet-600 mb-3 transition font-semibold w-fit">
+          <ArrowLeft size={16} /> Back to Classes
         </Link>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">{name}'s Progress</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Full learning report.</p>
@@ -63,7 +50,6 @@ export default function ChildDetail() {
         <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-32 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
       ) : (
         <div className="space-y-6">
-          {/* stat cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
               { icon: BookOpen,   label: 'Questions',  value: stats?.total_questions ?? 0,  color: 'bg-gradient-to-br from-indigo-500 to-indigo-600' },
@@ -85,9 +71,6 @@ export default function ChildDetail() {
             ))}
           </div>
 
-          {/* Only rendered once the report loads -- the panels would otherwise
-              show a full grid of "N/A" and read as "no activity" rather than
-              "still loading". */}
           {signalError && (
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>
@@ -102,12 +85,11 @@ export default function ChildDetail() {
           )}
 
           <div className="grid lg:grid-cols-2 gap-6">
-            {/* topic performance */}
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Topic Performance</h3>
               {perf.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-6">No topic data yet — your child hasn't used AI Adaptive mode.</p>
+                <p className="text-gray-400 text-sm text-center py-6">No topic data yet — this student hasn't used AI Adaptive mode.</p>
               ) : (
                 <div className="space-y-3">
                   {perf.map(p => {
@@ -133,7 +115,6 @@ export default function ChildDetail() {
               )}
             </motion.div>
 
-            {/* session history */}
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Recent Sessions</h3>

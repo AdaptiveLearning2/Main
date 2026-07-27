@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, LiveSignalSummary } from '../../components/signals/SignalPanel'
@@ -9,11 +9,12 @@ const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', alge
 
 export default function StudentReport() {
   const { id } = useParams()
+  const location = useLocation()
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
   const [perf, setPerf]           = useState([])
   const [loading, setLoading]     = useState(true)
-  const [name, setName]           = useState('Student')
+  const [name, setName]           = useState(location.state?.name || 'Student')
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
 

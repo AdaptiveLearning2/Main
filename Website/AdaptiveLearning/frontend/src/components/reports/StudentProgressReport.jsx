@@ -32,7 +32,7 @@ export default function StudentProgressReport({
   backTo,
   backLabel,
   backHoverClass = 'hover:text-violet-600',
-  emptyTopicText,
+  emptyTopicText = 'No topic data yet.',
   nameFetch,
 }) {
   const [stats, setStats]         = useState(null)

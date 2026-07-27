@@ -13,10 +13,16 @@ export default function StudentReport() {
 
   return (
     <StudentProgressReport
+      // Remount on a new student id so the heading re-seeds from initialName
+      // instead of showing the previous student's name until a fetch resolves.
+      key={id}
       studentId={id}
       // Seeded from router state (passed by the class roster) so the heading
       // shows the real name immediately, even if the weekly-report is slow or
-      // fails; the report's student_name confirms it once loaded.
+      // fails; the report's student_name confirms it once loaded. On a cold
+      // direct visit there is no router state (name falls back to 'Student') and
+      // no class id, so the weekly-report's student_name is the only name source
+      // -- if it fails the heading stays 'Student'.
       initialName={name || 'Student'}
       backTo={backTo}
       backLabel={backLabel}

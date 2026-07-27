@@ -127,7 +127,6 @@ export default function ClassDetail() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {students.map((s, i) => {
-            const acc = s.total_questions > 0 ? Math.round((s.total_correct / s.total_questions) * 100) : 0
             return (
               <motion.div key={s.user_id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}

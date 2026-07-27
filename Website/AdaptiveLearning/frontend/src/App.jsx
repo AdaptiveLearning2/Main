@@ -31,7 +31,7 @@ import ClassDetail      from './pages/teacher/ClassDetail'
 import Live             from './pages/teacher/Live'
 import SessionReview    from './pages/teacher/SessionReview'
 import Sessions         from './pages/teacher/Sessions'
-import StudentReport    from './pages/teacher/StudentReport' 
+import StudentReport    from './pages/teacher/StudentReport'
 
 import ParentDashboard  from './pages/parent/Dashboard'
 import ParentLinkChild  from './pages/parent/LinkChild'

@@ -17,6 +17,9 @@ export default function ChildDetail() {
 
   return (
     <StudentProgressReport
+      // Remount on a new child id so the heading re-seeds from the name source
+      // instead of showing the previous child's name until the fetch resolves.
+      key={id}
       studentId={id}
       initialName="Child"
       backTo="/parent"

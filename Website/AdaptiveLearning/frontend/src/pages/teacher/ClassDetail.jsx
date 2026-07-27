@@ -127,19 +127,16 @@ export default function ClassDetail() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {students.map((s, i) => {
-            const acc = s.total_questions > 0 ? Math.round((s.total_correct / s.total_questions) * 100) : 0
             return (
               <motion.div key={s.user_id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
                 className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-center gap-3 shadow-sm">
                
-                <div className="min-w-0">
-                  <p className="text-lg  font-bold text-gray-900 dark:text-white truncate flex items-center justify-center">{s.name}</p>
-                  <button onClick={null}
-                    className="bg-violet-500 hover:bg-violet-900 dark:hover:bg-violet-700 dark:bg-violet-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center gap-2 text-lg font-bold text-gray-100 dark:text-gray-100 hover:text-violet-600 dark:hover:text-violet-400 transition mb-6">
-                    Get Report
-                  </button>
-                </div>
+                <p className="min-w-0 text-lg font-bold text-gray-900 dark:text-white truncate">{s.name}</p>
+                <button onClick={() => navigate(`/teacher/students/${s.user_id}/report`, { state: { name: s.name, classId: id, className: cls?.name } })}
+                  className="shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-bold transition">
+                  Get Report
+                </button>
               </motion.div>
             )
           })}

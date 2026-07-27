@@ -31,6 +31,7 @@ import ClassDetail      from './pages/teacher/ClassDetail'
 import Live             from './pages/teacher/Live'
 import SessionReview    from './pages/teacher/SessionReview'
 import Sessions         from './pages/teacher/Sessions'
+import StudentReport    from './pages/teacher/StudentReport'
 
 import ParentDashboard  from './pages/parent/Dashboard'
 import ParentLinkChild  from './pages/parent/LinkChild'
@@ -71,6 +72,7 @@ export default function App() {
               <Route path="/teacher/classes"             element={<Classes />} />
               <Route path="/teacher/classes/:id"         element={<ClassDetail />} />
               <Route path="/teacher/students"            element={<Students />} />
+              <Route path="/teacher/students/:id/report" element={<StudentReport />} />
               <Route path="/teacher/questions"           element={<Questions />} />
               <Route path="/teacher/analytics"           element={<Analytics />} />
               <Route path="/teacher/settings"            element={<TeacherSettings />} />

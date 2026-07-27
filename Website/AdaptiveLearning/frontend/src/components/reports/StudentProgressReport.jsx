@@ -42,6 +42,7 @@ export default function StudentProgressReport({
   const [name, setName]           = useState(initialName)
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
+  const [loadError, setLoadError]       = useState(null)
 
   useEffect(() => {
     Promise.all([
@@ -52,8 +53,16 @@ export default function StudentProgressReport({
       setStats(s)
       setSessions(sess || [])
       setPerf(p || [])
+      setLoadError(null)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(err => {
+      // A failed core load (a 403 for a student outside the teacher's classes,
+      // offline, or a server error) must not fall through to the zeros-filled
+      // report below: that reads as a real-but-inactive student and, on the
+      // teacher route, hides that the id simply isn't theirs to view. Surface it.
+      setLoadError(err.message || 'Could not load this report')
+      setLoading(false)
+    })
 
     // Fetched separately from the Promise.all above: this is the newest and
     // heaviest query, and a failure here shouldn't blank the whole page when
@@ -94,6 +103,15 @@ export default function StudentProgressReport({
 
       {loading ? (
         <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-32 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+      ) : loadError ? (
+        // A core-load failure shows an honest error here rather than the
+        // zeros-filled report; for a 403 the message is the backend's own
+        // "You do not have access to this student". The back link above stays,
+        // so a teacher who mistyped a student id can still get out.
+        <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-8 shadow-sm text-center">
+          <p className="text-sm font-semibold text-gray-600 dark:text-gray-300">Couldn&apos;t load this student&apos;s report.</p>
+          <p className="text-xs text-gray-400 mt-1">{loadError}</p>
+        </div>
       ) : (
         <div className="space-y-6">
           {/* stat cards */}

@@ -64,3 +64,23 @@ it('falls back to the class list on a direct visit with no state', async () => {
   // No name in state, and weekly-report supplied none, so the placeholder holds.
   expect(screen.getByText("Student's Progress")).toBeInTheDocument()
 })
+
+it('shows an error state, not an empty report, when the core load fails', async () => {
+  // A 403 (a student outside the teacher's classes), offline, or a server error
+  // on stats/sessions/performance must not render as a zeros-filled report --
+  // that reads as a real but inactive student and hides the access boundary.
+  apiFetch.mockReset()
+  apiFetch.mockImplementation((url) =>
+    String(url).includes('/weekly-report')
+      ? Promise.resolve(null)
+      : Promise.reject(new Error('You do not have access to this student')),
+  )
+  renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
+
+  expect(await screen.findByText(/couldn't load this student's report/i)).toBeInTheDocument()
+  expect(screen.getByText('You do not have access to this student')).toBeInTheDocument()
+  // The report body (and its misleading zeros) must not render...
+  expect(screen.queryByText('Recent Sessions')).not.toBeInTheDocument()
+  // ...but the back link stays, so the teacher can still leave.
+  expect(screen.getByRole('link', { name: /back to algebra/i })).toHaveAttribute('href', '/teacher/classes/class-1')
+})

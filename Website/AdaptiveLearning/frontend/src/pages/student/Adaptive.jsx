@@ -162,16 +162,22 @@ export default function Adaptive() {
   const toggleHeadband = async () => {
     if (!stationId) return
     const activeSessionId = await getOrCreateSession()
-    if (!recorder) {
-      const r = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
-      setRecorder(r)
+    // Use a local var, not the recorder state var directly: setRecorder()
+    // below doesn't take effect until the next render, so a read of
+    // `recorder` later in this same call would still see the pre-update
+    // value (null, right after a disconnect) instead of what was just
+    // created.
+    let rec = recorder
+    if (!rec) {
+      rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
+      setRecorder(rec)
       window.AL_currentSessionId = activeSessionId
     }
 
     // — Disconnect —
     if (headband.connected) {
       clearTimeout(phaseTimer.current)
-      await recorder.stop()
+      await rec.stop()
       // Drop the recorder rather than leaving it cached: it closed over
       // deviceId at creation time, so reusing it after the user picks a
       // different station on the picker would start the next poller on the
@@ -195,7 +201,7 @@ export default function Adaptive() {
     try {
       // 1. Start the backend EEG poller
       setHeadband(s => ({ ...s, phase: 'starting' }))
-      const res = await recorder.start()
+      const res = await rec.start()
       if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
 
       // 2. Disconnect any previous session so the headband isn't stuck in streaming state

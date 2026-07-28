@@ -172,6 +172,14 @@ export default function Adaptive() {
     if (headband.connected) {
       clearTimeout(phaseTimer.current)
       await recorder.stop()
+      // Drop the recorder rather than leaving it cached: it closed over
+      // deviceId at creation time, so reusing it after the user picks a
+      // different station on the picker would start the next poller on the
+      // stale station while the BLE pairing below runs against the new
+      // one -- silently misattributing whichever station's data actually
+      // gets recorded. Recreating it on the next connect binds it to
+      // whatever stationId is selected then.
+      setRecorder(null)
       setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null }))
       return
     }

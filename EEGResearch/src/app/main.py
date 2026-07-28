@@ -141,7 +141,7 @@ async def muse_refresh(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
 ) -> JSONResponse:
     try:
-        out = stream_manager.send_muse_bridge_command(device_id, "refresh")
+        out = stream_manager.send_muse_bridge_command("refresh", device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
     return JSONResponse({"status": "ok", "data": out})
@@ -150,7 +150,7 @@ async def muse_refresh(
 @app.post("/api/v1/muse/connect")
 async def muse_connect(body: MuseConnectBody, _: str = Depends(require_admin_token)) -> JSONResponse:
     try:
-        out = stream_manager.send_muse_bridge_command(body.device_id, "connect", name=body.name.strip())
+        out = stream_manager.send_muse_bridge_command("connect", body.device_id, name=body.name.strip())
     except UnknownDeviceError:
         raise _unknown_device(body.device_id)
     return JSONResponse({"status": "ok", "data": out})
@@ -161,7 +161,7 @@ async def muse_disconnect(
     device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
 ) -> JSONResponse:
     try:
-        out = stream_manager.send_muse_bridge_command(device_id, "disconnect")
+        out = stream_manager.send_muse_bridge_command("disconnect", device_id)
     except UnknownDeviceError:
         raise _unknown_device(device_id)
     return JSONResponse({"status": "ok", "data": out})

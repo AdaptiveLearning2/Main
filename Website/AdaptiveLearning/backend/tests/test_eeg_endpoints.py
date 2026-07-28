@@ -203,3 +203,75 @@ def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatc
     payload = main.EegSessionRequest(session_id="session-1", device_id="anything")
     out = main.eeg_start(payload, request=None)
     assert out["running"] is True
+
+
+# ── /api/eeg/muse/refresh|connect|disconnect: cross-user guard ──────────
+#
+# Same real-registry approach as the status/debug guard tests above: a
+# stranger disconnecting/reconnecting/rescanning someone else's live station
+# is per-victim griefing, not just an unwanted side effect, so each handler
+# gets owner-allowed / stranger-403 / unclaimed-open coverage.
+
+def test_muse_refresh_blocks_stranger_allows_owner(monkeypatch):
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-x")
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-x"})
+    assert exc_info.value.status_code == 403
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-x"}) == {"ok": True}
+
+
+def test_muse_refresh_allows_unclaimed_station(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-unclaimed"}) == {"ok": True}
+
+
+def test_muse_connect_blocks_stranger_allows_owner(monkeypatch):
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-x")
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+
+    body = {"name": "MuseS-1234", "device_id": "station-x"}
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_connect(request=None, body=body)
+    assert exc_info.value.status_code == 403
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_muse_connect(request=None, body=body) == {"ok": True}
+
+
+def test_muse_connect_allows_unclaimed_station(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    body = {"name": "MuseS-1234", "device_id": "station-unclaimed"}
+    assert main.eeg_muse_connect(request=None, body=body) == {"ok": True}
+
+
+def test_muse_disconnect_blocks_stranger_allows_owner(monkeypatch):
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-x")
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_disconnect(request=None, body={"device_id": "station-x"})
+    assert exc_info.value.status_code == 403
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_muse_disconnect(request=None, body={"device_id": "station-x"}) == {"ok": True}
+
+
+def test_muse_disconnect_allows_unclaimed_station(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_disconnect(request=None, body={"device_id": "station-unclaimed"}) == {"ok": True}

@@ -287,7 +287,7 @@ class StreamManager:
     def metrics(self, device_id: str = DEFAULT_DEVICE_ID) -> dict[str, int | bool]:
         return self.session(device_id).metrics()
 
-    def send_muse_bridge_command(self, device_id: str, cmd: str, **kwargs: Any) -> dict[str, Any]:
+    def send_muse_bridge_command(self, cmd: str, device_id: str = DEFAULT_DEVICE_ID, **kwargs: Any) -> dict[str, Any]:
         return self.session(device_id).send_muse_bridge_command(cmd, **kwargs)
 
     def muse_ingestion_snapshot(self, device_id: str = DEFAULT_DEVICE_ID) -> dict[str, Any]:

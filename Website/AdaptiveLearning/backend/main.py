@@ -954,13 +954,16 @@ def class_live(class_id: str, request: Request):
 @app.post("/api/eeg/muse/refresh")
 def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
-    get_user(request)
-    # TODO(#33): not guarded by eeg_poller.can_use_device -- any logged-in user
-    # can rescan/reconnect/disconnect another user's claimed station by
-    # device_id. Not a regression (the pre-device-registry single shared
-    # stream was equally pokeable), but worth closing now that stations are
-    # individually targetable. Tracked as a fast-follow, not fixed here.
+    user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
+    # A station with a live poller is that poller's owner's in-progress
+    # session -- another user rescanning/reconnecting it (or, on the
+    # disconnect handler below, killing it outright) is per-victim griefing,
+    # not just an unwanted side effect. See can_use_device's docstring for
+    # the unclaimed-station pairing window this doesn't (and isn't meant to)
+    # close.
+    if not eeg_poller.can_use_device(user["id"], device_id):
+        raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -971,12 +974,14 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
 @app.post("/api/eeg/muse/connect")
 def eeg_muse_connect(request: Request, body: dict = Body(...)):
     """Connect to a specific Muse headband by name."""
-    get_user(request)
-    # TODO(#33): see eeg_muse_refresh above -- not guarded by can_use_device.
+    user = get_user(request)
     name = (body.get("name") or "").strip()
     device_id = body.get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not name:
         raise HTTPException(400, "Device name required")
+    # See eeg_muse_refresh above.
+    if not eeg_poller.can_use_device(user["id"], device_id):
+        raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -987,11 +992,13 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
 @app.post("/api/eeg/muse/disconnect")
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     """Tell the native bridge to disconnect from the current headband."""
-    get_user(request)
-    # TODO(#33): see eeg_muse_refresh above -- not guarded by can_use_device.
-    # Worth noting this one specifically enables griefing (disconnecting
-    # someone else's live session), not just an unwanted rescan/reconnect.
+    user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
+    # See eeg_muse_refresh above -- this is the handler where the
+    # unguarded gap mattered most (a stranger disconnecting someone else's
+    # live session), so it's guarded the same way for consistency.
+    if not eeg_poller.can_use_device(user["id"], device_id):
+        raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -1001,7 +1008,14 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
 
 @app.get("/api/eeg/devices")
 def eeg_devices(request: Request):
-    """List the sidecar's registered devices (stations), for the frontend picker."""
+    """List the sidecar's registered devices (stations), for the frontend picker.
+
+    Enumeration-only, gated on being logged in (not can_use_device): it
+    returns device_id/kind/running/connection_state_name for every station,
+    with no biometric values or per-user ownership -- the picker needs the
+    full list to choose from, and "station X is in use" is the extent of
+    what leaks. Considered non-sensitive.
+    """
     get_user(request)
     if not eeg_client.is_alive():
         return {"available": False, "devices": []}

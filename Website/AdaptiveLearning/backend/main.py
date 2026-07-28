@@ -992,7 +992,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
 
 @app.get("/api/eeg/devices")
 def eeg_devices(request: Request):
-    """List the sidecar's registered devices (seats), for the frontend picker."""
+    """List the sidecar's registered devices (stations), for the frontend picker."""
     get_user(request)
     if not eeg_client.is_alive():
         return {"available": False, "devices": []}
@@ -1001,9 +1001,14 @@ def eeg_devices(request: Request):
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
-    get_user(request)
+    user = get_user(request)
     if not eeg_client.is_alive():
         return {"available": False}
+    # A station with a live poller is that poller's owner's in-progress
+    # biometric data, not shared classroom data -- don't let another user
+    # read it just because they know the device_id.
+    if not eeg_poller.can_use_device(user["id"], device_id):
+        return {"available": False, "reason": "in_use_by_other"}
     # Same as eeg_health: a missing/misconfigured token makes get_state and
     # get_muse_status raise (by design), which would otherwise surface here as a
     # bare 500. Report it instead so the two EEG endpoints behave alike.
@@ -1071,9 +1076,16 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
 @app.get("/api/eeg/status")
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     user = get_user(request)
+    # Blank only the muse block, not the whole response -- the caller's own
+    # poller status (below) is always theirs to see regardless of device_id.
+    muse = (
+        eeg_client.get_muse_status(device_id)
+        if eeg_poller.can_use_device(user["id"], device_id)
+        else {"available": False, "reason": "in_use_by_other"}
+    )
     return {
         "service": eeg_client.is_alive(),
-        "muse":    eeg_client.get_muse_status(device_id),
+        "muse":    muse,
         "poller":  eeg_poller.status(user["id"]),
     }
 

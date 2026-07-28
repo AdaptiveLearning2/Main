@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")
     # Multi-headband registry: "device_id:kind[@[host:]port],...", e.g.
-    # "seat1:muse@8765,seat2:muse@8766" or "seat1:sim,seat2:sim". Empty/unset
+    # "station1:muse@8765,station2:muse@8766" or "station1:sim,station2:sim". Empty/unset
     # means single-device mode -- see parse_eeg_devices below.
     eeg_devices: str = Field(default="", alias="EEG_DEVICES")
 
@@ -79,6 +79,8 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
         addr_part = addr_part.strip()
         if addr_part:
             host_part, sep2, port_part = addr_part.rpartition(":")
+            if sep2 and not host_part.strip():
+                raise ValueError(f"Invalid EEG_DEVICES entry: {entry!r} (empty host before ':')")
             try:
                 if sep2:
                     host = host_part.strip()

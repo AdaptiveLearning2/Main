@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from src.app.config import DeviceConfig, Settings, get_settings, parse_eeg_devices
+from src.app.config import DEFAULT_DEVICE_ID, DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
 from src.app.services.signal_processing import SignalProcessor
@@ -254,7 +254,7 @@ class StreamManager:
     behavior change."""
 
     CONTRACT_VERSION = CONTRACT_VERSION
-    DEFAULT_DEVICE_ID = "default"
+    DEFAULT_DEVICE_ID = DEFAULT_DEVICE_ID
 
     def __init__(self) -> None:
         self.settings = get_settings()

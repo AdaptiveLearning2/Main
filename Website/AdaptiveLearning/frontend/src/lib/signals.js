@@ -5,14 +5,14 @@ import { apiFetch } from './api'
  * (it polls the EEGResearch sidecar service on :8001 and writes to Supabase).
  * The frontend just toggles polling on/off for the current session.
  */
-export function createSignalRecorder({ sessionId }) {
+export function createSignalRecorder({ sessionId, deviceId }) {
   let active = false
 
   const start = async () => {
     if (active || !sessionId) return { ok: false }
     try {
       const res = await apiFetch('/api/eeg/start', {
-        method: 'POST', body: { session_id: sessionId }
+        method: 'POST', body: { session_id: sessionId, device_id: deviceId }
       })
       active = !!res.running
       return { ok: true, ...res }
@@ -45,7 +45,13 @@ export async function eegHealth() {
   catch (e) { return { available: false, error: e.message } }
 }
 
-export async function eegStatus() {
-  try { return await apiFetch('/api/eeg/status') }
+export async function eegStatus(deviceId) {
+  const path = deviceId ? `/api/eeg/status?device_id=${encodeURIComponent(deviceId)}` : '/api/eeg/status'
+  try { return await apiFetch(path) }
   catch { return { service: false, poller: { running: false } } }
+}
+
+export async function eegDevices() {
+  try { return await apiFetch('/api/eeg/devices') }
+  catch (e) { return { available: false, devices: [], error: e.message } }
 }

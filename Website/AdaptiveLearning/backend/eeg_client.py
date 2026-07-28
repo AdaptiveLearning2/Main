@@ -30,6 +30,9 @@ def _admin_headers() -> dict:
     return {"Authorization": f"Bearer {EEG_ADMIN_TOKEN}"}
 
 
+DEFAULT_DEVICE_ID = "default"
+
+
 def is_alive(timeout: float = 1.5) -> bool:
     try:
         r = requests.get(f"{EEG_API_URL}/healthz", timeout=timeout)
@@ -38,21 +41,27 @@ def is_alive(timeout: float = 1.5) -> bool:
         return False
 
 
-def start_session() -> dict:
-    """Tells the EEG service to start its simulator/bridge stream."""
-    r = requests.post(f"{EEG_API_URL}/api/v1/session/start", headers=_admin_headers(), timeout=3)
+def start_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
+    """Tells the EEG service to start its simulator/bridge stream for device_id."""
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/session/start",
+        headers=_admin_headers(), params={"device_id": device_id}, timeout=3,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def stop_session() -> dict:
-    r = requests.post(f"{EEG_API_URL}/api/v1/session/stop", headers=_admin_headers(), timeout=3)
+def stop_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/session/stop",
+        headers=_admin_headers(), params={"device_id": device_id}, timeout=3,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def get_state(timeout: float = 2.0) -> Optional[dict]:
-    """Returns the latest interpreted EEG snapshot, or None if idle / unavailable."""
+def get_state(device_id: str = DEFAULT_DEVICE_ID, timeout: float = 2.0) -> Optional[dict]:
+    """Returns the latest interpreted EEG snapshot for device_id, or None if idle / unavailable."""
     # Built before the try, so a missing token raises instead of being caught
     # below and reported as "sidecar unavailable". The two failures differ in
     # kind: a stopped sidecar is transient and recovers on its own, while a
@@ -60,7 +69,10 @@ def get_state(timeout: float = 2.0) -> Optional[dict]:
     # isn't working" with nothing pointing at configuration.
     headers = _learner_headers()
     try:
-        r = requests.get(f"{EEG_API_URL}/api/v1/state", headers=headers, timeout=timeout)
+        r = requests.get(
+            f"{EEG_API_URL}/api/v1/state",
+            headers=headers, params={"device_id": device_id}, timeout=timeout,
+        )
         if r.status_code != 200:
             return None
         body = r.json()
@@ -71,33 +83,44 @@ def get_state(timeout: float = 2.0) -> Optional[dict]:
         return None
 
 
-def muse_refresh() -> dict:
+def muse_refresh(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     """Tell the native bridge to scan for nearby Muse headbands."""
-    r = requests.post(f"{EEG_API_URL}/api/v1/muse/refresh", headers=_admin_headers(), timeout=5)
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/muse/refresh",
+        headers=_admin_headers(), params={"device_id": device_id}, timeout=5,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def muse_disconnect() -> dict:
+def muse_disconnect(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     """Tell the native bridge to disconnect from the current headband."""
-    r = requests.post(f"{EEG_API_URL}/api/v1/muse/disconnect", headers=_admin_headers(), timeout=5)
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/muse/disconnect",
+        headers=_admin_headers(), params={"device_id": device_id}, timeout=5,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def muse_connect(name: str) -> dict:
+def muse_connect(name: str, device_id: str = DEFAULT_DEVICE_ID) -> dict:
     """Tell the native bridge to connect to a specific headband by name."""
-    r = requests.post(f"{EEG_API_URL}/api/v1/muse/connect", headers=_admin_headers(),
-                      json={"name": name}, timeout=5)
+    r = requests.post(
+        f"{EEG_API_URL}/api/v1/muse/connect", headers=_admin_headers(),
+        json={"name": name, "device_id": device_id}, timeout=5,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def get_muse_status() -> dict:
+def get_muse_status(device_id: str = DEFAULT_DEVICE_ID) -> dict:
     # Outside the try for the same reason as get_state.
     headers = _learner_headers()
     try:
-        r = requests.get(f"{EEG_API_URL}/api/v1/muse/status", headers=headers, timeout=2)
+        r = requests.get(
+            f"{EEG_API_URL}/api/v1/muse/status",
+            headers=headers, params={"device_id": device_id}, timeout=2,
+        )
         if r.status_code != 200:
             return {"available": False}
         body = r.json().get("data", {}) or {}
@@ -107,22 +130,16 @@ def get_muse_status() -> dict:
         return {"available": False}
 
 
-DEFAULT_DEVICE_ID = "default"
-
-
-def current_device_id() -> str:
-    """Identifies the physical device the sidecar is currently bound to.
-
-    The sidecar only ever holds one connection (real headband or simulator)
-    at a time, so this is what eeg_poller uses to tell whether two different
-    users are trying to claim the same underlying stream. Falls back to a
-    fixed id when no named device is reported (e.g. simulator mode) so that
-    "one session per device" still degrades to "one session, period" rather
-    than silently disabling the check.
-    """
-    status = get_muse_status()
-    name = (status.get("ingestion") or {}).get("active_muse_name")
-    return name or DEFAULT_DEVICE_ID
+def list_devices() -> list:
+    """List the sidecar's registered devices (stations), for the frontend picker."""
+    headers = _learner_headers()
+    try:
+        r = requests.get(f"{EEG_API_URL}/api/v1/devices", headers=headers, timeout=3)
+        if r.status_code != 200:
+            return []
+        return r.json().get("data", []) or []
+    except Exception:
+        return []
 
 
 def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
@@ -170,6 +187,7 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
         "delta":      b.get("delta"),
         "gamma":      b.get("gamma"),
         "raw": {
+            "device_id":       eeg.get("device_id"),
             "channels":        eeg.get("channels"),
             "state":           eeg.get("state"),
             "question_policy": eeg.get("question_policy"),

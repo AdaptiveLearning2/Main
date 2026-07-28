@@ -62,6 +62,13 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
         }
 
     devices: dict[str, DeviceConfig] = {}
+    # Each "muse" device owns a TCP connection to one muse_native_bridge.exe
+    # process, which accepts exactly one client. Two devices resolving to the
+    # same (host, port) would both try to claim that one bridge -- the exact
+    # cross-attribution/contention failure this registry exists to prevent,
+    # just one layer down. "sim" devices have no such constraint (no shared
+    # process behind them), so they're exempt.
+    seen_muse_endpoints: set[tuple[str, int]] = set()
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
@@ -91,6 +98,14 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
                 raise ValueError(f"Invalid EEG_DEVICES entry: {entry!r} (bad port)") from exc
         if device_id in devices:
             raise ValueError(f"Duplicate device_id in EEG_DEVICES: {device_id!r}")
+        if kind == "muse":
+            endpoint = (host, port)
+            if endpoint in seen_muse_endpoints:
+                raise ValueError(
+                    f"Invalid EEG_DEVICES entry: {entry!r} ({host}:{port} is already used by "
+                    "another muse device -- each muse device needs its own bridge host:port)"
+                )
+            seen_muse_endpoints.add(endpoint)
         devices[device_id] = DeviceConfig(device_id=device_id, kind=kind, host=host, port=port)
 
     if not devices:

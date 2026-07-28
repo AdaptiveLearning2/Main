@@ -1219,6 +1219,22 @@ def test_parse_eeg_devices_rejects_malformed_entries():
         parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:muse@:8766"}))
 
 
+def test_parse_eeg_devices_rejects_two_muse_devices_on_the_same_bridge():
+    # No explicit port on either entry -- both would silently resolve to the
+    # same default MUSE_BRIDGE_HOST:MUSE_BRIDGE_PORT and contend for one
+    # single-client bridge process.
+    with pytest.raises(ValueError, match="already used by another muse device"):
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:muse,station2:muse"}))
+    # Same failure spelled out with explicit matching ports.
+    with pytest.raises(ValueError, match="already used by another muse device"):
+        parse_eeg_devices(
+            get_settings().model_copy(update={"eeg_devices": "station1:muse@8766,station2:muse@8766"})
+        )
+    # sim devices share no underlying process, so no such constraint applies.
+    devices = parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:sim,station2:sim"}))
+    assert set(devices) == {"station1", "station2"}
+
+
 def test_list_devices_endpoint_shape():
     client = TestClient(app)
     settings = get_settings()

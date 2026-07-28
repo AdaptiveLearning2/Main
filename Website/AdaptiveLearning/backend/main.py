@@ -955,6 +955,11 @@ def class_live(class_id: str, request: Request):
 def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
     get_user(request)
+    # TODO(#33): not guarded by eeg_poller.can_use_device -- any logged-in user
+    # can rescan/reconnect/disconnect another user's claimed station by
+    # device_id. Not a regression (the pre-device-registry single shared
+    # stream was equally pokeable), but worth closing now that stations are
+    # individually targetable. Tracked as a fast-follow, not fixed here.
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
@@ -967,6 +972,7 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
 def eeg_muse_connect(request: Request, body: dict = Body(...)):
     """Connect to a specific Muse headband by name."""
     get_user(request)
+    # TODO(#33): see eeg_muse_refresh above -- not guarded by can_use_device.
     name = (body.get("name") or "").strip()
     device_id = body.get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not name:
@@ -982,6 +988,9 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     """Tell the native bridge to disconnect from the current headband."""
     get_user(request)
+    # TODO(#33): see eeg_muse_refresh above -- not guarded by can_use_device.
+    # Worth noting this one specifically enables griefing (disconnecting
+    # someone else's live session), not just an unwanted rescan/reconnect.
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
@@ -1054,6 +1063,15 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
+    # Without this, an unknown/typo'd device_id spawns a poller that dies on
+    # the sidecar's 404 -- but eeg_poller.start() has already returned
+    # running: True by then, so the user sees "connected" and silently gets
+    # no data. known_ids empty (list_devices() unreachable/erroring even
+    # though is_alive() just succeeded) falls back to the old permissive
+    # behavior rather than blocking a legitimate start on a transient glitch.
+    known_ids = {d.get("device_id") for d in eeg_client.list_devices()}
+    if known_ids and device_id not in known_ids:
+        raise HTTPException(404, f"Unknown device_id: {device_id!r}")
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
     except eeg_poller.DeviceClaimedError:

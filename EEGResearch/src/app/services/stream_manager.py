@@ -258,6 +258,9 @@ class StreamManager:
 
     def __init__(self) -> None:
         self.settings = get_settings()
+        # _sessions is populated once below and never mutated afterward, so
+        # this lock guards nothing today -- it's future-proofing for runtime
+        # device (de)registration, which doesn't exist yet.
         self._lock = threading.Lock()
         device_configs = parse_eeg_devices(self.settings)
         self._sessions: dict[str, DeviceSession] = {

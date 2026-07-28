@@ -111,7 +111,7 @@ class _Poller(threading.Thread):
             time.sleep(POLL_INTERVAL)
 
         try:
-            # Each device_id (seat) is its own independent sidecar stream now, so
+            # Each device_id (station) is its own independent sidecar stream now, so
             # only another poller *on the same device* keeps it alive. Hold _lock
             # across the whole check-then-stop sequence (not just the _active read)
             # so start() -- which also holds _lock while registering a new poller
@@ -166,6 +166,25 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
         p.start()
         _active[session_id] = p
         return {"running": True, "already": False}
+
+
+def can_use_device(user_id: str, device_id: str) -> bool:
+    """Whether user_id may read/control device_id's (station's) live stream.
+
+    A station with a *live* poller belongs to that poller's user -- its stream
+    is that student's in-progress biometric data, not shared classroom data --
+    so only the owner may touch it. An unclaimed station (no live poller) is
+    open to anyone, which is what lets a user scan/pair a free station before
+    their own poller has started. start()'s claim guard ensures at most one
+    user ever holds a given device_id, so the first live match is decisive; a
+    dead-but-not-yet-reaped poller doesn't count (is_alive()), matching the
+    rest of this module.
+    """
+    with _lock:
+        for p in _active.values():
+            if p.device_id == device_id and p.is_alive():
+                return p.user_id == user_id
+    return True
 
 
 def stop(session_id: str) -> dict:

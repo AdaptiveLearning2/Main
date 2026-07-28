@@ -131,7 +131,7 @@ def get_muse_status(device_id: str = DEFAULT_DEVICE_ID) -> dict:
 
 
 def list_devices() -> list:
-    """List the sidecar's registered devices (seats), for the frontend picker."""
+    """List the sidecar's registered devices (stations), for the frontend picker."""
     headers = _learner_headers()
     try:
         r = requests.get(f"{EEG_API_URL}/api/v1/devices", headers=headers, timeout=3)

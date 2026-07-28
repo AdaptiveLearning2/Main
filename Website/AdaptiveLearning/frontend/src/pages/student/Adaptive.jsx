@@ -50,12 +50,12 @@ export default function Adaptive() {
     deviceName: null,
   })
 
-  // Sidecar seats (device-keyed EEG registry, e.g. multiple headband rigs in the
+  // Sidecar stations (device-keyed EEG registry, e.g. multiple headband rigs in the
   // same room) -- distinct from the BLE headband name list below (muse_devices):
-  // a seat is *which sidecar stream* to use, chosen before the BLE pairing flow
+  // a station is *which sidecar stream* to use, chosen before the BLE pairing flow
   // (scan/connect by headband name) even starts.
-  const [seats, setSeats]   = useState([])
-  const [seatId, setSeatId] = useState(null)
+  const [stations, setStations]     = useState([])
+  const [stationId, setStationId]   = useState(null)
 
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
@@ -87,17 +87,17 @@ export default function Adaptive() {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
-  // Discover sidecar seats once the EEG service is reachable. Auto-select when
+  // Discover sidecar stations once the EEG service is reachable. Auto-select when
   // there's exactly one (mirrors the previous single-device behavior with no UI
-  // change); otherwise wait for the user to pick one via the seat picker below.
+  // change); otherwise wait for the user to pick one via the station picker below.
   useEffect(() => {
     if (!headband.available) return
     let alive = true
     eegDevices().then(d => {
       if (!alive) return
       const list = d?.devices || []
-      setSeats(list)
-      setSeatId(prev => {
+      setStations(list)
+      setStationId(prev => {
         if (prev && list.some(s => s.device_id === prev)) return prev
         if (list.length === 1) return list[0].device_id
         if (list.length === 0) return 'default'
@@ -123,7 +123,7 @@ export default function Adaptive() {
     if (!sessionId) return
     let killed = false
     const tick = async () => {
-      const s = await eegStatus(seatId)
+      const s = await eegStatus(stationId)
       if (killed) return
       setHeadband(prev => ({
         ...prev,
@@ -136,21 +136,21 @@ export default function Adaptive() {
     tick()
     const id = setInterval(tick, 3000)
     return () => { killed = true; clearInterval(id) }
-  }, [sessionId, seatId])
+  }, [sessionId, stationId])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
     if (!EEG_DEBUG) return
     const poll = async () => {
       try {
-        const d = await apiFetch(`/api/eeg/debug${seatId ? `?device_id=${encodeURIComponent(seatId)}` : ''}`)
+        const d = await apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`)
         setEegDebug(d)
       } catch { setEegDebug(null) }
     }
     poll()
     debugTimer.current = setInterval(poll, 1500)
     return () => clearInterval(debugTimer.current)
-  }, [seatId])
+  }, [stationId])
 
   useEffect(() => {
     if (!user?.id) return
@@ -160,10 +160,10 @@ export default function Adaptive() {
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
   const toggleHeadband = async () => {
-    if (!seatId) return
+    if (!stationId) return
     const activeSessionId = await getOrCreateSession()
     if (!recorder) {
-      const r = createSignalRecorder({ sessionId: activeSessionId, deviceId: seatId })
+      const r = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
       setRecorder(r)
       window.AL_currentSessionId = activeSessionId
     }
@@ -192,19 +192,19 @@ export default function Adaptive() {
 
       // 2. Disconnect any previous session so the headband isn't stuck in streaming state
       //    (causes BadStateError on the next connect if skipped)
-      await apiFetch('/api/eeg/muse/disconnect', { method: 'POST', body: { device_id: seatId } }).catch(() => {})
+      await apiFetch('/api/eeg/muse/disconnect', { method: 'POST', body: { device_id: stationId } }).catch(() => {})
       await new Promise(r => setTimeout(r, 1500))
 
       // 3. Tell the native bridge to scan for nearby headbands
       setHeadband(s => ({ ...s, phase: 'scanning' }))
-      await apiFetch('/api/eeg/muse/refresh', { method: 'POST', body: { device_id: seatId } })
+      await apiFetch('/api/eeg/muse/refresh', { method: 'POST', body: { device_id: stationId } })
 
       // 4. Poll up to 12 s for at least one device to appear
       let devices = []
       let bluetoothEnabled = true
       for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 1000))
-        const s = await eegStatus(seatId)
+        const s = await eegStatus(stationId)
         devices = s?.muse?.ingestion?.muse_devices || []
         if (devices.length > 0) break
         // Bridge reports the PC's Bluetooth radio state directly (see
@@ -229,7 +229,7 @@ export default function Adaptive() {
       // 5. Connect to first discovered device (usually there's only one)
       const target = devices[0]
       setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
-      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target, device_id: seatId } })
+      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target, device_id: stationId } })
 
       // 6. Poll for actual BLE connection — bridge connects asynchronously.
       //    If we get BadStateError the headband is still streaming from a prior session;
@@ -237,7 +237,7 @@ export default function Adaptive() {
       let muse_ok = false
       for (let i = 0; i < 10; i++) {
         await new Promise(r => setTimeout(r, 1000))
-        const s = await eegStatus(seatId)
+        const s = await eegStatus(stationId)
         if (s?.muse?.ingestion?.muse_connected) { muse_ok = true; break }
       }
 
@@ -368,17 +368,17 @@ export default function Adaptive() {
             )}
           </p>
         </div>
-        {/* Seat picker: only shown when the sidecar has more than one registered
+        {/* Station picker: only shown when the sidecar has more than one registered
             device (e.g. several headband rigs in the same room). Single-device
-            deployments auto-select their one seat and never see this. */}
-        {seats.length > 1 && !headband.connected && (
+            deployments auto-select their one station and never see this. */}
+        {stations.length > 1 && !headband.connected && (
           <select
-            value={seatId || ''}
-            onChange={e => setSeatId(e.target.value)}
+            value={stationId || ''}
+            onChange={e => setStationId(e.target.value)}
             className="text-xs font-bold rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1.5"
           >
             <option value="" disabled>Choose a headband…</option>
-            {seats.map(s => (
+            {stations.map(s => (
               <option key={s.device_id} value={s.device_id}>
                 {s.device_id}{s.running ? ' (in use)' : ''}
               </option>
@@ -390,7 +390,7 @@ export default function Adaptive() {
             (to stop double-registering history) but left a !sessionId guard here, so
             the button that creates the session was disabled until one existed. */}
         <button onClick={toggleHeadband}
-          disabled={!headband.available || !seatId || ['starting','scanning','connecting'].includes(headband.phase)}
+          disabled={!headband.available || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
             headband.connected ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}>

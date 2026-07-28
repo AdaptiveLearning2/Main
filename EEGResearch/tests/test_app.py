@@ -1196,25 +1196,27 @@ def test_parse_eeg_devices_defaults_to_single_default_device_when_unset():
 
 def test_parse_eeg_devices_parses_multi_entry_with_and_without_port_override():
     settings = get_settings().model_copy(
-        update={"eeg_devices": "seat1:muse@8766,seat2:muse@192.168.1.5:8767,seat3:sim"}
+        update={"eeg_devices": "station1:muse@8766,station2:muse@192.168.1.5:8767,station3:sim"}
     )
     devices = parse_eeg_devices(settings)
-    assert set(devices) == {"seat1", "seat2", "seat3"}
-    assert devices["seat1"].kind == "muse"
-    assert devices["seat1"].host == settings.muse_bridge_host
-    assert devices["seat1"].port == 8766
-    assert devices["seat2"].host == "192.168.1.5"
-    assert devices["seat2"].port == 8767
-    assert devices["seat3"].kind == "sim"
+    assert set(devices) == {"station1", "station2", "station3"}
+    assert devices["station1"].kind == "muse"
+    assert devices["station1"].host == settings.muse_bridge_host
+    assert devices["station1"].port == 8766
+    assert devices["station2"].host == "192.168.1.5"
+    assert devices["station2"].port == 8767
+    assert devices["station3"].kind == "sim"
 
 
 def test_parse_eeg_devices_rejects_malformed_entries():
     with pytest.raises(ValueError):
-        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1"}))
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1"}))
     with pytest.raises(ValueError):
-        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1:not-a-kind"}))
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:not-a-kind"}))
     with pytest.raises(ValueError):
-        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "seat1:sim,seat1:sim"}))
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:sim,station1:sim"}))
+    with pytest.raises(ValueError, match="empty host"):
+        parse_eeg_devices(get_settings().model_copy(update={"eeg_devices": "station1:muse@:8766"}))
 
 
 def test_list_devices_endpoint_shape():
@@ -1259,13 +1261,25 @@ def test_two_sim_devices_run_independently():
         await manager_b.start()
         for _ in range(5):
             await asyncio.sleep(0.05)
+        b_before = manager_b.samples_processed
         await manager_a.stop()
+        for _ in range(5):
+            await asyncio.sleep(0.05)
+        # Snapshot B's state here, before stopping it too, since stop() itself
+        # zeroes latest_payload -- capturing after both stops would prove
+        # nothing about B being independent of A's stop.
+        b_after = manager_b.samples_processed
+        b_signal_quality = manager_b.latest_payload["features"]["signal_quality"]
         await manager_b.stop()
-        return manager_a, manager_b
+        return manager_a, manager_b, b_before, b_after, b_signal_quality
 
-    manager_a, manager_b = asyncio.run(run_case())
+    manager_a, manager_b, b_before, b_after, b_signal_quality = asyncio.run(run_case())
     assert manager_a.samples_processed > 0
-    assert manager_b.samples_processed > 0
-    # Independent counters -- stopping one doesn't touch the other's tally.
+    assert b_before > 0
+    # Independent counters -- stopping device A doesn't freeze or reset
+    # device B's tally, which keeps advancing on its own loop.
+    assert b_after > b_before
+    assert manager_a.latest_payload["features"]["signal_quality"] == "no_signal"
+    assert b_signal_quality != "no_signal"
     assert manager_a.device_id == "dev-a"
     assert manager_b.device_id == "dev-b"

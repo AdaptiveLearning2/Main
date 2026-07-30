@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-<<<<<<< HEAD
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity } from 'lucide-react'
-=======
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Eye, Zap } from 'lucide-react'
->>>>>>> 4fa1ce3 (Add parent reports and signal safety features)
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
-import { formatSignalValue } from '../../components/signals/SignalPanel'
 
 export default function ParentDashboard() {
   const { user } = useAuth()
@@ -27,7 +22,7 @@ export default function ParentDashboard() {
     <div className="p-6 lg:p-8 pb-12 space-y-8">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing.</p>
       </motion.div>
 
       {loading ? (
@@ -55,19 +50,16 @@ export default function ParentDashboard() {
             const acc = child.stats?.total_questions > 0
               ? Math.round((child.stats.total_correct / child.stats.total_questions) * 100)
               : 0
-            const report = child.weekly_report || {}
-            const eeg = report.eeg || {}
-            const face = report.face || {}
-            const perf = report.performance || {}
             return (
               <motion.div key={child.user_id}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
 
+                {/* header */}
                 <div className="flex items-center justify-between p-5 border-b border-gray-50 dark:border-gray-800">
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
-                      {(child.name || '?')[0].toUpperCase()}
+                      {child.name[0].toUpperCase()}
                     </div>
                     <div>
                       <h3 className="font-black text-gray-900 dark:text-white">{child.name}</h3>
@@ -82,22 +74,21 @@ export default function ParentDashboard() {
                   </Link>
                 </div>
 
+                {/* stats row */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 divide-x divide-gray-50 dark:divide-gray-800">
                   {[
                     { icon: BookOpen,   label: 'Questions', value: child.stats?.total_questions ?? 0,  color: 'text-indigo-600' },
-                    { icon: TrendingUp, label: 'Accuracy',  value: `${acc}%`, color: acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
+                    { icon: TrendingUp, label: 'Accuracy',  value: `${acc}%`,                           color: acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
                     { icon: Flame,      label: 'Streak',    value: `${child.stats?.current_streak ?? 0}d`, color: 'text-orange-500' },
-                    { icon: TrendingUp, label: 'Correct',   value: child.stats?.total_correct ?? 0, color: 'text-violet-600' },
+                    { icon: TrendingUp, label: 'Correct',   value: child.stats?.total_correct ?? 0,    color: 'text-violet-600' },
                   ].map(s => (
                     <div key={s.label} className="p-4 text-center">
-                      <s.icon size={18} className={`mx-auto mb-1 ${s.color}`} />
-                      <p className="text-xl font-black text-gray-900 dark:text-white">{s.value}</p>
-                      <p className="text-[11px] uppercase tracking-wider font-bold text-gray-400">{s.label}</p>
+                      <p className={`text-2xl font-black ${s.color}`}>{s.value}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</p>
                     </div>
                   ))}
                 </div>
 
-<<<<<<< HEAD
                 {/* Weekly signal averages. Rendered only when the child has
                     actually recorded signals -- an all-"N/A" row reads as
                     "something is broken" rather than "nothing recorded yet". */}
@@ -123,15 +114,6 @@ export default function ParentDashboard() {
                 )}
 
                 {/* recent sessions */}
-=======
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
-                  <SignalCard icon={<Brain size={15} />} label="Weekly focus" value={formatSignalValue(eeg.avg_focus)} sub={eeg.sample_count ? `${eeg.sample_count} readings` : 'no EEG data'} />
-                  <SignalCard icon={<Zap size={15} />} label="Weekly stress" value={formatSignalValue(eeg.avg_stress)} sub={eeg.sample_count ? 'learning indicator' : 'no EEG data'} />
-                  <SignalCard icon={<Eye size={15} />} label="Face attention" value={formatSignalValue(face?.avg_attention)} sub={face?.dominant_emotion || 'no face data'} />
-                  <SignalCard icon={<BookOpen size={15} />} label="AI sessions" value={perf.session_count ?? 0} sub="last 7 days" />
-                </div>
-
->>>>>>> 4fa1ce3 (Add parent reports and signal safety features)
                 {child.sessions?.length > 0 && (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800">
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Recent Sessions</p>
@@ -163,17 +145,6 @@ export default function ParentDashboard() {
           </Link>
         </div>
       )}
-    </div>
-  )
-}
-
-function SignalCard({ icon, label, value, sub }) {
-  return (
-    <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-3">
-      <div className="text-emerald-600 dark:text-emerald-300 mb-2">{icon}</div>
-      <p className="text-lg font-black text-gray-900 dark:text-white">{value}</p>
-      <p className="text-[11px] uppercase tracking-widest font-bold text-gray-400">{label}</p>
-      {sub && <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>}
     </div>
   )
 }

@@ -1,8 +1,13 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+<<<<<<< HEAD
 import os, requests, random, string, threading
 from datetime import datetime, timedelta, timezone
+=======
+import os, requests, random, string, threading, re
+from datetime import datetime, timedelta
+>>>>>>> 4fa1ce3 (Add parent reports and signal safety features)
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -1122,6 +1127,231 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     }
 
 
+
+# ─── weekly reports and parent strategy support ──────────────────────────
+
+class LearningStrategyRequest(BaseModel):
+    include_face: bool = True
+
+
+def _avg(rows: list[dict], key: str):
+    vals = []
+    for row in rows:
+        val = row.get(key)
+        if val is None:
+            continue
+        try:
+            vals.append(float(val))
+        except (TypeError, ValueError):
+            pass
+    if not vals:
+        return None
+    return sum(vals) / len(vals)
+
+
+def _max_value(rows: list[dict], key: str):
+    vals = []
+    for row in rows:
+        val = row.get(key)
+        if val is None:
+            continue
+        try:
+            vals.append(float(val))
+        except (TypeError, ValueError):
+            pass
+    return max(vals) if vals else None
+
+
+def _min_value(rows: list[dict], key: str):
+    vals = []
+    for row in rows:
+        val = row.get(key)
+        if val is None:
+            continue
+        try:
+            vals.append(float(val))
+        except (TypeError, ValueError):
+            pass
+    return min(vals) if vals else None
+
+
+def _dominant_emotion(face_rows: list[dict]):
+    counts = {}
+    for row in face_rows:
+        emotion = row.get("emotion")
+        if emotion:
+            counts[emotion] = counts.get(emotion, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
+def _topic_report(student_id: str):
+    rows = supabase.table("user_math_performance") \
+        .select("*, math_topics(topic_name)") \
+        .eq("user_id", student_id).execute().data or []
+    out = []
+    for row in rows:
+        attempted = row.get("attempted_questions") or 0
+        correct = row.get("correct_questions") or 0
+        accuracy = round((correct / attempted) * 100) if attempted else None
+        out.append({
+            "topic_id": row.get("topic_id"),
+            "topic_name": (row.get("math_topics") or {}).get("topic_name") or "unknown",
+            "correct_questions": correct,
+            "attempted_questions": attempted,
+            "accuracy": accuracy,
+        })
+    return out
+
+
+def _build_student_weekly_report(student_id: str, include_face: bool = True, days: int = 7):
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+    sessions = supabase.table("sessions").select("*") \
+        .eq("user_id", student_id).gte("started_at", cutoff) \
+        .order("started_at", desc=True).execute().data or []
+
+    total_questions = sum((s.get("questions_answered") or 0) for s in sessions)
+    total_correct = sum((s.get("correct_answers") or 0) for s in sessions)
+    accuracy = round((total_correct / total_questions) * 100) if total_questions else None
+
+    cognitive = supabase.table("cognitive_signals").select("*") \
+        .eq("user_id", student_id).gte("ts", cutoff).order("ts").limit(5000).execute().data or []
+
+    face_rows = []
+    if include_face:
+        face_rows = supabase.table("face_signals").select("*") \
+            .eq("user_id", student_id).gte("ts", cutoff).order("ts").limit(5000).execute().data or []
+
+    latest_cog = cognitive[-1] if cognitive else None
+    latest_face = face_rows[-1] if face_rows else None
+
+    topics = _topic_report(student_id)
+    weakest_topic = None
+    scored_topics = [t for t in topics if t.get("accuracy") is not None]
+    if scored_topics:
+        weakest_topic = min(scored_topics, key=lambda t: t["accuracy"])
+
+    return {
+        "student_id": student_id,
+        "period_days": days,
+        "generated_at": datetime.utcnow().isoformat(),
+        "performance": {
+            "total_questions": total_questions,
+            "total_correct": total_correct,
+            "accuracy": accuracy,
+            "session_count": len(sessions),
+            "weakest_topic": weakest_topic,
+        },
+        "topics": topics,
+        "eeg": {
+            "sample_count": len(cognitive),
+            "avg_focus": _avg(cognitive, "focus"),
+            "avg_stress": _avg(cognitive, "stress"),
+            "avg_engagement": _avg(cognitive, "engagement"),
+            "highest_stress": _max_value(cognitive, "stress"),
+            "lowest_focus": _min_value(cognitive, "focus"),
+            "latest": latest_cog,
+        },
+        "face": None if not include_face else {
+            "sample_count": len(face_rows),
+            "avg_attention": _avg(face_rows, "attention"),
+            "avg_identity_confidence": _avg(face_rows, "identity_confidence"),
+            "dominant_emotion": _dominant_emotion(face_rows),
+            "latest": latest_face,
+        },
+    }
+
+
+def _fallback_learning_strategies(report: dict):
+    perf = report.get("performance") or {}
+    eeg = report.get("eeg") or {}
+    face = report.get("face") or {}
+    strategies = []
+
+    weakest = perf.get("weakest_topic")
+    if weakest:
+        strategies.append(f"Spend 10-15 minutes reviewing {weakest.get('topic_name', 'the weakest topic').replace('_', ' ')} with short practice problems before moving to new material.")
+    else:
+        strategies.append("Start with a short review session and ask the student to explain one problem out loud to check understanding.")
+
+    avg_stress = eeg.get("avg_stress")
+    if avg_stress is not None and float(avg_stress) >= 0.65:
+        strategies.append("Use shorter study blocks with a two-minute break between sets because weekly stress indicators were elevated.")
+    else:
+        strategies.append("Use 15-20 minute focused practice blocks followed by quick feedback and encouragement.")
+
+    avg_focus = eeg.get("avg_focus")
+    if avg_focus is not None and float(avg_focus) < 0.45:
+        strategies.append("Reduce distractions during home practice and ask the student to complete one small goal at a time.")
+    else:
+        strategies.append("Keep the current study environment consistent because focus indicators were stable or unavailable.")
+
+    if face and face.get("avg_attention") is not None and float(face.get("avg_attention")) < 0.5:
+        strategies.append("Try more interactive practice, such as drawing the problem steps or using real-world examples, when attention appears low.")
+
+    strategies.append("End each session by asking the student which problem felt hardest and which strategy helped most.")
+    return strategies[:5]
+
+
+@app.get("/api/teacher/students/{student_id}/weekly-eeg-report")
+def teacher_student_weekly_report(student_id: str, request: Request, include_face: bool = True):
+    user = get_user(request)
+    if user.get("user_metadata", {}).get("role") != "teacher":
+        raise HTTPException(403, "Only teachers can access teacher reports")
+    _verify_can_view_student(user, student_id)
+    return _build_student_weekly_report(student_id, include_face=include_face)
+
+
+@app.get("/api/parent/children/{child_id}/weekly-report")
+def parent_child_weekly_report(child_id: str, request: Request, include_face: bool = True):
+    user = get_user(request)
+    if user.get("user_metadata", {}).get("role") != "parent":
+        raise HTTPException(403, "Only parents can access parent reports")
+    _verify_can_view_student(user, child_id)
+    return _build_student_weekly_report(child_id, include_face=include_face)
+
+
+@app.post("/api/parent/children/{child_id}/learning-strategies")
+def parent_learning_strategies(child_id: str, payload: LearningStrategyRequest, request: Request):
+    user = get_user(request)
+    if user.get("user_metadata", {}).get("role") != "parent":
+        raise HTTPException(403, "Only parents can generate parent strategies")
+    _verify_can_view_student(user, child_id)
+    report = _build_student_weekly_report(child_id, include_face=payload.include_face)
+    strategies = _fallback_learning_strategies(report)
+    source = "rule-based safety fallback"
+
+    # Optional local AI refinement. If Ollama is unavailable, the safe fallback above is returned.
+    try:
+        prompt = (
+            "You are helping a parent support a student at home. "
+            "Use only the weekly learning report below. Do not make medical claims. "
+            "Return exactly five short, practical at-home learning strategies as a numbered list.\n\n"
+            f"Report: {report}"
+        )
+        resp = requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": "llama3.1:8b", "prompt": prompt, "stream": False},
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            raw = (resp.json().get("response") or "").strip()
+            lines = []
+            for line in raw.splitlines():
+                cleaned = line.strip().lstrip("-• ").strip()
+                cleaned = re.sub(r"^\d+[\).]\s*", "", cleaned) if 're' in globals() else cleaned
+                if cleaned:
+                    lines.append(cleaned)
+            if lines:
+                strategies = lines[:5]
+                source = "local Ollama AI with safety fallback"
+    except Exception as e:
+        print(f"[parent strategies fallback] {e}")
+
+    return {"student_id": child_id, "strategies": strategies, "source": source, "report": report}
+
 # ─── parent endpoints ────────────────────────────────────────────────────
 
 @app.post("/api/parent/link-child")
@@ -1160,7 +1390,13 @@ def my_children(request: Request):
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         perf_res = supabase.table("user_math_performance").select("*, math_topics(topic_name)").eq("user_id", cid).execute()
         p = _profile(cid)
+        try:
+            weekly_report = _build_student_weekly_report(cid, include_face=True)
+        except Exception as e:
+            print(f"[parent children weekly report] {e}")
+            weekly_report = None
         children.append({
+<<<<<<< HEAD
             "user_id":     cid,
             "name":        p.get("display_name") or "Student",
             "email":       p.get("email") or "",
@@ -1172,6 +1408,16 @@ def my_children(request: Request):
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
             "signal_summary": summaries.get(str(cid)) or _EMPTY_SUMMARY.copy(),
+=======
+            "user_id":       cid,
+            "name":          p.get("display_name") or "Student",
+            "email":         p.get("email") or "",
+            "linked_at":     lnk["created_at"],
+            "stats":         stats,
+            "sessions":      sess_res.data or [],
+            "performance":   perf_res.data or [],
+            "weekly_report": weekly_report,
+>>>>>>> 4fa1ce3 (Add parent reports and signal safety features)
         })
     return children
 

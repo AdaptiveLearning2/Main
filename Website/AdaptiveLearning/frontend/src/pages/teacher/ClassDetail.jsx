@@ -1,20 +1,22 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { ArrowLeft, Copy, Check, GraduationCap, Users } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { ArrowLeft, Copy, Check, GraduationCap, Users, FileText } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import { WeeklySignalReport } from '../../components/signals/SignalPanel'
 import { toast } from 'sonner'
 
 export default function ClassDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [cls, setCls]           = useState(null)
-  // Defaults to an array, never null: the render path calls students.length,
-  // and the endpoint resolving to anything non-array would crash the page.
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [copied, setCopied]     = useState(false)
+  const [openReport, setOpenReport] = useState(null)
+  const [reports, setReports] = useState({})
+  const [reportLoading, setReportLoading] = useState({})
 
   useEffect(() => { loadData() }, [id])
 
@@ -30,10 +32,6 @@ export default function ClassDetail() {
       setCls(classInfo || null)
       setStudents(Array.isArray(studentList) ? studentList : [])
     } catch (err) {
-      // Tracked separately from "class not found" -- a failed request (offline,
-      // 403, server error) is a different situation from a class that doesn't
-      // exist, and telling a teacher "Class not found" when their request just
-      // failed sends them looking for the wrong problem.
       setError(err.message || 'Could not load class')
       toast.error(err.message || 'Could not load class')
     } finally {
@@ -41,8 +39,26 @@ export default function ClassDetail() {
     }
   }
 
+  async function toggleReport(studentId) {
+    if (openReport === studentId) {
+      setOpenReport(null)
+      return
+    }
+    setOpenReport(studentId)
+    if (reports[studentId] || reportLoading[studentId]) return
+    setReportLoading(prev => ({ ...prev, [studentId]: true }))
+    try {
+      const report = await apiFetch(`/api/teacher/students/${studentId}/weekly-eeg-report?include_face=true`)
+      setReports(prev => ({ ...prev, [studentId]: report }))
+    } catch (err) {
+      toast.error(err.message || 'Could not load weekly report')
+      setReports(prev => ({ ...prev, [studentId]: null }))
+    } finally {
+      setReportLoading(prev => ({ ...prev, [studentId]: false }))
+    }
+  }
+
   function copyCode() {
-    // Without the guard this copies the string "undefined" and reports success.
     if (!cls?.join_code) {
       toast.error('This class has no join code yet')
       return
@@ -57,9 +73,7 @@ export default function ClassDetail() {
     return (
       <div className="p-6 lg:p-8 pb-12">
         <div className="h-8 w-40 bg-gray-100 dark:bg-gray-800 rounded-lg animate-pulse mb-6" />
-        <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}
-        </div>
+        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
       </div>
     )
   }
@@ -125,6 +139,7 @@ export default function ClassDetail() {
           <p className="text-gray-400 text-sm">No students have joined yet. Share the code <span className="font-mono font-black text-violet-600">{cls.join_code}</span></p>
         </div>
       ) : (
+<<<<<<< HEAD
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {students.map((s, i) => {
             return (
@@ -137,9 +152,38 @@ export default function ClassDetail() {
                   className="shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-bold transition">
                   Get Report
                 </button>
+=======
+        <div className="space-y-4">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {students.map((s, i) => {
+              const acc = s.total_questions > 0 ? Math.round((s.total_correct / s.total_questions) * 100) : 0
+              return (
+                <motion.div key={s.user_id}
+                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
+                  className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm">
+                  <p className="text-lg font-bold text-gray-900 dark:text-white truncate text-center">{s.name}</p>
+                  <p className="text-xs text-gray-400 text-center mb-3">Accuracy: {acc}%</p>
+                  <button onClick={() => toggleReport(s.user_id)}
+                    className="w-full bg-violet-600 hover:bg-violet-700 rounded-xl px-4 py-3 flex items-center justify-center gap-2 text-sm font-bold text-white transition">
+                    <FileText size={15} /> {openReport === s.user_id ? 'Hide Report' : 'Get Report'}
+                  </button>
+                </motion.div>
+              )
+            })}
+          </div>
+
+          <AnimatePresence>
+            {openReport && (
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}>
+                {reportLoading[openReport] ? (
+                  <div className="h-56 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 animate-pulse" />
+                ) : (
+                  <WeeklySignalReport report={reports[openReport]} includeFace={true} title="Student Weekly EEG & Face Report" />
+                )}
+>>>>>>> 4fa1ce3 (Add parent reports and signal safety features)
               </motion.div>
-            )
-          })}
+            )}
+          </AnimatePresence>
         </div>
       )}
     </div>

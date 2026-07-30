@@ -43,7 +43,7 @@ export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo
   )
 }
 
-export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
+export function LiveSignalSummary({ report, title = 'Live Signal Snapshot', includeFace = true }) {
   const latest = report?.latest || {}
   const cog = latest.cognitive || {}
   const face = latest.face || {}
@@ -60,9 +60,9 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <MiniMetric label="Focus" value={pct(cog.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={pct(cog.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(cog.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={pct(face.attention)} icon={Eye} tone="sky" />
+        {includeFace && <MiniMetric label="Face Attention" value={pct(face.attention)} icon={Eye} tone="sky" />}
       </div>
-      <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
+      {includeFace && <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Facial Emotion</p>
           <p className="font-bold text-gray-900 dark:text-white capitalize">{face.emotion || 'No data'}</p>
@@ -71,12 +71,12 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
           <p className="font-bold text-gray-900 dark:text-white">{pct(face.identity_confidence)}</p>
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
 
-export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' }) {
+export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report', includeFace = true }) {
   const avg = report?.averages || {}
   const highlights = report?.highlights || {}
   const counts = report?.sample_counts || {}
@@ -106,7 +106,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={pct(avg.face_attention)} icon={Eye} tone="sky" />
+        {includeFace && <MiniMetric label="Face Attention" value={pct(avg.face_attention)} icon={Eye} tone="sky" />}
         <MiniMetric label="Sessions" value={counts.sessions ?? 0} icon={Radio} tone="amber" />
       </div>
 
@@ -125,7 +125,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                   Matches the MiniMetric tones above. */}
               <Line type="monotone" dataKey="focus" stroke="#10b981" strokeWidth={2} dot={false} name="Focus" />
               <Line type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={false} name="Stress" />
-              <Line type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={false} name="Face Attention" />
+              {includeFace && <Line type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={false} name="Face Attention" />}
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -140,10 +140,10 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Lowest Focus</p>
           <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.lowest_focus)}</p>
         </div>
-        <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
+        {includeFace && <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Dominant Emotion</p>
           <p className="font-bold text-gray-900 dark:text-white capitalize">{highlights.dominant_emotion || 'N/A'}</p>
-        </div>
+        </div>}
       </div>
 
       <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">{report?.summary || 'No summary available yet.'}</p>

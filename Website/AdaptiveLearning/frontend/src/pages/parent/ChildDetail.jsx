@@ -27,6 +27,7 @@ export default function ChildDetail() {
       backHoverClass="hover:text-emerald-600"
       emptyTopicText="No topic data yet — your child hasn't used AI Adaptive mode."
       nameFetch={nameFetch}
+      showParentTools
     />
   )
 }

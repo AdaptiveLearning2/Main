@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity } from 'lucide-react'
+import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+
+function percent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'N/A'
+  return `${Math.round(Number(value) * 100)}%`
+}
+
+function hasSignalSummary(summary) {
+  return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null || summary.face_attention != null))
+}
 
 export default function ParentDashboard() {
   const { user } = useAuth()
@@ -14,7 +23,7 @@ export default function ParentDashboard() {
 
   useEffect(() => {
     apiFetch('/api/parent/children')
-      .then(c => { setChildren(c); setLoading(false) })
+      .then(c => { setChildren(c || []); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
   }, [])
 
@@ -22,7 +31,7 @@ export default function ParentDashboard() {
     <div className="p-6 lg:p-8 pb-12 space-y-8">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing.</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
       </motion.div>
 
       {loading ? (
@@ -50,70 +59,80 @@ export default function ParentDashboard() {
             const acc = child.stats?.total_questions > 0
               ? Math.round((child.stats.total_correct / child.stats.total_questions) * 100)
               : 0
+            const signals = child.signal_summary || {}
+            const showSignals = hasSignalSummary(signals)
+            const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
               <motion.div key={child.user_id}
                 initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
 
-                {/* header */}
-                <div className="flex items-center justify-between p-5 border-b border-gray-50 dark:border-gray-800">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-5 border-b border-gray-50 dark:border-gray-800">
                   <div className="flex items-center gap-3">
                     <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
-                      {child.name[0].toUpperCase()}
+                      {initial}
                     </div>
                     <div>
-                      <h3 className="font-black text-gray-900 dark:text-white">{child.name}</h3>
-                      <p className="text-xs text-gray-400">{child.email}</p>
+                      <h3 className="font-black text-gray-900 dark:text-white">{child.name || 'Student'}</h3>
+                      <p className="text-xs text-gray-400">{child.email || 'No email available'}</p>
                     </div>
                   </div>
                   <Link to={`/parent/child/${child.user_id}`}>
                     <motion.div whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl text-sm font-bold hover:bg-emerald-100 transition">
+                      className="flex items-center justify-center gap-1.5 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 rounded-xl text-sm font-bold hover:bg-emerald-100 transition">
                       Full Report <ArrowUpRight size={14} />
                     </motion.div>
                   </Link>
                 </div>
 
-                {/* stats row */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-0 divide-x divide-gray-50 dark:divide-gray-800">
                   {[
                     { icon: BookOpen,   label: 'Questions', value: child.stats?.total_questions ?? 0,  color: 'text-indigo-600' },
-                    { icon: TrendingUp, label: 'Accuracy',  value: `${acc}%`,                           color: acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
+                    { icon: TrendingUp, label: 'Accuracy',  value: `${acc}%`, color: acc >= 70 ? 'text-green-600' : acc >= 40 ? 'text-amber-600' : 'text-rose-600' },
                     { icon: Flame,      label: 'Streak',    value: `${child.stats?.current_streak ?? 0}d`, color: 'text-orange-500' },
-                    { icon: TrendingUp, label: 'Correct',   value: child.stats?.total_correct ?? 0,    color: 'text-violet-600' },
+                    { icon: TrendingUp, label: 'Correct',   value: child.stats?.total_correct ?? 0, color: 'text-violet-600' },
                   ].map(s => (
                     <div key={s.label} className="p-4 text-center">
+                      <s.icon size={18} className={`mx-auto mb-1 ${s.color}`} />
                       <p className={`text-2xl font-black ${s.color}`}>{s.value}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{s.label}</p>
                     </div>
                   ))}
                 </div>
 
-                {/* Weekly signal averages. Rendered only when the child has
-                    actually recorded signals -- an all-"N/A" row reads as
-                    "something is broken" rather than "nothing recorded yet". */}
-                {child.signal_summary && (child.signal_summary.sessions > 0 || child.signal_summary.focus != null) && (
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800">
+                {showSignals ? (
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     {[
-                      { icon: Brain,    label: 'Weekly Focus',  value: child.signal_summary.focus,          color: 'text-emerald-600' },
-                      { icon: Zap,      label: 'Weekly Stress', value: child.signal_summary.stress,         color: 'text-rose-600' },
-                      { icon: Eye,      label: 'Face Attention', value: child.signal_summary.face_attention, color: 'text-sky-600' },
-                      { icon: Activity, label: 'Sessions',      value: child.signal_summary.sessions, raw: true, color: 'text-amber-600' },
+                      { icon: Brain,    label: 'Weekly Focus',   value: percent(signals.focus),          color: 'text-emerald-600' },
+                      { icon: Zap,      label: 'Weekly Stress',  value: percent(signals.stress),         color: 'text-rose-600' },
+                      { icon: Eye,      label: 'Face Attention', value: percent(signals.face_attention), color: 'text-sky-600' },
+                      { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
-                      <div key={item.label} className="rounded-2xl bg-slate-50 dark:bg-gray-800 p-4">
+                      <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">
                         <item.icon size={17} className={`${item.color} mb-2`} />
-                        <p className={`text-xl font-black ${item.color}`}>
-                          {item.raw
-                            ? (item.value ?? 0)
-                            : (item.value != null ? `${Math.round(item.value * 100)}%` : 'N/A')}
-                        </p>
+                        <p className={`text-xl font-black ${item.color}`}>{item.value}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{item.label}</p>
                       </div>
                     ))}
                   </div>
+                ) : (
+                  <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
+                    <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 dark:text-gray-400">
+                      No weekly EEG or facial-recognition signal data yet. Open the full report after the student completes an AI session.
+                    </div>
+                  </div>
                 )}
 
-                {/* recent sessions */}
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between px-5 py-3 border-t border-gray-50 dark:border-gray-800 bg-emerald-50/50 dark:bg-emerald-900/10">
+                  <div className="flex items-start gap-2 text-xs text-gray-500 dark:text-gray-400">
+                    <ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" />
+                    <span>Signals are learning-state indicators only, not medical or diagnostic data.</span>
+                  </div>
+                  <Link to={`/parent/child/${child.user_id}`} className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300 hover:underline">
+                    <Sparkles size={14} /> View strategies
+                  </Link>
+                </div>
+
                 {child.sessions?.length > 0 && (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800">
                     <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Recent Sessions</p>

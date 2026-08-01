@@ -40,6 +40,22 @@ Also:
   table is already large, build the index manually with `CONCURRENTLY` outside a transaction
   first; the `IF NOT EXISTS` in the migration then no-ops.
 
+### When changing an existing function's signature
+
+Adding a parameter creates a **new** function rather than replacing the old one, so the migration
+has to `DROP FUNCTION` the previous signature explicitly — `CREATE OR REPLACE` alone leaves it
+behind as an overload that is still granted, still callable, and unaware of whatever the new
+parameter controls. Keeping both is not an option either: with named-argument RPC calls that
+match more than one signature, Postgres rejects the call as ambiguous. The new signature also
+carries a fresh ACL, so repeat the revokes and the `service_role` grant against it.
+
+That leaves a window. Backend code calling the new signature against a database that has not run
+the migration yet gets PostgREST's `PGRST202`, which the callers here catch — so the failure is
+silent, and the symptom is empty data rather than an error. **Apply the migration before rolling
+out the code that depends on it.** Where an in-between state would be visible to a user,
+degrade explicitly: `_summary_rpc` in `Website/AdaptiveLearning/backend/main.py` retries against
+the old signature, but only where doing so cannot violate what the caller asked for.
+
 ### Do not "fix" the RLS helper functions
 
 `is_member_of_class` and `is_teacher_of_class`

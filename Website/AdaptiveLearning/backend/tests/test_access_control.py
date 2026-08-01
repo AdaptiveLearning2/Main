@@ -108,12 +108,16 @@ class _Single:
 
 
 class _FakeSupabase:
-    def __init__(self, tables, max_rows=None, rpc_results=None):
+    def __init__(self, tables, max_rows=None, rpc_results=None, rpc_raises=None):
         self._tables = tables
         # int applies to every table; dict is per table, which is what the
         # mixed-truncation case needs (the row cap is per table in reality).
         self._max_rows = max_rows
         self._rpc_results = rpc_results or {}
+        # (name, params) -> Exception or None. Lets a test model a database
+        # that has the function but not the signature being called, which is
+        # what a deploy ahead of its migration actually looks like.
+        self._rpc_raises = rpc_raises
         self.rpc_calls = []
         # Which tables were reached for, in order. Lets a test assert a query
         # was *not* made -- an empty result cannot distinguish "asked and got
@@ -127,15 +131,21 @@ class _FakeSupabase:
         return _Query(self._tables.get(name, []), max_rows=cap)
 
     def rpc(self, name, params=None):
-        self.rpc_calls.append((name, params or {}))
-        return _Rpc(self._rpc_results.get(name, []))
+        params = params or {}
+        self.rpc_calls.append((name, params))
+        exc = self._rpc_raises(name, params) if self._rpc_raises else None
+        return _Rpc(self._rpc_results.get(name, []), exc)
 
 
 class _Rpc:
-    def __init__(self, data):
+    def __init__(self, data, exc=None):
         self._data = data
+        self._exc = exc
 
     def execute(self):
+        # supabase-py surfaces PostgREST errors by raising from execute().
+        if self._exc:
+            raise self._exc
         return _Result(self._data)
 
 
@@ -397,6 +407,76 @@ def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
     assert cut, "days beyond the session cap must be flagged"
     for d in cut:
         assert d["sessions"] is None, "0 would read as a day with no sessions"
+
+
+# ── database behind the build ────────────────────────────────────────────
+
+_PGRST202 = "PGRST202: Could not find the function public.student_signal_summary" \
+            "(p_days, p_include_face, p_student_id) in the schema cache"
+
+
+def _rejects_include_face(_name, params):
+    """A database that has these functions but not the p_include_face form."""
+    return RuntimeError(_PGRST202) if "p_include_face" in params else None
+
+
+def test_signal_summary_survives_a_database_without_the_flag(monkeypatch):
+    """p_include_face arrived with its own migration. Between deploying this
+    code and applying it, every call carries an argument the database has no
+    signature for -- and an unhandled one blanks the dashboard silently for the
+    length of the window rather than erroring."""
+    fake = _FakeSupabase({}, rpc_results={
+        "student_signal_summary": [{"focus": 0.6, "stress": 0.3, "engagement": 0.5,
+                                    "face_attention": 0.8, "sessions": 2,
+                                    "cognitive_samples": 9, "face_samples": 4}],
+    }, rpc_raises=_rejects_include_face)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main._signal_summary("student-1")
+    assert out["focus"] == 0.6, "the retry must actually produce the summary"
+    assert out["face_included"] is True
+    # Tried the new signature first; only then fell back.
+    assert "p_include_face" in fake.rpc_calls[0][1]
+    assert "p_include_face" not in fake.rpc_calls[1][1]
+
+
+def test_signal_summaries_survive_a_database_without_the_flag(monkeypatch):
+    fake = _FakeSupabase({}, rpc_results={
+        "student_signal_summary_many": [{"student_id": "student-1", "focus": 0.4,
+                                         "sessions": 1, "cognitive_samples": 3}],
+    }, rpc_raises=_rejects_include_face)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main._signal_summaries(["student-1"])
+    assert out["student-1"]["focus"] == 0.4
+
+
+def test_no_fallback_when_the_opt_out_is_on(monkeypatch):
+    """The old signature has no way to be told to skip facial rows, so retrying
+    against it would read exactly what the caller asked us not to. A blank tile
+    is the right outcome; the UI already renders it as "Off"."""
+    fake = _FakeSupabase({}, rpc_results={
+        "student_signal_summary": [{"focus": 0.6, "face_attention": 0.8,
+                                    "face_samples": 4}],
+    }, rpc_raises=_rejects_include_face)
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main._signal_summary("student-1", include_face=False)
+    assert out["face_attention"] is None
+    assert out["focus"] is None
+    assert out["face_included"] is False
+    assert len(fake.rpc_calls) == 1, "a retry here would read the facial rows"
+
+
+def test_a_broken_rpc_is_not_retried(monkeypatch):
+    """Only a missing *signature* justifies the fallback. Retrying a function
+    that exists and failed would double every error's cost."""
+    fake = _FakeSupabase({}, rpc_raises=lambda *_a: RuntimeError("57014: statement timeout"))
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main._signal_summary("student-1")
+    assert out == {**main._EMPTY_SUMMARY, "face_included": True}
+    assert len(fake.rpc_calls) == 1
 
 
 def test_signal_summary_surfaces_sample_counts(monkeypatch):

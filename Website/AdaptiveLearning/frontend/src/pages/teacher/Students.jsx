@@ -5,6 +5,139 @@ import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingU
 import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
 import { readFacePref, writeFacePref } from '../../lib/facePref'
 
+// How far back the expanded row's signal averages look. Matches the weekly
+// report and the summary RPCs' p_days default, so a teacher and a parent
+// looking at the same student are describing the same week. Named rather than
+// inlined because the copy below quotes it.
+const SIGNAL_WINDOW_DAYS = 7
+// Stated on the signal tiles themselves rather than as a heading over the grid:
+// Total Accuracy and Current Streak sit in the same rows and come from
+// user_stats, which is lifetime. A blanket "last 7 days" above all of them would
+// be wrong about half its contents.
+const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
+const eegSub  = (n) => (n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`)
+const faceSub = (n, text) => (n ? `${text} · ${WINDOW_NOTE}` : `no face data · ${WINDOW_NOTE}`)
+
+// Hoisted out of the component: none of this reads component state, and
+// leaving it inside put a Date.now() call in the render path as far as the
+// react-hooks/purity rule is concerned -- it is only ever reached from an
+// event handler, but the rule cannot see that, and the honest fix is for the
+// data layer not to live in the render body at all.
+// Signals are stored as 0..1 ratios in cognitive_signals and face_signals,
+// which is the interpretation the original placeholders were waiting on. The
+// rest of the app scales them by 100 at render (Live.jsx's Gauge,
+// SignalPanel's pct), so these do too.
+//
+// Nulls are dropped before the conversion, not after: every signal column is
+// nullable, and Number(null) is 0 -- which Number.isFinite happily accepts,
+// pulling the average down and turning a student with no usable readings into
+// a confident "0%" rather than "no data".
+const avg = (rows, key) => {
+  const vals = rows
+    .map(r => r[key])
+    .filter(v => v !== null && v !== undefined)
+    .map(Number)
+    .filter(Number.isFinite)
+  if (!vals.length) return null
+  return vals.reduce((a, b) => a + b, 0) / vals.length
+}
+
+const asPct = (ratio) => (ratio === null ? null : `${Math.round(ratio * 100)}%`)
+
+// Function to retrieve student data from user_stats, cognitive_signals,
+// face_signals and topic performance in supabase.
+//
+// Read with the browser client, so RLS applies: the "cog: teacher read" and
+// "face: teacher read" policies scope these to students in a class the
+// signed-in teacher owns. A teacher outside that relationship gets zero rows
+// rather than an error.
+//
+// withFace=false skips the face_signals query outright rather than hiding the
+// result, matching what the weekly-report endpoint does for the same switch:
+// the point of the control is that the data is not read.
+//
+// Both signal reads are bounded by time as well as by row count. The row cap
+// alone left these averages describing an unbounded span -- the newest 200
+// readings, whenever they happened -- while the labels called it a window and
+// the panel sat beside a weekly-framed toggle. A student who stopped using
+// the app months ago showed months-old averages as current. Seven days to
+// match every other surface: the weekly report, and the summary RPCs' p_days
+// default. The row cap stays as the ceiling for a heavy week.
+async function getStudentStats(studentId, withFace = true)
+{
+   const since = new Date(Date.now() - SIGNAL_WINDOW_DAYS * 86400000).toISOString()
+   const [statsRes, signalsRes, faceRes, topicRes] = await Promise.all([
+    supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
+    supabase.from('cognitive_signals')
+      .select('focus, stress, engagement, ts')
+      .eq('user_id', studentId)
+      .gte('ts', since)
+      .order('ts', { ascending: false })
+      .limit(200),
+    withFace
+      ? supabase.from('face_signals')
+          .select('attention, emotion, ts')
+          .eq('user_id', studentId)
+          .gte('ts', since)
+          .order('ts', { ascending: false })
+          .limit(200)
+      : Promise.resolve({ data: [], error: null }),
+    supabase.from('user_math_performance')
+      .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
+      .eq('user_id', studentId)
+  ])
+
+  if (statsRes.error) console.error('Failed to load user_stats:', statsRes.error)
+  if (signalsRes.error) console.error('Failed to load cognitive_signals:', signalsRes.error)
+  if (faceRes.error) console.error('Failed to load face_signals:', faceRes.error)
+  if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
+
+  const userStats = statsRes.data
+  const signals = signalsRes.data || []
+  const faceSignals = faceRes.data || []
+
+  const totalAccuracy = userStats && userStats.total_questions > 0
+    ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
+    : null
+
+  const emotionCounts = {}
+  for (const f of faceSignals) {
+    if (f.emotion) emotionCounts[f.emotion] = (emotionCounts[f.emotion] || 0) + 1
+  }
+  const dominantEmotion = Object.entries(emotionCounts)
+    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+
+  return {
+    totalAccuracy,
+    totalQuestions: userStats?.total_questions ?? 0,
+    currentStreak: userStats?.current_streak ?? 0,
+    bestStreak: userStats?.best_streak ?? 0,
+    focusScore: asPct(avg(signals, 'focus')),
+    stressLevel: asPct(avg(signals, 'stress')),
+    engagement: asPct(avg(signals, 'engagement')),
+    faceAttention: asPct(avg(faceSignals, 'attention')),
+    dominantEmotion,
+    signalCount: signals.length,
+    faceSignalCount: faceSignals.length,
+    // Lets the panel say "Off" rather than "—": a switched-off control is a
+    // different statement from a student with no facial readings.
+    faceIncluded: withFace,
+    topics: (topicRes.data || []).map(row => {
+      const attempted = row.attempted_questions || 0
+      const correct = row.correct_questions || 0
+      return {
+        topicId: row.topic_id,
+        topicName: row.math_topics?.topic_name || 'unknown',
+        attempted,
+        correct,
+        // null, not 0: an untouched topic is not a topic scored zero, and
+        // the bar below renders the two differently.
+        accuracy: attempted ? Math.round((correct / attempted) * 100) : null,
+      }
+    })
+  }
+}
+
 export default function Students() {
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
@@ -142,109 +275,6 @@ export default function Students() {
     if (expandedId) refreshStats(expandedId, next)
   }
 
-  // Signals are stored as 0..1 ratios in cognitive_signals and face_signals,
-  // which is the interpretation the original placeholders were waiting on. The
-  // rest of the app scales them by 100 at render (Live.jsx's Gauge,
-  // SignalPanel's pct), so these do too.
-  //
-  // Nulls are dropped before the conversion, not after: every signal column is
-  // nullable, and Number(null) is 0 -- which Number.isFinite happily accepts,
-  // pulling the average down and turning a student with no usable readings into
-  // a confident "0%" rather than "no data".
-  const avg = (rows, key) => {
-    const vals = rows
-      .map(r => r[key])
-      .filter(v => v !== null && v !== undefined)
-      .map(Number)
-      .filter(Number.isFinite)
-    if (!vals.length) return null
-    return vals.reduce((a, b) => a + b, 0) / vals.length
-  }
-
-  const asPct = (ratio) => (ratio === null ? null : `${Math.round(ratio * 100)}%`)
-
-  // Function to retrieve student data from user_stats, cognitive_signals,
-  // face_signals and topic performance in supabase.
-  //
-  // Read with the browser client, so RLS applies: the "cog: teacher read" and
-  // "face: teacher read" policies scope these to students in a class the
-  // signed-in teacher owns. A teacher outside that relationship gets zero rows
-  // rather than an error.
-  //
-  // withFace=false skips the face_signals query outright rather than hiding the
-  // result, matching what the weekly-report endpoint does for the same switch:
-  // the point of the control is that the data is not read.
-  async function getStudentStats(studentId, withFace = true)
-  {
-     const [statsRes, signalsRes, faceRes, topicRes] = await Promise.all([
-      supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
-      supabase.from('cognitive_signals')
-        .select('focus, stress, engagement, ts')
-        .eq('user_id', studentId)
-        .order('ts', { ascending: false })
-        .limit(200),
-      withFace
-        ? supabase.from('face_signals')
-            .select('attention, emotion, ts')
-            .eq('user_id', studentId)
-            .order('ts', { ascending: false })
-            .limit(200)
-        : Promise.resolve({ data: [], error: null }),
-      supabase.from('user_math_performance')
-        .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
-        .eq('user_id', studentId)
-    ])
-
-    if (statsRes.error) console.error('Failed to load user_stats:', statsRes.error)
-    if (signalsRes.error) console.error('Failed to load cognitive_signals:', signalsRes.error)
-    if (faceRes.error) console.error('Failed to load face_signals:', faceRes.error)
-    if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
-
-    const userStats = statsRes.data
-    const signals = signalsRes.data || []
-    const faceSignals = faceRes.data || []
-
-    const totalAccuracy = userStats && userStats.total_questions > 0
-      ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
-      : null
-
-    const emotionCounts = {}
-    for (const f of faceSignals) {
-      if (f.emotion) emotionCounts[f.emotion] = (emotionCounts[f.emotion] || 0) + 1
-    }
-    const dominantEmotion = Object.entries(emotionCounts)
-      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-
-    return {
-      totalAccuracy,
-      totalQuestions: userStats?.total_questions ?? 0,
-      currentStreak: userStats?.current_streak ?? 0,
-      bestStreak: userStats?.best_streak ?? 0,
-      focusScore: asPct(avg(signals, 'focus')),
-      stressLevel: asPct(avg(signals, 'stress')),
-      engagement: asPct(avg(signals, 'engagement')),
-      faceAttention: asPct(avg(faceSignals, 'attention')),
-      dominantEmotion,
-      signalCount: signals.length,
-      faceSignalCount: faceSignals.length,
-      // Lets the panel say "Off" rather than "—": a switched-off control is a
-      // different statement from a student with no facial readings.
-      faceIncluded: withFace,
-      topics: (topicRes.data || []).map(row => {
-        const attempted = row.attempted_questions || 0
-        const correct = row.correct_questions || 0
-        return {
-          topicId: row.topic_id,
-          topicName: row.math_topics?.topic_name || 'unknown',
-          attempted,
-          correct,
-          // null, not 0: an untouched topic is not a topic scored zero, and
-          // the bar below renders the two differently.
-          accuracy: attempted ? Math.round((correct / attempted) * 100) : null,
-        }
-      })
-    }
-  }
   return (
     <div className="p-6 lg:p-8 pb-12">
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
@@ -352,14 +382,14 @@ export default function Students() {
                                 icon={<Flame size={16} />}
                                 label="Stress Level"
                                 value={stats.stressLevel ?? '—'}
-                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
+                                sub={eegSub(stats.signalCount)}
                                 color="rose"
                               />
                               <StatCard
                                 icon={<Target size={16} />}
                                 label="Focus Score"
                                 value={stats.focusScore ?? '—'}
-                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
+                                sub={eegSub(stats.signalCount)}
                                 color="emerald"
                               />
                               <StatCard
@@ -376,7 +406,7 @@ export default function Students() {
                                 icon={<Brain size={16} />}
                                 label="Engagement"
                                 value={stats.engagement ?? '—'}
-                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
+                                sub={eegSub(stats.signalCount)}
                                 color="indigo"
                               />
                               {/* "Off" rather than "—": the viewer switched
@@ -387,7 +417,7 @@ export default function Students() {
                                 label="Face Attention"
                                 value={stats.faceIncluded ? (stats.faceAttention ?? '—') : 'Off'}
                                 sub={stats.faceIncluded
-                                  ? (stats.faceSignalCount ? `${stats.faceSignalCount} face readings` : 'no face data')
+                                  ? faceSub(stats.faceSignalCount, `${stats.faceSignalCount} face readings`)
                                   : 'reporting off'}
                                 color="sky"
                               />
@@ -396,7 +426,7 @@ export default function Students() {
                                 label="Dominant Emotion"
                                 value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
                                 sub={stats.faceIncluded
-                                  ? (stats.faceSignalCount ? 'most frequent this window' : 'no face data')
+                                  ? faceSub(stats.faceSignalCount, 'most frequent')
                                   : 'reporting off'}
                                 color="violet"
                               />

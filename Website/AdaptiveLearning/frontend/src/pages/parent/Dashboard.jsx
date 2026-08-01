@@ -4,17 +4,14 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
-import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
+// pct is shared rather than redefined here: this page had a verbatim copy, and
+// a fix to one of them did not reach the other.
+import { FacialRecognitionToggle, pct } from '../../components/signals/SignalPanel'
 // Same stored preference as the child's full report and the teacher student
 // list. This page shows a Face Attention tile per child, so leaving it out
 // meant switching the control off on a report and navigating back here put
 // facial data straight back on screen.
 import { readFacePref, writeFacePref, faceIncluded } from '../../lib/facePref'
-
-function percent(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'N/A'
-  return `${Math.round(Number(value) * 100)}%`
-}
 
 // Exactly the values the tiles below can render -- deliberately not every
 // field the summary carries. engagement is absent because this page has no
@@ -37,7 +34,7 @@ export default function ParentDashboard() {
   useEffect(() => {
     let cancelled = false
     apiFetch(`/api/parent/children?include_face=${includeFace}`)
-      .then(c => { if (!cancelled) { setChildren(c || []); setLoading(false) } })
+      .then(c => { if (!cancelled) { setChildren(c || []); setError(false); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
     // Toggling twice quickly can land the responses out of order, and the
     // earlier one carries the facial data the switch is meant to exclude.
@@ -77,9 +74,21 @@ export default function ParentDashboard() {
 
       <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
 
+      {/* A failed refresh with rows already on screen is a banner, not a
+          takeover. This effect re-runs when the facial switch flips, so the
+          whole-page error used to replace a screenful of academic stats and
+          sessions -- none of which the switch has anything to do with -- over
+          one failed request. The rows that are up were scrubbed of facial data
+          when the switch moved, so what stays visible still honours it. */}
+      {error && children.length > 0 && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+          Couldn't refresh this page just now — showing the last data loaded.
+        </div>
+      )}
+
       {loading ? (
         <div className="space-y-4">{[1,2].map(i => <div key={i} className="h-48 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
-      ) : error ? (
+      ) : error && children.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-4xl mb-3">⚠️</p>
           <p className="text-gray-500 dark:text-gray-400">Couldn't load data. Make sure the backend is running.</p>
@@ -146,12 +155,12 @@ export default function ParentDashboard() {
                 {showSignals ? (
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     {[
-                      { icon: Brain,    label: 'Weekly Focus',   value: percent(signals.focus),          color: 'text-emerald-600' },
-                      { icon: Zap,      label: 'Weekly Stress',  value: percent(signals.stress),         color: 'text-rose-600' },
+                      { icon: Brain,    label: 'Weekly Focus',   value: pct(signals.focus),          color: 'text-emerald-600' },
+                      { icon: Zap,      label: 'Weekly Stress',  value: pct(signals.stress),         color: 'text-rose-600' },
                       // "Off" rather than "N/A": the viewer switched facial
                       // reporting off, which is a different statement from the
                       // camera having recorded nothing.
-                      { icon: Eye,      label: 'Face Attention', value: faceIncluded(signals) ? percent(signals.face_attention) : 'Off', color: 'text-sky-600' },
+                      { icon: Eye,      label: 'Face Attention', value: faceIncluded(signals) ? pct(signals.face_attention) : 'Off', color: 'text-sky-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">

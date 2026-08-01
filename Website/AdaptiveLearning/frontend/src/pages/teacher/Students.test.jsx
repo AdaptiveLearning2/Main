@@ -11,6 +11,10 @@ import Students from './Students'
 vi.mock('../../lib/supabase', () => {
   const fromCalls = []
   const results = {}
+  // Recorded per table so a test can assert the signal reads are bounded in
+  // time, not just in rows. Without this the builder accepts .gte() silently
+  // and dropping the window again would pass every assertion below.
+  const gteCalls = {}
   // Every builder method the page chains returns the builder; the terminal
   // calls resolve. The builder is itself a thenable because two of the four
   // queries are awaited straight off .eq() with no limit()/maybeSingle().
@@ -24,6 +28,7 @@ vi.mock('../../lib/supabase', () => {
     const q = {
       select: () => q,
       eq: () => q,
+      gte: (col, value) => { (gteCalls[table] ||= []).push([col, value]); return q },
       order: () => q,
       limit: () => settle(),
       maybeSingle: () => settle(),
@@ -38,10 +43,11 @@ vi.mock('../../lib/supabase', () => {
     },
     __fromCalls: fromCalls,
     __results: results,
+    __gteCalls: gteCalls,
   }
 })
 
-const { __fromCalls: fromCalls, __results: results } = await import('../../lib/supabase')
+const { __fromCalls: fromCalls, __results: results, __gteCalls: gteCalls } = await import('../../lib/supabase')
 
 const MEMBERSHIPS = {
   data: [{
@@ -75,6 +81,7 @@ async function expandAda() {
 beforeEach(() => {
   localStorage.clear()
   fromCalls.length = 0
+  for (const k of Object.keys(gteCalls)) delete gteCalls[k]
   setTables({
     cognitive: [
       { focus: 0.8, stress: 0.3, engagement: 0.5 },
@@ -92,6 +99,27 @@ describe('signal averages', () => {
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+  })
+
+  it('bounds both signal reads by time, not just by row count', async () => {
+    // The row cap alone left these averages describing an unbounded span -- the
+    // newest 200 readings, whenever they happened -- while the tiles called it a
+    // window and the panel sits beside a weekly-framed toggle. A student who
+    // stopped using the app months ago showed months-old averages as current.
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(gteCalls.cognitive_signals).toBeDefined())
+    await waitFor(() => expect(gteCalls.face_signals).toBeDefined())
+
+    for (const table of ['cognitive_signals', 'face_signals']) {
+      const [[col, value]] = gteCalls[table]
+      expect(col).toBe('ts')
+      // Seven days back, to match the weekly report and the summary RPCs'
+      // p_days default, so a teacher and a parent describe the same week.
+      const days = (Date.now() - Date.parse(value)) / 86400000
+      expect(days).toBeGreaterThan(6.9)
+      expect(days).toBeLessThan(7.1)
+    }
   })
 
   it('reports no data rather than a confident zero when every reading is null', async () => {

@@ -86,6 +86,11 @@ it('stops showing facial data as soon as the switch is off, not when the refetch
     highlights: { dominant_emotion: 'confused' },
     latest:     { cognitive: { focus: 0.41 }, face: { attention: 0.72, emotion: 'confused' } },
     daily:      [{ day: '2026-07-30', attention: 0.72, cognitive_retrieved: true, face_retrieved: true }],
+    // The sentence the backend actually builds when facial data was read, not
+    // emptyReport's "nothing recorded" one. Inheriting that carried no facial
+    // figure, so this fixture could not exhibit the summary staying on screen
+    // when every other facial field had been scrubbed -- which it did.
+    summary: 'This week, average focus was 41%, average stress was 22%, average face attention was 72%.',
   }
   let release
   const pending = new Promise(resolve => { release = resolve })
@@ -100,6 +105,7 @@ it('stops showing facial data as soon as the switch is off, not when the refetch
   renderReport()
   await screen.findByText('Recent Sessions')
   expect(screen.getAllByText('72%').length).toBeGreaterThan(0)
+  expect(screen.getByText(/average face attention was 72%/)).toBeInTheDocument()
 
   await userEvent.click(screen.getByRole('switch'))
 
@@ -109,6 +115,11 @@ it('stops showing facial data as soon as the switch is off, not when the refetch
   expect(screen.queryByText('confused')).not.toBeInTheDocument()
   // "Off", not "N/A": the measurement was excluded, not missing.
   expect(screen.getAllByText('Off').length).toBeGreaterThan(0)
+  // The summary sentence too. It is prose rather than a number, so nulling the
+  // fields around it left it as the last facial measurement on screen -- sitting
+  // directly above the note saying facial data was not included.
+  expect(screen.queryByText(/average face attention was 72%/)).not.toBeInTheDocument()
+  expect(screen.getByText(/Facial recognition data was not included/)).toBeInTheDocument()
 
   release({ ...emptyReport, face_included: false })
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(2))

@@ -147,9 +147,21 @@ export default function StudentProgressReport({
     // The per-day face_retrieved flags go to null, not false: null is "not
     // requested", and leaving a cap-driven false behind would go on blaming a
     // retrieval gap on facial data this report no longer shows.
+    //
+    // summary goes too, and it is the one field here that is not a number. The
+    // backend joins its clauses into a finished sentence, so a report that read
+    // facial data carries "average face attention was 72%" inside prose there is
+    // no structure left to edit -- and it renders verbatim. Nulling the numeric
+    // fields around it left that sentence up as the last facial measurement on
+    // screen, directly above the "facial recognition data was not included"
+    // note, each contradicting the other. The panel falls back to "No summary
+    // available yet." for the round-trip, which costs the still-valid EEG
+    // clauses -- the same trade the tiles above already make, and the
+    // replacement sentence is already in flight.
     setSignalReport(prev => prev && {
       ...prev,
       face_included: false,
+      summary: null,
       averages:   { ...(prev.averages   || {}), face_attention: null },
       highlights: { ...(prev.highlights || {}), dominant_emotion: null },
       latest:     { ...(prev.latest     || {}), face: null },

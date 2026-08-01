@@ -9,18 +9,36 @@ const FACE_OFF = 'Off'
 // assume (Live.jsx's Gauge and Dashboard.jsx both scale by 100 at render).
 // Rendering them without scaling printed focus 0.72 as "1%", i.e. every metric
 // on this panel came out ~100x too small.
-function pct(ratio) {
-  if (ratio === null || ratio === undefined || Number.isNaN(Number(ratio))) return 'N/A'
-  return `${Math.round(Number(ratio) * 100)}%`
+//
+// A measurement, or null for anything that is not one. Guarding with
+// Number.isNaN(Number(v)) was not enough, in two directions: Number('') and
+// Number('  ') are both 0, so an empty value rendered as a confident "0%"
+// rather than "N/A", and Number.isNaN(Infinity) is false, so a non-finite
+// number passed straight through to Math.round. Converting first and asking
+// Number.isFinite covers both -- the same reasoning as the null-dropping in
+// Students.jsx, where Number(null) === 0 caused the mirror-image bug.
+function ratio(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+// Exported: the parent dashboard renders the same 0..1 ratios in its own tiles
+// and had a verbatim copy of this, which is how it kept the weakness above
+// after this one was fixed. One definition, so the surfaces cannot disagree
+// about what an unrenderable value looks like.
+export function pct(value) {
+  const n = ratio(value)
+  return n === null ? 'N/A' : `${Math.round(n * 100)}%`
 }
 
 // Same scaling for chart series. Nulls must stay null rather than becoming 0:
 // a day with no retrievable data should leave a gap, not draw a line at the
 // floor claiming zero focus.
-function toPct(ratio) {
-  return ratio === null || ratio === undefined || Number.isNaN(Number(ratio))
-    ? null
-    : Number(ratio) * 100
+function toPct(value) {
+  const n = ratio(value)
+  return n === null ? null : n * 100
 }
 
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {

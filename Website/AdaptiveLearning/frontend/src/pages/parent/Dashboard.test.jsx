@@ -235,3 +235,31 @@ it('says facial signals were not read when there is nothing else to show', async
   // The absence it must not report is the one it never measured.
   expect(screen.queryByText(/facial-recognition signal data yet/i)).not.toBeInTheDocument()
 })
+
+it('keeps the rows up when a toggle refresh fails, rather than blanking the page', async () => {
+  // The children effect re-runs when the facial switch flips, so a failed
+  // refetch used to replace a screenful of academic stats and sessions -- none
+  // of which the switch has anything to do with -- with the whole-page error.
+  renderDashboard()
+  await screen.findByText('Ada')
+
+  apiFetch.mockImplementation(() => Promise.reject(new Error('backend down')))
+  await userEvent.click(screen.getByRole('switch'))
+
+  await screen.findByText(/couldn't refresh this page just now/i)
+  // The row survives, and the takeover error does not appear.
+  expect(screen.getByText('Ada')).toBeInTheDocument()
+  expect(screen.queryByText(/make sure the backend is running/i)).not.toBeInTheDocument()
+  // What is still on screen honours the switch: the scrub ran when it moved.
+  expect(tile('Face Attention').getByText('Off')).toBeInTheDocument()
+})
+
+it('still takes over the page when the very first load fails', async () => {
+  // With nothing on screen there is nothing to preserve, and a bare banner over
+  // an empty page would read as "no children linked".
+  apiFetch.mockImplementation(() => Promise.reject(new Error('backend down')))
+  renderDashboard()
+
+  await screen.findByText(/make sure the backend is running/i)
+  expect(screen.queryByText(/couldn't refresh this page just now/i)).not.toBeInTheDocument()
+})

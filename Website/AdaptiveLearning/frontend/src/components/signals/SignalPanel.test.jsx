@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveSignalSummary, WeeklySignalReport, FacialRecognitionToggle, StrategyPanel } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, FacialRecognitionToggle, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
 // face_signals store. Rendering them unscaled printed focus 0.72 as "1%", so
@@ -229,5 +229,26 @@ describe('StrategyPanel', () => {
   it('invites generation before anything has been produced', () => {
     render(<StrategyPanel onGenerate={() => {}} />)
     expect(screen.getByText(/no strategies generated yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('pct', () => {
+  // Shared with the parent dashboard, which had a verbatim copy -- so a fix to
+  // one of them did not reach the other. Both guarded with
+  // Number.isNaN(Number(v)), which lets two kinds of non-measurement through.
+  it('scales a ratio to a whole percent', () => {
+    expect(pct(0.72)).toBe('72%')
+    expect(pct(0)).toBe('0%')       // a real zero reading still renders
+  })
+
+  it('reports an empty value as N/A rather than a confident zero', () => {
+    // Number('') and Number('  ') are both 0, so these rendered as "0%" --
+    // a measurement of a struggling student, out of no measurement at all.
+    for (const v of ['', '   ', null, undefined]) expect(pct(v)).toBe('N/A')
+  })
+
+  it('reports a non-finite number as N/A', () => {
+    // Number.isNaN(Infinity) is false, so this reached Math.round.
+    for (const v of [Infinity, -Infinity, NaN, 'abc']) expect(pct(v)).toBe('N/A')
   })
 })

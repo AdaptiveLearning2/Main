@@ -124,6 +124,67 @@ it('does not claim facial data is absent when it was never requested', async () 
   expect(screen.queryByText(/facial-recognition signal data yet/i)).not.toBeInTheDocument()
 })
 
+describe('blanking on toggle', () => {
+  // The switch governs what gets read, but a viewer who has just asked to
+  // exclude facial data should not go on looking at it for the round-trip.
+  function deferred() {
+    let resolve
+    const promise = new Promise(r => { resolve = r })
+    return { promise, resolve }
+  }
+
+  it('clears the facial tile before the refetch resolves', async () => {
+    renderDashboard()
+    await screen.findByText('Ada')
+    expect(tile('Face Attention').getByText('85%')).toBeInTheDocument()
+
+    const pending = deferred()
+    apiFetch.mockImplementation(() => pending.promise)
+    await userEvent.click(screen.getByRole('switch'))
+
+    // Nothing has come back from the server yet.
+    expect(tile('Face Attention').getByText('Off')).toBeInTheDocument()
+    pending.resolve(withoutFace)
+    await waitFor(() => expect(urls()).toHaveLength(2))
+    expect(tile('Face Attention').getByText('Off')).toBeInTheDocument()
+  })
+
+  it('leaves the EEG tiles up while the refetch is in flight', async () => {
+    // Only the facial values are excluded; blanking the rest would read as the
+    // whole report having been thrown away.
+    renderDashboard()
+    await screen.findByText('Ada')
+
+    apiFetch.mockImplementation(() => deferred().promise)
+    await userEvent.click(screen.getByRole('switch'))
+
+    expect(tile('Weekly Focus').getByText('72%')).toBeInTheDocument()
+    expect(tile('Weekly Stress').getByText('31%')).toBeInTheDocument()
+    expect(tile('AI Sessions').getByText('3')).toBeInTheDocument()
+  })
+
+  it('does not report the value as missing while it is on its way back', async () => {
+    // Switching back on, "N/A" would say the camera recorded nothing -- the
+    // exact confusion face_included exists to prevent. The payload in hand
+    // genuinely holds no facial data, so it stays "Off" until one that does
+    // arrives.
+    localStorage.setItem('signal_include_face', 'false')
+    renderDashboard()
+    await screen.findByText('Ada')
+    expect(tile('Face Attention').getByText('Off')).toBeInTheDocument()
+
+    const pending = deferred()
+    apiFetch.mockImplementation(() => pending.promise)
+    await userEvent.click(screen.getByRole('switch'))
+
+    expect(tile('Face Attention').getByText('Off')).toBeInTheDocument()
+    expect(tile('Face Attention').queryByText('N/A')).not.toBeInTheDocument()
+
+    pending.resolve(withFace)
+    await waitFor(() => expect(tile('Face Attention').getByText('85%')).toBeInTheDocument())
+  })
+})
+
 it('still renders facial data for payloads predating the flag', async () => {
   apiFetch.mockImplementation(() => {
     const { face_included, ...summary } = withFace[0].signal_summary  // eslint-disable-line no-unused-vars

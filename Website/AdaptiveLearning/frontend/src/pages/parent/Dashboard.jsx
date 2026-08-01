@@ -41,6 +41,25 @@ export default function ParentDashboard() {
   function handleIncludeFaceChange(next) {
     setIncludeFace(next)
     writeFacePref(next)
+    // Drop the facial values from what is already on screen rather than leaving
+    // them up for the round-trip. The switch governs what gets read, but a
+    // viewer who has just asked to exclude facial data should not go on looking
+    // at it while the request is in flight.
+    //
+    // face_included goes false in both directions, including when the switch is
+    // being turned back on, because the flag describes the payload in hand and
+    // this one no longer carries facial data. The tile therefore reads "Off"
+    // until the response lands, rather than "N/A" -- which would report a
+    // measurement as missing when it is simply on its way.
+    setChildren(prev => prev.map(child => ({
+      ...child,
+      signal_summary: {
+        ...child.signal_summary,
+        face_attention: null,
+        face_samples: 0,
+        face_included: false,
+      },
+    })))
   }
 
   return (

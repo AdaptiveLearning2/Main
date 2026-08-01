@@ -1,5 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
-import { LiveSignalSummary, WeeklySignalReport } from './SignalPanel'
+import userEvent from '@testing-library/user-event'
+import { LiveSignalSummary, WeeklySignalReport, FacialRecognitionToggle, StrategyPanel } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
 // face_signals store. Rendering them unscaled printed focus 0.72 as "1%", so
@@ -92,5 +93,103 @@ describe('LiveSignalSummary', () => {
     render(<LiveSignalSummary report={{}} />)
     expect(metric('Focus').getByText('N/A')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('No data')).toBeInTheDocument()
+  })
+})
+
+// The backend nulls every face field when the viewer opts out, which on its
+// own is indistinguishable from "the camera recorded nothing". face_included
+// carries the difference, and these panels have to show it as one -- "N/A"
+// where a parent switched facial reporting off reports a missing measurement
+// instead of a respected choice.
+describe('facial reporting switched off', () => {
+  const faceOff = { ...report, face_included: false }
+
+  it('labels the weekly face tiles as off rather than missing', () => {
+    render(<WeeklySignalReport report={faceOff} />)
+    expect(metric('Face Attention').getByText('Off')).toBeInTheDocument()
+    expect(metric('Dominant Emotion').getByText('Reporting off')).toBeInTheDocument()
+    expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
+  })
+
+  it('labels the live face tiles as off rather than missing', () => {
+    render(<LiveSignalSummary report={faceOff} />)
+    expect(metric('Face Attention').getByText('Off')).toBeInTheDocument()
+    expect(metric('Facial Emotion').getByText('Reporting off')).toBeInTheDocument()
+    expect(metric('Identity Confidence').getByText('Reporting off')).toBeInTheDocument()
+  })
+
+  it('leaves the EEG metrics untouched', () => {
+    render(<WeeklySignalReport report={faceOff} />)
+    expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
+    expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
+  })
+
+  it('still reports face data when the flag is absent', () => {
+    // Payloads predating the flag must keep rendering facial data.
+    const { face_included, ...legacy } = faceOff   // eslint-disable-line no-unused-vars
+    render(<WeeklySignalReport report={legacy} />)
+    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
+  })
+
+  it('does not count the opt-out as data it failed to retrieve', () => {
+    // face_retrieved is null (not requested), not false (the cap stopped us).
+    const truncated = {
+      ...faceOff,
+      truncated: true,
+      daily: [{ date: '2026-07-20', focus: 0.7, stress: 0.3, attention: null, cognitive_retrieved: true, face_retrieved: null }],
+    }
+    render(<WeeklySignalReport report={truncated} />)
+    expect(screen.queryByText(/could not be retrieved/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('FacialRecognitionToggle', () => {
+  it('exposes its state to assistive technology', () => {
+    const { rerender } = render(<FacialRecognitionToggle enabled onChange={() => {}} />)
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+    rerender(<FacialRecognitionToggle enabled={false} onChange={() => {}} />)
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('reports the flipped value to its caller', async () => {
+    const onChange = vi.fn()
+    render(<FacialRecognitionToggle enabled onChange={onChange} />)
+    await userEvent.click(screen.getByRole('switch'))
+    expect(onChange).toHaveBeenCalledWith(false)
+  })
+
+  it('does not claim to control the camera', () => {
+    // The switch decides what the report reads, and promising more than that
+    // is a guarantee it cannot keep.
+    render(<FacialRecognitionToggle enabled onChange={() => {}} />)
+    expect(screen.getByText(/does not switch a camera on or off/i)).toBeInTheDocument()
+  })
+})
+
+describe('StrategyPanel', () => {
+  const strategies = ['Review fractions for ten minutes', 'Take a short break between sets']
+
+  it('numbers the strategies and names their source', () => {
+    // The source distinguishes the fixed rule set from model output that
+    // passed the backend's safety checks -- worth seeing before acting on it.
+    render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
+    expect(screen.getByText(strategies[0])).toBeInTheDocument()
+    expect(screen.getByText('Source: rule-based')).toBeInTheDocument()
+  })
+
+  it('shows an error instead of stale advice when generation fails', () => {
+    render(<StrategyPanel strategies={strategies} error="Backend unavailable" onGenerate={() => {}} />)
+    expect(screen.getByText('Backend unavailable')).toBeInTheDocument()
+    expect(screen.queryByText(strategies[0])).not.toBeInTheDocument()
+  })
+
+  it('disables the button while generating', () => {
+    render(<StrategyPanel loading onGenerate={() => {}} />)
+    expect(screen.getByRole('button')).toBeDisabled()
+  })
+
+  it('invites generation before anything has been produced', () => {
+    render(<StrategyPanel onGenerate={() => {}} />)
+    expect(screen.getByText(/no strategies generated yet/i)).toBeInTheDocument()
   })
 })

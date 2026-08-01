@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
-import { Users, Search, ChevronDown, Flame, Brain, Target, TrendingUp, Zap} from 'lucide-react'
+import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap} from 'lucide-react'
 
 export default function Students() {
   const [students, setStudents] = useState([])
@@ -86,44 +86,91 @@ export default function Students() {
     setStatsLoading(prev => ({ ...prev, [studentId]: false }))
   }
 
-  //Function to retrieve student data from user_stats and cognitive_signals tables in supabase
+  // Signals are stored as 0..1 ratios in cognitive_signals and face_signals,
+  // which is the interpretation the original placeholders were waiting on. The
+  // rest of the app scales them by 100 at render (Live.jsx's Gauge,
+  // SignalPanel's pct), so these do too.
+  const avg = (rows, key) => {
+    const vals = rows
+      .map(r => Number(r[key]))
+      .filter(v => Number.isFinite(v))
+    if (!vals.length) return null
+    return vals.reduce((a, b) => a + b, 0) / vals.length
+  }
+
+  const asPct = (ratio) => (ratio === null ? null : `${Math.round(ratio * 100)}%`)
+
+  // Function to retrieve student data from user_stats, cognitive_signals,
+  // face_signals and topic performance in supabase.
+  //
+  // Read with the browser client, so RLS applies: the "cog: teacher read" and
+  // "face: teacher read" policies scope these to students in a class the
+  // signed-in teacher owns. A teacher outside that relationship gets zero rows
+  // rather than an error.
   async function getStudentStats(studentId)
   {
-     const [statsRes, signalsRes] = await Promise.all([
+     const [statsRes, signalsRes, faceRes, topicRes] = await Promise.all([
       supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
       supabase.from('cognitive_signals')
         .select('focus, stress, engagement, ts')
         .eq('user_id', studentId)
         .order('ts', { ascending: false })
-        .limit(200)
+        .limit(200),
+      supabase.from('face_signals')
+        .select('attention, emotion, ts')
+        .eq('user_id', studentId)
+        .order('ts', { ascending: false })
+        .limit(200),
+      supabase.from('user_math_performance')
+        .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
+        .eq('user_id', studentId)
     ])
 
     if (statsRes.error) console.error('Failed to load user_stats:', statsRes.error)
     if (signalsRes.error) console.error('Failed to load cognitive_signals:', signalsRes.error)
+    if (faceRes.error) console.error('Failed to load face_signals:', faceRes.error)
+    if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
 
     const userStats = statsRes.data
     const signals = signalsRes.data || []
+    const faceSignals = faceRes.data || []
 
     const totalAccuracy = userStats && userStats.total_questions > 0
       ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
       : null
 
-    const avg = (key) => {
-      const vals = signals.map(s => s[key]).filter(v => v !== null && v !== undefined)
-      if (!vals.length) return null
-      return vals.reduce((a, b) => a + b, 0) / vals.length
+    const emotionCounts = {}
+    for (const f of faceSignals) {
+      if (f.emotion) emotionCounts[f.emotion] = (emotionCounts[f.emotion] || 0) + 1
     }
-    
+    const dominantEmotion = Object.entries(emotionCounts)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
 
     return {
       totalAccuracy,
       totalQuestions: userStats?.total_questions ?? 0,
       currentStreak: userStats?.current_streak ?? 0,
       bestStreak: userStats?.best_streak ?? 0,
-      focusScore: 'Focus Placeholder', //Place Holders for Focus, Stress, and Engagement as I am not sure how the data in the cognitive_signals table is meant to be interpreted 
-      stressLevel: 'Stress Placeholder',
-      engagement: 'Engagement Placeholder',
-      signalCount: signals.length
+      focusScore: asPct(avg(signals, 'focus')),
+      stressLevel: asPct(avg(signals, 'stress')),
+      engagement: asPct(avg(signals, 'engagement')),
+      faceAttention: asPct(avg(faceSignals, 'attention')),
+      dominantEmotion,
+      signalCount: signals.length,
+      faceSignalCount: faceSignals.length,
+      topics: (topicRes.data || []).map(row => {
+        const attempted = row.attempted_questions || 0
+        const correct = row.correct_questions || 0
+        return {
+          topicId: row.topic_id,
+          topicName: row.math_topics?.topic_name || 'unknown',
+          attempted,
+          correct,
+          // null, not 0: an untouched topic is not a topic scored zero, and
+          // the bar below renders the two differently.
+          accuracy: attempted ? Math.round((correct / attempted) * 100) : null,
+        }
+      })
     }
   }
   return (
@@ -228,15 +275,15 @@ export default function Students() {
                               <StatCard
                                 icon={<Flame size={16} />}
                                 label="Stress Level"
-                                value={stats.stressLevel !== null ? `${stats.stressLevel}` : '—'}
-                                sub={stats.signalCount ? `${stats.signalCount} readings` : 'no data yet'}
+                                value={stats.stressLevel ?? '—'}
+                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
                                 color="rose"
                               />
                               <StatCard
                                 icon={<Target size={16} />}
                                 label="Focus Score"
-                                value={stats.focusScore !== null ? `${stats.focusScore}` : '—'}
-                                sub={stats.signalCount ? `${stats.signalCount} readings` : 'no data yet'}
+                                value={stats.focusScore ?? '—'}
+                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
                                 color="emerald"
                               />
                               <StatCard
@@ -247,7 +294,56 @@ export default function Students() {
                                 color="amber"
                               />
                             </div>
-                            {stats.totalQuestions === 0 && stats.signalCount === 0 && (
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+                              <StatCard
+                                icon={<Brain size={16} />}
+                                label="Engagement"
+                                value={stats.engagement ?? '—'}
+                                sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
+                                color="indigo"
+                              />
+                              <StatCard
+                                icon={<Eye size={16} />}
+                                label="Face Attention"
+                                value={stats.faceAttention ?? '—'}
+                                sub={stats.faceSignalCount ? `${stats.faceSignalCount} face readings` : 'no face data'}
+                                color="sky"
+                              />
+                              <StatCard
+                                icon={<Smile size={16} />}
+                                label="Dominant Emotion"
+                                value={stats.dominantEmotion ?? '—'}
+                                sub={stats.faceSignalCount ? 'most frequent this window' : 'no face data'}
+                                color="violet"
+                              />
+                            </div>
+
+                            {stats.topics.length > 0 && (
+                              <div className="mt-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4">
+                                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Per-topic accuracy</p>
+                                <div className="grid sm:grid-cols-2 gap-3">
+                                  {stats.topics.map(t => (
+                                    <div key={t.topicId ?? t.topicName}>
+                                      <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 capitalize">
+                                          {t.topicName.replaceAll('_', ' ')}
+                                        </span>
+                                        <span className="text-xs font-black text-gray-900 dark:text-white">
+                                          {t.accuracy === null ? 'not attempted' : `${t.accuracy}%`}
+                                        </span>
+                                      </div>
+                                      <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                                        <div className="h-full rounded-full bg-violet-500" style={{ width: `${t.accuracy ?? 0}%` }} />
+                                      </div>
+                                      <p className="text-[10px] text-gray-400 mt-0.5">{t.correct}/{t.attempted} correct</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {stats.totalQuestions === 0 && stats.signalCount === 0 && stats.faceSignalCount === 0 && (
                               <p className="text-xs text-gray-400 mt-3">
                                 This student hasn't completed any sessions yet.
                               </p>
@@ -273,6 +369,8 @@ function StatCard({ icon, label, value, sub, color }) {
     rose:   'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300',
     emerald:'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300',
     amber:  'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300',
+    sky:    'bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300',
+    violet: 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300',
   }
   return (
     <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-3">

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os, requests, random, string, threading
+import os, re, requests, random, string, threading
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
@@ -176,11 +176,17 @@ def _signal_summaries(student_ids: list[str], days: int = 7) -> dict[str, dict]:
     return {str(r.get("student_id")): _shape_summary(r) for r in rows if r.get("student_id")}
 
 
-def _weekly_signal_report(student_id: str, days: int = 7):
+def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = True):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
     Returns averages, highlights and per-day buckets. Callers must have already
     established that the requester may see this student.
+
+    include_face=False skips the face_signals query outright rather than
+    fetching and discarding: the point of the opt-out is that facial data isn't
+    read at all, and it also drops the heaviest of the three queries. Every
+    face-derived field then comes back None, and `face_included` tells the
+    caller that means "not requested" rather than "nothing recorded".
     """
     since = _iso_days_ago(days)
 
@@ -209,7 +215,7 @@ def _weekly_signal_report(student_id: str, days: int = 7):
             return [], False
 
     cog, cog_cut = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP)
+    face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face else ([], False)
     sessions, _ = _fetch("sessions", "started_at", 100)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
@@ -238,8 +244,12 @@ def _weekly_signal_report(student_id: str, days: int = 7):
         # "We could not retrieve this day", judged per table.
         cog_missing = bool(cog_cut and cog_oldest_day and day < cog_oldest_day)
         face_missing = bool(face_cut and face_oldest_day and day < face_oldest_day)
-        if cog_missing and face_missing:
-            continue  # nothing retrievable for this day at all
+        # Skip only when nothing we actually asked for could be retrieved. With
+        # face reporting off there is no face request to fail, so the day hinges
+        # on cognitive alone -- otherwise an always-False face_missing would
+        # keep days that hold no retrievable data at all.
+        if cog_missing and (face_missing or not include_face):
+            continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
         daily.append({
@@ -251,8 +261,11 @@ def _weekly_signal_report(student_id: str, days: int = 7):
             "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
             # False means "the cap stopped us fetching this", which a null
             # metric alone cannot distinguish from "nothing was recorded".
+            # None means "not requested" -- face reporting is off, so there was
+            # no retrieval to succeed or fail, and the consumers that count
+            # `=== false` must not treat the opt-out as a retrieval failure.
             "cognitive_retrieved": not cog_missing,
-            "face_retrieved": not face_missing,
+            "face_retrieved": (not face_missing) if include_face else None,
         })
 
     emotion_counts: dict[str, int] = {}
@@ -278,14 +291,23 @@ def _weekly_signal_report(student_id: str, days: int = 7):
         bits.append(f"average stress was {_as_pct(avg_stress)}%")
     if avg_attention is not None:
         bits.append(f"average face attention was {_as_pct(avg_attention)}%")
-    summary = ("This week, " + ", ".join(bits) + ".") if bits else \
-        "No EEG or facial recognition samples were recorded this week."
+    if bits:
+        summary = "This week, " + ", ".join(bits) + "."
+    elif include_face:
+        summary = "No EEG or facial recognition samples were recorded this week."
+    else:
+        # Naming facial recognition here would report an absence that was never
+        # measured, since the caller opted out of reading it.
+        summary = "No EEG samples were recorded this week."
 
     return {
         "student_id": student_id,
         "days": days,
         "since": since,
         "truncated": truncated,
+        # Distinguishes "facial reporting is switched off for this view" from
+        # "the camera recorded nothing". Both leave every face field null.
+        "face_included": include_face,
         "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
         "averages": {
             "focus": avg_focus,
@@ -602,18 +624,21 @@ def student_performance(student_id: str, request: Request):
 
 
 @app.get("/api/students/{student_id}/weekly-report")
-def student_weekly_report(student_id: str, request: Request, days: int = 7):
+def student_weekly_report(student_id: str, request: Request, days: int = 7, include_face: bool = True):
     """Aggregated EEG/facial signals for a student over the last `days`.
 
     Role-neutral path: teachers and parents both read this for the students
     they're entitled to see, so namespacing it under /api/teacher/ would be
     misleading. Access is decided by relationship, not by role name.
+
+    include_face=false omits facial-recognition data from the report entirely;
+    see _weekly_signal_report.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
     return {
         "student_name": p.get("display_name") or p.get("email") or "Student",
-        **_weekly_signal_report(student_id, max(1, min(days, 30))),
+        **_weekly_signal_report(student_id, max(1, min(days, 30)), include_face=include_face),
     }
 
 
@@ -621,6 +646,243 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7):
 def student_topic_breakdown(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
     return _topic_breakdown(student_id)
+
+
+# ─── at-home learning strategies ─────────────────────────────────────────
+
+# The model pass is opt-in. Off, the endpoint answers from the deterministic
+# rules below and never opens a socket -- which is what CI, and any deployment
+# without a local Ollama, should do. Enabling it changes only whether the
+# rule-based answer gets a chance to be replaced.
+STRATEGY_LLM_ENABLED = os.getenv("STRATEGY_LLM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
+
+_STRATEGY_COUNT = 5
+_STRATEGY_MAX_CHARS = 320
+
+# Clinical vocabulary that must not reach a parent from this endpoint. These
+# are learning-state indicators, not measurements of health, and a local model
+# asked for study tips will still occasionally volunteer a diagnosis. Output
+# containing any of these is discarded wholesale rather than edited: a sentence
+# that needed a word removed to be safe is not a sentence to hand a parent.
+_CLINICAL_TERMS = re.compile(
+    r"\b(diagnos\w*|disorder\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
+    r"depress(?:ion|ive)|medicat\w*|prescri\w*|psychiatr\w*|psycholog(?:ist|ical)|"
+    r"clinical\w*|symptom\w*|disease\w*|syndrome\w*|patient\w*|"
+    r"therap(?:y|ist|ies)|treatment\w*|neurolog\w*|cognitive impairment)\b",
+    re.IGNORECASE,
+)
+
+# Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
+_LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
+
+
+def _weakest_topic(topics: list[dict]):
+    """Lowest-accuracy topic the student has actually attempted.
+
+    Topics with no attempts are excluded: _topic_breakdown reports them at 0%,
+    which would otherwise always win and send a parent to revise a topic their
+    child has never been given.
+    """
+    attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
+    if not attempted:
+        return None
+    return min(attempted, key=lambda t: t.get("accuracy") or 0)
+
+
+def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
+    """Deterministic at-home strategies derived from the weekly report.
+
+    Always computed, and always what the endpoint falls back to. Thresholds are
+    on the 0..1 ratios the signal tables store.
+    """
+    averages = report.get("averages") or {}
+    strategies = []
+
+    weakest = _weakest_topic(topics)
+    if weakest:
+        label = str(weakest.get("topic_name") or "the weakest topic").replace("_", " ")
+        strategies.append(
+            f"Spend 10-15 minutes on {label} before new material — it is currently "
+            f"the lowest-scoring topic at {weakest.get('accuracy')}%."
+        )
+    else:
+        strategies.append(
+            "Start with a short review and ask your child to explain one solved "
+            "problem out loud, which shows where their understanding actually stops."
+        )
+
+    stress = averages.get("stress")
+    if stress is not None and float(stress) >= 0.65:
+        strategies.append(
+            "Break practice into shorter blocks with a two-minute pause between "
+            "them — stress indicators ran high this week."
+        )
+    else:
+        strategies.append(
+            "Keep practice to 15-20 minute blocks, each followed by quick feedback "
+            "on what went well."
+        )
+
+    focus = averages.get("focus")
+    if focus is not None and float(focus) < 0.45:
+        strategies.append(
+            "Clear the workspace of phones and second screens, and set one small "
+            "goal per block — focus indicators were low this week."
+        )
+    else:
+        strategies.append(
+            "Keep the study setup and time of day consistent, since the current "
+            "routine is holding up."
+        )
+
+    attention = averages.get("face_attention")
+    if report.get("face_included") and attention is not None and float(attention) < 0.5:
+        strategies.append(
+            "Try working problems on paper together or tying them to a real "
+            "situation when attention drifts."
+        )
+
+    strategies.append(
+        "Close each session by asking which problem felt hardest and what helped "
+        "most — it makes the next session easier to plan."
+    )
+    return strategies[:_STRATEGY_COUNT]
+
+
+def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> str:
+    """Prompt text built from aggregates only.
+
+    Deliberately excludes the student id, name, and the raw `latest` rows the
+    report carries: the model needs the shape of the week, not a record that
+    identifies a child.
+    """
+    averages = report.get("averages") or {}
+
+    def _pct(v):
+        return "unavailable" if v is None else f"{round(float(v) * 100)}%"
+
+    weakest = _weakest_topic(topics)
+    topic_line = (
+        f"{str(weakest.get('topic_name')).replace('_', ' ')} at {weakest.get('accuracy')}%"
+        if weakest else "no attempted topics yet"
+    )
+    face_line = (
+        f"average facial attention {_pct(averages.get('face_attention'))}"
+        if report.get("face_included") else "facial reporting is switched off"
+    )
+    return (
+        "You are helping a parent support their child's maths practice at home.\n"
+        "Use only the weekly summary below. These are classroom learning "
+        "indicators, not medical measurements — do not diagnose, do not name any "
+        "condition, and do not give medical advice.\n"
+        f"Return exactly {_STRATEGY_COUNT} short, practical, at-home strategies as "
+        "a numbered list. One sentence each, no preamble.\n\n"
+        f"Weekly summary (last {report.get('days', 7)} days):\n"
+        f"- average focus {_pct(averages.get('focus'))}\n"
+        f"- average stress {_pct(averages.get('stress'))}\n"
+        f"- average engagement {_pct(averages.get('engagement'))}\n"
+        f"- {face_line}\n"
+        f"- weakest attempted topic: {topic_line}\n"
+        f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
+        "For reference, here is a safe baseline answer:\n"
+        + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
+    )
+
+
+def _parse_strategy_lines(raw: str) -> list[str]:
+    lines = []
+    for line in (raw or "").splitlines():
+        cleaned = _LIST_MARKER.sub("", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _validated_strategies(raw: str) -> list[str] | None:
+    """Model output, or None if it fails any check.
+
+    Returning None means the caller keeps the deterministic list. There is no
+    partial acceptance: a reply that breaks one rule has shown it is not
+    following the prompt, and the rest of it has not earned more trust.
+    """
+    lines = _parse_strategy_lines(raw)
+    if len(lines) < 3:
+        return None
+    if any(len(line) > _STRATEGY_MAX_CHARS for line in lines):
+        return None
+    if any(_CLINICAL_TERMS.search(line) for line in lines):
+        return None
+    return lines[:_STRATEGY_COUNT]
+
+
+def _llm_strategies(prompt: str) -> list[str] | None:
+    """One local-model attempt, or None on any failure.
+
+    ollama is imported here rather than at module scope so this module stays
+    importable — and the endpoint stays usable on the rule-based path — in an
+    environment where the package or the server is absent.
+    """
+    try:
+        from ollama import generate
+        resp = generate(
+            model=STRATEGY_LLM_MODEL,
+            prompt=prompt,
+            options={"temperature": 0.4},
+        )
+        raw = resp.get("response") if isinstance(resp, dict) else getattr(resp, "response", "")
+    except Exception as e:
+        print(f"[learning_strategies:llm] {e}")
+        return None
+    return _validated_strategies(raw or "")
+
+
+class LearningStrategyRequest(BaseModel):
+    include_face: bool = True
+    days: int = 7
+
+
+@app.post("/api/students/{student_id}/learning-strategies")
+def student_learning_strategies(student_id: str, request: Request, payload: LearningStrategyRequest):
+    """At-home practice strategies derived from a student's weekly report.
+
+    Role-neutral, like the weekly report it reads: gated on the viewer's
+    relationship to the student, not on a role claim.
+
+    Always answers. The deterministic rules produce the response unless the
+    optional model pass is enabled *and* its output passes _validated_strategies,
+    and `source` says which of those happened.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+
+    days = max(1, min(payload.days, 30))
+    report = _weekly_signal_report(student_id, days, include_face=payload.include_face)
+    topics = _topic_breakdown(student_id)
+
+    strategies = _rule_based_strategies(report, topics)
+    source = "rule-based"
+
+    if STRATEGY_LLM_ENABLED:
+        refined = _llm_strategies(_strategy_prompt(report, topics, strategies))
+        if refined:
+            strategies, source = refined, "model-refined"
+        else:
+            # Named distinctly from the plain rule-based case: "the model was
+            # asked and its answer was not usable" is worth seeing in the UI.
+            source = "rule-based (model output rejected)"
+
+    return {
+        "student_id": student_id,
+        "generated_at": _utc_now().isoformat(),
+        "strategies": strategies,
+        "source": source,
+        "basis": {
+            "days": days,
+            "face_included": payload.include_face,
+            "averages": report.get("averages") or {},
+            "weakest_topic": _weakest_topic(topics),
+        },
+    }
 
 
 # ─── leaderboard ─────────────────────────────────────────────────────────

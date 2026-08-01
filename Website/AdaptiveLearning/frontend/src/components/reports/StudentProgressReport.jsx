@@ -2,10 +2,29 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
-import { WeeklySignalReport, LiveSignalSummary } from '../signals/SignalPanel'
+import { WeeklySignalReport, LiveSignalSummary, FacialRecognitionToggle, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+
+// Persisted so the choice survives navigation between students -- switching
+// facial reporting off and having it silently come back on the next page is
+// the kind of thing that makes a privacy control untrustworthy.
+const FACE_PREF_KEY = 'signal_include_face'
+
+function readFacePref() {
+  try {
+    return localStorage.getItem(FACE_PREF_KEY) !== 'false'
+  } catch {
+    return true   // Safari private mode and friends: default to the normal report.
+  }
+}
+
+function writeFacePref(enabled) {
+  try {
+    localStorage.setItem(FACE_PREF_KEY, enabled ? 'true' : 'false')
+  } catch { /* preference is best-effort; the toggle still works this session */ }
+}
 
 /**
  * A single student's full learning report: academic stat cards, the weekly
@@ -25,6 +44,8 @@ const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', alge
  *   Promise<string|null>. When provided it owns the name (the parent's children
  *   list, which survives a weekly-report failure); when omitted the name comes
  *   from the weekly-report's student_name.
+ * @param {boolean}  [showStrategies] render the at-home strategies panel. Parent
+ *   route only -- the copy is written for someone supporting a child at home.
  */
 export default function StudentProgressReport({
   studentId,
@@ -34,6 +55,7 @@ export default function StudentProgressReport({
   backHoverClass = 'hover:text-violet-600',
   emptyTopicText = 'No topic data yet.',
   nameFetch,
+  showStrategies = false,
 }) {
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
@@ -43,7 +65,15 @@ export default function StudentProgressReport({
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
   const [loadError, setLoadError]       = useState(null)
+  const [includeFace, setIncludeFace]   = useState(readFacePref)
+  const [strategies, setStrategies]     = useState(null)
+  const [strategySource, setStrategySource]   = useState(null)
+  const [strategyError, setStrategyError]     = useState(null)
+  const [strategyLoading, setStrategyLoading] = useState(false)
 
+  // Academic stats and the name. Deliberately not re-run when the facial
+  // toggle flips: none of this depends on it, and re-fetching three endpoints
+  // to change one query parameter is the regression #36 shipped.
   useEffect(() => {
     Promise.all([
       apiFetch(`/api/stats/student/${studentId}`),
@@ -64,11 +94,26 @@ export default function StudentProgressReport({
       setLoading(false)
     })
 
-    // Fetched separately from the Promise.all above: this is the newest and
-    // heaviest query, and a failure here shouldn't blank the whole page when
-    // the academic stats loaded fine.
-    apiFetch(`/api/students/${studentId}/weekly-report`)
+    // Optional independent name source (the parent's children list). Kept apart
+    // from the weekly-report below so the heading still shows the real name when
+    // that heavier request fails.
+    if (nameFetch) {
+      nameFetch().then(n => { if (n) setName(n) }).catch(() => {})
+    }
+  }, [studentId, nameFetch])
+
+  // The signal report, which is the only thing the facial toggle changes.
+  // Fetched separately from the Promise.all above: this is the heaviest query,
+  // and a failure here shouldn't blank the page when the stats loaded fine.
+  //
+  // nameFetch is in the dependency list because the body reads it. Callers
+  // memoise it against the same id, so it changes only when studentId does --
+  // it does not cause an extra fetch on toggle.
+  useEffect(() => {
+    let cancelled = false
+    apiFetch(`/api/students/${studentId}/weekly-report?include_face=${includeFace}`)
       .then(r => {
+        if (cancelled) return
         setSignalReport(r)
         setSignalError(null)
         // With no independent nameFetch (the teacher case), the report is the
@@ -79,15 +124,45 @@ export default function StudentProgressReport({
       // identically to a quiet week otherwise, and telling a viewer the student
       // had no activity when the request just failed is worse than saying
       // nothing. Same distinction #16 established for ClassDetail.
-      .catch(err => { setSignalReport(null); setSignalError(err.message || 'Could not load signal report') })
+      .catch(err => {
+        if (cancelled) return
+        setSignalReport(null)
+        setSignalError(err.message || 'Could not load signal report')
+      })
+    // Toggling twice quickly can land the responses out of order, and the
+    // report carries the face data the toggle is meant to exclude -- so a
+    // stale resolve could put it back on screen after it was switched off.
+    return () => { cancelled = true }
+  }, [studentId, includeFace, nameFetch])
 
-    // Optional independent name source (the parent's children list). Kept apart
-    // from the weekly-report above so the heading still shows the real name when
-    // that heavier request fails.
-    if (nameFetch) {
-      nameFetch().then(n => { if (n) setName(n) }).catch(() => {})
+  function handleIncludeFaceChange(next) {
+    setIncludeFace(next)
+    writeFacePref(next)
+    // Built from a report that included facial data; keep it out of the way
+    // rather than leaving advice on screen that the new setting excludes.
+    setStrategies(null)
+    setStrategySource(null)
+    setStrategyError(null)
+  }
+
+  async function generateStrategies() {
+    setStrategyLoading(true)
+    setStrategyError(null)
+    try {
+      const res = await apiFetch(`/api/students/${studentId}/learning-strategies`, {
+        method: 'POST',
+        body: { include_face: includeFace },
+      })
+      setStrategies(res.strategies || [])
+      setStrategySource(res.source || null)
+    } catch (err) {
+      setStrategies(null)
+      setStrategySource(null)
+      setStrategyError(err.message || 'Could not generate strategies right now.')
+    } finally {
+      setStrategyLoading(false)
     }
-  }, [studentId, nameFetch])
+  }
 
   const acc = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
 
@@ -136,6 +211,8 @@ export default function StudentProgressReport({
             ))}
           </div>
 
+          <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
+
           {/* Only rendered once the report loads -- the panels would otherwise
               show a full grid of "N/A" and read as "no activity" rather than
               "still loading". */}
@@ -150,6 +227,16 @@ export default function StudentProgressReport({
               <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
               <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
             </div>
+          )}
+
+          {showStrategies && (
+            <StrategyPanel
+              strategies={strategies}
+              source={strategySource}
+              loading={strategyLoading}
+              error={strategyError}
+              onGenerate={generateStrategies}
+            />
           )}
 
           <div className="grid lg:grid-cols-2 gap-6">

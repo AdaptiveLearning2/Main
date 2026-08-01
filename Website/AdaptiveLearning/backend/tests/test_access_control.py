@@ -113,8 +113,14 @@ class _FakeSupabase:
         self._max_rows = max_rows
         self._rpc_results = rpc_results or {}
         self.rpc_calls = []
+        # Which tables were reached for, in order. Lets a test assert a query
+        # was *not* made -- an empty result cannot distinguish "asked and got
+        # nothing" from "never asked", which is exactly the difference the
+        # facial-recognition opt-out has to make.
+        self.table_calls = []
 
     def table(self, name):
+        self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
         return _Query(self._tables.get(name, []), max_rows=cap)
 
@@ -371,3 +377,230 @@ def test_missing_class_returns_404_not_500():
     with pytest.raises(main.HTTPException) as exc:
         main._verify_class_owner("class-does-not-exist", "teacher-1")
     assert exc.value.status_code == 404
+
+
+# ── facial-recognition opt-out ───────────────────────────────────────────
+
+def test_report_without_face_never_queries_face_signals(monkeypatch):
+    """The opt-out has to mean "not read", not "read and hidden".
+
+    A parent switching facial reporting off is making a statement about what
+    gets looked at, so asserting on the nulled output alone would pass even if
+    the rows were still being fetched.
+    """
+    fake = _FakeSupabase(_signal_tables(
+        [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}],
+        [{"user_id": "student-1", "ts": _ts(1), "attention": 0.9, "emotion": "happy"}],
+    ))
+    monkeypatch.setattr(main, "supabase", fake)
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    assert "face_signals" not in fake.table_calls
+    assert report["face_included"] is False
+    assert report["averages"]["face_attention"] is None
+    assert report["highlights"]["dominant_emotion"] is None
+    assert report["sample_counts"]["face"] == 0
+    # Cognitive is unaffected.
+    assert report["averages"]["focus"] == 0.7
+
+
+def test_report_without_face_marks_days_not_applicable_rather_than_unretrieved(monkeypatch):
+    """face_retrieved=False means "the cap stopped us". With face reporting
+    off nothing was requested, so False would report a retrieval failure that
+    never happened -- and the UI counts `=== false` to warn about gaps."""
+    fake = _FakeSupabase(_signal_tables(
+        [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}]))
+    monkeypatch.setattr(main, "supabase", fake)
+    report = main._weekly_signal_report("student-1", include_face=False)
+    assert report["daily"], "days should still be reported"
+    assert all(d["face_retrieved"] is None for d in report["daily"])
+
+
+def test_report_without_face_does_not_claim_facial_data_was_absent(monkeypatch):
+    """Saying "no facial recognition samples were recorded" reports an absence
+    that was never measured."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([])))
+    off = main._weekly_signal_report("student-1", include_face=False)
+    on = main._weekly_signal_report("student-1", include_face=True)
+    assert "facial recognition" not in off["summary"]
+    assert "facial recognition" in on["summary"]
+
+
+def test_report_with_face_still_included_by_default(monkeypatch):
+    fake = _FakeSupabase(_signal_tables(
+        [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}],
+        [{"user_id": "student-1", "ts": _ts(1), "attention": 0.9}],
+    ))
+    monkeypatch.setattr(main, "supabase", fake)
+    report = main._weekly_signal_report("student-1")
+    assert "face_signals" in fake.table_calls
+    assert report["face_included"] is True
+    assert report["averages"]["face_attention"] == 0.9
+
+
+# ── learning strategies ──────────────────────────────────────────────────
+
+def _strategy_tables(topic_rows=None, cog_rows=None):
+    return {
+        **_signal_tables(cog_rows or []),
+        "user_math_performance": topic_rows or [],
+    }
+
+
+def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
+    """Same gate as every other student-data endpoint: the relationship, not a
+    role claim. The service-role client bypasses RLS, so this check is the only
+    thing in the way."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: STRANGER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+    assert exc.value.status_code == 403
+
+
+def test_learning_strategies_allows_a_linked_parent(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+    assert out["student_id"] == "student-1"
+    # Four with no signal data: the face-attention rule is conditional on a low
+    # reading, so it does not fire here. The cap is five, not a quota.
+    assert len(out["strategies"]) == 4
+    assert out["source"] == "rule-based"
+
+
+def test_weakest_topic_ignores_topics_with_no_attempts():
+    """_topic_breakdown reports an unattempted topic at 0%, which would always
+    win -- sending a parent to revise a topic never given to their child."""
+    topics = [
+        {"topic_name": "algebra", "attempted_questions": 0, "accuracy": 0},
+        {"topic_name": "geometry", "attempted_questions": 10, "accuracy": 40},
+        {"topic_name": "mean", "attempted_questions": 5, "accuracy": 80},
+    ]
+    assert main._weakest_topic(topics)["topic_name"] == "geometry"
+    assert main._weakest_topic([]) is None
+    assert main._weakest_topic([{"topic_name": "x", "attempted_questions": 0, "accuracy": 0}]) is None
+
+
+def test_rule_based_strategies_react_to_elevated_stress():
+    high = main._rule_based_strategies({"averages": {"stress": 0.8, "focus": 0.7}}, [])
+    calm = main._rule_based_strategies({"averages": {"stress": 0.2, "focus": 0.7}}, [])
+    assert any("shorter blocks" in s for s in high)
+    assert not any("shorter blocks" in s for s in calm)
+
+
+def test_rule_based_strategies_ignore_face_attention_when_reporting_is_off():
+    averages = {"face_attention": 0.2, "focus": 0.7, "stress": 0.3}
+    off = main._rule_based_strategies({"averages": averages, "face_included": False}, [])
+    on = main._rule_based_strategies({"averages": averages, "face_included": True}, [])
+    assert any("attention drifts" in s for s in on)
+    assert not any("attention drifts" in s for s in off)
+
+
+def test_strategy_prompt_carries_no_identifying_data():
+    """The report holds the student id and raw `latest` rows. The model needs
+    the shape of the week, not a record identifying a child."""
+    report = {
+        "student_id": "student-1", "days": 7, "face_included": True,
+        "averages": {"focus": 0.7, "stress": 0.3, "engagement": 0.5, "face_attention": 0.8},
+        "sample_counts": {"sessions": 3},
+        "latest": {"cognitive": {"focus": 0.7, "session_id": "session-9"}},
+    }
+    prompt = main._strategy_prompt(report, [], ["baseline"])
+    assert "student-1" not in prompt
+    assert "session-9" not in prompt
+    assert "70%" in prompt
+
+
+@pytest.mark.parametrize("bad", [
+    "1. Try flashcards\n2. This suggests your child may have dyslexia",
+    "1. Ask about symptoms of their learning disorder",
+    "1. Consider whether ADHD medication would help",
+    "1. Speak to a therapist about the results",
+])
+def test_validated_strategies_rejects_clinical_language(bad):
+    assert main._validated_strategies(bad) is None
+
+
+def test_validated_strategies_rejects_a_reply_that_is_too_short():
+    assert main._validated_strategies("1. Just do more practice") is None
+    assert main._validated_strategies("") is None
+
+
+def test_validated_strategies_rejects_an_overlong_line():
+    long_line = "1. " + ("practice " * 60)
+    assert main._validated_strategies(f"{long_line}\n2. b\n3. c") is None
+
+
+def test_validated_strategies_accepts_and_strips_list_markers():
+    out = main._validated_strategies(
+        "1. Review fractions for ten minutes\n"
+        "2) Take a short break between sets\n"
+        "- Ask which problem felt hardest\n"
+        "• Keep the study time consistent\n"
+        "* Praise the effort, not the score\n"
+        "6. A sixth one that must be dropped"
+    )
+    assert out == [
+        "Review fractions for ten minutes",
+        "Take a short break between sets",
+        "Ask which problem felt hardest",
+        "Keep the study time consistent",
+        "Praise the effort, not the score",
+    ]
+
+
+def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch):
+    """Default deployment has no local Ollama. The endpoint must answer without
+    opening a socket, not fail or hang."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", False)
+    called = []
+    monkeypatch.setattr(main, "_llm_strategies", lambda *_a: called.append(1))
+    out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+    assert called == []
+    assert out["source"] == "rule-based"
+
+
+def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monkeypatch):
+    """The whole point of the validation: rejected output must not reach a
+    parent, and the response must say the model was tried and discarded."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    monkeypatch.setattr(main, "_llm_strategies", lambda *_a: None)
+    out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+    baseline = main._rule_based_strategies(
+        main._weekly_signal_report("student-1"), [])
+    assert out["strategies"] == baseline
+    assert out["source"] == "rule-based (model output rejected)"
+
+
+def test_learning_strategies_uses_validated_model_output(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    monkeypatch.setattr(main, "_llm_strategies", lambda *_a: ["a", "b", "c"])
+    out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+    assert out["strategies"] == ["a", "b", "c"]
+    assert out["source"] == "model-refined"
+
+
+def test_llm_strategies_returns_none_when_ollama_is_unreachable(monkeypatch):
+    """Any failure reaching the model is a fallback, not a 500."""
+    def _boom(*_a, **_k):
+        raise ConnectionError("connection refused")
+    monkeypatch.setitem(sys.modules, "ollama", type(sys)("ollama"))
+    sys.modules["ollama"].generate = _boom
+    assert main._llm_strategies("prompt") is None
+
+
+def test_learning_strategies_clamps_the_day_range(monkeypatch):
+    fake = _FakeSupabase({**TABLES, **_strategy_tables()})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    assert main.student_learning_strategies(
+        "student-1", None, main.LearningStrategyRequest(days=999))["basis"]["days"] == 30
+    assert main.student_learning_strategies(
+        "student-1", None, main.LearningStrategyRequest(days=0))["basis"]["days"] == 1

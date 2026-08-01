@@ -27,6 +27,9 @@ export default function ChildDetail() {
       backHoverClass="hover:text-emerald-600"
       emptyTopicText="No topic data yet — your child hasn't used AI Adaptive mode."
       nameFetch={nameFetch}
+      // Parent route only: the strategies are written for someone sitting down
+      // with a child at home, which is not the teacher page's situation.
+      showStrategies
     />
   )
 }

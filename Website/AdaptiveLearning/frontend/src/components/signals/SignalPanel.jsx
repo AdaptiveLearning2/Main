@@ -103,7 +103,9 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   // Days the row cap kept us from retrieving, as opposed to days with no
   // activity. Both render as a gap, so the difference has to be stated.
   const unretrieved = (report?.daily || []).filter(
-    d => d.cognitive_retrieved === false || d.face_retrieved === false
+    d => d.cognitive_retrieved === false
+      || d.face_retrieved === false
+      || d.sessions_retrieved === false
   ).length
 
   return (

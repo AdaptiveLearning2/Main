@@ -7,6 +7,8 @@ at all, which is what these tests exist to prevent recurring.
 """
 import os
 import sys
+import threading
+import time
 
 # main.py builds a Supabase client at import time and raises without these.
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -166,6 +168,18 @@ def fake_supabase(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(TABLES))
 
 
+@pytest.fixture(autouse=True)
+def reset_strategy_rate_limit():
+    """The limiter counts in module-level state, which outlives a test.
+
+    Without this the strategy tests share one allowance and start failing on
+    whichever of them happens to run eleventh.
+    """
+    main._strategy_hits.clear()
+    yield
+    main._strategy_hits.clear()
+
+
 # ── _can_view_student ────────────────────────────────────────────────────
 
 def test_student_can_view_their_own_data():
@@ -265,11 +279,11 @@ def _ts(days_ago: int, hour: int = 12) -> str:
     return d.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
-def _signal_tables(cog_rows, face_rows=None):
+def _signal_tables(cog_rows, face_rows=None, session_rows=None):
     return {
         "cognitive_signals": cog_rows,
         "face_signals": face_rows if face_rows is not None else [],
-        "sessions": [],
+        "sessions": session_rows or [],
     }
 
 
@@ -327,6 +341,62 @@ def test_weekly_report_detects_truncation_from_count_not_row_length(monkeypatch)
     assert len(cog) < main._REPORT_ROW_CAP, "fixture must stay under our own cap"
     assert report["truncated"] is True
     assert report["sample_counts"]["cognitive"] == 10
+
+
+def test_weekly_report_reports_session_truncation(monkeypatch):
+    """sample_counts.sessions is rendered as the report's Sessions figure.
+
+    Its truncation flag was discarded, so a student over the cap was shown a
+    count that had silently stopped at it -- and with the signal tables under
+    their own caps, `truncated` stayed False and nothing said otherwise.
+    """
+    sessions = [{"id": f"s{i}", "user_id": "student-1", "started_at": _ts(i % 7)}
+                for i in range(40)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], session_rows=sessions), max_rows={"sessions": 10}))
+    report = main._weekly_signal_report("student-1")
+
+    assert report["sample_counts"]["sessions"] == 10
+    assert report["truncated"] is True
+
+
+def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
+    """Sessions come from their own query under their own cap, so a day whose
+    signal rows were trimmed can still have a session count retrieved intact.
+
+    Dropping the day threw that away and reported the day as absent rather
+    than partial.
+    """
+    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
+    sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
+                for d in range(0, 7)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables(cog, session_rows=sessions), max_rows={"cognitive_signals": 3}))
+    # Face reporting off, so the only thing that could have kept these days
+    # before was the face query -- which is not running.
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    trimmed = [d for d in report["daily"] if d["cognitive_retrieved"] is False]
+    assert trimmed, "days beyond cognitive's reach must still be reported"
+    for d in trimmed:
+        assert d["focus"] is None            # the signal genuinely was not read
+        assert d["sessions_retrieved"] is True
+        assert d["sessions"] == 1            # ...but the session count was
+
+
+def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
+    """A day the cap kept us from reading did not have zero sessions. Same
+    distinction the signal metrics draw, so it gets the same shape."""
+    sessions = [{"id": f"s{d}", "user_id": "student-1", "started_at": _ts(d)}
+                for d in range(0, 7)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], session_rows=sessions), max_rows={"sessions": 2}))
+    report = main._weekly_signal_report("student-1")
+
+    cut = [d for d in report["daily"] if d["sessions_retrieved"] is False]
+    assert cut, "days beyond the session cap must be flagged"
+    for d in cut:
+        assert d["sessions"] is None, "0 would read as a day with no sessions"
 
 
 def test_signal_summary_surfaces_sample_counts(monkeypatch):
@@ -795,6 +865,93 @@ def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
         "Ask which problem felt hardest",
     ]
     assert client.last_kwargs.get("timeout") == 7.5
+
+
+def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch):
+    """The client-side timeout is per operation, not for the call as a whole.
+
+    A server that keeps resetting it -- dribbling a byte inside every read
+    window -- holds the request open indefinitely while every individual
+    deadline is honoured. What the caller waits for has to be bounded
+    separately, or the guarantee is only that no single read stalls.
+    """
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    monkeypatch.setattr(main, "STRATEGY_LLM_TIMEOUT", 0.05)
+
+    released = threading.Event()
+
+    def _hang(*_a):
+        # Bounded so the pool thread cannot outlive the suite, but far longer
+        # than the deadline under test.
+        released.wait(timeout=10)
+        return ["Model output that arrived far too late to be used"]
+
+    monkeypatch.setattr(main, "_llm_strategies", _hang)
+    try:
+        started = time.monotonic()
+        out = main.student_learning_strategies(
+            "student-1", None, main.LearningStrategyRequest())
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 5, "the caller waited on the stalled model call"
+        assert out["source"] == "rule-based (model output rejected)"
+        assert not any("too late" in s for s in out["strategies"])
+    finally:
+        released.set()
+
+
+# ── strategy rate limit ──────────────────────────────────────────────────
+
+def _strategies_as(viewer, monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: viewer)
+    return main.student_learning_strategies(
+        "student-1", None, main.LearningStrategyRequest())
+
+
+def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch):
+    """It is the heaviest endpoint a click can trigger -- two capped signal
+    reads, a topic breakdown, and optionally a model call -- behind a button
+    that can be pressed as fast as a parent likes."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 3)
+
+    for _ in range(3):
+        assert _strategies_as(PARENT, monkeypatch)["student_id"] == "student-1"
+
+    with pytest.raises(main.HTTPException) as exc:
+        _strategies_as(PARENT, monkeypatch)
+    assert exc.value.status_code == 429
+    # Without it the client is told to back off but not for how long.
+    assert int(exc.value.headers["Retry-After"]) >= 1
+
+
+def test_learning_strategies_rate_limit_is_per_caller(monkeypatch):
+    """Counted per viewer, not globally: one parent exhausting their allowance
+    must not lock every other parent out of the endpoint."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
+
+    _strategies_as(PARENT, monkeypatch)
+    with pytest.raises(main.HTTPException):
+        _strategies_as(PARENT, monkeypatch)
+
+    # A teacher of student-1's class, with their own untouched allowance.
+    assert _strategies_as(TEACHER, monkeypatch)["student_id"] == "student-1"
+
+
+def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch):
+    """A caller with no relationship gets 403, not 429. The limit protects the
+    work below it; masking the access decision would make an unauthorised
+    caller's result depend on how often they had asked."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
+    monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
+
+    for _ in range(3):
+        with pytest.raises(main.HTTPException) as exc:
+            _strategies_as(STRANGER, monkeypatch)
+        assert exc.value.status_code == 403
 
 
 def test_learning_strategies_clamps_the_day_range(monkeypatch):

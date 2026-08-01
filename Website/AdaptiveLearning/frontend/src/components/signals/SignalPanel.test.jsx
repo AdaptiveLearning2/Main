@@ -74,6 +74,24 @@ describe('WeeklySignalReport', () => {
     expect(screen.getByText(/could not be retrieved, not because there was no activity/i)).toBeInTheDocument()
   })
 
+  it('counts a day whose sessions were cut as unretrieved', () => {
+    // Sessions have their own query and their own cap, so a day can lose only
+    // them. Counting the two signal flags alone left that day looking like a
+    // day with nothing on it.
+    const truncated = {
+      ...report,
+      truncated: true,
+      daily: [
+        { date: '2026-07-15', focus: 0.7, stress: 0.3, attention: 0.8,
+          cognitive_retrieved: true, face_retrieved: true,
+          sessions: null, sessions_retrieved: false },
+        ...report.daily,
+      ],
+    }
+    render(<WeeklySignalReport report={truncated} />)
+    expect(screen.getByText(/could not be retrieved, not because there was no activity/i)).toBeInTheDocument()
+  })
+
   it('renders without data', () => {
     render(<WeeklySignalReport report={null} />)
     expect(screen.getByText(/no weekly signal data available yet/i)).toBeInTheDocument()

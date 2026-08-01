@@ -1,7 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os, re, requests, random, string, threading
+import os, re, requests, random, string, threading, time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
@@ -66,6 +67,9 @@ def _profile(uid: str) -> dict:
 # OLDEST samples -- see _weekly_signal_report for why the day buckets are built
 # from what actually came back rather than from the requested date range.
 _REPORT_ROW_CAP = 5000
+# Sessions are far coarser than signal samples -- one row per sitting, not per
+# reading -- so they get their own, much smaller cap.
+_SESSION_ROW_CAP = 100
 
 
 def _avg(values):
@@ -229,7 +233,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
 
     cog, cog_cut = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
     face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face else ([], False)
-    sessions, _ = _fetch("sessions", "started_at", 100)
+    # Truncation kept, not discarded. sample_counts.sessions is rendered as the
+    # report's Sessions figure, so a student over the cap was shown a count
+    # that silently stopped at it -- and with the other two tables under their
+    # own cap, `truncated` stayed False and nothing said so.
+    sessions, ses_cut = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
     # back empty and would be reported as "no activity" rather than "not
@@ -244,9 +252,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     def _oldest(rows: list, ts_col: str) -> str:
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
-    truncated = cog_cut or face_cut
+    truncated = cog_cut or face_cut or ses_cut
     cog_oldest_day = _oldest(cog, "ts")[:10]
     face_oldest_day = _oldest(face, "ts")[:10]
+    ses_oldest_day = _oldest(sessions, "started_at")[:10]
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
@@ -257,11 +266,17 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # "We could not retrieve this day", judged per table.
         cog_missing = bool(cog_cut and cog_oldest_day and day < cog_oldest_day)
         face_missing = bool(face_cut and face_oldest_day and day < face_oldest_day)
+        ses_missing = bool(ses_cut and ses_oldest_day and day < ses_oldest_day)
         # Skip only when nothing we actually asked for could be retrieved. With
         # face reporting off there is no face request to fail, so the day hinges
-        # on cognitive alone -- otherwise an always-False face_missing would
-        # keep days that hold no retrievable data at all.
-        if cog_missing and (face_missing or not include_face):
+        # on the other two -- otherwise an always-False face_missing would keep
+        # days that hold no retrievable data at all.
+        #
+        # Sessions count here too: they come from their own query under its own
+        # cap, so a day whose signals were trimmed can still have a session
+        # count that was retrieved intact. Dropping the day threw that away and
+        # reported the day as absent rather than partial.
+        if cog_missing and (face_missing or not include_face) and ses_missing:
             continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
@@ -271,7 +286,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             "stress": None if cog_missing else _avg([r.get("stress") for r in day_cog]),
             "engagement": None if cog_missing else _avg([r.get("engagement") for r in day_cog]),
             "attention": None if face_missing else _avg([r.get("attention") for r in day_face]),
-            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
+            # None rather than 0, on the same reasoning as the metrics above: a
+            # day the cap kept us from reading did not have zero sessions, and
+            # `sessions_retrieved` is what tells the two apart.
+            "sessions": None if ses_missing else
+                        len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
             # False means "the cap stopped us fetching this", which a null
             # metric alone cannot distinguish from "nothing was recorded".
             # None means "not requested" -- face reporting is off, so there was
@@ -279,6 +298,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             # `=== false` must not treat the opt-out as a retrieval failure.
             "cognitive_retrieved": not cog_missing,
             "face_retrieved": (not face_missing) if include_face else None,
+            "sessions_retrieved": not ses_missing,
         })
 
     emotion_counts: dict[str, int] = {}
@@ -675,6 +695,67 @@ STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
 # rule-based answer the caller is guaranteed.
 STRATEGY_LLM_TIMEOUT = float(os.getenv("STRATEGY_LLM_TIMEOUT", "20"))
 
+# The model call runs here rather than on the request's own thread so the
+# deadline can actually be enforced.
+#
+# Handing the timeout to the client is not enough on its own: httpx applies it
+# per operation (connect, then each read), not to the call as a whole, so a
+# server that dribbles a byte inside every window keeps the request alive well
+# past STRATEGY_LLM_TIMEOUT. Waiting on a future instead bounds what the caller
+# experiences, whatever the transport does.
+#
+# The client-side timeout stays on for the other half of the problem: once the
+# wait is abandoned the worker is still in there, and the per-operation deadline
+# is what eventually frees it. max_workers caps how many can pile up; past that,
+# submissions queue and time out on the same deadline, which degrades to the
+# rule-based answer rather than to unbounded threads.
+_STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strategy-llm")
+
+# Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
+# trigger by clicking a button -- two capped signal reads, a topic breakdown,
+# and optionally a model call -- and the button is repeatable at whatever rate
+# they can click.
+#
+# In-process, so with multiple uvicorn workers the effective ceiling is this
+# many per worker. That is deliberate: the point is to blunt one caller looping
+# on the button, and a shared counter would mean a cache or a table to keep it
+# in. Move it to one if the ceiling ever needs to be exact.
+_STRATEGY_RATE_LIMIT  = int(os.getenv("STRATEGY_RATE_LIMIT", "10"))
+_STRATEGY_RATE_WINDOW = float(os.getenv("STRATEGY_RATE_WINDOW", "60"))
+_strategy_hits: dict[str, list[float]] = {}
+_strategy_hits_lock = threading.Lock()
+
+
+def _rate_limit_strategies(user_id: str):
+    """Raise 429 if this caller has already had its allowance this window.
+
+    Timed on monotonic(), not wall-clock: a clock adjustment would otherwise
+    either wipe the window or extend it arbitrarily.
+    """
+    now = time.monotonic()
+    with _strategy_hits_lock:
+        # The dict is keyed by caller, so it grows with everyone who has ever
+        # used the endpoint. Sweeping it only once it is large keeps the common
+        # path a single lookup rather than a scan of every known caller.
+        if len(_strategy_hits) > 1024:
+            for uid in [u for u, ts in _strategy_hits.items()
+                        if all(now - t >= _STRATEGY_RATE_WINDOW for t in ts)]:
+                del _strategy_hits[uid]
+
+        hits = [t for t in _strategy_hits.get(user_id, ()) if now - t < _STRATEGY_RATE_WINDOW]
+        if len(hits) >= _STRATEGY_RATE_LIMIT:
+            _strategy_hits[user_id] = hits
+            # Measured from the oldest hit still counted -- that is the one
+            # whose expiry frees a slot.
+            retry_after = max(1, int(_STRATEGY_RATE_WINDOW - (now - min(hits))) + 1)
+            raise HTTPException(
+                429,
+                "Too many strategy requests. Try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        hits.append(now)
+        _strategy_hits[user_id] = hits
+
 _STRATEGY_COUNT = 5
 _STRATEGY_MAX_CHARS = 320
 # A floor as well as a ceiling. Without one, a truncated or degenerate reply
@@ -911,6 +992,27 @@ def _llm_strategies(prompt: str) -> list[str] | None:
     return _validated_strategies(raw or "")
 
 
+def _llm_strategies_bounded(prompt: str) -> list[str] | None:
+    """_llm_strategies under a deadline the caller actually feels.
+
+    See _STRATEGY_LLM_POOL: the client-side timeout is per operation, so this
+    is what holds when the transport keeps resetting it. Abandoning the wait
+    leaves the worker running -- there is no way to interrupt a blocking socket
+    read -- but the caller is no longer behind it, and the answer they get is
+    the rule-based one that was always the fallback.
+    """
+    try:
+        return _STRATEGY_LLM_POOL.submit(_llm_strategies, prompt).result(timeout=STRATEGY_LLM_TIMEOUT)
+    except FutureTimeoutError:
+        print(f"[learning_strategies:llm] abandoned after {STRATEGY_LLM_TIMEOUT}s")
+        return None
+    except Exception as e:
+        # _llm_strategies swallows its own failures, so reaching here means the
+        # pool itself refused the work (shutting down, for instance).
+        print(f"[learning_strategies:llm] {e}")
+        return None
+
+
 class LearningStrategyRequest(BaseModel):
     include_face: bool = True
     days: int = 7
@@ -926,8 +1028,14 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
     Always answers. The deterministic rules produce the response unless the
     optional model pass is enabled *and* its output passes _validated_strategies,
     and `source` says which of those happened.
+
+    Rate limited per caller. The access check runs first so a caller with no
+    relationship to the student still gets 403 rather than having the answer
+    masked by a 429; the limit then guards the expensive part below.
     """
-    _verify_can_view_student(get_user(request), student_id)
+    viewer = get_user(request)
+    _verify_can_view_student(viewer, student_id)
+    _rate_limit_strategies(viewer["id"])
 
     days = max(1, min(payload.days, 30))
     report = _weekly_signal_report(student_id, days, include_face=payload.include_face)
@@ -937,7 +1045,7 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
     source = "rule-based"
 
     if STRATEGY_LLM_ENABLED:
-        refined = _llm_strategies(_strategy_prompt(report, topics, strategies))
+        refined = _llm_strategies_bounded(_strategy_prompt(report, topics, strategies))
         if refined:
             strategies, source = refined, "model-refined"
         else:

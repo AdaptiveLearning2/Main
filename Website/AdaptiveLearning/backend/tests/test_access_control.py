@@ -372,6 +372,64 @@ def test_signal_summaries_skips_the_round_trip_for_no_children(monkeypatch):
     assert fake.rpc_calls == []
 
 
+# ── the opt-out on the headline summaries (parent dashboard) ─────────────
+
+def test_signal_summaries_pass_the_opt_out_into_the_aggregate(monkeypatch):
+    """The dashboard reads facial attention through this RPC.
+
+    Nulling the field on the way out would leave the rows still being read; the
+    aggregate takes the flag so no facial row is touched, which is the promise
+    the weekly report and the teacher list already make.
+    """
+    fake = _FakeSupabase({}, rpc_results={"student_signal_summary_many": []})
+    monkeypatch.setattr(main, "supabase", fake)
+    main._signal_summaries(["student-1"], include_face=False)
+    assert fake.rpc_calls[0][1]["p_include_face"] is False
+
+    fake.rpc_calls.clear()
+    main._signal_summaries(["student-1"])
+    assert fake.rpc_calls[0][1]["p_include_face"] is True, "included unless asked otherwise"
+
+
+def test_signal_summary_passes_the_opt_out_into_the_aggregate(monkeypatch):
+    fake = _FakeSupabase({}, rpc_results={"student_signal_summary": []})
+    monkeypatch.setattr(main, "supabase", fake)
+    main._signal_summary("student-1", include_face=False)
+    assert fake.rpc_calls[0][1]["p_include_face"] is False
+
+
+def test_summary_marks_the_opt_out_rather_than_reporting_no_face_data(monkeypatch):
+    """face_attention null beside face_samples 0 is exactly what a student the
+    camera never saw looks like. face_included is what tells them apart."""
+    fake = _FakeSupabase({}, rpc_results={"student_signal_summary_many": [
+        {"student_id": "student-1", "focus": 0.6, "face_attention": None,
+         "sessions": 2, "cognitive_samples": 10, "face_samples": 0},
+    ]})
+    monkeypatch.setattr(main, "supabase", fake)
+    off = main._signal_summaries(["student-1"], include_face=False)
+    assert off["student-1"]["face_included"] is False
+    on = main._signal_summaries(["student-1"])
+    assert on["student-1"]["face_included"] is True
+
+
+def test_children_endpoint_threads_the_opt_out(monkeypatch):
+    """A parent switching facial reporting off on a child's report and going
+    back to the dashboard must not find facial attention on screen again."""
+    tables = {**TABLES, "parent_child_links": [
+        {"id": "l1", "parent_id": "parent-1", "child_id": "student-1",
+         "created_at": "2026-07-01T00:00:00Z"},
+    ]}
+    fake = _FakeSupabase(tables, rpc_results={"student_signal_summary_many": []})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    children = main.my_children(None, include_face=False)
+    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    # The fallback shape for a child the RPC returned no row for has to carry
+    # the flag too, or the dashboard renders "N/A" where it should say "Off".
+    assert all(c["signal_summary"]["face_included"] is False for c in children)
+    assert children, "fixture should link at least one child to this parent"
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:
@@ -596,7 +654,53 @@ def test_validated_strategies_rejects_a_reply_that_is_too_short():
 
 def test_validated_strategies_rejects_an_overlong_line():
     long_line = "1. " + ("practice " * 60)
-    assert main._validated_strategies(f"{long_line}\n2. b\n3. c") is None
+    assert main._validated_strategies(f"{long_line}\n2. Take a short break between sets\n"
+                                      "3. Ask which problem felt hardest") is None
+
+
+def test_validated_strategies_rejects_list_scaffolding_with_nothing_in_it():
+    """"1. a" is well-formed: three marked items, none over the ceiling, no
+    clinical vocabulary. Without a floor it passed every check and reached a
+    parent labelled model-refined."""
+    assert main._validated_strategies("1. a\n2. b\n3. c") is None
+    assert main._validated_strategies(
+        f"{_THREE_SAFE}\n4. Practice more") is None, "one stub rejects the whole reply"
+
+
+def test_validated_strategies_accepts_ordinary_advice_at_the_floor():
+    """The floor has to clear real one-liners, or it just disables the model."""
+    out = main._validated_strategies(_THREE_SAFE)
+    assert out and len(out) == 3
+
+
+def test_validated_strategies_unwraps_markdown_emphasis():
+    """Nothing between here and the parent renders markdown, so asterisks would
+    arrive as literal punctuation. The whole-item case matters most: the bold
+    marker sits in front of the number, where the list pattern would eat it as
+    a bullet and leave the digits behind as text."""
+    assert main._validated_strategies(
+        "1. **Review fractions for ten minutes**\n"
+        "**2. Take a short break between sets**\n"
+        "3. Ask which _problem felt hardest_ today"
+    ) == [
+        "Review fractions for ten minutes",
+        "Take a short break between sets",
+        "Ask which problem felt hardest today",
+    ]
+
+
+def test_validated_strategies_still_reads_asterisk_bullets():
+    """A leading "* " is a bullet, not emphasis -- unwrapping must not eat it."""
+    out = main._validated_strategies(
+        "* Review fractions for ten minutes\n"
+        "* Take a short break between sets\n"
+        "* Ask which problem felt hardest"
+    )
+    assert out == [
+        "Review fractions for ten minutes",
+        "Take a short break between sets",
+        "Ask which problem felt hardest",
+    ]
 
 
 def test_validated_strategies_accepts_and_strips_list_markers():
@@ -648,9 +752,10 @@ def test_learning_strategies_uses_validated_model_output(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
-    monkeypatch.setattr(main, "_llm_strategies", lambda *_a: ["a", "b", "c"])
+    refined = ["Review fractions for ten minutes", "Take a short break between sets"]
+    monkeypatch.setattr(main, "_llm_strategies", lambda *_a: refined)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
-    assert out["strategies"] == ["a", "b", "c"]
+    assert out["strategies"] == refined
     assert out["source"] == "model-refined"
 
 
@@ -682,9 +787,13 @@ def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
     """A server that accepts the connection and then stalls never raises, so
     without a deadline on the client this endpoint holds a worker thread open
     instead of falling back to the answer it guarantees."""
-    client = _fake_ollama(monkeypatch, lambda **_k: {"response": "1. a\n2. b\n3. c"})
+    client = _fake_ollama(monkeypatch, lambda **_k: {"response": _THREE_SAFE})
     monkeypatch.setattr(main, "STRATEGY_LLM_TIMEOUT", 7.5)
-    assert main._llm_strategies("prompt") == ["a", "b", "c"]
+    assert main._llm_strategies("prompt") == [
+        "Review fractions for ten minutes",
+        "Take a short break between sets",
+        "Ask which problem felt hardest",
+    ]
     assert client.last_kwargs.get("timeout") == 7.5
 
 

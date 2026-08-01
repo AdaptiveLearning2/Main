@@ -35,3 +35,16 @@ export function clearFacePref() {
     localStorage.removeItem(FACE_PREF_KEY)
   } catch { /* nothing to clean up if storage is unavailable */ }
 }
+
+// The other half of the setting: whether a payload already in hand was built
+// with facial data in it. The backend sets face_included=false when the viewer
+// opted out, which leaves every face field null -- indistinguishable from "the
+// camera recorded nothing" without the flag, and the two must not be rendered
+// the same way. Older payloads predate the field, so absent means included.
+//
+// Lives here rather than beside its first caller because the signal panels, the
+// weekly report and the parent dashboard all apply it. One definition, so the
+// surfaces cannot drift into disagreeing about what a missing flag means.
+export function faceIncluded(payload) {
+  return payload?.face_included !== false
+}

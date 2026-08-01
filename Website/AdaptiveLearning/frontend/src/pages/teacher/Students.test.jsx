@@ -151,4 +151,35 @@ describe('facial recognition switch', () => {
     await waitFor(() => expect(fromCalls).toContain('cognitive_signals'))
     expect(fromCalls).not.toContain('face_signals')
   })
+
+  it('discards a read that lands after a newer one under the same setting', async () => {
+    // Off and straight back on leaves two reads in flight that both carry
+    // faceIncluded=true. Keying the staleness check on that value alone let the
+    // older one land last and overwrite newer data with it.
+    const deferred = () => {
+      let resolve
+      const promise = new Promise(r => { resolve = r })
+      return { promise, resolve }
+    }
+    const first = deferred(), second = deferred(), third = deferred()
+
+    results.cognitive_signals = first.promise
+    render(<Students />)
+    await expandAda()                                   // read 1, face on
+
+    results.cognitive_signals = second.promise
+    await userEvent.click(screen.getByRole('switch'))   // read 2, face off
+    results.cognitive_signals = third.promise
+    await userEvent.click(screen.getByRole('switch'))   // read 3, face on again
+
+    third.resolve({ data: [{ focus: 0.6, stress: 0.3, engagement: 0.5 }], error: null })
+    await waitFor(() => expect(tile('Focus Score').getByText('60%')).toBeInTheDocument())
+
+    second.resolve({ data: [{ focus: 0.2, stress: 0.3, engagement: 0.5 }], error: null })
+    first.resolve({ data: [{ focus: 0.1, stress: 0.3, engagement: 0.5 }], error: null })
+    await waitFor(() => expect(fromCalls.filter(t => t === 'cognitive_signals')).toHaveLength(3))
+
+    expect(tile('Focus Score').getByText('60%')).toBeInTheDocument()
+    expect(screen.queryByText('10%')).not.toBeInTheDocument()
+  })
 })

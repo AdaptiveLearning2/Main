@@ -114,33 +114,39 @@ def _topic_breakdown(student_id: str):
     return out
 
 
-def _signal_summary(student_id: str, days: int = 7) -> dict:
+def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
     numbers, which is fine for one student on a detail page and wasteful on a
     list that loads every visit. This returns the same headline figures without
     transferring any rows -- see the student_signal_summary migration.
+
+    include_face=False is passed down into the aggregate, so no facial row is
+    read at all -- the same guarantee _weekly_signal_report makes, rather than
+    a null applied on the way out.
     """
     try:
         res = supabase.rpc("student_signal_summary",
-                           {"p_student_id": student_id, "p_days": days}).execute()
+                           {"p_student_id": student_id, "p_days": days,
+                            "p_include_face": include_face}).execute()
     except Exception as e:
         print(f"[signal_summary] {e}")
-        return _EMPTY_SUMMARY.copy()
+        return _shape_summary(None, include_face)
     rows = res.data or []
     row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    return _shape_summary(row)
+    return _shape_summary(row, include_face)
 
 
 _EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "sessions": 0,
-                  "cognitive_samples": 0, "face_samples": 0}
+                  "cognitive_samples": 0, "face_samples": 0,
+                  "face_included": True}
 
 
-def _shape_summary(row) -> dict:
+def _shape_summary(row, include_face: bool = True) -> dict:
     if not row:
-        return _EMPTY_SUMMARY.copy()
+        return {**_EMPTY_SUMMARY, "face_included": include_face}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -153,10 +159,15 @@ def _shape_summary(row) -> dict:
         # measurements specifically so that distinction holds.
         "cognitive_samples": row.get("cognitive_samples") or 0,
         "face_samples": row.get("face_samples") or 0,
+        # With the opt-out on, face_attention is null and face_samples 0 --
+        # identical to a student the camera never saw. Same distinction the
+        # weekly report draws with its own face_included.
+        "face_included": include_face,
     }
 
 
-def _signal_summaries(student_ids: list[str], days: int = 7) -> dict[str, dict]:
+def _signal_summaries(student_ids: list[str], days: int = 7,
+                      include_face: bool = True) -> dict[str, dict]:
     """Headline averages for many students in one round-trip.
 
     The single-student RPC removes the row transfer but still costs one
@@ -166,14 +177,16 @@ def _signal_summaries(student_ids: list[str], days: int = 7) -> dict[str, dict]:
         return {}
     try:
         res = supabase.rpc("student_signal_summary_many",
-                           {"p_student_ids": student_ids, "p_days": days}).execute()
+                           {"p_student_ids": student_ids, "p_days": days,
+                            "p_include_face": include_face}).execute()
     except Exception as e:
         print(f"[signal_summaries] {e}")
         return {}
     rows = res.data or []
     if isinstance(rows, dict):
         rows = [rows]
-    return {str(r.get("student_id")): _shape_summary(r) for r in rows if r.get("student_id")}
+    return {str(r.get("student_id")): _shape_summary(r, include_face)
+            for r in rows if r.get("student_id")}
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = True):
@@ -664,6 +677,12 @@ STRATEGY_LLM_TIMEOUT = float(os.getenv("STRATEGY_LLM_TIMEOUT", "20"))
 
 _STRATEGY_COUNT = 5
 _STRATEGY_MAX_CHARS = 320
+# A floor as well as a ceiling. Without one, a truncated or degenerate reply
+# ("1. a\n2. b\n3. c") passed every check and was served to a parent as
+# model-refined advice. Nothing useful to someone helping a child with maths
+# fits in fewer characters than this, and the rule-based list is always there
+# to fall back to.
+_STRATEGY_MIN_CHARS = 25
 
 # Clinical vocabulary that must not reach a parent from this endpoint. These
 # are learning-state indicators, not measurements of health, and a local model
@@ -681,6 +700,11 @@ _CLINICAL_TERMS = re.compile(
 
 # Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
 _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
+
+# Markdown emphasis a model wraps an item in ("1. **Keep sessions short**").
+# Stripped rather than left alone: nothing renders markdown between here and
+# the parent, so the asterisks would reach them as literal punctuation.
+_MD_EMPHASIS = re.compile(r"(\*{1,3}|_{1,3})(?=\S)(.+?)(?<=\S)\1")
 
 
 def _weakest_topic(topics: list[dict]):
@@ -818,10 +842,15 @@ def _parse_strategy_lines(raw: str) -> list[str]:
     model never wrote. Unmarked trailing chatter goes the same way, and a
     strategy wrapped across two lines keeps only its marked first line rather
     than splitting into two half-sentences.
+
+    Emphasis is unwrapped before the marker is stripped, not after: a model that
+    bolds the whole item ("**1. Keep sessions short**") puts an asterisk in
+    front of the number, which the marker pattern would otherwise consume as a
+    bullet and leave the digits behind as text.
     """
     lines = []
     for line in (raw or "").splitlines():
-        cleaned, marked = _LIST_MARKER.subn("", line)
+        cleaned, marked = _LIST_MARKER.subn("", _MD_EMPHASIS.sub(r"\2", line))
         cleaned = cleaned.strip()
         if marked and cleaned:
             lines.append(cleaned)
@@ -845,7 +874,10 @@ def _validated_strategies(raw: str) -> list[str] | None:
     lines = _parse_strategy_lines(raw)
     if len(lines) < 3:
         return None
-    if any(len(line) > _STRATEGY_MAX_CHARS for line in lines):
+    # Bounded at both ends. The ceiling catches a model that ran on; the floor
+    # catches one that produced list scaffolding with nothing in it -- "1. a"
+    # is well-formed, survives every other check, and is not advice.
+    if any(not _STRATEGY_MIN_CHARS <= len(line) <= _STRATEGY_MAX_CHARS for line in lines):
         return None
     return lines[:_STRATEGY_COUNT]
 
@@ -855,7 +887,10 @@ def _llm_strategies(prompt: str) -> list[str] | None:
 
     ollama is imported here rather than at module scope so this module stays
     importable — and the endpoint stays usable on the rule-based path — in an
-    environment where the package or the server is absent.
+    environment where the package is missing. requirements.txt pins it, so that
+    is a slimmed-down or partially-installed deployment rather than the normal
+    case; the routine failure this guards is the *server* being absent, which
+    surfaces as an exception from the call below.
 
     Goes through an explicit Client so the call carries STRATEGY_LLM_TIMEOUT.
     The module-level ollama.generate() has no deadline, and a server that
@@ -1448,7 +1483,14 @@ def link_child(payload: LinkChildRequest, request: Request):
     return {"ok": True, "child_id": payload.child_id, "child_name": p.get("display_name") or "Student"}
 
 @app.get("/api/parent/children")
-def my_children(request: Request):
+def my_children(request: Request, include_face: bool = True):
+    """A parent's linked children with their headline signal averages.
+
+    include_face=false carries the facial-recognition opt-out down into the
+    aggregate, so the dashboard honours the same control as the child's report.
+    Without it, switching facial reporting off on a report and navigating back
+    put facial attention straight back on screen.
+    """
     user = get_user(request)
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
@@ -1456,7 +1498,8 @@ def my_children(request: Request):
     # child inside the loop below. Note the rest of this loop is still a query
     # per child (stats, sessions, performance, profile); this fixes the query
     # added here, not the endpoint's overall shape.
-    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])])
+    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])],
+                                  include_face=include_face)
     children = []
     for lnk in (links.data or []):
         cid = lnk["child_id"]
@@ -1476,7 +1519,7 @@ def my_children(request: Request):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": summaries.get(str(cid)) or _EMPTY_SUMMARY.copy(),
+            "signal_summary": summaries.get(str(cid)) or _shape_summary(None, include_face),
         })
     return children
 

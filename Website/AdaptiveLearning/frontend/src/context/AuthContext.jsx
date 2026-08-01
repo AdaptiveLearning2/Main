@@ -19,7 +19,12 @@ export function AuthProvider({ children }) {
       setRole(session?.user ? extractRole(session.user) : null)
       setLoading(false)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // Covers the sign-outs that never go through signOut() below: an expired
+      // or revoked refresh token, and a sign-out performed in another tab. The
+      // preference is per-browser, not per-account, so every route out of a
+      // session has to drop it.
+      if (event === 'SIGNED_OUT') clearFacePref()
       setSession(session)
       setUser(session?.user ?? null)
       setRole(session?.user ? extractRole(session.user) : null)
@@ -43,11 +48,16 @@ export function AuthProvider({ children }) {
   }
 
   const signOut = async () => {
-    await supabase.auth.signOut()
-    // The facial-reporting preference lives in localStorage, which is scoped to
-    // the browser rather than the account. Leaving it behind hands the next
-    // person to sign in a privacy setting they never chose.
-    clearFacePref()
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      // In a finally, not after the await: a sign-out that fails on the network
+      // still leaves the user at the login screen, and the preference lives in
+      // localStorage, which is scoped to the browser rather than the account.
+      // Leaving it behind on a shared machine hands the next person to sign in
+      // a privacy setting they never chose.
+      clearFacePref()
+    }
   }
 
   return (

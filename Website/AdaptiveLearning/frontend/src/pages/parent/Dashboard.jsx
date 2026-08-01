@@ -4,6 +4,12 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
+// Same stored preference as the child's full report and the teacher student
+// list. This page shows a Face Attention tile per child, so leaving it out
+// meant switching the control off on a report and navigating back here put
+// facial data straight back on screen.
+import { readFacePref, writeFacePref, faceIncluded } from '../../lib/facePref'
 
 function percent(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return 'N/A'
@@ -19,13 +25,23 @@ export default function ParentDashboard() {
   const [children, setChildren]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
+  const [includeFace, setIncludeFace] = useState(readFacePref)
   const name = user?.email?.split('@')[0] || 'there'
 
   useEffect(() => {
-    apiFetch('/api/parent/children')
-      .then(c => { setChildren(c || []); setLoading(false) })
-      .catch(() => { setError(true); setLoading(false) })
-  }, [])
+    let cancelled = false
+    apiFetch(`/api/parent/children?include_face=${includeFace}`)
+      .then(c => { if (!cancelled) { setChildren(c || []); setLoading(false) } })
+      .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
+    // Toggling twice quickly can land the responses out of order, and the
+    // earlier one carries the facial data the switch is meant to exclude.
+    return () => { cancelled = true }
+  }, [includeFace])
+
+  function handleIncludeFaceChange(next) {
+    setIncludeFace(next)
+    writeFacePref(next)
+  }
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
@@ -33,6 +49,8 @@ export default function ParentDashboard() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
       </motion.div>
+
+      <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
 
       {loading ? (
         <div className="space-y-4">{[1,2].map(i => <div key={i} className="h-48 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
@@ -105,7 +123,10 @@ export default function ParentDashboard() {
                     {[
                       { icon: Brain,    label: 'Weekly Focus',   value: percent(signals.focus),          color: 'text-emerald-600' },
                       { icon: Zap,      label: 'Weekly Stress',  value: percent(signals.stress),         color: 'text-rose-600' },
-                      { icon: Eye,      label: 'Face Attention', value: percent(signals.face_attention), color: 'text-sky-600' },
+                      // "Off" rather than "N/A": the viewer switched facial
+                      // reporting off, which is a different statement from the
+                      // camera having recorded nothing.
+                      { icon: Eye,      label: 'Face Attention', value: faceIncluded(signals) ? percent(signals.face_attention) : 'Off', color: 'text-sky-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">
@@ -118,7 +139,13 @@ export default function ParentDashboard() {
                 ) : (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 dark:text-gray-400">
-                      No weekly EEG or facial-recognition signal data yet. Open the full report after the student completes an AI session.
+                      {/* Naming facial recognition with the switch off would
+                          report an absence that was never measured -- the same
+                          distinction the weekly report's summary draws. */}
+                      {faceIncluded(signals)
+                        ? 'No weekly EEG or facial-recognition signal data yet.'
+                        : 'No weekly EEG signal data yet.'}
+                      {' '}Open the full report after the student completes an AI session.
                     </div>
                   </div>
                 )}

@@ -1,13 +1,6 @@
 import { Activity, Brain, Eye, Radio, Sparkles, Zap } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-
-// Whether the report in hand actually contains facial data. The backend sets
-// face_included=false when the viewer opted out, which nulls every face field
-// -- indistinguishable from "the camera recorded nothing" without this flag.
-// Older payloads predate the field, so absent means included.
-function faceIncluded(report) {
-  return report?.face_included !== false
-}
+import { faceIncluded } from '../../lib/facePref'
 
 const FACE_OFF = 'Off'
 

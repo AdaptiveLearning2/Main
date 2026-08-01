@@ -16,8 +16,11 @@ export default function Students() {
   // page reads face_signals too, and honouring the control on one surface while
   // ignoring it here would make it meaningless.
   const [includeFace, setIncludeFace] = useState(readFacePref)
-  // Read inside async callbacks that captured an older render's value.
-  const includeFaceRef = useRef(includeFace)
+  // Identifies the fetch whose result is still wanted, per student. Keying the
+  // staleness check on the facial setting alone was not enough: flipping the
+  // switch off and back on leaves two requests in flight that both carry
+  // faceIncluded=true, so an older one landing last could overwrite newer data.
+  const statsRequestIds = useRef({})
 
   useEffect(() => {
     // pull users who registered with the 'student' role
@@ -91,19 +94,24 @@ export default function Students() {
   }
 
   async function refreshStats(studentId, withFace) {
+    const requestId = (statsRequestIds.current[studentId] || 0) + 1
+    statsRequestIds.current[studentId] = requestId
     setStatsLoading(prev => ({ ...prev, [studentId]: true }))
     const stats = await getStudentStats(studentId, withFace)
+    // Discard a superseded result. Without this a request that was still in
+    // flight when the switch was turned off lands afterwards and puts facial
+    // data back on screen -- and two requests under the same setting can still
+    // land out of order, leaving the older one's data on display.
+    if (requestId !== statsRequestIds.current[studentId]) return
+    // Cleared only by the newest request: a superseded one doing it would stop
+    // the indicator for the fetch still running, leaving the row showing
+    // neither a spinner nor data until the replacement lands.
     setStatsLoading(prev => ({ ...prev, [studentId]: false }))
-    // Discard a result read under a facial setting the viewer has since
-    // changed. Without this a request that was still in flight when the switch
-    // was turned off lands afterwards and puts facial data back on screen.
-    if (stats.faceIncluded !== includeFaceRef.current) return
     setStatsCache(prev => ({ ...prev, [studentId]: stats }))
   }
 
   function handleIncludeFaceChange(next) {
     setIncludeFace(next)
-    includeFaceRef.current = next
     writeFacePref(next)
     // Cached rows were read under the previous setting -- with facial data in
     // them, or without. Drop the cache so what is on screen matches the switch

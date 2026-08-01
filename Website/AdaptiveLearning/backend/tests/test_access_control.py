@@ -970,6 +970,34 @@ def test_validated_strategies_leaves_snake_case_intact():
     ]
 
 
+def test_validated_strategies_leaves_arithmetic_intact():
+    """Asterisks are only emphasis at a word boundary, same as underscores.
+
+    "*" is the multiplication sign, and this is a maths app. Matched anywhere,
+    the unwrapping treated two products in one line as one emphasis span and
+    deleted both asterisks: "practise 7*8 and 9*6" reached a parent as
+    "practise 78 and 96" -- a garbled line that passed every other check, being
+    well formed and the right length. Exactly the failure snake_case topic
+    names hit, and at least as reachable: the model is being asked for maths
+    practice advice.
+
+    Both products belong on one line. The delimiters have to pair up for the
+    old pattern to match at all, so a line carrying only one asterisk holds
+    nothing.
+    """
+    out = main._validated_strategies(
+        "1. Practise times tables such as 7*8 and 9*6 for five minutes each evening\n"
+        "2. Alternate practice with a short break between each set of questions\n"
+        "3. Ask which *problem felt hardest* at the end of the session"
+    )
+    assert out == [
+        "Practise times tables such as 7*8 and 9*6 for five minutes each evening",
+        "Alternate practice with a short break between each set of questions",
+        # Genuine emphasis, delimiters at a word boundary: still unwrapped.
+        "Ask which problem felt hardest at the end of the session",
+    ]
+
+
 def test_validated_strategies_still_reads_asterisk_bullets():
     """A leading "* " is a bullet, not emphasis -- unwrapping must not eat it."""
     out = main._validated_strategies(

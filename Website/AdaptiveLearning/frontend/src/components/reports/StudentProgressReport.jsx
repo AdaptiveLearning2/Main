@@ -128,6 +128,34 @@ export default function StudentProgressReport({
   function handleIncludeFaceChange(next) {
     setIncludeFace(next)
     writeFacePref(next)
+
+    // Drop the facial values from the report already on screen rather than
+    // leaving them up for the round-trip. The switch governs what gets read,
+    // but a viewer who has just asked to exclude facial data should not go on
+    // looking at it while the replacement request is in flight -- which is what
+    // happened here: the panels kept rendering the previous payload, whose
+    // face_included is true, so Face Attention, Dominant Emotion and the
+    // attention series stayed on screen with the switch already reading "off".
+    //
+    // face_included goes false in both directions, including when the switch is
+    // being turned back on, because the flag describes the payload in hand and
+    // this one no longer carries facial data. The panels therefore read "Off"
+    // until the response lands, rather than "N/A" -- which would report a
+    // measurement as missing when it is simply on its way. Same treatment the
+    // parent dashboard gives its own tiles.
+    //
+    // The per-day face_retrieved flags go to null, not false: null is "not
+    // requested", and leaving a cap-driven false behind would go on blaming a
+    // retrieval gap on facial data this report no longer shows.
+    setSignalReport(prev => prev && {
+      ...prev,
+      face_included: false,
+      averages:   { ...(prev.averages   || {}), face_attention: null },
+      highlights: { ...(prev.highlights || {}), dominant_emotion: null },
+      latest:     { ...(prev.latest     || {}), face: null },
+      daily: (prev.daily || []).map(d => ({ ...d, attention: null, face_retrieved: null })),
+    })
+
     // Built from a report that included facial data; keep it out of the way
     // rather than leaving advice on screen that the new setting excludes.
     //

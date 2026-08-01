@@ -73,6 +73,47 @@ it('re-fetches only the signal report when the toggle flips', async () => {
   expect(urlsFor('/stats/')).toHaveLength(academicBefore)
 })
 
+it('stops showing facial data as soon as the switch is off, not when the refetch lands', async () => {
+  // The switch reading "off" while the previous payload is still on screen is
+  // the guarantee this control exists to make, broken for the length of a
+  // round-trip. The report kept rendering a payload whose face_included is
+  // true, so the facial panels went on showing real measurements after the
+  // viewer asked for them to be excluded. Same scrubbing the parent dashboard
+  // does to its own tiles.
+  const faceReport = {
+    ...emptyReport,
+    averages:   { focus: 0.41, stress: 0.22, engagement: 0.33, face_attention: 0.72 },
+    highlights: { dominant_emotion: 'confused' },
+    latest:     { cognitive: { focus: 0.41 }, face: { attention: 0.72, emotion: 'confused' } },
+    daily:      [{ day: '2026-07-30', attention: 0.72, cognitive_retrieved: true, face_retrieved: true }],
+  }
+  let release
+  const pending = new Promise(resolve => { release = resolve })
+  let reportCalls = 0
+  apiFetch.mockImplementation((url) => {
+    const u = String(url)
+    if (u.includes('/weekly-report')) return ++reportCalls === 1 ? Promise.resolve(faceReport) : pending
+    if (u.includes('/stats/'))        return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
+    return Promise.resolve([])
+  })
+
+  renderReport()
+  await screen.findByText('Recent Sessions')
+  expect(screen.getAllByText('72%').length).toBeGreaterThan(0)
+
+  await userEvent.click(screen.getByRole('switch'))
+
+  // The replacement is still in flight, so this is the state the viewer is
+  // actually looking at.
+  await waitFor(() => expect(screen.queryByText('72%')).not.toBeInTheDocument())
+  expect(screen.queryByText('confused')).not.toBeInTheDocument()
+  // "Off", not "N/A": the measurement was excluded, not missing.
+  expect(screen.getAllByText('Off').length).toBeGreaterThan(0)
+
+  release({ ...emptyReport, face_included: false })
+  await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(2))
+})
+
 it('remembers the choice across mounts', async () => {
   const { unmount } = renderReport()
   await screen.findByText('Recent Sessions')

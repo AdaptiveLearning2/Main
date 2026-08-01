@@ -886,17 +886,29 @@ _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
 # Stripped rather than left alone: nothing renders markdown between here and
 # the parent, so the asterisks would reach them as literal punctuation.
 #
-# Split by delimiter, because the two need different rules. Underscores are
-# only emphasis at a word boundary: matched anywhere, and with the pattern
-# deleting its delimiters rather than spacing them, an item naming topics in
-# the form the tables store them came out mangled -- "review
-# angle_relationships and mean_median" became "review anglerelationships and
-# meanmedian", a garbled word served to a parent past every other check.
-# CommonMark draws the boundary in the same place and for the same reason, so
-# "_problem felt hardest_" is still unwrapped while snake_case is left alone.
+# Both delimiters need a word-boundary guard, for the same reason: the pattern
+# deletes its delimiters rather than spacing them, so a pair that was never
+# emphasis in the first place fuses the text around it into a garbled word --
+# well formed, the right length, and past every other check on its way to a
+# parent.
 #
-# Asterisks need no such guard: they do not occur inside words.
-_MD_ASTERISK = re.compile(r"(\*{1,3})(?=\S)(.+?)(?<=\S)\1")
+# Underscores: an item naming topics in the form the tables store them came out
+# as "review anglerelationships and meanmedian" from "review
+# angle_relationships and mean_median".
+#
+# Asterisks: not "they do not occur inside words" -- they do not occur inside
+# *words*, but this is a maths app and "*" is the multiplication sign. Two
+# products in one line pair up exactly as two snake_case terms did: "practise
+# 7*8 and 9*6" became "practise 78 and 96". CommonMark does allow intraword "*"
+# emphasis, so the unguarded pattern was spec-faithful -- but spec-fidelity is
+# not what this is for, and a model writing arithmetic here is at least as
+# likely as one writing two topic ids.
+#
+# Genuine emphasis is unaffected in both cases: the delimiters of "**Keep
+# sessions short**" and "_problem felt hardest_" are flanked by whitespace or
+# the line ends, and a bolded whole item ("**2. Take a break**") still unwraps
+# before the list marker is read.
+_MD_ASTERISK = re.compile(r"(?<![\w*])(\*{1,3})(?=\S)(.+?)(?<=\S)\1(?![\w*])")
 _MD_UNDERSCORE = re.compile(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
 
 

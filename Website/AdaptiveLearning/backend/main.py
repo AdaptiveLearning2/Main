@@ -123,6 +123,14 @@ def _rpc_signature_missing(exc) -> bool:
 
     PostgREST answers PGRST202 when nothing matches the name and argument list;
     Postgres itself uses SQLSTATE 42883 (undefined_function).
+
+    The fallback to matching the string form is deliberately loose -- these
+    clients do not expose a code attribute consistently, and "42883" could in
+    principle appear in unrelated error text. That is safe here because of where
+    the answer is used: _summary_rpc only retries when include_face is True, and
+    the retry just drops an argument whose new-signature default is also True.
+    A false positive therefore costs one extra round-trip and returns the same
+    rows. Do not reuse this to decide anything where a wrong True is not free.
     """
     code = getattr(exc, "code", None)
     if code in ("PGRST202", "42883"):
@@ -144,6 +152,13 @@ def _summary_rpc(name: str, params: dict, include_face: bool):
     calling it would read exactly the facial rows the caller asked us not to.
     A blank tile is the correct outcome there, and the UI already renders it as
     "Off" rather than as a measurement.
+
+    REMOVABLE once 20260801000000_signal_summary_include_face.sql is applied
+    everywhere this code runs. It exists only for the window between deploying
+    this build and running that migration, and after that the fallback branch is
+    unreachable -- but it has to outlive the deploy it guards, so it cannot go in
+    the same change that introduced it. Deleting it early re-opens exactly the
+    blank-dashboard failure it was added for.
     """
     try:
         return supabase.rpc(name, {**params, "p_include_face": include_face}).execute()
@@ -717,6 +732,25 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── at-home learning strategies ─────────────────────────────────────────
 
+def _env_number(name: str, default, cast):
+    """A numeric setting from the environment, falling back on a bad value.
+
+    These are read at import, so a typo in a deployment's environment would
+    otherwise raise ValueError before the app object exists -- taking down every
+    endpoint over a tuning parameter for one optional feature. Falling back to
+    the shipped default keeps the process up, and the log line is what says the
+    setting is not the one that was configured.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        print(f"[config] {name}={raw!r} is not a number; using {default}")
+        return default
+
+
 # The model pass is opt-in. Off, the endpoint answers from the deterministic
 # rules below and never opens a socket -- which is what CI, and any deployment
 # without a local Ollama, should do. Enabling it changes only whether the
@@ -727,7 +761,7 @@ STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
 # exception, so without an explicit timeout the endpoint would block one of a
 # small pool of worker threads indefinitely instead of falling back to the
 # rule-based answer the caller is guaranteed.
-STRATEGY_LLM_TIMEOUT = float(os.getenv("STRATEGY_LLM_TIMEOUT", "20"))
+STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float)
 
 # The model call runs here rather than on the request's own thread so the
 # deadline can actually be enforced.
@@ -759,8 +793,8 @@ _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strat
 # many per worker. That is deliberate: the point is to blunt one caller looping
 # on the button, and a shared counter would mean a cache or a table to keep it
 # in. Move it to one if the ceiling ever needs to be exact.
-_STRATEGY_RATE_LIMIT  = int(os.getenv("STRATEGY_RATE_LIMIT", "10"))
-_STRATEGY_RATE_WINDOW = float(os.getenv("STRATEGY_RATE_WINDOW", "60"))
+_STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int)
+_STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float)
 _strategy_hits: dict[str, list[float]] = {}
 _strategy_hits_lock = threading.Lock()
 

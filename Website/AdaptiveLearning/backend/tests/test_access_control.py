@@ -1040,6 +1040,31 @@ def test_pool_refusing_the_work_falls_back_rather_than_raising():
         main._STRATEGY_LLM_POOL = original_pool
 
 
+# ── numeric configuration ────────────────────────────────────────────────
+
+def test_bad_numeric_env_falls_back_instead_of_killing_the_process(monkeypatch):
+    """These are read at import, so a typo would raise before the app object
+    exists -- taking down every endpoint over a tuning parameter that belongs to
+    one optional feature."""
+    monkeypatch.setenv("STRATEGY_RATE_LIMIT", "ten")
+    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 10
+
+
+def test_unset_and_empty_numeric_env_use_the_default(monkeypatch):
+    monkeypatch.delenv("STRATEGY_RATE_WINDOW", raising=False)
+    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
+    # An exported-but-empty variable is the shape a shell leaves behind, and
+    # float("") raises just as loudly as float("abc").
+    monkeypatch.setenv("STRATEGY_RATE_WINDOW", "   ")
+    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float) == 60.0
+
+
+def test_valid_numeric_env_is_still_honoured(monkeypatch):
+    """The fallback must not swallow a setting that was configured correctly."""
+    monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
+    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float) == 2.5
+
+
 # ── strategy rate limit ──────────────────────────────────────────────────
 
 def _strategies_as(viewer, monkeypatch):

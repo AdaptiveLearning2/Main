@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # main.py builds a Supabase client at import time and raises without these.
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -980,6 +981,63 @@ def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch):
         assert not any("too late" in s for s in out["strategies"])
     finally:
         released.set()
+
+
+def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
+    """max_workers bounds the threads, not the queue behind them.
+
+    With every worker stuck on a stalled server, a submission that the caller
+    later gives up on still sits in the pool's work queue and runs once a worker
+    frees up. Left uncancelled, a sustained outage accumulates a backlog of
+    prompts nobody is waiting for and then generates every one of them against
+    the recovered server.
+    """
+    released = threading.Event()
+    started = []
+
+    def _work(prompt):
+        started.append(prompt)
+        released.wait(timeout=10)
+        return None
+
+    # A dedicated single-worker pool, so occupying it cannot disturb the
+    # module-level one the rest of the suite shares.
+    pool = ThreadPoolExecutor(max_workers=1)
+    original_pool = main._STRATEGY_LLM_POOL
+    original_llm = main._llm_strategies
+    original_timeout = main.STRATEGY_LLM_TIMEOUT
+    main._STRATEGY_LLM_POOL = pool
+    main._llm_strategies = _work
+    main.STRATEGY_LLM_TIMEOUT = 0.05
+    try:
+        blocker = pool.submit(main._llm_strategies, "occupying")
+        while not started:            # let it actually reach the worker, so
+            time.sleep(0.01)          # the next submission has to queue
+        assert main._llm_strategies_bounded("queued") is None
+        released.set()
+        blocker.result(timeout=10)
+    finally:
+        released.set()
+        pool.shutdown(wait=True)
+        main._STRATEGY_LLM_POOL = original_pool
+        main._llm_strategies = original_llm
+        main.STRATEGY_LLM_TIMEOUT = original_timeout
+
+    assert "queued" not in started, \
+        "the abandoned prompt still ran once a worker freed up"
+
+
+def test_pool_refusing_the_work_falls_back_rather_than_raising():
+    """submit() itself raises on a shut-down pool. That has to degrade to the
+    rule-based answer like every other model failure, not surface as a 500."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    pool.shutdown(wait=True)
+    original_pool = main._STRATEGY_LLM_POOL
+    main._STRATEGY_LLM_POOL = pool
+    try:
+        assert main._llm_strategies_bounded("prompt") is None
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
 
 
 # ── strategy rate limit ──────────────────────────────────────────────────

@@ -97,7 +97,20 @@ export default function Students() {
     const requestId = (statsRequestIds.current[studentId] || 0) + 1
     statsRequestIds.current[studentId] = requestId
     setStatsLoading(prev => ({ ...prev, [studentId]: true }))
-    const stats = await getStudentStats(studentId, withFace)
+    let stats
+    try {
+      stats = await getStudentStats(studentId, withFace)
+    } catch (err) {
+      // A throw here would otherwise leave the row's loading flag set forever,
+      // and toggleExpand treats a loading student as already handled -- so the
+      // row would show a spinner that collapsing and re-expanding never clears.
+      // Same stuck-row failure the supersede path below is careful to avoid.
+      console.error('Failed to load student stats:', err)
+      if (requestId === statsRequestIds.current[studentId]) {
+        setStatsLoading(prev => ({ ...prev, [studentId]: false }))
+      }
+      return
+    }
     // Discard a superseded result. Without this a request that was still in
     // flight when the switch was turned off lands afterwards and puts facial
     // data back on screen -- and two requests under the same setting can still

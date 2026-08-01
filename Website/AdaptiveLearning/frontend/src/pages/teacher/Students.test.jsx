@@ -15,14 +15,19 @@ vi.mock('../../lib/supabase', () => {
   // calls resolve. The builder is itself a thenable because two of the four
   // queries are awaited straight off .eq() with no limit()/maybeSingle().
   const query = (table) => {
-    const result = () => results[table] ?? { data: [], error: null }
+    // An Error stored for a table rejects rather than resolving, so a test can
+    // exercise the throw path as well as the { data, error } one.
+    const settle = () => {
+      const r = results[table] ?? { data: [], error: null }
+      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
+    }
     const q = {
       select: () => q,
       eq: () => q,
       order: () => q,
-      limit: () => Promise.resolve(result()),
-      maybeSingle: () => Promise.resolve(result()),
-      then: (res, rej) => Promise.resolve(result()).then(res, rej),
+      limit: () => settle(),
+      maybeSingle: () => settle(),
+      then: (res, rej) => settle().then(res, rej),
     }
     return q
   }
@@ -98,6 +103,25 @@ describe('signal averages', () => {
     await expandAda()
     // "0%" here would read as a real measurement of a struggling student.
     await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
+  })
+})
+
+describe('a failed read', () => {
+  it('leaves the row refetchable rather than stuck loading', async () => {
+    // The loading flag is what toggleExpand checks to decide a row is already
+    // handled. A read that throws without clearing it leaves the row showing a
+    // spinner that collapsing and re-expanding never clears -- the same stuck
+    // row the supersede path is careful to avoid.
+    results.user_stats = new Error('network down')
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(fromCalls.filter(t => t === 'user_stats')).toHaveLength(1))
+
+    setTables({ cognitive: [{ focus: 0.8, stress: 0.3, engagement: 0.5 }], face: [] })
+    await expandAda()   // collapse
+    await expandAda()   // and retry
+    await waitFor(() => expect(tile('Focus Score').getByText('80%')).toBeInTheDocument())
+    expect(fromCalls.filter(t => t === 'user_stats').length).toBeGreaterThan(1)
   })
 })
 

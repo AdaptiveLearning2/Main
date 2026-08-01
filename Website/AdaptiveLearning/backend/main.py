@@ -743,6 +743,11 @@ STRATEGY_LLM_TIMEOUT = float(os.getenv("STRATEGY_LLM_TIMEOUT", "20"))
 # is what eventually frees it. max_workers caps how many can pile up; past that,
 # submissions queue and time out on the same deadline, which degrades to the
 # rule-based answer rather than to unbounded threads.
+#
+# max_workers bounds the threads but not the queue behind them, so an abandoned
+# wait also cancels its future -- see _llm_strategies_bounded. Without that, a
+# stalled server turns every timed-out request into a work item that still runs
+# later, and the backlog is unbounded even though the thread count is not.
 _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strategy-llm")
 
 # Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
@@ -1031,13 +1036,28 @@ def _llm_strategies_bounded(prompt: str) -> list[str] | None:
 
     See _STRATEGY_LLM_POOL: the client-side timeout is per operation, so this
     is what holds when the transport keeps resetting it. Abandoning the wait
-    leaves the worker running -- there is no way to interrupt a blocking socket
-    read -- but the caller is no longer behind it, and the answer they get is
-    the rule-based one that was always the fallback.
+    leaves a *started* worker running -- there is no way to interrupt a blocking
+    socket read -- but the caller is no longer behind it, and the answer they
+    get is the rule-based one that was always the fallback.
     """
+    future = None
     try:
-        return _STRATEGY_LLM_POOL.submit(_llm_strategies, prompt).result(timeout=STRATEGY_LLM_TIMEOUT)
+        # Inside the try: submit() itself raises if the pool is shutting down,
+        # which the handler below turns into the rule-based fallback.
+        future = _STRATEGY_LLM_POOL.submit(_llm_strategies, prompt)
+        return future.result(timeout=STRATEGY_LLM_TIMEOUT)
     except FutureTimeoutError:
+        # Cancel, rather than just dropping the reference. Bounding the workers
+        # does not bound the queue behind them: with both busy on a stalled
+        # server, every further submission sits in the pool's work queue and
+        # still runs once a worker frees up. A sustained outage would otherwise
+        # accumulate a backlog of prompts nobody is waiting for any more, and
+        # then generate every one of them against the recovered server.
+        #
+        # Returns False for a task already running, which genuinely cannot be
+        # stopped -- but True for one that never started, which is exactly the
+        # case that piles up.
+        future.cancel()
         print(f"[learning_strategies:llm] abandoned after {STRATEGY_LLM_TIMEOUT}s")
         return None
     except Exception as e:

@@ -131,6 +131,34 @@ describe('at-home strategies', () => {
     await waitFor(() => expect(screen.queryByText('Review fractions')).not.toBeInTheDocument())
   })
 
+  it('discards a generation that lands after the toggle flips', async () => {
+    // Clearing the rendered list is not enough on its own: the request already
+    // in flight was built from a report that read facial data, and letting it
+    // resolve puts that advice back on screen after the viewer switched it off.
+    // Same stale-resolve the weekly report guards against.
+    let release
+    const pending = new Promise(resolve => { release = resolve })
+    apiFetch.mockImplementation((url) => {
+      const u = String(url)
+      if (u.includes('/learning-strategies')) return pending
+      if (u.includes('/stats/'))              return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
+      if (u.includes('/weekly-report'))       return Promise.resolve(emptyReport)
+      return Promise.resolve([])
+    })
+    renderReport({ showStrategies: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
+
+    await userEvent.click(screen.getByRole('switch'))
+    release({ strategies: ['Advice built from facial data'], source: 'rule-based' })
+
+    await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(2))
+    expect(screen.queryByText('Advice built from facial data')).not.toBeInTheDocument()
+    // Finding the button by its idle label also proves the superseded request
+    // did not leave the panel stuck on "Generating…".
+    expect(screen.getByRole('button', { name: /generate strategies/i })).toBeEnabled()
+  })
+
   it('surfaces a failure instead of silently showing nothing', async () => {
     apiFetch.mockImplementation((url) => {
       const u = String(url)

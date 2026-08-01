@@ -656,6 +656,11 @@ def student_topic_breakdown(student_id: str, request: Request):
 # rule-based answer gets a chance to be replaced.
 STRATEGY_LLM_ENABLED = os.getenv("STRATEGY_LLM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
+# Wall-clock budget for the whole model call. A hung Ollama server is not an
+# exception, so without an explicit timeout the endpoint would block one of a
+# small pool of worker threads indefinitely instead of falling back to the
+# rule-based answer the caller is guaranteed.
+STRATEGY_LLM_TIMEOUT = float(os.getenv("STRATEGY_LLM_TIMEOUT", "20"))
 
 _STRATEGY_COUNT = 5
 _STRATEGY_MAX_CHARS = 320
@@ -666,10 +671,11 @@ _STRATEGY_MAX_CHARS = 320
 # containing any of these is discarded wholesale rather than edited: a sentence
 # that needed a word removed to be safe is not a sentence to hand a parent.
 _CLINICAL_TERMS = re.compile(
-    r"\b(diagnos\w*|disorder\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
-    r"depress(?:ion|ive)|medicat\w*|prescri\w*|psychiatr\w*|psycholog(?:ist|ical)|"
-    r"clinical\w*|symptom\w*|disease\w*|syndrome\w*|patient\w*|"
-    r"therap(?:y|ist|ies)|treatment\w*|neurolog\w*|cognitive impairment)\b",
+    r"\b(diagnos\w*|disorder\w*|disabilit\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
+    r"depress(?:ion|ive)|anxiet\w*|anxious|medicat\w*|meds|prescri\w*|psychiatr\w*|"
+    r"psycholog\w*|counsel\w*|clinical\w*|symptom\w*|disease\w*|syndrome\w*|"
+    r"patient\w*|therap(?:y|ist|ies)|treatment\w*|neurolog\w*|"
+    r"cognitive impairment|special (?:needs|education\w*)|iep)\b",
     re.IGNORECASE,
 )
 
@@ -688,6 +694,18 @@ def _weakest_topic(topics: list[dict]):
     if not attempted:
         return None
     return min(attempted, key=lambda t: t.get("accuracy") or 0)
+
+
+def _weakest_topic_summary(topics: list[dict]) -> dict | None:
+    """Just the fields the strategies response is about."""
+    weakest = _weakest_topic(topics)
+    if not weakest:
+        return None
+    return {
+        "topic_name": weakest.get("topic_name"),
+        "accuracy": weakest.get("accuracy"),
+        "attempted_questions": weakest.get("attempted_questions"),
+    }
 
 
 def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
@@ -791,10 +809,21 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
 
 
 def _parse_strategy_lines(raw: str) -> list[str]:
+    """The list items of a model reply, in order.
+
+    Only lines that actually carried a list marker count. The prompt asks for a
+    numbered list and says no preamble, but nothing makes the model obey: taking
+    every non-empty line turned a lead-in like "Here are five strategies for
+    your child:" into strategy #1, handing a parent a numbered instruction the
+    model never wrote. Unmarked trailing chatter goes the same way, and a
+    strategy wrapped across two lines keeps only its marked first line rather
+    than splitting into two half-sentences.
+    """
     lines = []
     for line in (raw or "").splitlines():
-        cleaned = _LIST_MARKER.sub("", line).strip()
-        if cleaned:
+        cleaned, marked = _LIST_MARKER.subn("", line)
+        cleaned = cleaned.strip()
+        if marked and cleaned:
             lines.append(cleaned)
     return lines
 
@@ -806,12 +835,17 @@ def _validated_strategies(raw: str) -> list[str] | None:
     partial acceptance: a reply that breaks one rule has shown it is not
     following the prompt, and the rest of it has not earned more trust.
     """
+    # Judged on the whole reply, not just the lines that survive parsing. A
+    # model that volunteered a diagnosis in a preamble is not one whose
+    # remaining items have earned trust for being well punctuated -- and
+    # checking post-parse would let exactly that text set the framing while
+    # passing the filter.
+    if _CLINICAL_TERMS.search(raw or ""):
+        return None
     lines = _parse_strategy_lines(raw)
     if len(lines) < 3:
         return None
     if any(len(line) > _STRATEGY_MAX_CHARS for line in lines):
-        return None
-    if any(_CLINICAL_TERMS.search(line) for line in lines):
         return None
     return lines[:_STRATEGY_COUNT]
 
@@ -822,10 +856,15 @@ def _llm_strategies(prompt: str) -> list[str] | None:
     ollama is imported here rather than at module scope so this module stays
     importable — and the endpoint stays usable on the rule-based path — in an
     environment where the package or the server is absent.
+
+    Goes through an explicit Client so the call carries STRATEGY_LLM_TIMEOUT.
+    The module-level ollama.generate() has no deadline, and a server that
+    accepts the connection and then stalls never raises — so the promise that
+    any failure is a fallback rather than a 500 only holds with it attached.
     """
     try:
-        from ollama import generate
-        resp = generate(
+        from ollama import Client
+        resp = Client(timeout=STRATEGY_LLM_TIMEOUT).generate(
             model=STRATEGY_LLM_MODEL,
             prompt=prompt,
             options={"temperature": 0.4},
@@ -880,7 +919,11 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
             "days": days,
             "face_included": payload.include_face,
             "averages": report.get("averages") or {},
-            "weakest_topic": _weakest_topic(topics),
+            # Named fields rather than the whole _topic_breakdown row, which
+            # also carries topic_id, a stress reading and updated_at — none of
+            # which this response is about, and all of which would become part
+            # of its contract by accident.
+            "weakest_topic": _weakest_topic_summary(topics),
         },
     }
 

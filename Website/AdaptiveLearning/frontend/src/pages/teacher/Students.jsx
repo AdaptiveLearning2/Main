@@ -1,15 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap} from 'lucide-react'
+import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
+import { readFacePref, writeFacePref } from '../../lib/facePref'
 
 export default function Students() {
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   const [search, setSearch]     = useState('')
   const [expandedId, setExpandedId] = useState(null)
-  const [statsCache, setStatsCache] = useState({})   
-  const [statsLoading, setStatsLoading] = useState({}) 
+  const [statsCache, setStatsCache] = useState({})
+  const [statsLoading, setStatsLoading] = useState({})
+  // Same switch, same stored preference, as the student progress report. This
+  // page reads face_signals too, and honouring the control on one surface while
+  // ignoring it here would make it meaningless.
+  const [includeFace, setIncludeFace] = useState(readFacePref)
+  // Read inside async callbacks that captured an older render's value.
+  const includeFaceRef = useRef(includeFace)
 
   useEffect(() => {
     // pull users who registered with the 'student' role
@@ -79,21 +87,46 @@ export default function Students() {
     }
     setExpandedId(studentId)
     if (statsCache[studentId] || statsLoading[studentId]) return
+    await refreshStats(studentId, includeFace)
+  }
 
+  async function refreshStats(studentId, withFace) {
     setStatsLoading(prev => ({ ...prev, [studentId]: true }))
-    const stats = await getStudentStats(studentId)
-    setStatsCache(prev => ({ ...prev, [studentId]: stats }))
+    const stats = await getStudentStats(studentId, withFace)
     setStatsLoading(prev => ({ ...prev, [studentId]: false }))
+    // Discard a result read under a facial setting the viewer has since
+    // changed. Without this a request that was still in flight when the switch
+    // was turned off lands afterwards and puts facial data back on screen.
+    if (stats.faceIncluded !== includeFaceRef.current) return
+    setStatsCache(prev => ({ ...prev, [studentId]: stats }))
+  }
+
+  function handleIncludeFaceChange(next) {
+    setIncludeFace(next)
+    includeFaceRef.current = next
+    writeFacePref(next)
+    // Cached rows were read under the previous setting -- with facial data in
+    // them, or without. Drop the cache so what is on screen matches the switch
+    // rather than whatever happened to be fetched first.
+    setStatsCache({})
+    if (expandedId) refreshStats(expandedId, next)
   }
 
   // Signals are stored as 0..1 ratios in cognitive_signals and face_signals,
   // which is the interpretation the original placeholders were waiting on. The
   // rest of the app scales them by 100 at render (Live.jsx's Gauge,
   // SignalPanel's pct), so these do too.
+  //
+  // Nulls are dropped before the conversion, not after: every signal column is
+  // nullable, and Number(null) is 0 -- which Number.isFinite happily accepts,
+  // pulling the average down and turning a student with no usable readings into
+  // a confident "0%" rather than "no data".
   const avg = (rows, key) => {
     const vals = rows
-      .map(r => Number(r[key]))
-      .filter(v => Number.isFinite(v))
+      .map(r => r[key])
+      .filter(v => v !== null && v !== undefined)
+      .map(Number)
+      .filter(Number.isFinite)
     if (!vals.length) return null
     return vals.reduce((a, b) => a + b, 0) / vals.length
   }
@@ -107,7 +140,11 @@ export default function Students() {
   // "face: teacher read" policies scope these to students in a class the
   // signed-in teacher owns. A teacher outside that relationship gets zero rows
   // rather than an error.
-  async function getStudentStats(studentId)
+  //
+  // withFace=false skips the face_signals query outright rather than hiding the
+  // result, matching what the weekly-report endpoint does for the same switch:
+  // the point of the control is that the data is not read.
+  async function getStudentStats(studentId, withFace = true)
   {
      const [statsRes, signalsRes, faceRes, topicRes] = await Promise.all([
       supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
@@ -116,11 +153,13 @@ export default function Students() {
         .eq('user_id', studentId)
         .order('ts', { ascending: false })
         .limit(200),
-      supabase.from('face_signals')
-        .select('attention, emotion, ts')
-        .eq('user_id', studentId)
-        .order('ts', { ascending: false })
-        .limit(200),
+      withFace
+        ? supabase.from('face_signals')
+            .select('attention, emotion, ts')
+            .eq('user_id', studentId)
+            .order('ts', { ascending: false })
+            .limit(200)
+        : Promise.resolve({ data: [], error: null }),
       supabase.from('user_math_performance')
         .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
         .eq('user_id', studentId)
@@ -158,6 +197,9 @@ export default function Students() {
       dominantEmotion,
       signalCount: signals.length,
       faceSignalCount: faceSignals.length,
+      // Lets the panel say "Off" rather than "—": a switched-off control is a
+      // different statement from a student with no facial readings.
+      faceIncluded: withFace,
       topics: (topicRes.data || []).map(row => {
         const attempted = row.attempted_questions || 0
         const correct = row.correct_questions || 0
@@ -188,6 +230,10 @@ export default function Students() {
         <input value={search} onChange={e => setSearch(e.target.value)}
           className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 transition"
           placeholder="Search students..." />
+      </div>
+
+      <div className="mb-6">
+        <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
       </div>
 
       {loading ? (
@@ -303,18 +349,25 @@ export default function Students() {
                                 sub={stats.signalCount ? `${stats.signalCount} EEG readings` : 'no EEG data'}
                                 color="indigo"
                               />
+                              {/* "Off" rather than "—": the viewer switched
+                                  facial reporting off, which is a different
+                                  statement from having no reading. */}
                               <StatCard
                                 icon={<Eye size={16} />}
                                 label="Face Attention"
-                                value={stats.faceAttention ?? '—'}
-                                sub={stats.faceSignalCount ? `${stats.faceSignalCount} face readings` : 'no face data'}
+                                value={stats.faceIncluded ? (stats.faceAttention ?? '—') : 'Off'}
+                                sub={stats.faceIncluded
+                                  ? (stats.faceSignalCount ? `${stats.faceSignalCount} face readings` : 'no face data')
+                                  : 'reporting off'}
                                 color="sky"
                               />
                               <StatCard
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
-                                value={stats.dominantEmotion ?? '—'}
-                                sub={stats.faceSignalCount ? 'most frequent this window' : 'no face data'}
+                                value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
+                                sub={stats.faceIncluded
+                                  ? (stats.faceSignalCount ? 'most frequent this window' : 'no face data')
+                                  : 'reporting off'}
                                 color="violet"
                               />
                             </div>

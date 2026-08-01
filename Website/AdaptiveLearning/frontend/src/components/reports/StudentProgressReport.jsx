@@ -1,30 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, LiveSignalSummary, FacialRecognitionToggle, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
-
-const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
-
 // Persisted so the choice survives navigation between students -- switching
 // facial reporting off and having it silently come back on the next page is
-// the kind of thing that makes a privacy control untrustworthy.
-const FACE_PREF_KEY = 'signal_include_face'
+// the kind of thing that makes a privacy control untrustworthy. Shared with the
+// teacher student list, which reads the same facial signals.
+import { readFacePref, writeFacePref } from '../../lib/facePref'
 
-function readFacePref() {
-  try {
-    return localStorage.getItem(FACE_PREF_KEY) !== 'false'
-  } catch {
-    return true   // Safari private mode and friends: default to the normal report.
-  }
-}
-
-function writeFacePref(enabled) {
-  try {
-    localStorage.setItem(FACE_PREF_KEY, enabled ? 'true' : 'false')
-  } catch { /* preference is best-effort; the toggle still works this session */ }
-}
+const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
 /**
  * A single student's full learning report: academic stat cards, the weekly
@@ -70,6 +56,10 @@ export default function StudentProgressReport({
   const [strategySource, setStrategySource]   = useState(null)
   const [strategyError, setStrategyError]     = useState(null)
   const [strategyLoading, setStrategyLoading] = useState(false)
+  // Identifies the generation request whose result is still wanted. Bumped by
+  // both a new generation and the facial toggle, so a response that lands after
+  // either cannot overwrite what replaced it.
+  const strategyRequestId = useRef(0)
 
   // Academic stats and the name. Deliberately not re-run when the facial
   // toggle flips: none of this depends on it, and re-fetching three endpoints
@@ -140,12 +130,20 @@ export default function StudentProgressReport({
     writeFacePref(next)
     // Built from a report that included facial data; keep it out of the way
     // rather than leaving advice on screen that the new setting excludes.
+    //
+    // Bumping the request id matters as much as clearing the state: a
+    // generation already in flight was built from a report that read facial
+    // data, and letting it resolve would put that advice back on screen after
+    // the viewer switched it off.
+    strategyRequestId.current += 1
     setStrategies(null)
     setStrategySource(null)
     setStrategyError(null)
+    setStrategyLoading(false)
   }
 
   async function generateStrategies() {
+    const requestId = ++strategyRequestId.current
     setStrategyLoading(true)
     setStrategyError(null)
     try {
@@ -153,14 +151,18 @@ export default function StudentProgressReport({
         method: 'POST',
         body: { include_face: includeFace },
       })
+      if (requestId !== strategyRequestId.current) return
       setStrategies(res.strategies || [])
       setStrategySource(res.source || null)
     } catch (err) {
+      if (requestId !== strategyRequestId.current) return
       setStrategies(null)
       setStrategySource(null)
       setStrategyError(err.message || 'Could not generate strategies right now.')
     } finally {
-      setStrategyLoading(false)
+      // Only the newest request owns the spinner; a superseded one clearing it
+      // would stop the indicator for the generation still running.
+      if (requestId === strategyRequestId.current) setStrategyLoading(false)
     }
   }
 

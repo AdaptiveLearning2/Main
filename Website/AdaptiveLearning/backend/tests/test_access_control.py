@@ -482,6 +482,21 @@ def test_weakest_topic_ignores_topics_with_no_attempts():
     assert main._weakest_topic([{"topic_name": "x", "attempted_questions": 0, "accuracy": 0}]) is None
 
 
+def test_weakest_topic_summary_carries_only_the_named_fields():
+    """The _topic_breakdown row also holds topic_id, a stress reading and
+    updated_at. Returning it whole made all of those part of this endpoint's
+    response contract by accident."""
+    topics = [{
+        "topic_id": 3, "topic_name": "geometry", "attempted_questions": 10,
+        "correct_questions": 4, "accuracy": 40, "stress": 0.8,
+        "updated_at": "2026-07-30T00:00:00Z",
+    }]
+    assert main._weakest_topic_summary(topics) == {
+        "topic_name": "geometry", "accuracy": 40, "attempted_questions": 10,
+    }
+    assert main._weakest_topic_summary([]) is None
+
+
 def test_rule_based_strategies_react_to_elevated_stress():
     high = main._rule_based_strategies({"averages": {"stress": 0.8, "focus": 0.7}}, [])
     calm = main._rule_based_strategies({"averages": {"stress": 0.2, "focus": 0.7}}, [])
@@ -512,14 +527,66 @@ def test_strategy_prompt_carries_no_identifying_data():
     assert "70%" in prompt
 
 
+# Three well-formed items. Prefixing the clinical cases with these makes the
+# safety filter the reason they are rejected -- written as one-liners they were
+# also failing the "fewer than three items" check, so the assertions would have
+# held even with the clinical filter removed entirely.
+_THREE_SAFE = (
+    "1. Review fractions for ten minutes\n"
+    "2. Take a short break between sets\n"
+    "3. Ask which problem felt hardest"
+)
+
+
 @pytest.mark.parametrize("bad", [
-    "1. Try flashcards\n2. This suggests your child may have dyslexia",
-    "1. Ask about symptoms of their learning disorder",
-    "1. Consider whether ADHD medication would help",
-    "1. Speak to a therapist about the results",
+    "4. This suggests your child may have dyslexia",
+    "4. Ask about symptoms of their learning disorder",
+    "4. Consider whether ADHD medication would help",
+    "4. Speak to a therapist about the results",
+    "4. This may point to a learning disability",
+    "4. Ask the school counsellor to take a look",
+    "4. A bit of psychology explains the pattern",
+    "4. These are classic signs of anxiety",
+    "4. Look into special educational needs support",
 ])
 def test_validated_strategies_rejects_clinical_language(bad):
-    assert main._validated_strategies(bad) is None
+    assert main._validated_strategies(f"{_THREE_SAFE}\n{bad}") is None
+
+
+def test_validated_strategies_rejects_clinical_language_outside_the_list():
+    """Checked against the whole reply, not just the lines that survive parsing.
+
+    An unmarked preamble is dropped, so a diagnosis there would never reach a
+    parent -- but a model that volunteered one is not following the prompt, and
+    the items it happened to format correctly have not earned more trust.
+    """
+    assert main._validated_strategies(
+        f"Note: these results suggest dyslexia.\n{_THREE_SAFE}") is None
+
+
+def test_validated_strategies_drops_an_unmarked_preamble():
+    """Every non-empty line used to count as a strategy, so a lead-in became
+    numbered advice a parent was handed and the model never wrote."""
+    out = main._validated_strategies(
+        "Here are five strategies for your child:\n"
+        f"{_THREE_SAFE}\n"
+        "Hope this helps!"
+    )
+    assert out == [
+        "Review fractions for ten minutes",
+        "Take a short break between sets",
+        "Ask which problem felt hardest",
+    ]
+
+
+def test_validated_strategies_rejects_prose_with_no_list():
+    """No markers means nothing was parsed as an item, so there is no reply to
+    accept -- the rule-based list stands."""
+    assert main._validated_strategies(
+        "Your child should practise more often.\n"
+        "Keep the sessions short.\n"
+        "Praise the effort rather than the score."
+    ) is None
 
 
 def test_validated_strategies_rejects_a_reply_that_is_too_short():
@@ -587,13 +654,38 @@ def test_learning_strategies_uses_validated_model_output(monkeypatch):
     assert out["source"] == "model-refined"
 
 
+def _fake_ollama(monkeypatch, generate):
+    """Install a stand-in ollama module exposing a Client with `generate`."""
+    class _Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            _Client.last_kwargs = kwargs
+
+        def generate(self, **call_kwargs):
+            return generate(**call_kwargs)
+
+    module = type(sys)("ollama")
+    module.Client = _Client
+    monkeypatch.setitem(sys.modules, "ollama", module)
+    return _Client
+
+
 def test_llm_strategies_returns_none_when_ollama_is_unreachable(monkeypatch):
     """Any failure reaching the model is a fallback, not a 500."""
-    def _boom(*_a, **_k):
+    def _boom(**_k):
         raise ConnectionError("connection refused")
-    monkeypatch.setitem(sys.modules, "ollama", type(sys)("ollama"))
-    sys.modules["ollama"].generate = _boom
+    _fake_ollama(monkeypatch, _boom)
     assert main._llm_strategies("prompt") is None
+
+
+def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
+    """A server that accepts the connection and then stalls never raises, so
+    without a deadline on the client this endpoint holds a worker thread open
+    instead of falling back to the answer it guarantees."""
+    client = _fake_ollama(monkeypatch, lambda **_k: {"response": "1. a\n2. b\n3. c"})
+    monkeypatch.setattr(main, "STRATEGY_LLM_TIMEOUT", 7.5)
+    assert main._llm_strategies("prompt") == ["a", "b", "c"]
+    assert client.last_kwargs.get("timeout") == 7.5
 
 
 def test_learning_strategies_clamps_the_day_range(monkeypatch):

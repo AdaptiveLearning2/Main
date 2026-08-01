@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { clearFacePref } from '../lib/facePref'
 
 const AuthContext = createContext()
 
@@ -43,6 +44,10 @@ export function AuthProvider({ children }) {
 
   const signOut = async () => {
     await supabase.auth.signOut()
+    // The facial-reporting preference lives in localStorage, which is scoped to
+    // the browser rather than the account. Leaving it behind hands the next
+    // person to sign in a privacy setting they never chose.
+    clearFacePref()
   }
 
   return (

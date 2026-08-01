@@ -256,8 +256,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     """
     since = _iso_days_ago(days)
 
-    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool]:
-        """Rows (newest first) plus whether the server withheld any.
+    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None]:
+        """Rows (newest first), whether the server withheld any, and the total.
 
         Truncation is detected from an exact count rather than from
         len(rows) >= limit. PostgREST applies its own db-max-rows ceiling
@@ -265,6 +265,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         silently trim the result while len(rows) never reached _REPORT_ROW_CAP
         -- leaving truncated=False and the whole guard disabled. Comparing
         against the count the server reports works whichever limit binds.
+
+        That count is worth returning as well as comparing: for sessions it is
+        the figure the report is actually about, and it is exact whether or not
+        the cap bound. None means the server reported no count.
         """
         try:
             res = supabase.table(table).select("*", count="exact") \
@@ -272,21 +276,22 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
                 .order(ts_col, desc=True).limit(limit).execute()
             rows = res.data or []
             total = getattr(res, "count", None)
-            # count=None means the client/server didn't report one; fall back
+            if not isinstance(total, int):
+                total = None
+            # total=None means the client/server didn't report one; fall back
             # to the length heuristic rather than claiming nothing was cut.
-            was_cut = (total > len(rows)) if isinstance(total, int) else len(rows) >= limit
-            return rows, was_cut
+            was_cut = (total > len(rows)) if total is not None else len(rows) >= limit
+            return rows, was_cut, total
         except Exception as e:
             print(f"[weekly_report:{table}] {e}")
-            return [], False
+            return [], False, None
 
-    cog, cog_cut = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face else ([], False)
-    # Truncation kept, not discarded. sample_counts.sessions is rendered as the
-    # report's Sessions figure, so a student over the cap was shown a count
+    cog, cog_cut, _ = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    face, face_cut, _ = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face else ([], False, None)
+    # Truncation kept, not discarded. A student over the cap was shown a count
     # that silently stopped at it -- and with the other two tables under their
     # own cap, `truncated` stayed False and nothing said so.
-    sessions, ses_cut = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
+    sessions, ses_cut, ses_total = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
     # back empty and would be reported as "no activity" rather than "not
@@ -391,6 +396,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # "the camera recorded nothing". Both leave every face field null.
         "face_included": include_face,
         "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
+        # How many sessions there *were*, as opposed to how many rows came back
+        # under _SESSION_ROW_CAP. sample_counts is rows-retrieved throughout, so
+        # rendering its sessions figure as the report's headline showed a heavy
+        # week as exactly the cap -- while the parent dashboard, which counts in
+        # Postgres, showed the real number for the same child and week. Falls
+        # back to the row count when the server reported no exact count, which
+        # is the same fallback the truncation check makes.
+        "sessions_recorded": ses_total if ses_total is not None else len(sessions),
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
@@ -785,9 +798,10 @@ STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float)
 _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strategy-llm")
 
 # Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
-# trigger by clicking a button -- two capped signal reads, a topic breakdown,
-# and optionally a model call -- and the button is repeatable at whatever rate
-# they can click.
+# trigger by clicking a button -- an aggregate over both signal tables, a topic
+# breakdown, and optionally a model call -- and the button is repeatable at
+# whatever rate they can click. The model call dominates, which is why the
+# limit stayed after _strategy_basis dropped the row transfer.
 #
 # In-process, so with multiple uvicorn workers the effective ceiling is this
 # many per worker. That is deliberate: the point is to blunt one caller looping
@@ -797,6 +811,13 @@ _STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int)
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float)
 _strategy_hits: dict[str, list[float]] = {}
 _strategy_hits_lock = threading.Lock()
+# When the sweep below last ran. Size alone was not a sufficient trigger: past
+# the threshold with that many *active* callers, every request scanned the
+# whole dict and deleted nothing, holding the lock to do it. Pairing size with
+# an interval keeps the sweep proportional to time rather than to traffic.
+_strategy_sweep_at = 0.0
+_STRATEGY_SWEEP_EVERY = 60.0
+_STRATEGY_SWEEP_ABOVE = 1024
 
 
 def _rate_limit_strategies(user_id: str):
@@ -805,12 +826,18 @@ def _rate_limit_strategies(user_id: str):
     Timed on monotonic(), not wall-clock: a clock adjustment would otherwise
     either wipe the window or extend it arbitrarily.
     """
+    global _strategy_sweep_at
     now = time.monotonic()
     with _strategy_hits_lock:
         # The dict is keyed by caller, so it grows with everyone who has ever
         # used the endpoint. Sweeping it only once it is large keeps the common
-        # path a single lookup rather than a scan of every known caller.
-        if len(_strategy_hits) > 1024:
+        # path a single lookup rather than a scan of every known caller, and
+        # only once per interval keeps it that way when the dict is large
+        # because the callers are real -- where a size-only trigger scanned
+        # everything on every request and freed nothing.
+        if (len(_strategy_hits) > _STRATEGY_SWEEP_ABOVE
+                and now - _strategy_sweep_at >= _STRATEGY_SWEEP_EVERY):
+            _strategy_sweep_at = now
             for uid in [u for u, ts in _strategy_hits.items()
                         if all(now - t >= _STRATEGY_RATE_WINDOW for t in ts)]:
                 del _strategy_hits[uid]
@@ -858,7 +885,23 @@ _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
 # Markdown emphasis a model wraps an item in ("1. **Keep sessions short**").
 # Stripped rather than left alone: nothing renders markdown between here and
 # the parent, so the asterisks would reach them as literal punctuation.
-_MD_EMPHASIS = re.compile(r"(\*{1,3}|_{1,3})(?=\S)(.+?)(?<=\S)\1")
+#
+# Split by delimiter, because the two need different rules. Underscores are
+# only emphasis at a word boundary: matched anywhere, and with the pattern
+# deleting its delimiters rather than spacing them, an item naming topics in
+# the form the tables store them came out mangled -- "review
+# angle_relationships and mean_median" became "review anglerelationships and
+# meanmedian", a garbled word served to a parent past every other check.
+# CommonMark draws the boundary in the same place and for the same reason, so
+# "_problem felt hardest_" is still unwrapped while snake_case is left alone.
+#
+# Asterisks need no such guard: they do not occur inside words.
+_MD_ASTERISK = re.compile(r"(\*{1,3})(?=\S)(.+?)(?<=\S)\1")
+_MD_UNDERSCORE = re.compile(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
+
+
+def _strip_emphasis(line: str) -> str:
+    return _MD_UNDERSCORE.sub(r"\2", _MD_ASTERISK.sub(r"\2", line))
 
 
 def _weakest_topic(topics: list[dict]):
@@ -883,6 +926,42 @@ def _weakest_topic_summary(topics: list[dict]) -> dict | None:
         "topic_name": weakest.get("topic_name"),
         "accuracy": weakest.get("accuracy"),
         "attempted_questions": weakest.get("attempted_questions"),
+    }
+
+
+def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
+    """The slice of a weekly report this endpoint actually reads.
+
+    Built from the aggregate RPC rather than _weekly_signal_report. Between
+    them _rule_based_strategies and _strategy_prompt use six numbers, and the
+    full report transfers up to _REPORT_ROW_CAP rows from each signal table
+    plus the sessions query to arrive at them -- the same waste _signal_summary
+    was added to remove from the parent dashboard, on the endpoint that is also
+    the heaviest thing a click can trigger.
+
+    Shaped like a report because the two consumers read report keys, and both
+    are also called directly on real reports by the weekly-report tests.
+
+    Two differences from the report's own figures, both improvements:
+    sessions is Postgres's count rather than a row count capped at
+    _SESSION_ROW_CAP, and averages carries no identity_confidence -- a
+    face-recognition confidence score that this response was never about and
+    that only reached `basis` because the whole averages dict was passed along.
+
+    include_face is threaded down into the aggregate, so with the opt-out on no
+    facial row is read here either.
+    """
+    summary = _signal_summary(student_id, days, include_face=include_face)
+    return {
+        "days": days,
+        "face_included": summary["face_included"],
+        "averages": {
+            "focus": summary["focus"],
+            "stress": summary["stress"],
+            "engagement": summary["engagement"],
+            "face_attention": summary["face_attention"],
+        },
+        "sample_counts": {"sessions": summary["sessions"]},
     }
 
 
@@ -1004,7 +1083,7 @@ def _parse_strategy_lines(raw: str) -> list[str]:
     """
     lines = []
     for line in (raw or "").splitlines():
-        cleaned, marked = _LIST_MARKER.subn("", _MD_EMPHASIS.sub(r"\2", line))
+        cleaned, marked = _LIST_MARKER.subn("", _strip_emphasis(line))
         cleaned = cleaned.strip()
         if marked and cleaned:
             lines.append(cleaned)
@@ -1117,6 +1196,10 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
     optional model pass is enabled *and* its output passes _validated_strategies,
     and `source` says which of those happened.
 
+    Reads its signal figures through _strategy_basis, which aggregates in
+    Postgres -- the full weekly report pulls thousands of rows to produce the
+    handful of numbers the rules and the prompt use.
+
     Rate limited per caller. The access check runs first so a caller with no
     relationship to the student still gets 403 rather than having the answer
     masked by a 429; the limit then guards the expensive part below.
@@ -1126,7 +1209,7 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
     _rate_limit_strategies(viewer["id"])
 
     days = max(1, min(payload.days, 30))
-    report = _weekly_signal_report(student_id, days, include_face=payload.include_face)
+    report = _strategy_basis(student_id, days, payload.include_face)
     topics = _topic_breakdown(student_id)
 
     strategies = _rule_based_strategies(report, topics)

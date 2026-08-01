@@ -160,10 +160,15 @@ export default function ParentDashboard() {
                     <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 dark:text-gray-400">
                       {/* Naming facial recognition with the switch off would
                           report an absence that was never measured -- the same
-                          distinction the weekly report's summary draws. */}
+                          distinction the weekly report's summary draws.
+                          Saying nothing at all about it is not enough either:
+                          hasSignalSummary reached "no data" without consulting
+                          any facial reading, and the copy has to be clear that
+                          is the scope of the claim rather than leaving a
+                          parent to read it as covering everything. */}
                       {faceIncluded(signals)
                         ? 'No weekly EEG or facial-recognition signal data yet.'
-                        : 'No weekly EEG signal data yet.'}
+                        : 'No weekly EEG signal data yet, and facial signals were not read.'}
                       {' '}Open the full report after the student completes an AI session.
                     </div>
                   </div>

@@ -53,6 +53,26 @@ describe('WeeklySignalReport', () => {
     expect(metric('Sessions').queryByText('500%')).not.toBeInTheDocument()
   })
 
+  it('shows how many sessions there were, not how many rows came back', () => {
+    // sample_counts is rows-retrieved throughout, so under the session row cap
+    // this tile showed exactly the cap while the parent dashboard -- counting
+    // the same week in Postgres -- showed the real number for the same child.
+    const busy = {
+      ...report,
+      truncated: true,
+      sample_counts: { ...report.sample_counts, sessions: 100 },
+      sessions_recorded: 137,
+    }
+    render(<WeeklySignalReport report={busy} />)
+    expect(metric('Sessions').getByText('137')).toBeInTheDocument()
+    expect(metric('Sessions').queryByText('100')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the row count for payloads predating the field', () => {
+    render(<WeeklySignalReport report={report} />)
+    expect(metric('Sessions').getByText('5')).toBeInTheDocument()
+  })
+
   it('shows N/A in the affected tile when a metric is missing', () => {
     const partial = { ...report, averages: { ...report.averages, focus: null } }
     render(<WeeklySignalReport report={partial} />)

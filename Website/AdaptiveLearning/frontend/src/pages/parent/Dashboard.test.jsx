@@ -194,3 +194,23 @@ it('still renders facial data for payloads predating the flag', async () => {
   await screen.findByText('Ada')
   expect(tile('Face Attention').getByText('85%')).toBeInTheDocument()
 })
+
+it('says facial signals were not read when there is nothing else to show', async () => {
+  // hasSignalSummary reaches "no data" without consulting a single facial
+  // reading, so the copy has to be clear that is the scope of the claim --
+  // otherwise a parent reads it as covering everything.
+  const empty = [{
+    ...withFace[0],
+    signal_summary: {
+      focus: null, stress: null, face_attention: null, sessions: 0,
+      cognitive_samples: 0, face_samples: 0, face_included: false,
+    },
+  }]
+  apiFetch.mockImplementation(() => Promise.resolve(empty))
+
+  renderDashboard()
+
+  await screen.findByText(/no weekly EEG signal data yet, and facial signals were not read/i)
+  // The absence it must not report is the one it never measured.
+  expect(screen.queryByText(/facial-recognition signal data yet/i)).not.toBeInTheDocument()
+})

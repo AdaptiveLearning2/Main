@@ -43,7 +43,6 @@ export default function Students() {
       .eq('classes.teacher_id', user.id)
 
       if (error) console.error('Failed to load students:', error)
-      console.log('raw result:', data)
 
       if(cancelled)
         return
@@ -427,9 +426,20 @@ export default function Students() {
                               </div>
                             )}
 
-                            {stats.totalQuestions === 0 && stats.signalCount === 0 && stats.faceSignalCount === 0 && (
+                            {/* The facial clause only applies when facial data
+                                was actually read. With the switch off
+                                faceSignalCount is 0 by construction, so
+                                including it unconditionally let this claim
+                                "no sessions" for a student whose only recorded
+                                activity was the facial signals we were asked
+                                not to look at. What the copy asserts is
+                                narrowed to what was checked. */}
+                            {stats.totalQuestions === 0 && stats.signalCount === 0 &&
+                             (!stats.faceIncluded || stats.faceSignalCount === 0) && (
                               <p className="text-xs text-gray-400 mt-3">
-                                This student hasn't completed any sessions yet.
+                                {stats.faceIncluded
+                                  ? "This student hasn't completed any sessions yet."
+                                  : 'No question or EEG activity yet — facial signals were not read.'}
                               </p>
                             )}
                           </>

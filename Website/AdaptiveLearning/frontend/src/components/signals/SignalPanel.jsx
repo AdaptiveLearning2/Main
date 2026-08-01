@@ -120,7 +120,12 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
         <MiniMetric label="Face Attention" value={faceOn ? pct(avg.face_attention) : FACE_OFF} icon={Eye} tone="sky" />
-        <MiniMetric label="Sessions" value={counts.sessions ?? 0} icon={Radio} tone="amber" />
+        {/* sessions_recorded, not sample_counts.sessions: the latter is rows
+            retrieved under the session row cap, so a heavy week showed exactly
+            the cap here while the parent dashboard -- which counts in Postgres
+            -- showed the real number for the same child and week. Falls back
+            for payloads predating the field. */}
+        <MiniMetric label="Sessions" value={report?.sessions_recorded ?? counts.sessions ?? 0} icon={Radio} tone="amber" />
       </div>
 
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">

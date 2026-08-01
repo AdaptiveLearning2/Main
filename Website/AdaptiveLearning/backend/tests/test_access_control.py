@@ -187,8 +187,10 @@ def reset_strategy_rate_limit():
     whichever of them happens to run eleventh.
     """
     main._strategy_hits.clear()
+    main._strategy_sweep_at = 0.0
     yield
     main._strategy_hits.clear()
+    main._strategy_sweep_at = 0.0
 
 
 # ── _can_view_student ────────────────────────────────────────────────────
@@ -419,6 +421,41 @@ _PGRST202 = "PGRST202: Could not find the function public.student_signal_summary
 def _rejects_include_face(_name, params):
     """A database that has these functions but not the p_include_face form."""
     return RuntimeError(_PGRST202) if "p_include_face" in params else None
+
+
+def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypatch):
+    """sample_counts is rows-retrieved throughout, and rendering its sessions
+    figure as the report headline showed a heavy week as exactly the cap --
+    while the parent dashboard, counting the same week in Postgres, showed the
+    real number. sessions_recorded is the count the report is actually about.
+    """
+    sessions = [{"id": f"s{i}", "user_id": "student-1", "started_at": _ts(1, hour=i % 24)}
+                for i in range(137)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], sessions)))
+    report = main._weekly_signal_report("student-1")
+    assert report["sample_counts"]["sessions"] == main._SESSION_ROW_CAP   # rows we hold
+    assert report["sessions_recorded"] == 137                             # sessions there were
+    assert report["truncated"] is True
+
+
+def test_weekly_report_session_count_falls_back_when_none_is_reported(monkeypatch):
+    """A client or server that reports no exact count leaves the row count as
+    the only figure available -- the same fallback the truncation check makes,
+    rather than a null where a number belongs."""
+    class _NoCountQuery(_Query):
+        def select(self, *a, **kw):
+            kw.pop("count", None)   # a server that answers without one
+            return super().select(*a, **kw)
+
+    class _NoCount(_FakeSupabase):
+        def table(self, name):
+            self.table_calls.append(name)
+            return _NoCountQuery(self._tables.get(name, []))
+
+    monkeypatch.setattr(main, "supabase", _NoCount(_signal_tables(
+        [], [], [{"id": "s1", "user_id": "student-1", "started_at": _ts(1)}])))
+    report = main._weekly_signal_report("student-1")
+    assert report["sessions_recorded"] == 1
 
 
 def test_signal_summary_survives_a_database_without_the_flag(monkeypatch):
@@ -656,6 +693,73 @@ def _strategy_tables(topic_rows=None, cog_rows=None):
     }
 
 
+def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch):
+    """The rules and the prompt use six numbers between them.
+
+    Reading them out of _weekly_signal_report transferred up to _REPORT_ROW_CAP
+    rows from each signal table to arrive at them, on the endpoint that is also
+    the heaviest thing a click can trigger. Asserted on the queries rather than
+    the output: identical numbers can be reached either way, and which is what
+    this is about.
+    """
+    fake = _FakeSupabase(
+        {**TABLES, **_strategy_tables()},
+        rpc_results={"student_signal_summary": [{
+            "focus": 0.7, "stress": 0.3, "engagement": 0.5,
+            "face_attention": 0.8, "sessions": 137,
+            "cognitive_samples": 900, "face_samples": 400,
+        }]},
+    )
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
+
+    assert "cognitive_signals" not in fake.table_calls
+    assert "face_signals" not in fake.table_calls
+    assert [name for name, _ in fake.rpc_calls] == ["student_signal_summary"]
+    assert out["basis"]["averages"]["focus"] == 0.7
+
+
+def test_strategy_basis_counts_sessions_in_postgres(monkeypatch):
+    """The aggregate's session count is exact.
+
+    The report's figure is a row count under _SESSION_ROW_CAP, so a busy week
+    reached the model as "practice sessions recorded: 100" however many there
+    really were.
+    """
+    fake = _FakeSupabase(
+        {**TABLES, **_strategy_tables()},
+        rpc_results={"student_signal_summary": [{"sessions": 137}]},
+    )
+    monkeypatch.setattr(main, "supabase", fake)
+    basis = main._strategy_basis("student-1", 7, True)
+    assert basis["sample_counts"]["sessions"] == 137
+
+
+def test_strategy_basis_drops_identity_confidence(monkeypatch):
+    """basis.averages is the response contract. identity_confidence is a
+    face-recognition confidence score this endpoint was never about, and it was
+    in there only because the report's whole averages dict was passed along."""
+    fake = _FakeSupabase(
+        {**TABLES, **_strategy_tables()},
+        rpc_results={"student_signal_summary": [{"focus": 0.7}]},
+    )
+    monkeypatch.setattr(main, "supabase", fake)
+    basis = main._strategy_basis("student-1", 7, True)
+    assert set(basis["averages"]) == {"focus", "stress", "engagement", "face_attention"}
+
+
+def test_strategy_basis_threads_the_opt_out_into_the_aggregate(monkeypatch):
+    """Same guarantee the other surfaces make: with the switch off, no facial
+    row is read here either."""
+    fake = _FakeSupabase({**TABLES, **_strategy_tables()},
+                         rpc_results={"student_signal_summary": []})
+    monkeypatch.setattr(main, "supabase", fake)
+    main._strategy_basis("student-1", 7, False)
+    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    assert "face_signals" not in fake.table_calls
+
+
 def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
     """Same gate as every other student-data endpoint: the relationship, not a
     role claim. The service-role client bypasses RLS, so this check is the only
@@ -840,6 +944,32 @@ def test_validated_strategies_unwraps_markdown_emphasis():
     ]
 
 
+def test_validated_strategies_leaves_snake_case_intact():
+    """Underscores are only emphasis at a word boundary.
+
+    Matched anywhere, the unwrapping treated two topics named the way the
+    tables store them as one emphasis span and deleted both underscores:
+    "angle_relationships and mean_median" reached a parent as
+    "anglerelationships and meanmedian" -- garbled words that passed every
+    other check, the line being well formed and the right length.
+
+    Both snake_case terms belong on one line. The delimiters have to pair up
+    for the old pattern to match at all, so a line carrying only one underscore
+    holds nothing.
+    """
+    out = main._validated_strategies(
+        "1. Review angle_relationships and mean_median for ten minutes each evening\n"
+        "2. Alternate practice with a short break between each set of questions\n"
+        "3. Ask which _problem felt hardest_ at the end of the session"
+    )
+    assert out == [
+        "Review angle_relationships and mean_median for ten minutes each evening",
+        "Alternate practice with a short break between each set of questions",
+        # Genuine emphasis, delimiters at a word boundary: still unwrapped.
+        "Ask which problem felt hardest at the end of the session",
+    ]
+
+
 def test_validated_strategies_still_reads_asterisk_bullets():
     """A leading "* " is a bullet, not emphasis -- unwrapping must not eat it."""
     out = main._validated_strategies(
@@ -894,7 +1024,7 @@ def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monk
     monkeypatch.setattr(main, "_llm_strategies", lambda *_a: None)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
     baseline = main._rule_based_strategies(
-        main._weekly_signal_report("student-1"), [])
+        main._strategy_basis("student-1", 7, True), [])
     assert out["strategies"] == baseline
     assert out["source"] == "rule-based (model output rejected)"
 
@@ -1115,6 +1245,33 @@ def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch):
         with pytest.raises(main.HTTPException) as exc:
             _strategies_as(STRANGER, monkeypatch)
         assert exc.value.status_code == 403
+
+
+def test_rate_limit_sweep_reclaims_callers_whose_window_has_passed(monkeypatch):
+    """The dict grows with everyone who has ever used the endpoint."""
+    monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
+    monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 0.0)   # every hit already expired
+    for i in range(4):
+        main._rate_limit_strategies(f"user-{i}")
+    # The sweep runs on the call that crosses the threshold, so the caller
+    # being served is the one left behind.
+    assert len(main._strategy_hits) == 1
+
+
+def test_rate_limit_sweep_does_not_run_on_every_request(monkeypatch):
+    """Past the size threshold with that many *active* callers there is nothing
+    to reclaim, and a size-only trigger rescanned the whole dict on every
+    request -- under the lock -- to discover that each time."""
+    monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
+    scans = []
+    real_items = dict.items
+    monkeypatch.setattr(main, "_strategy_hits",
+                        type("_Counted", (dict,), {
+                            "items": lambda self: (scans.append(1), real_items(self))[1],
+                        })())
+    for i in range(6):
+        main._rate_limit_strategies(f"user-{i}")
+    assert len(scans) == 1, f"swept {len(scans)} times for 6 requests"
 
 
 def test_learning_strategies_clamps_the_day_range(monkeypatch):

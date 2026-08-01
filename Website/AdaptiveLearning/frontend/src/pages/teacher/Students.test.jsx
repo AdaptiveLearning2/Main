@@ -231,3 +231,34 @@ describe('facial recognition switch', () => {
     expect(screen.queryByText('10%')).not.toBeInTheDocument()
   })
 })
+
+describe('the "nothing recorded" note', () => {
+  it('does not claim no sessions on the strength of facial data it never read', async () => {
+    // faceSignalCount is 0 by construction with the switch off, so including
+    // it in the condition unconditionally let this assert "no sessions" for a
+    // student whose only recorded activity was the facial signals we were
+    // asked not to look at.
+    setTables({ cognitive: [], face: [{ attention: 0.9, emotion: 'happy' }] })
+    results.user_stats = { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null }
+
+    render(<Students />)
+    await userEvent.click(await screen.findByRole('switch'))
+    await expandAda()
+
+    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
+    expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
+    // What was actually checked, stated as such.
+    expect(screen.getByText(/facial signals were not read/i)).toBeInTheDocument()
+  })
+
+  it('still says so when everything was read and there was nothing', async () => {
+    setTables({ cognitive: [], face: [] })
+    results.user_stats = { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null }
+
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() =>
+      expect(screen.getByText(/hasn't completed any sessions yet/i)).toBeInTheDocument())
+  })
+})

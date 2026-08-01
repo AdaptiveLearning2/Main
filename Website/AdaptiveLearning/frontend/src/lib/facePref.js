@@ -1,6 +1,22 @@
 // Whether the signed-in viewer wants facial-recognition data read into the
 // surfaces that show it.
 //
+// SCOPE, stated because the alternative reading is a much stronger promise
+// than this keeps: it is a *viewer-side read control*, not stored consent. It
+// governs what the browser in front of you asks for, and every surface honours
+// it by not issuing the query. It does NOT stop facial signals being recorded
+// about a student, and it does not travel with the student -- a parent
+// switching it off changes what their own browser reads, while another viewer
+// with their own switch on still sees that child's facial data.
+//
+// Making it consent over a child's biometrics would be a different feature: a
+// per-student setting held server-side and enforced where face_signals is
+// written, not a per-browser preference applied at read time. That is issue
+// #47; nothing here should be described as consent until it lands, and this
+// comment needs revisiting when it does. The toggle copy in SignalPanel is
+// written to match this scope ("this does not switch a camera on or off") --
+// keep the two in step.
+//
 // Shared rather than owned by one component: the student progress report and
 // the teacher student list both read facial signals, and a privacy switch that
 // one surface honours while a sibling ignores it is worse than no switch --

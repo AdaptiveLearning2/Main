@@ -152,6 +152,30 @@ describe('facial recognition switch', () => {
     expect(fromCalls).not.toContain('face_signals')
   })
 
+  it('discards a read left in flight by a row collapsed before the switch flipped', async () => {
+    // Only the expanded row's request used to be superseded. A student
+    // collapsed mid-read kept its request id, so the read landed afterwards
+    // and cached facial data under the new setting -- and toggleExpand skips
+    // the fetch when the cache is warm, so re-expanding served it straight
+    // back with the switch off.
+    let resolveCog
+    results.cognitive_signals = new Promise(r => { resolveCog = r })
+
+    render(<Students />)
+    await expandAda()                                   // read starts, face on
+    await expandAda()                                   // collapse, still loading
+    await userEvent.click(screen.getByRole('switch'))   // face off
+
+    resolveCog({ data: [{ focus: 0.8, stress: 0.3, engagement: 0.5 }], error: null })
+    await waitFor(() => expect(fromCalls).toContain('face_signals'))
+
+    await expandAda()
+    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
+    // The stale read must not have satisfied the cache either -- a row that
+    // never refetches shows nothing at all.
+    expect(tile('Focus Score').getByText('80%')).toBeInTheDocument()
+  })
+
   it('discards a read that lands after a newer one under the same setting', async () => {
     // Off and straight back on leaves two reads in flight that both carry
     // faceIncluded=true. Keying the staleness check on that value alone let the

@@ -9,8 +9,12 @@ export default function ChildDetail() {
   // Report-independent name source: the child's name comes from the children
   // list, so the heading survives a weekly-report failure. Memoised so it stays
   // stable across renders (the report runs it inside a studentId-keyed effect).
+  // include_face=false unconditionally: this call wants a name, and the
+  // endpoint reads face_signals for every linked child otherwise. Leaving it
+  // at the default had this page reading facial data for the whole family
+  // while its own switch said facial signals are not read.
   const nameFetch = useCallback(
-    () => apiFetch('/api/parent/children')
+    () => apiFetch('/api/parent/children?include_face=false')
       .then(children => children.find(c => c.user_id === id)?.name || null),
     [id],
   )

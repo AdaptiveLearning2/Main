@@ -113,10 +113,20 @@ export default function Students() {
   function handleIncludeFaceChange(next) {
     setIncludeFace(next)
     writeFacePref(next)
+    // Supersede every read in flight, not just the expanded row's. A student
+    // collapsed while its read was still running keeps that request, and
+    // nothing else would stop it landing afterwards and caching facial data
+    // under the new setting -- served straight back on the next expand, since
+    // toggleExpand skips the fetch when the cache is warm.
+    for (const id of Object.keys(statsRequestIds.current)) statsRequestIds.current[id] += 1
     // Cached rows were read under the previous setting -- with facial data in
     // them, or without. Drop the cache so what is on screen matches the switch
     // rather than whatever happened to be fetched first.
     setStatsCache({})
+    // Every in-flight read is superseded above, so none of them will clear
+    // their own flag. Left set, the row is stuck: toggleExpand treats a
+    // loading student as already handled and never refetches it.
+    setStatsLoading({})
     if (expandedId) refreshStats(expandedId, next)
   }
 

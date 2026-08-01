@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Trophy } from 'lucide-react'
-import { useAuth } from '../../context/AuthContext'
 import { apiFetch } from '../../lib/api'
 
 export default function Leaderboard() {
-  const { user } = useAuth()
   const [rows, setRows]       = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(false)
@@ -16,7 +14,10 @@ export default function Leaderboard() {
       .catch(() => { setError(true); setLoading(false) })
   }, [])
 
-  const myId = user?.id
+  // Which row is "you" comes from the backend as is_me. It used to be decided
+  // here by comparing the signed-in id against a user_id on every row, which
+  // meant the response had to carry everyone's UUID to answer a question about
+  // one of them.
   const RANK_BADGE = { 1: 'bg-yellow-400 text-white', 2: 'bg-gray-400 text-white', 3: 'bg-orange-400 text-white' }
   const MEDALS     = ['🥇','🥈','🥉']
 
@@ -37,7 +38,7 @@ export default function Leaderboard() {
             const heights = ['h-16', 'h-24', 'h-12']
             const colors  = ['bg-gray-400', 'bg-yellow-400', 'bg-orange-400']
             return (
-              <motion.div key={p.user_id}
+              <motion.div key={p.rank}
                 initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 + 0.1 }}
                 className={`flex flex-col items-center ${sizes[i]}`}
@@ -73,9 +74,9 @@ export default function Leaderboard() {
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
           {rows.map((p, i) => {
             const acc  = p.total_questions > 0 ? Math.round((p.total_correct / p.total_questions) * 100) : 0
-            const isMe = p.user_id === myId
+            const isMe = p.is_me
             return (
-              <motion.div key={p.user_id}
+              <motion.div key={p.rank}
                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 + 0.2 }}
                 whileHover={{ x: 4 }}
                 className={`flex items-center justify-between px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 transition-colors hover:bg-slate-50 dark:hover:bg-gray-800 ${isMe ? 'ring-2 ring-inset ring-indigo-400' : ''}`}

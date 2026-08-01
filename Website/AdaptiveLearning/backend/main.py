@@ -625,17 +625,38 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── leaderboard ─────────────────────────────────────────────────────────
 
+_LEADERBOARD_MAX = 100
+
+
 @app.get("/api/leaderboard")
 def leaderboard(request: Request, limit: int = 20):
-    get_user(request)
+    """Top students by correct answers.
+
+    This reads through the service-role client, so RLS does not apply and the
+    caller's `limit` is the only thing bounding how much of the user base comes
+    back -- with names attached. Unclamped, /api/leaderboard?limit=999999 was a
+    full directory of every user and their activity, for any signed-in caller.
+
+    user_id is resolved but never returned. The page only needs to know which
+    row is the viewer's own, and handing out a UUID -> display_name map for
+    everyone on the board is what turned the (separately fixed) open read on
+    user_stats into something that could be tied back to named students.
+    """
+    user = get_user(request)
     res = supabase.table("user_stats") \
         .select("user_id, total_correct, total_questions, current_streak, best_streak") \
-        .order("total_correct", desc=True).limit(limit).execute()
+        .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
     enriched = []
     for i, row in enumerate(rows):
-        p = _profile(row["user_id"])
-        enriched.append({**row, "display_name": p.get("display_name") or "Student", "rank": i + 1})
+        uid = row.pop("user_id", None)
+        p = _profile(uid)
+        enriched.append({
+            **row,
+            "display_name": p.get("display_name") or "Student",
+            "rank": i + 1,
+            "is_me": uid == user["id"],
+        })
     return enriched
 
 

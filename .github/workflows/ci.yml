@@ -90,6 +90,46 @@ jobs:
             echo "no tests/ directory yet — skipping"
           fi
 
+  database-migrations:
+    name: Database migrations
+    runs-on: ubuntu-latest
+    # Nothing in CI applied the migrations before this job. The "Supabase
+    # Preview" check reported by the Supabase GitHub app is a per-PR preview
+    # branch on the hosted project, and it reports "skipped" -- the feature is
+    # switched off in the project's integration settings, so a migration could
+    # reach main having never been executed anywhere but a developer's laptop.
+    #
+    # This runs the real thing rather than a bare postgres: the migrations
+    # reference auth.uid() and grant to the anon / authenticated / service_role
+    # roles, none of which exist in stock postgres. The local Supabase stack
+    # ships all of them, so a migration that passes here is one that will apply
+    # against the hosted project.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Excludes the services that have no bearing on whether SQL applies.
+      # The database, and the auth/rest containers that own the roles and
+      # schema the migrations reference, still come up.
+      - name: Start local Supabase
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector
+
+      # `supabase start` applies migrations on the way up, so this is the
+      # second application -- deliberately. It proves the set applies cleanly
+      # from an empty database in filename order, which is the property that
+      # matters when the hosted project runs them, and it fails loudly on a
+      # migration that only works against a database that already has its
+      # changes (the "works on my machine because I ran it by hand" case).
+      - name: Apply migrations from scratch
+        run: supabase db reset
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup
+
   frontend-build:
     name: Frontend tests, build & lint
     runs-on: ubuntu-latest

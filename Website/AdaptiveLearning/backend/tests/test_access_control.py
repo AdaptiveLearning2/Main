@@ -1223,6 +1223,44 @@ def test_valid_numeric_env_is_still_honoured(monkeypatch):
     assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float) == 2.5
 
 
+@pytest.mark.parametrize("raw", ["0", "-1"])
+def test_out_of_range_numeric_env_is_clamped_not_honoured(raw, monkeypatch):
+    """A number is not automatically a usable setting.
+
+    Each of these parses, so the ValueError fallback never fires, and each
+    disables its feature in whichever direction the parameter points: a rate
+    limit of zero makes `len(hits) >= limit` true on the first request and 429s
+    every caller; a window of zero leaves every hit already expired, so nothing
+    is counted and the ceiling silently is not there; a timeout of zero has the
+    wait expire before the model can answer, so the pass is off while
+    STRATEGY_LLM_ENABLED still says it is on.
+    """
+    monkeypatch.setenv("STRATEGY_RATE_LIMIT", raw)
+    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1) == 1
+
+
+def test_clamping_is_to_the_minimum_not_back_to_the_default(monkeypatch):
+    """A deployer who wrote a small number was asking for a small number, so
+    the nearest usable value is a better answer than the shipped one."""
+    monkeypatch.setenv("STRATEGY_RATE_WINDOW", "0.25")
+    assert main._env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0) == 1.0
+
+
+def test_in_range_values_are_untouched_by_the_floor(monkeypatch):
+    monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "2.5")
+    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 2.5
+    # No minimum given: unchanged behaviour for callers that do not want one.
+    monkeypatch.setenv("STRATEGY_RATE_LIMIT", "0")
+    assert main._env_number("STRATEGY_RATE_LIMIT", 10, int) == 0
+
+
+def test_the_shipped_settings_carry_a_floor():
+    """The floors are only worth anything if the real settings ask for them."""
+    assert main._STRATEGY_RATE_LIMIT >= 1
+    assert main._STRATEGY_RATE_WINDOW >= 1.0
+    assert main.STRATEGY_LLM_TIMEOUT >= 1.0
+
+
 # ── strategy rate limit ──────────────────────────────────────────────────
 
 def _strategies_as(viewer, monkeypatch):

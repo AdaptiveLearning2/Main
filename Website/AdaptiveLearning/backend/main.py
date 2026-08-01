@@ -745,7 +745,7 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── at-home learning strategies ─────────────────────────────────────────
 
-def _env_number(name: str, default, cast):
+def _env_number(name: str, default, cast, minimum=None):
     """A numeric setting from the environment, falling back on a bad value.
 
     These are read at import, so a typo in a deployment's environment would
@@ -753,15 +753,27 @@ def _env_number(name: str, default, cast):
     endpoint over a tuning parameter for one optional feature. Falling back to
     the shipped default keeps the process up, and the log line is what says the
     setting is not the one that was configured.
+
+    `minimum` extends that to values that parse but are not usable. A number is
+    not automatically a setting: every caller here has a floor below which the
+    value does not tune the feature but disables or breaks it, quietly and in
+    whichever direction the parameter happens to point -- see the call sites.
+    Clamping rather than falling back to the default, because a deployer who
+    wrote a small number was asking for a small number, and the nearest usable
+    one is closer to that than the shipped value is.
     """
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
         return default
     try:
-        return cast(raw)
+        value = cast(raw)
     except (TypeError, ValueError):
         print(f"[config] {name}={raw!r} is not a number; using {default}")
         return default
+    if minimum is not None and value < minimum:
+        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
+        return minimum
+    return value
 
 
 # The model pass is opt-in. Off, the endpoint answers from the deterministic
@@ -774,7 +786,12 @@ STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
 # exception, so without an explicit timeout the endpoint would block one of a
 # small pool of worker threads indefinitely instead of falling back to the
 # rule-based answer the caller is guaranteed.
-STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float)
+#
+# Floored: at zero or below, future.result() times out before the model can
+# answer at all, so the pass is permanently switched off while STRATEGY_LLM_
+# ENABLED still says it is on -- and the only symptom is every reply being
+# "rule-based (model output rejected)".
+STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
 
 # The model call runs here rather than on the request's own thread so the
 # deadline can actually be enforced.
@@ -807,8 +824,17 @@ _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strat
 # many per worker. That is deliberate: the point is to blunt one caller looping
 # on the button, and a shared counter would mean a cache or a table to keep it
 # in. Move it to one if the ceiling ever needs to be exact.
-_STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int)
-_STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float)
+#
+# Both floored, and they fail in opposite directions. A limit of zero or less
+# makes `len(hits) >= limit` true on the first request, so every caller gets
+# 429 and the feature is bricked over a tuning parameter -- the failure mode
+# _env_number exists to prevent for a typo, reached by a value that parses. A
+# window of zero or less makes every recorded hit already expired, so nothing
+# is ever counted and the ceiling silently is not there. Neither is a way to
+# turn the limiter off: there is no such setting, and if one is ever wanted it
+# should be explicit rather than an out-of-range number.
+_STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
+_STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _strategy_hits: dict[str, list[float]] = {}
 _strategy_hits_lock = threading.Lock()
 # When the sweep below last ran. Size alone was not a sufficient trigger: past

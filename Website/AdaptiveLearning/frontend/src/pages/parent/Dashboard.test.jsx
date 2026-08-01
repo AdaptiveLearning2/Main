@@ -195,6 +195,27 @@ it('still renders facial data for payloads predating the flag', async () => {
   expect(tile('Face Attention').getByText('85%')).toBeInTheDocument()
 })
 
+it('does not show a row of N/As for a reading it has no tile for', async () => {
+  // hasSignalSummary tracks what the tiles can render, not what the summary
+  // carries. engagement is in the payload but has no tile on this page, so a
+  // child whose only reading is engagement has nothing to show here -- and
+  // admitting it would produce four N/As, the "something is broken" display
+  // the check exists to avoid.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: {
+      focus: null, stress: null, engagement: 0.64, face_attention: null,
+      sessions: 0, cognitive_samples: 12, face_samples: 0, face_included: true,
+    },
+  }]))
+
+  renderDashboard()
+
+  await screen.findByText('Ada')
+  await screen.findByText(/no weekly EEG or facial-recognition signal data yet/i)
+  expect(screen.queryByText('Weekly Focus')).not.toBeInTheDocument()
+})
+
 it('says facial signals were not read when there is nothing else to show', async () => {
   // hasSignalSummary reaches "no data" without consulting a single facial
   // reading, so the copy has to be clear that is the scope of the claim --

@@ -16,6 +16,12 @@ function percent(value) {
   return `${Math.round(Number(value) * 100)}%`
 }
 
+// Exactly the values the tiles below can render -- deliberately not every
+// field the summary carries. engagement is absent because this page has no
+// engagement tile (the full report does); counting it here would let a child
+// whose only reading is engagement through to a row of four N/As, which is the
+// "something is broken" display this check exists to avoid. Keep this list and
+// the tiles below in step.
 function hasSignalSummary(summary) {
   return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null || summary.face_attention != null))
 }

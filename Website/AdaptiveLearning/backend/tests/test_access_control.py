@@ -11,7 +11,7 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 # main.py builds a Supabase client at import time and raises without these.
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -638,6 +638,26 @@ def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
     assert opted_out["retrieved"]["face"] is None
     # Neither an absence nor a failure is assertable about a read never made.
     assert "facial" not in opted_out["summary"].lower()
+
+
+def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
+    """A server cap of zero reports a count with no rows behind it.
+
+    That says the least of any input about what was retrieved, and it was
+    folded into the "nothing was trimmed" branch -- which called every day
+    whole and published the resulting empty averages as measurements of a quiet
+    day.
+    """
+    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables(cog, [], []), max_rows={"cognitive_signals": 0}))
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    assert report["truncated"] is True
+    assert report["sample_counts"]["cognitive"] == 0
+    for d in report["daily"]:
+        assert d["cognitive_retrieved"] is False
+        assert d["focus"] is None
 
 
 def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
@@ -1607,7 +1627,7 @@ def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
     released = threading.Event()
     started = []
 
-    def _work(prompt):
+    def _work(prompt, *_a):
         started.append(prompt)
         released.wait(timeout=10)
         return None
@@ -1637,6 +1657,93 @@ def test_abandoned_model_call_is_cancelled_rather_than_left_queued():
 
     assert "queued" not in started, \
         "the abandoned prompt still ran once a worker freed up"
+
+
+def test_a_queued_call_is_charged_the_remaining_budget_not_a_fresh_one():
+    """The wait and the work share one deadline.
+
+    They used to be the same duration measured from different moments: a
+    submission that queued behind a busy worker spent most of the caller's
+    budget waiting, then started with a full STRATEGY_LLM_TIMEOUT of its own --
+    so the pool could stay saturated for close to twice the setting, against a
+    deadline nobody was waiting on any more.
+    """
+    charged = []
+    release_blocker = threading.Event()
+    blocking = threading.Event()
+
+    def _record(_prompt, timeout=None):
+        charged.append(timeout)
+        return None
+
+    def _blocker(*_a):
+        blocking.set()
+        release_blocker.wait(timeout=10)
+        return None
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    original_pool = main._STRATEGY_LLM_POOL
+    original_llm = main._llm_strategies
+    original_timeout = main.STRATEGY_LLM_TIMEOUT
+    main._STRATEGY_LLM_POOL = pool
+    main.STRATEGY_LLM_TIMEOUT = 1.0
+    try:
+        main._llm_strategies = _blocker
+        pool.submit(main._llm_strategies, "occupying")
+        assert blocking.wait(timeout=5), "the blocker never reached the worker"
+
+        # Queued behind it for a chunk of the budget, and released with the
+        # rest of it still to run.
+        main._llm_strategies = _record
+        waiter = ThreadPoolExecutor(max_workers=1)
+        try:
+            result = waiter.submit(main._llm_strategies_bounded, "queued")
+            time.sleep(0.4)
+            release_blocker.set()
+            assert result.result(timeout=10) is None
+        finally:
+            waiter.shutdown(wait=True)
+    finally:
+        release_blocker.set()
+        pool.shutdown(wait=True)
+        main._STRATEGY_LLM_POOL = original_pool
+        main._llm_strategies = original_llm
+        main.STRATEGY_LLM_TIMEOUT = original_timeout
+
+    assert charged, "the queued call never ran"
+    # Strictly less than the full budget: the queueing time has to come out of
+    # it, not be handed back.
+    assert 0 < charged[0] < main.STRATEGY_LLM_TIMEOUT
+
+
+def test_a_call_that_starts_after_the_deadline_does_not_open_a_socket():
+    """cancel() catches the items still in the queue; this catches the one a
+    worker had already picked up. Nothing it could return would be used, so the
+    request is not worth making against the recovered server."""
+    called = []
+    original_llm = main._llm_strategies
+    original_timeout = main.STRATEGY_LLM_TIMEOUT
+
+    class _LatePool:
+        """Runs the work item inline, after the deadline has passed."""
+        def submit(self, fn, *a, **kw):
+            time.sleep(0.05)                  # outlive STRATEGY_LLM_TIMEOUT
+            future = Future()
+            future.set_result(fn(*a, **kw))
+            return future
+
+    original_pool = main._STRATEGY_LLM_POOL
+    main._STRATEGY_LLM_POOL = _LatePool()
+    main._llm_strategies = lambda *_a, **_k: called.append(1)
+    main.STRATEGY_LLM_TIMEOUT = 0.01
+    try:
+        assert main._llm_strategies_bounded("prompt") is None
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
+        main._llm_strategies = original_llm
+        main.STRATEGY_LLM_TIMEOUT = original_timeout
+
+    assert called == [], "the model was called for an answer nobody was waiting on"
 
 
 def test_pool_refusing_the_work_falls_back_rather_than_raising():

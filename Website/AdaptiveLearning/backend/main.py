@@ -410,8 +410,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         """(nothing was retrieved for this day, this day is complete)."""
         if not ok:
             return True, False          # the read failed; no day was covered
-        if not (cut and oldest_day):
+        if not cut:
             return False, True          # nothing was trimmed, so every day is whole
+        if not oldest_day:
+            # Trimmed, and nothing came back to say how far it reached -- a
+            # server cap of zero, or rows carrying no usable timestamp. Folded
+            # into "nothing was trimmed" before, which called every day whole
+            # and published the resulting empty averages as measurements, on
+            # the one input that says the least about what was retrieved.
+            return True, False
         if day < oldest_day:
             return True, False          # the cap stopped before this day entirely
         return False, day > oldest_day  # == oldest_day is the day it cut into
@@ -1400,7 +1407,7 @@ def _validated_strategies(raw: str) -> list[str] | None:
     return lines[:_STRATEGY_COUNT]
 
 
-def _llm_strategies(prompt: str) -> list[str] | None:
+def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | None:
     """One local-model attempt, or None on any failure.
 
     ollama is imported here rather than at module scope so this module stays
@@ -1410,14 +1417,22 @@ def _llm_strategies(prompt: str) -> list[str] | None:
     case; the routine failure this guards is the *server* being absent, which
     surfaces as an exception from the call below.
 
-    Goes through an explicit Client so the call carries STRATEGY_LLM_TIMEOUT.
-    The module-level ollama.generate() has no deadline, and a server that
-    accepts the connection and then stalls never raises — so the promise that
-    any failure is a fallback rather than a 500 only holds with it attached.
+    Goes through an explicit Client so the call carries a timeout at all. The
+    module-level ollama.generate() has no deadline, and a server that accepts
+    the connection and then stalls never raises — so the promise that any
+    failure is a fallback rather than a 500 only holds with one attached.
+
+    `timeout` is what remains of the caller's budget, which is not the same as
+    the budget itself once a submission has queued: the work item was created
+    when the caller started waiting, but it starts running whenever a worker
+    frees up. Charging it the full STRATEGY_LLM_TIMEOUT from there let it hold
+    a worker for nearly twice the setting, against a deadline the caller had
+    already given up on. Defaults to the full budget for a direct call, which
+    is not queued behind anything.
     """
     try:
         from ollama import Client
-        resp = Client(timeout=STRATEGY_LLM_TIMEOUT).generate(
+        resp = Client(timeout=STRATEGY_LLM_TIMEOUT if timeout is None else timeout).generate(
             model=STRATEGY_LLM_MODEL,
             prompt=prompt,
             options={"temperature": 0.4},
@@ -1437,12 +1452,31 @@ def _llm_strategies_bounded(prompt: str) -> list[str] | None:
     leaves a *started* worker running -- there is no way to interrupt a blocking
     socket read -- but the caller is no longer behind it, and the answer they
     get is the rule-based one that was always the fallback.
+
+    One deadline, shared by the wait and the work. The two used to be the same
+    *duration* measured from different moments: a submission that queued behind
+    a busy worker spent most of the caller's budget waiting, then started with
+    a fresh STRATEGY_LLM_TIMEOUT of its own -- so the pool could stay saturated
+    for close to twice the configured setting, generating against a deadline
+    nobody was waiting on any more.
     """
+    deadline = time.monotonic() + STRATEGY_LLM_TIMEOUT
+
+    def _run():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # Started after the caller gave up. Nothing this could return would
+            # be used, so it does not open a socket at all -- the cancel below
+            # catches the queued items, and this catches the one that had
+            # already been handed to a worker.
+            return None
+        return _llm_strategies(prompt, remaining)
+
     future = None
     try:
         # Inside the try: submit() itself raises if the pool is shutting down,
         # which the handler below turns into the rule-based fallback.
-        future = _strategy_pool().submit(_llm_strategies, prompt)
+        future = _strategy_pool().submit(_run)
         return future.result(timeout=STRATEGY_LLM_TIMEOUT)
     except FutureTimeoutError:
         # Cancel, rather than just dropping the reference. Bounding the workers

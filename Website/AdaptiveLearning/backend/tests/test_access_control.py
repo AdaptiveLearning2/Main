@@ -1502,6 +1502,52 @@ def test_the_shipped_settings_carry_a_floor():
     """The floors are only worth anything if the real settings ask for them."""
     assert main._STRATEGY_RATE_LIMIT >= 1
     assert main._STRATEGY_RATE_WINDOW >= 1.0
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "Infinity", "NaN"])
+def test_non_finite_numeric_env_falls_back_to_the_default(raw, monkeypatch):
+    """The third class of unusable value, which neither guard above catches.
+
+    float() accepts all of these, so the ValueError fallback never fires. The
+    floor does not catch inf or nan either: inf is above every minimum, and
+    every comparison against nan is False, so `value < minimum` is False for
+    both.
+
+    -inf is the one case the floor *would* have caught, and it is listed here
+    to pin that it deliberately no longer does. Clamping it to the minimum
+    treats it as a deployer asking for a small number; it is not a magnitude at
+    all, so it belongs with its siblings on the fallback rather than being
+    rounded into a plausible-looking setting.
+    """
+    monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", raw)
+    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 20.0
+
+
+def test_non_finite_rate_window_would_otherwise_turn_a_429_into_a_500():
+    """Why the fallback is the right answer for inf rather than clamping.
+
+    With an infinite window no recorded hit ever expires, so a caller past the
+    limit stays past it -- and the Retry-After calculation on that path computes
+    int(inf), which raises OverflowError. The rate limiter answers 500 instead
+    of 429, permanently, from a value that parses cleanly.
+    """
+    with pytest.raises(OverflowError):
+        int(float("inf") - 1.0)
+
+
+def test_non_finite_timeout_would_otherwise_disable_the_model_pass(monkeypatch):
+    """And why nan is not a timeout either: the wait expires immediately, so the
+    model pass is off for good while STRATEGY_LLM_ENABLED still says it is on,
+    with every reply coming back "rule-based (model output rejected)"."""
+    from concurrent.futures import Future
+    with pytest.raises(TimeoutError):
+        Future().result(timeout=float("nan"))
+
+
+def test_a_finite_value_below_the_floor_still_clamps(monkeypatch):
+    """The non-finite check runs before the floor, so it must not shadow it."""
+    monkeypatch.setenv("STRATEGY_LLM_TIMEOUT", "0")
+    assert main._env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0) == 1.0
     assert main.STRATEGY_LLM_TIMEOUT >= 1.0
 
 

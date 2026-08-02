@@ -16,8 +16,20 @@ const SIGNAL_WINDOW_DAYS = 7
 // user_stats, which is lifetime. A blanket "last 7 days" above all of them would
 // be wrong about half its contents.
 const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
-const eegSub  = (n) => (n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`)
-const faceSub = (n, text) => (n ? `${text} · ${WINDOW_NOTE}` : `no face data · ${WINDOW_NOTE}`)
+// A failed summary request is not a quiet week, and the tiles must not read as
+// one. Every count these subtitles quote comes back 0 when the request failed,
+// so "no EEG data" would be asserting an absence in data that never loaded --
+// the same distinction the report draws with signalError, and the same one the
+// facial clause on the note below was narrowed to make.
+const SIGNALS_UNAVAILABLE = 'signal data unavailable'
+const eegSub = (n, failed) => {
+  if (failed) return SIGNALS_UNAVAILABLE
+  return n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`
+}
+const faceSub = (n, text, failed) => {
+  if (failed) return SIGNALS_UNAVAILABLE
+  return n ? `${text} · ${WINDOW_NOTE}` : `no face data · ${WINDOW_NOTE}`
+}
 
 // Hoisted out of the component: none of this reads component state, and the
 // honest place for a data layer is not the render body.
@@ -100,6 +112,13 @@ async function getStudentStats(studentId, withFace = true)
     // aggregate -- not a length that stops at a row cap.
     signalCount: signals.cognitive_samples ?? 0,
     faceSignalCount: signals.face_samples ?? 0,
+    // Whether those counts mean anything. The catch above deliberately keeps a
+    // signal-summary outage from costing the academic tiles, which leaves every
+    // signal figure at its zero default -- indistinguishable from a student who
+    // recorded nothing unless the failure is carried alongside them. Without
+    // it the copy below told a teacher a student had completed no sessions on
+    // the strength of a request that never returned.
+    signalsFailed: summary === null,
     // What was asked for, not what came back: with the summary request failed
     // the tiles should still say "Off" rather than "—" when the switch is off.
     // Lets the panel distinguish a switched-off control from a student with no
@@ -365,14 +384,14 @@ export default function Students() {
                                 icon={<Flame size={16} />}
                                 label="Stress Level"
                                 value={stats.stressLevel ?? '—'}
-                                sub={eegSub(stats.signalCount)}
+                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
                                 color="rose"
                               />
                               <StatCard
                                 icon={<Target size={16} />}
                                 label="Focus Score"
                                 value={stats.focusScore ?? '—'}
-                                sub={eegSub(stats.signalCount)}
+                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
                                 color="emerald"
                               />
                               <StatCard
@@ -389,18 +408,22 @@ export default function Students() {
                                 icon={<Brain size={16} />}
                                 label="Engagement"
                                 value={stats.engagement ?? '—'}
-                                sub={eegSub(stats.signalCount)}
+                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
                                 color="indigo"
                               />
                               {/* "Off" rather than "—": the viewer switched
                                   facial reporting off, which is a different
-                                  statement from having no reading. */}
+                                  statement from having no reading.
+                                  'reporting off' also wins over the failure
+                                  note below it -- with the switch off no facial
+                                  data was requested, so a summary outage did
+                                  not cost these two tiles anything. */}
                               <StatCard
                                 icon={<Eye size={16} />}
                                 label="Face Attention"
                                 value={stats.faceIncluded ? (stats.faceAttention ?? '—') : 'Off'}
                                 sub={stats.faceIncluded
-                                  ? faceSub(stats.faceSignalCount, `${stats.faceSignalCount} face readings`)
+                                  ? faceSub(stats.faceSignalCount, `${stats.faceSignalCount} face readings`, stats.signalsFailed)
                                   : 'reporting off'}
                                 color="sky"
                               />
@@ -409,7 +432,7 @@ export default function Students() {
                                 label="Dominant Emotion"
                                 value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
                                 sub={stats.faceIncluded
-                                  ? faceSub(stats.faceSignalCount, 'most frequent')
+                                  ? faceSub(stats.faceSignalCount, 'most frequent', stats.signalsFailed)
                                   : 'reporting off'}
                                 color="violet"
                               />
@@ -439,22 +462,37 @@ export default function Students() {
                               </div>
                             )}
 
-                            {/* The facial clause only applies when facial data
-                                was actually read. With the switch off
-                                faceSignalCount is 0 by construction, so
-                                including it unconditionally let this claim
-                                "no sessions" for a student whose only recorded
-                                activity was the facial signals we were asked
-                                not to look at. What the copy asserts is
-                                narrowed to what was checked. */}
-                            {stats.totalQuestions === 0 && stats.signalCount === 0 &&
-                             (!stats.faceIncluded || stats.faceSignalCount === 0) && (
+                            {/* Both branches assert an absence, so both are
+                                gated on having actually looked.
+
+                                The facial clause only applies when facial data
+                                was read. With the switch off faceSignalCount is
+                                0 by construction, so including it
+                                unconditionally let this claim "no sessions" for
+                                a student whose only recorded activity was the
+                                facial signals we were asked not to look at.
+
+                                signalsFailed is the same mistake reached the
+                                other way: every signal count is 0 when the
+                                summary request failed, so the unguarded check
+                                told a teacher a student had completed nothing
+                                on the strength of a request that never
+                                returned. There is nothing to assert in that
+                                case -- only the outage to report, which is
+                                worth saying rather than leaving the tiles to
+                                explain on their own. */}
+                            {stats.signalsFailed ? (
+                              <p className="text-xs text-gray-400 mt-3">
+                                Signal data couldn&apos;t be loaded — the figures above cover questions only.
+                              </p>
+                            ) : stats.totalQuestions === 0 && stats.signalCount === 0 &&
+                                (!stats.faceIncluded || stats.faceSignalCount === 0) ? (
                               <p className="text-xs text-gray-400 mt-3">
                                 {stats.faceIncluded
                                   ? "This student hasn't completed any sessions yet."
                                   : 'No question or EEG activity yet — facial signals were not read.'}
                               </p>
-                            )}
+                            ) : null}
                           </>
                         )}
                       </div>

@@ -363,4 +363,56 @@ describe('the "nothing recorded" note', () => {
     await waitFor(() =>
       expect(screen.getByText(/hasn't completed any sessions yet/i)).toBeInTheDocument())
   })
+
+  it('does not claim no sessions on the strength of a request that failed', async () => {
+    // The same mistake as the facial one above, reached from the other side.
+    // The summary request is caught individually so an outage costs the signal
+    // tiles rather than the academic ones beside them -- which leaves every
+    // signal count at its zero default, indistinguishable from a student who
+    // recorded nothing unless the failure travels with them.
+    setData({
+      summary: new Error('signal summary unavailable'),
+      userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
+    })
+
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(screen.getByText(/couldn't be loaded/i)).toBeInTheDocument())
+    expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/facial signals were not read/i)).not.toBeInTheDocument()
+  })
+
+  it('does not report a failed request as an absence of readings on the tiles', async () => {
+    // "no EEG data · last 7d" is the same claim in miniature: the count it
+    // quotes is zero because nothing came back, not because nothing was
+    // recorded. The academic tiles beside it are unaffected, which is the
+    // point of catching the summary separately.
+    setData({ summary: new Error('signal summary unavailable') })
+
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument())
+    expect(tile('Focus Score').queryByText(/no EEG data/i)).not.toBeInTheDocument()
+    expect(tile('Face Attention').getByText(/signal data unavailable/i)).toBeInTheDocument()
+    // Read from user_stats, so the outage does not reach them.
+    expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
+  })
+
+  it('keeps "reporting off" over the failure note when the switch is off', async () => {
+    // With facial reporting off no facial data was requested, so the outage
+    // cost these two tiles nothing and the switch is still the reason they are
+    // blank. The EEG tiles beside them do report the failure.
+    setData({ summary: new Error('signal summary unavailable') })
+
+    render(<Students />)
+    await userEvent.click(await screen.findByRole('switch'))
+    await expandAda()
+
+    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
+    expect(tile('Face Attention').getByText(/reporting off/i)).toBeInTheDocument()
+    expect(tile('Dominant Emotion').getByText(/reporting off/i)).toBeInTheDocument()
+    expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument()
+  })
 })

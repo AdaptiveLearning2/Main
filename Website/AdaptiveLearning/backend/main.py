@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os, re, requests, random, string, threading, time
+import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
@@ -834,6 +834,18 @@ def _env_number(name: str, default, cast, minimum=None):
     Clamping rather than falling back to the default, because a deployer who
     wrote a small number was asking for a small number, and the nearest usable
     one is closer to that than the shipped value is.
+
+    The non-finite check is separate from both, and falls back rather than
+    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
+    comparison -- inf because it is above every floor, nan because every
+    comparison against it is False -- so neither of the guards above sees them,
+    and they are not magnitudes there is a nearest usable value to clamp to.
+    They reach the call sites as settings that break rather than tune:
+    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
+    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
+    makes future.result() time out instantly, switching the model pass off for
+    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
+    the cast, so this only bites the float callers.
     """
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -842,6 +854,9 @@ def _env_number(name: str, default, cast, minimum=None):
         value = cast(raw)
     except (TypeError, ValueError):
         print(f"[config] {name}={raw!r} is not a number; using {default}")
+        return default
+    if not math.isfinite(value):
+        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
         return default
     if minimum is not None and value < minimum:
         print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")

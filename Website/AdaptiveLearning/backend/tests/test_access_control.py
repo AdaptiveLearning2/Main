@@ -1821,6 +1821,104 @@ def test_a_call_that_starts_after_the_deadline_does_not_open_a_socket():
     assert called == [], "the model was called for an answer nobody was waiting on"
 
 
+def test_waiters_on_the_model_are_capped_and_the_excess_falls_back():
+    """Bounding the workers and the queue does not bound the *waiters*.
+
+    This endpoint is a sync def, so every caller blocked in future.result()
+    holds one of anyio's threadpool slots -- shared with every other sync
+    endpoint in the app -- for up to STRATEGY_LLM_TIMEOUT. The per-caller rate
+    limit does not help, being keyed on user id: distinct parents clicking
+    Generate against a stalled Ollama could take the whole threadpool down with
+    them.
+
+    Past the cap the model pass is skipped rather than queued, which costs the
+    caller generic advice instead of tuned advice -- exactly what a rejected or
+    timed-out reply already costs.
+    """
+    admitted = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def _blocking(prompt, *_a, **_kw):
+        calls.append(prompt)
+        admitted.set()
+        release.wait(timeout=10)
+        return None
+
+    pool = ThreadPoolExecutor(max_workers=2)
+    original_pool = main._STRATEGY_LLM_POOL
+    original_llm = main._llm_strategies
+    original_timeout = main.STRATEGY_LLM_TIMEOUT
+    original_sem = main._strategy_llm_waiters
+    main._STRATEGY_LLM_POOL = pool
+    main._llm_strategies = _blocking
+    main.STRATEGY_LLM_TIMEOUT = 5.0
+    # A cap of one, so a single occupant is enough to close the door.
+    main._strategy_llm_waiters = threading.BoundedSemaphore(1)
+    waiter = ThreadPoolExecutor(max_workers=1)
+    try:
+        held = waiter.submit(main._llm_strategies_bounded, "admitted")
+        assert admitted.wait(timeout=5), "the first caller never got in"
+
+        # The cap is full. This one must return immediately rather than block.
+        started = time.monotonic()
+        assert main._llm_strategies_bounded("over-capacity") is None
+        elapsed = time.monotonic() - started
+        assert elapsed < 1.0, \
+            "the over-capacity caller waited instead of falling back at once"
+
+        release.set()
+        assert held.result(timeout=10) is None
+    finally:
+        release.set()
+        waiter.shutdown(wait=True)
+        pool.shutdown(wait=True)
+        main._STRATEGY_LLM_POOL = original_pool
+        main._llm_strategies = original_llm
+        main.STRATEGY_LLM_TIMEOUT = original_timeout
+        main._strategy_llm_waiters = original_sem
+
+    assert calls == ["admitted"], \
+        "the over-capacity prompt reached the model instead of falling back"
+
+
+def test_the_waiter_cap_is_released_so_it_does_not_leak_a_slot():
+    """A BoundedSemaphore that is acquired and not released degrades to a
+    permanent outage of the model pass -- the silent-disable failure that keeps
+    coming up in this file. Every exit path from the wait has to give the slot
+    back, including the timeout and the pool-refused paths."""
+    original_sem = main._strategy_llm_waiters
+    original_pool = main._STRATEGY_LLM_POOL
+    original_timeout = main.STRATEGY_LLM_TIMEOUT
+    dead = ThreadPoolExecutor(max_workers=1)
+    dead.shutdown(wait=True)
+    main._strategy_llm_waiters = threading.BoundedSemaphore(1)
+    main.STRATEGY_LLM_TIMEOUT = 0.05
+    try:
+        # The pool-refused path, three times over. Without the release the
+        # second call would be turned away by the cap rather than by the pool.
+        main._STRATEGY_LLM_POOL = dead
+        for _ in range(3):
+            assert main._llm_strategies_bounded("prompt") is None
+        # The slot is still free afterwards.
+        assert main._strategy_llm_waiters.acquire(blocking=False)
+        main._strategy_llm_waiters.release()
+    finally:
+        main._strategy_llm_waiters = original_sem
+        main._STRATEGY_LLM_POOL = original_pool
+        main.STRATEGY_LLM_TIMEOUT = original_timeout
+
+
+def test_the_waiter_cap_has_a_floor_like_the_other_settings(monkeypatch):
+    """Zero would admit nobody, switching the model pass off for good while
+    STRATEGY_LLM_ENABLED says it is on -- the same silent disable the other
+    strategy settings are floored against."""
+    monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "0")
+    assert main._env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
+    monkeypatch.setenv("STRATEGY_LLM_MAX_WAITERS", "-3")
+    assert main._env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1) == 1
+
+
 def test_pool_refusing_the_work_falls_back_rather_than_raising():
     """submit() itself raises on a shut-down pool. That has to degrade to the
     rule-based answer like every other model failure, not surface as a 500."""

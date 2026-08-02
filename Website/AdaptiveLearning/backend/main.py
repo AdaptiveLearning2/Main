@@ -1060,6 +1060,32 @@ def _shutdown_strategy_pool():
     if pool is not None:
         pool.shutdown(wait=False, cancel_futures=True)
 
+
+# How many requests may be *waiting* on the model at once, process-wide.
+#
+# Distinct from max_workers, which bounds the threads doing the generating.
+# This bounds the callers blocked on the result -- and those are the scarce
+# resource, because this endpoint is a sync def. FastAPI runs sync endpoints on
+# anyio's threadpool (40 slots by default), so every request sitting in
+# future.result() holds one of those slots for up to STRATEGY_LLM_TIMEOUT
+# seconds. The per-caller rate limit does not help here: it is per user id, so
+# ~40 distinct parents clicking Generate against a stalled Ollama could occupy
+# the entire threadpool for 20s at a time -- taking down every other sync
+# endpoint in the app, none of which has anything to do with this feature.
+#
+# Past the cap the model pass is skipped rather than queued. That is not a
+# degradation the caller has to be protected from: the rule-based list is the
+# guaranteed answer and always the fallback, so the cost of being over the cap
+# is generic advice instead of tuned advice, which is exactly what a rejected
+# or timed-out model reply already costs.
+#
+# Floored at 1: at zero or below the semaphore never admits anyone, so the
+# model pass would be permanently off while STRATEGY_LLM_ENABLED says it is on
+# -- the silent-disable failure _env_number's minimum exists to prevent.
+_STRATEGY_LLM_MAX_WAITERS = _env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1)
+_strategy_llm_waiters = threading.BoundedSemaphore(_STRATEGY_LLM_MAX_WAITERS)
+
+
 # Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
 # trigger by clicking a button -- an aggregate over both signal tables, a topic
 # breakdown, and optionally a model call -- and the button is repeatable at
@@ -1484,7 +1510,39 @@ def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | No
 
 
 def _llm_strategies_bounded(prompt: str) -> list[str] | None:
-    """_llm_strategies under a deadline the caller actually feels.
+    """_llm_strategies under a deadline the caller actually feels, if admitted.
+
+    Admission first. See _STRATEGY_LLM_MAX_WAITERS: this endpoint is a sync
+    def, so a caller blocked on the model is holding one of anyio's threadpool
+    slots, and those are shared with every other sync endpoint in the app.
+    Bounding the workers and bounding the pool's queue -- both of which the
+    deadline logic below already does -- do not bound the *waiters*, and the
+    waiters are what the rest of the app contends with.
+    """
+    # Non-blocking: a caller who cannot get in must not queue on the semaphore
+    # too, which would reintroduce the wait this cap exists to prevent -- just
+    # one lock deeper, and without a deadline on it.
+    if not _strategy_llm_waiters.acquire(blocking=False):
+        # Not an error, and deliberately not raised to the caller: the
+        # rule-based list is the guaranteed answer, so being over the cap costs
+        # generic advice rather than tuned advice. `source` reports it as
+        # "rule-based (model output rejected)" alongside a rejected reply,
+        # which is the same thing from the reader's point of view -- the model
+        # did not produce a usable answer for this request.
+        print(f"[learning_strategies:llm] at capacity "
+              f"({_STRATEGY_LLM_MAX_WAITERS} in flight); using the rule-based answer")
+        return None
+    try:
+        return _llm_strategies_admitted(prompt)
+    finally:
+        _strategy_llm_waiters.release()
+
+
+def _llm_strategies_admitted(prompt: str) -> list[str] | None:
+    """The wait itself, once _llm_strategies_bounded has admitted the caller.
+
+    Split out so the semaphore's release is a plain finally around a single
+    call rather than wrapping every return path here.
 
     See _STRATEGY_LLM_POOL: the client-side timeout is per operation, so this
     is what holds when the transport keeps resetting it. Abandoning the wait

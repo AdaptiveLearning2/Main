@@ -248,8 +248,17 @@ export function FacialRecognitionToggle({ enabled, onChange, disabled = false })
  * rule set unless an optional local model produced output that passed its
  * safety checks, and which of those happened is worth showing to whoever is
  * about to act on the advice.
+ *
+ * `signalsRetrieved` is the same argument about a different failure. When the
+ * aggregate behind the report does not load, the endpoint still answers -- the
+ * rules read a null average as no signal to act on and fall through to their
+ * generic branches, which is the right outcome. But the result is advice that
+ * is not about this student's week, sitting under a subtitle that says it is.
+ * False here retracts that claim. Undefined means a payload predating the
+ * field, which came from a working read by definition.
  */
-export function StrategyPanel({ strategies, source, loading, error, onGenerate }) {
+export function StrategyPanel({ strategies, source, signalsRetrieved, loading, error, onGenerate }) {
+  const signalsMissing = signalsRetrieved === false
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
@@ -257,8 +266,15 @@ export function StrategyPanel({ strategies, source, loading, error, onGenerate }
           <h3 className="font-black text-gray-900 dark:text-white flex items-center gap-2">
             <Sparkles size={18} className="text-violet-500" /> At-Home Learning Strategies
           </h3>
+          {/* The subtitle claims these were built from the report, which is
+              the thing that is not true when the signals did not load. Swapped
+              rather than annotated, so the two do not sit next to each other
+              contradicting one another -- the same treatment the weekly
+              report's summary sentence gets when facial data is excluded. */}
           <p className="text-xs text-gray-400 mt-1">
-            Practice suggestions built from this week&apos;s report. Learning indicators only — not medical or behavioural advice.
+            {signalsMissing
+              ? <>General practice suggestions — this week&apos;s signal data could not be read. Learning indicators only — not medical or behavioural advice.</>
+              : <>Practice suggestions built from this week&apos;s report. Learning indicators only — not medical or behavioural advice.</>}
           </p>
         </div>
         <button
@@ -279,6 +295,14 @@ export function StrategyPanel({ strategies, source, loading, error, onGenerate }
         <p className="text-sm text-gray-400">No strategies generated yet.</p>
       ) : (
         <div className="space-y-3">
+          {/* Above the list rather than beside `source` below it: it changes
+              how every item that follows should be read, and someone acting on
+              the advice should not have to reach the end to find that out. */}
+          {signalsMissing && (
+            <p className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              This week&apos;s signal data couldn&apos;t be loaded, so these are general suggestions rather than ones based on your child&apos;s report. Try again shortly.
+            </p>
+          )}
           {/* Index key: the list is replaced wholesale on each generation and
               never reordered, and strategy text is not guaranteed unique. */}
           {strategies.map((s, i) => (

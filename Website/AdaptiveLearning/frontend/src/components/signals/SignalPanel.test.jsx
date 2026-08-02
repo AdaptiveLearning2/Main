@@ -230,6 +230,37 @@ describe('StrategyPanel', () => {
     render(<StrategyPanel onGenerate={() => {}} />)
     expect(screen.getByText(/no strategies generated yet/i)).toBeInTheDocument()
   })
+
+  it('retracts the "built from this week\'s report" claim when the signals did not load', () => {
+    // The endpoint still answers with a usable list -- the rules read a null
+    // average as no signal to act on and fall through to their generic
+    // branches. But that list is not about this student's week, and the
+    // subtitle says it is.
+    render(<StrategyPanel strategies={strategies} source="rule-based"
+                          signalsRetrieved={false} onGenerate={() => {}} />)
+    expect(screen.getByText(/general practice suggestions/i)).toBeInTheDocument()
+    expect(screen.queryByText(/built from this week's report/i)).not.toBeInTheDocument()
+    // Stated above the list too, since it changes how every item reads.
+    expect(screen.getByText(/so these are general suggestions/i)).toBeInTheDocument()
+    // Still shows the advice: a generic list is the correct answer here, not
+    // an error state.
+    expect(screen.getByText(strategies[0])).toBeInTheDocument()
+  })
+
+  it('keeps the default claim when the signals loaded', () => {
+    render(<StrategyPanel strategies={strategies} source="rule-based"
+                          signalsRetrieved={true} onGenerate={() => {}} />)
+    expect(screen.getByText(/built from this week's report/i)).toBeInTheDocument()
+    expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
+  })
+
+  it('treats a payload predating the field as a working read', () => {
+    // signals_retrieved is absent on older responses, which came from a
+    // working read by definition -- undefined must not read as a failure.
+    render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
+    expect(screen.getByText(/built from this week's report/i)).toBeInTheDocument()
+    expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
+  })
 })
 
 describe('pct', () => {

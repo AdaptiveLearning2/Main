@@ -26,16 +26,20 @@ function urlsFor(fragment) {
   return apiFetch.mock.calls.map(c => String(c[0])).filter(u => u.includes(fragment))
 }
 
+// The default responses, named so a test that overrides one endpoint can defer
+// the rest here rather than restating all four.
+function defaultFetch(url) {
+  const u = String(url)
+  if (u.includes('/stats/'))                return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
+  if (u.includes('/weekly-report'))         return Promise.resolve(emptyReport)
+  if (u.includes('/learning-strategies'))   return Promise.resolve({ strategies: ['Review fractions'], source: 'rule-based' })
+  return Promise.resolve([]) // sessions + performance
+}
+
 beforeEach(() => {
   localStorage.clear()
   apiFetch.mockReset()
-  apiFetch.mockImplementation((url) => {
-    const u = String(url)
-    if (u.includes('/stats/'))                return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
-    if (u.includes('/weekly-report'))         return Promise.resolve(emptyReport)
-    if (u.includes('/learning-strategies'))   return Promise.resolve({ strategies: ['Review fractions'], source: 'rule-based' })
-    return Promise.resolve([]) // sessions + performance
-  })
+  apiFetch.mockImplementation(defaultFetch)
 })
 
 function renderReport(props = {}) {
@@ -169,6 +173,31 @@ describe('at-home strategies', () => {
     expect(screen.getByText('Source: rule-based')).toBeInTheDocument()
     const call = apiFetch.mock.calls.find(c => String(c[0]).includes('/learning-strategies'))
     expect(call[1]).toMatchObject({ method: 'POST', body: { include_face: true } })
+  })
+
+  it('carries the "signals did not load" flag from the response to the panel', async () => {
+    // The endpoint answers with a usable generic list when its aggregate
+    // fails, so nothing about the response says the advice is not about this
+    // student's week except basis.signals_retrieved. Dropping it on the way
+    // through left the panel claiming the list was built from the report.
+    apiFetch.mockImplementation((u) => {
+      if (String(u).includes('/learning-strategies')) {
+        return Promise.resolve({
+          strategies: ['Review fractions'],
+          source: 'rule-based',
+          basis: { signals_retrieved: false },
+        })
+      }
+      return defaultFetch(u)
+    })
+
+    renderReport({ showStrategies: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
+
+    await screen.findByText('Review fractions')
+    expect(screen.getByText(/so these are general suggestions/i)).toBeInTheDocument()
+    expect(screen.queryByText(/built from this week's report/i)).not.toBeInTheDocument()
   })
 
   it('drops advice built from data the new setting excludes', async () => {

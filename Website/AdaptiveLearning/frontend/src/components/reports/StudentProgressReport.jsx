@@ -54,6 +54,13 @@ export default function StudentProgressReport({
   const [includeFace, setIncludeFace]   = useState(readFacePref)
   const [strategies, setStrategies]     = useState(null)
   const [strategySource, setStrategySource]   = useState(null)
+  // Whether the aggregate the advice was derived from actually loaded.
+  // The endpoint answers either way -- the rules read a null average as no
+  // signal to act on and fall through to their generic branches -- so
+  // without this the panel presents a generic list as one built from the
+  // child's week. Tracked beside `source` because it qualifies the result
+  // the same way.
+  const [strategySignals, setStrategySignals] = useState(null)
   const [strategyError, setStrategyError]     = useState(null)
   const [strategyLoading, setStrategyLoading] = useState(false)
   // Identifies the generation request whose result is still wanted. Bumped by
@@ -178,6 +185,7 @@ export default function StudentProgressReport({
     strategyRequestId.current += 1
     setStrategies(null)
     setStrategySource(null)
+    setStrategySignals(null)
     setStrategyError(null)
     setStrategyLoading(false)
   }
@@ -194,10 +202,14 @@ export default function StudentProgressReport({
       if (requestId !== strategyRequestId.current) return
       setStrategies(res.strategies || [])
       setStrategySource(res.source || null)
+      // Absent on payloads predating the field, which came from a working
+      // read by definition -- null leaves the panel's default claim intact.
+      setStrategySignals(res.basis?.signals_retrieved ?? null)
     } catch (err) {
       if (requestId !== strategyRequestId.current) return
       setStrategies(null)
       setStrategySource(null)
+      setStrategySignals(null)
       setStrategyError(err.message || 'Could not generate strategies right now.')
     } finally {
       // Only the newest request owns the spinner; a superseded one clearing it
@@ -275,6 +287,7 @@ export default function StudentProgressReport({
             <StrategyPanel
               strategies={strategies}
               source={strategySource}
+              signalsRetrieved={strategySignals}
               loading={strategyLoading}
               error={strategyError}
               onGenerate={generateStrategies}

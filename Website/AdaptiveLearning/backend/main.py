@@ -1274,7 +1274,18 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
         # saying so: without this, a caller comparing `basis.averages` against
         # the week could not tell advice built from a quiet week from advice
         # built from a query that never ran.
-        "retrieved": summary["retrieved"],
+        #
+        # Named signals_retrieved, NOT `retrieved`, even though that is the key
+        # the summary payload uses. This dict is deliberately shaped like a
+        # weekly report -- _rule_based_strategies and _strategy_prompt read
+        # report keys and are called on both -- and a real report's `retrieved`
+        # is a dict of three per-table booleans, not one. Two shapes under one
+        # key across two payloads with shared consumers is a wrong answer
+        # waiting for the first caller to write
+        # `report.get("retrieved", {}).get("cognitive")`. The response field
+        # below has always been called signals_retrieved; this just stops the
+        # collision existing internally as well.
+        "signals_retrieved": summary["retrieved"],
         "averages": {
             "focus": summary["focus"],
             "stress": summary["stress"],
@@ -1584,7 +1595,7 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
             # tuned to the student. Same distinction the summary endpoint
             # makes; stated here because this response is what a parent acts
             # on.
-            "signals_retrieved": report.get("retrieved", True),
+            "signals_retrieved": report.get("signals_retrieved", True),
             "averages": report.get("averages") or {},
             # Named fields rather than the whole _topic_breakdown row, which
             # also carries topic_id, a stress reading and updated_at — none of

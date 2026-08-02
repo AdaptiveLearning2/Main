@@ -1234,6 +1234,48 @@ def test_strategy_basis_threads_the_opt_out_into_the_aggregate(monkeypatch):
     assert "face_signals" not in fake.table_calls
 
 
+def test_strategy_basis_does_not_reuse_the_reports_retrieved_key(monkeypatch):
+    """_strategy_basis is shaped like a weekly report, so it must not put a
+    different shape under a key a real report already defines.
+
+    A report's `retrieved` is a dict of three per-table booleans; this one has
+    a single bool. _rule_based_strategies and _strategy_prompt read report keys
+    and are called on both shapes, so one key meaning two things is a wrong
+    answer waiting for the first consumer to reach into it. Named
+    signals_retrieved instead, matching what the response field has always been
+    called.
+    """
+    fake = _FakeSupabase({**TABLES, **_strategy_tables()},
+                         rpc_results={"student_signal_summary": [{"focus": 0.7}]})
+    monkeypatch.setattr(main, "supabase", fake)
+    basis = main._strategy_basis("student-1", 7, True)
+    assert basis["signals_retrieved"] is True
+    # The collision itself, asserted directly: the two payloads must not both
+    # define `retrieved`.
+    assert "retrieved" not in basis
+    report = main._weekly_signal_report("student-1", 7)
+    assert isinstance(report["retrieved"], dict)
+
+
+def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch):
+    """The response field is a bool on the success path too, not just on the
+    failure path test_strategies_basis_reports_that_its_signals_did_not_load
+    covers.
+
+    It reads the key _strategy_basis sets, and the frontend tests it with
+    `=== false` -- so a report-shaped dict arriving there would be truthy and
+    silently read as "the signals loaded fine".
+    """
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"user_math_performance": []},
+        rpc_results={"student_signal_summary": [{"focus": 0.7, "sessions": 3}]}))
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "student-1"})
+
+    out = main.student_learning_strategies(
+        "student-1", None, main.LearningStrategyRequest())
+    assert out["basis"]["signals_retrieved"] is True
+
+
 def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
     """Same gate as every other student-data endpoint: the relationship, not a
     role claim. The service-role client bypasses RLS, so this check is the only

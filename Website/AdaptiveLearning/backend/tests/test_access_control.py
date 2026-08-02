@@ -5,6 +5,7 @@ bypasses RLS -- so the checks in main.py are the only thing standing between a
 caller and another student's data. Six of them shipped with no ownership check
 at all, which is what these tests exist to prevent recurring.
 """
+import asyncio
 import inspect
 import os
 import sys
@@ -34,9 +35,13 @@ class _Result:
 class _Query:
     """Minimal stand-in for the supabase-py query builder chain."""
 
-    def __init__(self, rows, max_rows=None):
+    def __init__(self, rows, max_rows=None, raises=None):
         self._rows = rows
         self._max_rows = max_rows
+        # A read that fails rather than returning nothing. The two are the same
+        # empty list to everything downstream, which is the distinction the
+        # report's `retrieved` flags exist to make.
+        self._raises = raises
         self._filters = {}
         self._limit = None
         self._order = None
@@ -81,6 +86,8 @@ class _Query:
         return True
 
     def execute(self):
+        if self._raises:
+            raise self._raises
         rows = [r for r in self._rows if self._matches(r)]
         if self._order:
             rows = sorted(rows, key=lambda r: str(r.get(self._order, "")), reverse=self._desc)
@@ -110,8 +117,13 @@ class _Single:
 
 
 class _FakeSupabase:
-    def __init__(self, tables, max_rows=None, rpc_results=None, rpc_raises=None):
+    def __init__(self, tables, max_rows=None, rpc_results=None, rpc_raises=None,
+                 table_raises=None):
         self._tables = tables
+        # Table names whose reads blow up. Per table, because the report's
+        # three queries fail independently and one broken table must not be
+        # able to retract what the other two did read.
+        self._table_raises = set(table_raises or ())
         # int applies to every table; dict is per table, which is what the
         # mixed-truncation case needs (the row cap is per table in reality).
         self._max_rows = max_rows
@@ -130,7 +142,8 @@ class _FakeSupabase:
     def table(self, name):
         self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
-        return _Query(self._tables.get(name, []), max_rows=cap)
+        exc = RuntimeError(f"{name} read failed") if name in self._table_raises else None
+        return _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
 
     def rpc(self, name, params=None):
         params = params or {}
@@ -544,6 +557,99 @@ def test_weekly_report_session_count_falls_back_when_none_is_reported(monkeypatc
         [], [], [{"id": "s1", "user_id": "student-1", "started_at": _ts(1)}])))
     report = main._weekly_signal_report("student-1")
     assert report["sessions_recorded"] == 1
+
+
+def test_a_failed_read_is_not_reported_as_a_quiet_week(monkeypatch):
+    """_fetch swallows its exception so one broken table does not blank a
+    report -- which left the empty list it returns indistinguishable from a
+    student who recorded nothing.
+
+    The endpoint answers 200 either way, so every figure derived from that
+    table came back as a default presented as a measurement: null averages, a
+    zero sample count, and a summary sentence asserting that nothing was
+    recorded. Same distinction the summary payloads draw with `retrieved`,
+    reached from the other direction.
+    """
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], [], []), table_raises={"cognitive_signals"}))
+    report = main._weekly_signal_report("student-1")
+
+    assert report["retrieved"]["cognitive"] is False
+    assert report["retrieved"]["face"] is True        # this one was read
+    assert report["retrieved"]["sessions"] is True
+    # The claim the old sentence made on the strength of a query that never ran.
+    assert "no eeg" not in report["summary"].lower()
+    assert "could not be loaded" in report["summary"]
+
+
+def test_a_failed_read_marks_every_day_unretrieved(monkeypatch):
+    """A failed query is flatter than a capped one: the table was not read for
+    any day in the range.
+
+    Judged from the cap logic alone it looks like an untruncated empty result,
+    so every day was called complete and its empty average published as a
+    measurement of a quiet day.
+    """
+    face = [{"user_id": "student-1", "ts": _ts(d), "attention": 0.8} for d in range(0, 7)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], face, []), table_raises={"cognitive_signals"}))
+    report = main._weekly_signal_report("student-1")
+
+    assert report["daily"], "the face read succeeded, so the days must survive"
+    for d in report["daily"]:
+        assert d["cognitive_retrieved"] is False
+        assert d["focus"] is None
+        assert d["face_retrieved"] is True   # the table that was read is unaffected
+
+
+def test_a_failed_sessions_read_does_not_report_zero_sessions(monkeypatch):
+    """sessions_recorded fell back to the length of the empty list the failed
+    read returned, so a broken query reached the panel as a confident "0
+    sessions this week"."""
+    cog = [{"user_id": "student-1", "ts": _ts(1), "focus": 0.5}]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables(cog, [], []), table_raises={"sessions"}))
+    report = main._weekly_signal_report("student-1")
+
+    assert report["sessions_recorded"] is None
+    assert report["retrieved"]["sessions"] is False
+    assert all(d["sessions"] is None and d["sessions_retrieved"] is False
+               for d in report["daily"])
+    # The EEG read worked, so its figures are still measurements.
+    assert report["retrieved"]["cognitive"] is True
+    assert report["averages"]["focus"] == 0.5
+
+
+def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
+    """Both leave every facial field null, and they are different statements.
+
+    retrieved.face is None with the opt-out on -- there was no retrieval to
+    succeed or fail -- and False when the query was made and broke. A consumer
+    checking `is False` must not read the opt-out as a failure.
+    """
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], [], []), table_raises={"face_signals"}))
+    failed = main._weekly_signal_report("student-1")
+    assert failed["retrieved"]["face"] is False
+    assert "facial recognition data could not be loaded" in failed["summary"].lower()
+
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], [])))
+    opted_out = main._weekly_signal_report("student-1", include_face=False)
+    assert opted_out["retrieved"]["face"] is None
+    # Neither an absence nor a failure is assertable about a read never made.
+    assert "facial" not in opted_out["summary"].lower()
+
+
+def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
+    """The flags must not turn every empty report into a failure: a read that
+    reached the database and legitimately found nothing is still an absence,
+    and the sentence saying so is the right one."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], [])))
+    report = main._weekly_signal_report("student-1")
+
+    assert report["retrieved"] == {"cognitive": True, "face": True, "sessions": True}
+    assert report["summary"] == "No EEG or facial recognition samples were recorded this week."
+    assert report["sessions_recorded"] == 0
 
 
 def test_signal_summary_survives_a_database_without_the_flag(monkeypatch):
@@ -1542,6 +1648,61 @@ def test_pool_refusing_the_work_falls_back_rather_than_raising():
     main._STRATEGY_LLM_POOL = pool
     try:
         assert main._llm_strategies_bounded("prompt") is None
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
+
+
+def test_the_pool_is_not_built_until_a_model_call_needs_it():
+    """The model pass is opt-in and off by default, so the common deployment --
+    CI, and anything without a local Ollama -- should not carry an executor
+    nothing ever submits to."""
+    original_pool = main._STRATEGY_LLM_POOL
+    main._STRATEGY_LLM_POOL = None
+    try:
+        assert main._STRATEGY_LLM_POOL is None
+        pool = main._strategy_pool()
+        assert pool is main._STRATEGY_LLM_POOL, "the pool must be the shared one"
+        # Built once. A second caller getting its own executor would put its
+        # worker outside both the max_workers ceiling and the shutdown hook.
+        assert main._strategy_pool() is pool
+    finally:
+        if main._STRATEGY_LLM_POOL is not None and main._STRATEGY_LLM_POOL is not original_pool:
+            main._STRATEGY_LLM_POOL.shutdown(wait=False)
+        main._STRATEGY_LLM_POOL = original_pool
+
+
+def test_shutdown_releases_the_pool_rather_than_leaving_it_behind():
+    """The hook has to clear the global as well as shut the executor down: a
+    shut-down pool handed to a later caller makes submit() raise, which
+    degrades every strategy request to the rule-based answer for good."""
+    original_pool = main._STRATEGY_LLM_POOL
+    main._STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=1)
+    try:
+        main._shutdown_strategy_pool()
+        assert main._STRATEGY_LLM_POOL is None
+        # A reload in the same process gets a working pool, not the fallback.
+        fresh = main._strategy_pool()
+        assert fresh.submit(lambda: 42).result(timeout=5) == 42
+        fresh.shutdown(wait=False)
+    finally:
+        main._STRATEGY_LLM_POOL = original_pool
+
+
+def test_the_app_runs_the_shutdown_on_the_way_out():
+    """The hook is only worth having if it is actually wired to the app's
+    lifespan -- a shutdown handler nobody calls leaves the pool exactly where
+    it was before it was written."""
+    assert main.app.router.lifespan_context is main._lifespan
+
+    original_pool = main._STRATEGY_LLM_POOL
+    main._STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=1)
+    try:
+        async def _cycle():
+            async with main._lifespan(main.app):
+                pass          # startup, then straight to shutdown
+
+        asyncio.run(_cycle())
+        assert main._STRATEGY_LLM_POOL is None
     finally:
         main._STRATEGY_LLM_POOL = original_pool
 

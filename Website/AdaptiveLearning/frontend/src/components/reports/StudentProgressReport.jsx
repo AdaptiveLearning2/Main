@@ -165,10 +165,16 @@ export default function StudentProgressReport({
     // available yet." for the round-trip, which costs the still-valid EEG
     // clauses -- the same trade the tiles above already make, and the
     // replacement sentence is already in flight.
+    //
+    // retrieved.face follows face_retrieved to null for the same reason: the
+    // payload in hand no longer carries facial data, so a false left over from
+    // a failed facial read would keep warning about a read this report is no
+    // longer making.
     setSignalReport(prev => prev && {
       ...prev,
       face_included: false,
       summary: null,
+      retrieved: { ...(prev.retrieved || {}), face: null },
       averages:   { ...(prev.averages   || {}), face_attention: null },
       highlights: { ...(prev.highlights || {}), dominant_emotion: null },
       latest:     { ...(prev.latest     || {}), face: null },

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
@@ -22,7 +23,20 @@ if not SUPABASE_URL or not SERVICE_ROLE_KEY:
 
 supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-app = FastAPI(title="AdaptiveLearning API")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Process-lifetime hooks. Everything before the yield is startup.
+
+    A lifespan handler rather than @app.on_event, which FastAPI deprecated --
+    and which has to be attached to the app object, so it would have pulled
+    this handler up here anyway. The names below resolve when the handler runs,
+    which lets each one stay defined beside the state it owns.
+    """
+    yield
+    _shutdown_strategy_pool()
+
+
+app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -300,8 +314,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     """
     since = _iso_days_ago(days)
 
-    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None]:
-        """Rows (newest first), whether the server withheld any, and the total.
+    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None, bool]:
+        """Rows (newest first), whether the server withheld any, the total, and
+        whether the read happened at all.
 
         Truncation is detected from an exact count rather than from
         len(rows) >= limit. PostgREST applies its own db-max-rows ceiling
@@ -313,6 +328,13 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         That count is worth returning as well as comparing: for sessions it is
         the figure the report is actually about, and it is exact whether or not
         the cap bound. None means the server reported no count.
+
+        The last element is the same distinction the summary payloads draw with
+        `retrieved`, reached the other way. This function swallows its exception
+        so one broken table does not blank a report -- but the empty list it
+        returns is indistinguishable from a student who recorded nothing, and
+        every figure downstream is then a default presented as a measurement.
+        The caller has to be told which it is holding.
         """
         try:
             res = supabase.table(table).select("*", count="exact") \
@@ -325,17 +347,21 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             # total=None means the client/server didn't report one; fall back
             # to the length heuristic rather than claiming nothing was cut.
             was_cut = (total > len(rows)) if total is not None else len(rows) >= limit
-            return rows, was_cut, total
+            return rows, was_cut, total, True
         except Exception as e:
             print(f"[weekly_report:{table}] {e}")
-            return [], False, None
+            return [], False, None, False
 
-    cog, cog_cut, _ = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    face, face_cut, _ = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face else ([], False, None)
+    cog, cog_cut, _, cog_ok = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    # ok=True with the opt-out on: nothing failed, there was simply nothing to
+    # ask for. `face_included` is what says the query never ran, and conflating
+    # the two would have the opt-out reported as a broken read.
+    face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face \
+        else ([], False, None, True)
     # Truncation kept, not discarded. A student over the cap was shown a count
     # that silently stopped at it -- and with the other two tables under their
     # own cap, `truncated` stayed False and nothing said so.
-    sessions, ses_cut, ses_total = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
+    sessions, ses_cut, ses_total, ses_ok = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
     # back empty and would be reported as "no activity" rather than "not
@@ -373,8 +399,17 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     # day that really is complete, and that is not distinguishable from here
     # without another query. It resolves the conservative way: a complete day
     # understated as partial, rather than a partial day published as complete.
-    def _coverage(cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
+    #
+    # A failed query is the fourth state and the flattest of them: the table was
+    # not read for any day in the range, so every day is missing rather than
+    # merely trimmed. It has to be judged here rather than left to the cap
+    # logic, which sees only an empty result and a truncation flag of False --
+    # and would therefore call every day complete and publish the resulting
+    # empty averages and zero session counts as measurements.
+    def _coverage(ok: bool, cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
         """(nothing was retrieved for this day, this day is complete)."""
+        if not ok:
+            return True, False          # the read failed; no day was covered
         if not (cut and oldest_day):
             return False, True          # nothing was trimmed, so every day is whole
         if day < oldest_day:
@@ -384,9 +419,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     daily = []
     for i in range(days - 1, -1, -1):
         day = (_utc_now() - timedelta(days=i)).date().isoformat()
-        cog_missing, cog_whole = _coverage(cog_cut, cog_oldest_day, day)
-        face_missing, face_whole = _coverage(face_cut, face_oldest_day, day)
-        ses_missing, ses_whole = _coverage(ses_cut, ses_oldest_day, day)
+        cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
+        face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
+        ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
         # Skip only when nothing we actually asked for could be retrieved. With
         # face reporting off there is no face request to fail, so the day hinges
         # on the other two -- otherwise an always-False face_missing would keep
@@ -416,10 +451,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             # give exactly half the sessions, with no hint that it is half.
             "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
                         if ses_whole else None,
-            # False means "the cap stopped us fetching this day in full", which
-            # a null metric alone cannot distinguish from "nothing was
-            # recorded". It covers both the days the cap never reached and the
-            # single day it cut into.
+            # False means "we did not fetch this day in full", which a null
+            # metric alone cannot distinguish from "nothing was recorded". It
+            # covers the days the cap never reached, the single day it cut
+            # into, and every day of a table whose query failed outright.
             # None means "not requested" -- face reporting is off, so there was
             # no retrieval to succeed or fail, and the consumers that count
             # `=== false` must not treat the opt-out as a retrieval failure.
@@ -453,12 +488,32 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         bits.append(f"average face attention was {_as_pct(avg_attention)}%")
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
-    elif include_face:
-        summary = "No EEG or facial recognition samples were recorded this week."
     else:
-        # Naming facial recognition here would report an absence that was never
-        # measured, since the caller opted out of reading it.
-        summary = "No EEG samples were recorded this week."
+        # An absence is only assertable about a table that was actually read.
+        # A failed query leaves exactly the empty result a quiet week does, so
+        # without splitting these the sentence reported "nothing was recorded"
+        # on the strength of a query that never returned -- the same mistake
+        # the opt-out branch below was written to avoid, reached by a different
+        # route. Each table lands in one list or the other, and only the read
+        # ones get an absence claimed about them.
+        measured, unread = [], []
+        (measured if cog_ok else unread).append("EEG")
+        # Naming facial recognition at all would report on something that was
+        # never measured, since the caller opted out of reading it.
+        if include_face:
+            (measured if face_ok else unread).append("facial recognition")
+
+        def _sentence_case(text: str) -> str:
+            # Not .capitalize(), which lowercases the rest and turns "EEG" into
+            # "Eeg".
+            return text[:1].upper() + text[1:]
+
+        parts = []
+        if measured:
+            parts.append(f"No {' or '.join(measured)} samples were recorded this week.")
+        if unread:
+            parts.append(_sentence_case(f"{' and '.join(unread)} data could not be loaded."))
+        summary = " ".join(parts)
 
     return {
         "student_id": student_id,
@@ -468,6 +523,21 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # Distinguishes "facial reporting is switched off for this view" from
         # "the camera recorded nothing". Both leave every face field null.
         "face_included": include_face,
+        # Which of the three reads actually happened. Everything else in this
+        # payload is a figure computed from whatever came back, and a query that
+        # failed contributes the same empty rows as a student who recorded
+        # nothing -- so a null average, a zero sample count and an absent day
+        # are all ambiguous without this. Per table, because the reads fail
+        # independently and one broken table should not retract the other two.
+        #
+        # face is None with the opt-out on, matching the per-day
+        # `face_retrieved`: there was no retrieval to succeed or fail, and a
+        # consumer checking `is False` must not read the opt-out as a failure.
+        "retrieved": {
+            "cognitive": cog_ok,
+            "face": face_ok if include_face else None,
+            "sessions": ses_ok,
+        },
         "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
         # How many sessions there *were*, as opposed to how many rows came back
         # under _SESSION_ROW_CAP. sample_counts is rows-retrieved throughout, so
@@ -476,7 +546,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # Postgres, showed the real number for the same child and week. Falls
         # back to the row count when the server reported no exact count, which
         # is the same fallback the truncation check makes.
-        "sessions_recorded": ses_total if ses_total is not None else len(sessions),
+        #
+        # None when the read failed, rather than the len() of the empty list it
+        # returned: "0 sessions this week" is a claim, and there is nothing
+        # behind it on that path. `retrieved.sessions` says which it is, and the
+        # panel renders the null as a dash.
+        "sessions_recorded": (ses_total if ses_total is not None else len(sessions)) if ses_ok else None,
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
@@ -931,7 +1006,52 @@ STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=
 # wait also cancels its future -- see _llm_strategies_bounded. Without that, a
 # stalled server turns every timed-out request into a work item that still runs
 # later, and the backlog is unbounded even though the thread count is not.
-_STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="strategy-llm")
+#
+# None until the first model call. Built on demand rather than at import
+# because the model pass is opt-in and off by default: CI, and any deployment
+# without a local Ollama, would otherwise carry an executor nothing ever
+# submits to. Tests substitute this global directly, so _strategy_pool hands
+# back whatever is already here rather than insisting on building it itself.
+_STRATEGY_LLM_POOL: ThreadPoolExecutor | None = None
+_strategy_pool_lock = threading.Lock()
+
+
+def _strategy_pool() -> ThreadPoolExecutor:
+    """The model-call pool, created on first use.
+
+    Locked, because two requests can reach a cold pool at once and the loser of
+    that race would otherwise hand back an executor that is not the one in the
+    global -- leaving its worker outside the max_workers ceiling and outside
+    the shutdown below.
+    """
+    global _STRATEGY_LLM_POOL
+    with _strategy_pool_lock:
+        if _STRATEGY_LLM_POOL is None:
+            _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2,
+                                                    thread_name_prefix="strategy-llm")
+        return _STRATEGY_LLM_POOL
+
+
+def _shutdown_strategy_pool():
+    """Drop the queue on the way out. Called from _lifespan.
+
+    wait=False and cancel_futures=True rather than a clean join: the whole
+    point of the pool is that a worker can be stuck in a socket read against a
+    stalled Ollama for as long as the client timeout allows, and nobody is
+    waiting on that answer by the time the process is going down. Cancelling
+    discards the queued work; the running worker cannot be interrupted, and the
+    interpreter's own atexit join is what eventually collects it.
+
+    The global goes back to None so a pool shut down here is never handed to a
+    later caller -- submit() on a shut-down executor raises, which
+    _llm_strategies_bounded degrades to the rule-based answer, but a reload in
+    the same process should get a working pool rather than that fallback.
+    """
+    global _STRATEGY_LLM_POOL
+    with _strategy_pool_lock:
+        pool, _STRATEGY_LLM_POOL = _STRATEGY_LLM_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 # Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
 # trigger by clicking a button -- an aggregate over both signal tables, a topic
@@ -1322,7 +1442,7 @@ def _llm_strategies_bounded(prompt: str) -> list[str] | None:
     try:
         # Inside the try: submit() itself raises if the pool is shutting down,
         # which the handler below turns into the rule-based fallback.
-        future = _STRATEGY_LLM_POOL.submit(_llm_strategies, prompt)
+        future = _strategy_pool().submit(_llm_strategies, prompt)
         return future.result(timeout=STRATEGY_LLM_TIMEOUT)
     except FutureTimeoutError:
         # Cancel, rather than just dropping the reference. Bounding the workers

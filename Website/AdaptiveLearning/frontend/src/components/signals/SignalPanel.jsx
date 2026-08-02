@@ -125,6 +125,16 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       || d.face_retrieved === false
       || d.sessions_retrieved === false
   ).length
+  // Which of the report's three reads happened. A failed query returns the same
+  // empty rows as a quiet week, so every metric below it is a default rendered
+  // as a measurement unless this says otherwise. `=== false` throughout:
+  // undefined is a payload predating the field, which came from working reads
+  // by definition, and null is the facial opt-out rather than a failure.
+  const retrieved = report?.retrieved || {}
+  const cogFailed = retrieved.cognitive === false
+  const faceFailed = retrieved.face === false
+  const sessionsFailed = retrieved.sessions === false
+  const anyFailed = cogFailed || faceFailed || sessionsFailed
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -142,13 +152,31 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             retrieved under the session row cap, so a heavy week showed exactly
             the cap here while the parent dashboard -- which counts in Postgres
             -- showed the real number for the same child and week. Falls back
-            for payloads predating the field. */}
-        <MiniMetric label="Sessions" value={report?.sessions_recorded ?? counts.sessions ?? 0} icon={Radio} tone="amber" />
+            for payloads predating the field.
+
+            A dash when the sessions read failed, not the 0 the fallback chain
+            would otherwise reach: sessions_recorded is null on that path and
+            sample_counts.sessions is the length of an empty list, so the
+            fallback would answer a broken query with a confident "0 sessions
+            this week". */}
+        <MiniMetric
+          label="Sessions"
+          value={sessionsFailed ? '—' : (report?.sessions_recorded ?? counts.sessions ?? 0)}
+          icon={Radio}
+          tone="amber"
+        />
       </div>
 
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {chartData.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-gray-400">No weekly signal data available yet.</div>
+          <div className="h-full flex items-center justify-center text-sm text-gray-400 text-center px-4">
+            {/* A failed read empties the series exactly as a quiet week does,
+                and every day is dropped when nothing could be retrieved for it
+                -- so the "yet" claim has to be gated on having looked. */}
+            {anyFailed
+              ? 'Weekly signal data could not be loaded.'
+              : 'No weekly signal data available yet.'}
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -191,6 +219,20 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {report && !faceOn && (
         <p className="mt-1 text-xs text-gray-400">
           Facial recognition data was not included in this report.
+        </p>
+      )}
+      {/* Named per table rather than as one blanket warning: the reads fail
+          independently, and "the EEG figures did not load" is a different thing
+          for a reader to act on than "the session count did not load". The
+          tiles above show a dash or an N/A either way, which on its own reads
+          as "nothing recorded". */}
+      {anyFailed && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          {[
+            cogFailed && 'EEG signals',
+            faceFailed && 'facial recognition signals',
+            sessionsFailed && 'session counts',
+          ].filter(Boolean).join(', ')} could not be loaded — the figures shown for them are not measurements.
         </p>
       )}
       {report?.truncated && (

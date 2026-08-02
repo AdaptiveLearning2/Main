@@ -116,6 +116,65 @@ describe('WeeklySignalReport', () => {
     render(<WeeklySignalReport report={null} />)
     expect(screen.getByText(/no weekly signal data available yet/i)).toBeInTheDocument()
   })
+
+  it('names the reads that failed rather than showing their defaults as figures', () => {
+    // The backend swallows a failed table read so one broken query does not
+    // blank the report -- which leaves the tiles showing N/A and a dash, both
+    // of which read as "nothing recorded" on their own.
+    const broken = {
+      ...report,
+      retrieved: { cognitive: false, face: true, sessions: true },
+    }
+    render(<WeeklySignalReport report={broken} />)
+    expect(screen.getByText(/EEG signals.*could not be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/session counts/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a dash rather than zero when the sessions read failed', () => {
+    // sessions_recorded is null on that path and sample_counts.sessions is the
+    // length of an empty list, so the fallback chain answered a broken query
+    // with a confident "0 sessions this week".
+    const broken = {
+      ...report,
+      sessions_recorded: null,
+      sample_counts: { ...report.sample_counts, sessions: 0 },
+      retrieved: { cognitive: true, face: true, sessions: false },
+    }
+    render(<WeeklySignalReport report={broken} />)
+    expect(metric('Sessions').getByText('—')).toBeInTheDocument()
+    expect(metric('Sessions').queryByText('0')).not.toBeInTheDocument()
+  })
+
+  it('does not read the facial opt-out as a failed facial read', () => {
+    // retrieved.face is null with the opt-out on: there was no retrieval to
+    // succeed or fail, and the warning must not fire on it.
+    const off = {
+      ...report,
+      face_included: false,
+      retrieved: { cognitive: true, face: null, sessions: true },
+    }
+    render(<WeeklySignalReport report={off} />)
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
+  })
+
+  it('does not claim an empty chart is a quiet week when the reads failed', () => {
+    const broken = {
+      ...report,
+      daily: [],
+      retrieved: { cognitive: false, face: false, sessions: false },
+    }
+    render(<WeeklySignalReport report={broken} />)
+    expect(screen.getByText(/weekly signal data could not be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no weekly signal data available yet/i)).not.toBeInTheDocument()
+  })
+
+  it('stays quiet for a report whose reads all succeeded', () => {
+    // Payloads predating the field came from working reads by definition, so
+    // an absent `retrieved` must not raise the warning either.
+    render(<WeeklySignalReport report={report} />)
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument()
+  })
 })
 
 describe('LiveSignalSummary', () => {

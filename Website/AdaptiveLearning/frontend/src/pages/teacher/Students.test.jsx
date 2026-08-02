@@ -3,21 +3,41 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Students from './Students'
 
-// This page reads cognitive_signals and face_signals straight from the browser
-// client. Two things about that are easy to get wrong and invisible in the UI:
-// how null readings are averaged, and whether the facial-recognition switch
-// actually stops the query rather than just hiding the result.
+// This page reads user_stats and topic performance from the browser client, and
+// its four signal averages from /api/students/{id}/signal-summary.
+//
+// The averages used to come from a direct cognitive_signals / face_signals read
+// capped at 200 rows. At the poller's 1 Hz default that cap binds after about
+// three minutes, so tiles labelled "last 7d" were averaging the newest three
+// minutes of one sitting and reporting a reading count pinned at exactly 200 as
+// a count of the week -- while the parent dashboard, aggregating the same week
+// in Postgres, showed different numbers for the same student. The tests below
+// cover the endpoint that replaced it, and that the facial switch still stops
+// the facial data being asked for rather than merely hiding it.
+
+vi.mock('../../lib/api', () => {
+  const apiCalls = []
+  // The next signal-summary response. A plain object resolves, an Error
+  // rejects, and a Promise is adopted as-is -- which is what the staleness
+  // tests need in order to land two responses out of order.
+  const state = { summary: null }
+  return {
+    apiFetch: (path) => {
+      apiCalls.push(path)
+      const r = state.summary
+      return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
+    },
+    __apiCalls: apiCalls,
+    __apiState: state,
+  }
+})
 
 vi.mock('../../lib/supabase', () => {
   const fromCalls = []
   const results = {}
-  // Recorded per table so a test can assert the signal reads are bounded in
-  // time, not just in rows. Without this the builder accepts .gte() silently
-  // and dropping the window again would pass every assertion below.
-  const gteCalls = {}
   // Every builder method the page chains returns the builder; the terminal
-  // calls resolve. The builder is itself a thenable because two of the four
-  // queries are awaited straight off .eq() with no limit()/maybeSingle().
+  // calls resolve. The builder is itself a thenable because the topic query is
+  // awaited straight off .eq() with no limit()/maybeSingle().
   const query = (table) => {
     // An Error stored for a table rejects rather than resolving, so a test can
     // exercise the throw path as well as the { data, error } one.
@@ -28,7 +48,6 @@ vi.mock('../../lib/supabase', () => {
     const q = {
       select: () => q,
       eq: () => q,
-      gte: (col, value) => { (gteCalls[table] ||= []).push([col, value]); return q },
       order: () => q,
       limit: () => settle(),
       maybeSingle: () => settle(),
@@ -43,11 +62,11 @@ vi.mock('../../lib/supabase', () => {
     },
     __fromCalls: fromCalls,
     __results: results,
-    __gteCalls: gteCalls,
   }
 })
 
-const { __fromCalls: fromCalls, __results: results, __gteCalls: gteCalls } = await import('../../lib/supabase')
+const { __fromCalls: fromCalls, __results: results } = await import('../../lib/supabase')
+const { __apiCalls: apiCalls, __apiState: apiState } = await import('../../lib/api')
 
 const MEMBERSHIPS = {
   data: [{
@@ -58,18 +77,42 @@ const MEMBERSHIPS = {
   error: null,
 }
 
-function setTables({ cognitive, face }) {
+// Seven days at 1 Hz across a few sittings. Deliberately far above the 200-row
+// cap the browser read used to impose, so a count rendered from rows rather
+// than from the aggregate cannot accidentally match.
+const WEEK_OF_SAMPLES = 51840
+
+const SUMMARY = {
+  focus: 0.7, stress: 0.4, engagement: 0.6, face_attention: 0.9,
+  sessions: 3, cognitive_samples: WEEK_OF_SAMPLES, face_samples: WEEK_OF_SAMPLES,
+  face_included: true, dominant_emotion: 'happy',
+}
+
+// What the endpoint returns for the same student with the switch off: no facial
+// row is read, so every facial field comes back empty and face_included says
+// why. Sessions and EEG are untouched by the switch.
+const SUMMARY_FACE_OFF = {
+  ...SUMMARY, face_attention: null, face_samples: 0,
+  face_included: false, dominant_emotion: null,
+}
+
+const USER_STATS = {
+  data: { total_questions: 10, total_correct: 5, current_streak: 2, best_streak: 3 },
+  error: null,
+}
+
+function setData({ summary = SUMMARY, userStats = USER_STATS } = {}) {
   for (const k of Object.keys(results)) delete results[k]
   Object.assign(results, {
     class_memberships: MEMBERSHIPS,
-    user_stats: { data: { total_questions: 10, total_correct: 5, current_streak: 2, best_streak: 3 }, error: null },
-    cognitive_signals: { data: cognitive, error: null },
-    face_signals: { data: face, error: null },
+    user_stats: userStats,
     user_math_performance: { data: [], error: null },
   })
+  apiState.summary = summary
 }
 
-// StatCard renders the value above the label, so scope by the label's parent.
+// StatCard renders the value, label and subtitle in one div, so scope by the
+// label's parent.
 function tile(label) {
   return within(screen.getByText(label).closest('div'))
 }
@@ -78,102 +121,130 @@ async function expandAda() {
   await userEvent.click(await screen.findByRole('button', { name: /ada/i }))
 }
 
+const summaryCalls = () => apiCalls.filter(p => p.includes('/signal-summary'))
+
+function deferred() {
+  let resolve
+  const promise = new Promise(r => { resolve = r })
+  return { promise, resolve }
+}
+
 beforeEach(() => {
   localStorage.clear()
   fromCalls.length = 0
-  for (const k of Object.keys(gteCalls)) delete gteCalls[k]
-  setTables({
-    cognitive: [
-      { focus: 0.8, stress: 0.3, engagement: 0.5 },
-      { focus: null, stress: null, engagement: null },
-      { focus: 0.6, stress: 0.5, engagement: 0.7 },
-    ],
-    face: [{ attention: 0.9, emotion: 'happy' }],
-  })
+  apiCalls.length = 0
+  setData()
 })
 
 describe('signal averages', () => {
-  it('ignores null readings instead of counting them as zero', async () => {
-    // Number(null) is 0 and Number.isFinite(0) is true, so converting before
-    // filtering pulled the mean of [0.8, null, 0.6] down from 70% to 47%.
+  it('renders the aggregate as percentages', async () => {
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+    expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
+    expect(tile('Engagement').getByText('60%')).toBeInTheDocument()
+    expect(tile('Face Attention').getByText('90%')).toBeInTheDocument()
+    expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
   })
 
-  it('bounds both signal reads by time, not just by row count', async () => {
-    // The row cap alone left these averages describing an unbounded span -- the
-    // newest 200 readings, whenever they happened -- while the tiles called it a
-    // window and the panel sits beside a weekly-framed toggle. A student who
-    // stopped using the app months ago showed months-old averages as current.
+  it('reports the whole window, not a row cap', async () => {
+    // The regression this endpoint exists for. The browser read it replaced was
+    // capped at 200 rows, so a busy week rendered "200 EEG readings · last 7d"
+    // -- a cap presented as a measurement of the week, and a number the parent
+    // dashboard contradicted for the same student.
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(gteCalls.cognitive_signals).toBeDefined())
-    await waitFor(() => expect(gteCalls.face_signals).toBeDefined())
-
-    for (const table of ['cognitive_signals', 'face_signals']) {
-      const [[col, value]] = gteCalls[table]
-      expect(col).toBe('ts')
-      // Seven days back, to match the weekly report and the summary RPCs'
-      // p_days default, so a teacher and a parent describe the same week.
-      const days = (Date.now() - Date.parse(value)) / 86400000
-      expect(days).toBeGreaterThan(6.9)
-      expect(days).toBeLessThan(7.1)
-    }
+    await waitFor(() =>
+      expect(tile('Focus Score').getByText(`${WEEK_OF_SAMPLES} EEG readings · last 7d`)).toBeInTheDocument())
+    expect(tile('Face Attention').getByText(`${WEEK_OF_SAMPLES} face readings · last 7d`)).toBeInTheDocument()
   })
 
-  it('reports no data rather than a confident zero when every reading is null', async () => {
-    setTables({
-      cognitive: [{ focus: null, stress: null, engagement: null }],
-      face: [{ attention: 0.9, emotion: 'happy' }],
-    })
+  it('asks the aggregate for the window the tiles claim', async () => {
+    // The tiles say "last 7d", so the request has to say seven days -- matching
+    // the weekly report and the summary RPCs' p_days default, so that a teacher
+    // and a parent describe the same week.
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+    expect(summaryCalls()[0]).toContain('days=7')
+    expect(summaryCalls()[0]).toContain('/api/students/stu-1/signal-summary')
+  })
+
+  it('reports no data rather than a confident zero when the aggregate has none', async () => {
+    setData({ summary: { ...SUMMARY, focus: null, cognitive_samples: 0 } })
     render(<Students />)
     await expandAda()
     // "0%" here would read as a real measurement of a struggling student.
     await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
   })
+
+  it('does not render a missing field as NaN%', async () => {
+    // Number(undefined) is NaN and Number(null) is 0, so converting without a
+    // finite check turns an absent field into "NaN%" or a confident "0%".
+    setData({ summary: {} })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Focus Score').getByText('—')).toBeInTheDocument())
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+  })
 })
 
 describe('a failed read', () => {
+  it('costs the signal tiles only, not the academic ones beside them', async () => {
+    // The summary is one of three parallel reads. Letting it reject the whole
+    // Promise.all would blank stats that loaded perfectly well.
+    setData({ summary: new Error('signal summary down') })
+    render(<Students />)
+    await expandAda()
+    await waitFor(() => expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument())
+    expect(tile('Focus Score').getByText('—')).toBeInTheDocument()
+  })
+
   it('leaves the row refetchable rather than stuck loading', async () => {
     // The loading flag is what toggleExpand checks to decide a row is already
     // handled. A read that throws without clearing it leaves the row showing a
     // spinner that collapsing and re-expanding never clears -- the same stuck
     // row the supersede path is careful to avoid.
-    results.user_stats = new Error('network down')
+    setData({ userStats: new Error('network down') })
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(fromCalls.filter(t => t === 'user_stats')).toHaveLength(1))
 
-    setTables({ cognitive: [{ focus: 0.8, stress: 0.3, engagement: 0.5 }], face: [] })
+    setData()
     await expandAda()   // collapse
     await expandAda()   // and retry
-    await waitFor(() => expect(tile('Focus Score').getByText('80%')).toBeInTheDocument())
+    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(fromCalls.filter(t => t === 'user_stats').length).toBeGreaterThan(1)
   })
 })
 
 describe('facial recognition switch', () => {
-  it('reads facial signals by default', async () => {
+  it('asks for facial data by default', async () => {
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(fromCalls).toContain('face_signals'))
+    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+    expect(summaryCalls()[0]).toContain('include_face=true')
     expect(tile('Face Attention').getByText('90%')).toBeInTheDocument()
   })
 
-  it('does not query face_signals once switched off', async () => {
+  it('does not ask for facial data once switched off', async () => {
     // The same control the student progress report offers. Honouring it there
-    // and ignoring it here would make it a promise the app does not keep.
+    // and ignoring it here would make it a promise the app does not keep. The
+    // aggregate reads no face_signals row when told false, so this is the whole
+    // guarantee -- not a value hidden on the way out.
+    setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await userEvent.click(await screen.findByRole('switch'))
-    fromCalls.length = 0
+    apiCalls.length = 0
     await expandAda()
 
-    await waitFor(() => expect(fromCalls).toContain('cognitive_signals'))
-    expect(fromCalls).not.toContain('face_signals')
+    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+    expect(summaryCalls()[0]).toContain('include_face=false')
+    expect(summaryCalls().some(p => p.includes('include_face=true'))).toBe(false)
   })
 
   it('labels the facial tiles as off rather than missing', async () => {
+    setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await userEvent.click(await screen.findByRole('switch'))
     await expandAda()
@@ -182,12 +253,13 @@ describe('facial recognition switch', () => {
   })
 
   it('re-reads an open student when the switch flips', async () => {
-    // The cached rows were fetched with facial data in them; leaving them on
+    // The cached figures were fetched with facial data in them; leaving them on
     // screen would show exactly what the viewer just excluded.
     render(<Students />)
     await expandAda()
     await waitFor(() => expect(tile('Face Attention').getByText('90%')).toBeInTheDocument())
 
+    apiState.summary = SUMMARY_FACE_OFF
     await userEvent.click(screen.getByRole('switch'))
     await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
   })
@@ -197,11 +269,12 @@ describe('facial recognition switch', () => {
     await userEvent.click(await screen.findByRole('switch'))
     unmount()
 
-    fromCalls.length = 0
+    apiCalls.length = 0
+    setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(fromCalls).toContain('cognitive_signals'))
-    expect(fromCalls).not.toContain('face_signals')
+    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
+    expect(summaryCalls()[0]).toContain('include_face=false')
   })
 
   it('discards a read left in flight by a row collapsed before the switch flipped', async () => {
@@ -210,64 +283,63 @@ describe('facial recognition switch', () => {
     // and cached facial data under the new setting -- and toggleExpand skips
     // the fetch when the cache is warm, so re-expanding served it straight
     // back with the switch off.
-    let resolveCog
-    results.cognitive_signals = new Promise(r => { resolveCog = r })
+    const stale = deferred()
+    apiState.summary = stale.promise
 
     render(<Students />)
     await expandAda()                                   // read starts, face on
     await expandAda()                                   // collapse, still loading
     await userEvent.click(screen.getByRole('switch'))   // face off
 
-    resolveCog({ data: [{ focus: 0.8, stress: 0.3, engagement: 0.5 }], error: null })
-    await waitFor(() => expect(fromCalls).toContain('face_signals'))
+    apiState.summary = SUMMARY_FACE_OFF
+    stale.resolve(SUMMARY)                              // the superseded read lands
+    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
 
     await expandAda()
     await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     // The stale read must not have satisfied the cache either -- a row that
     // never refetches shows nothing at all.
-    expect(tile('Focus Score').getByText('80%')).toBeInTheDocument()
+    expect(tile('Focus Score').getByText('70%')).toBeInTheDocument()
   })
 
   it('discards a read that lands after a newer one under the same setting', async () => {
     // Off and straight back on leaves two reads in flight that both carry
     // faceIncluded=true. Keying the staleness check on that value alone let the
     // older one land last and overwrite newer data with it.
-    const deferred = () => {
-      let resolve
-      const promise = new Promise(r => { resolve = r })
-      return { promise, resolve }
-    }
     const first = deferred(), second = deferred(), third = deferred()
 
-    results.cognitive_signals = first.promise
+    apiState.summary = first.promise
     render(<Students />)
     await expandAda()                                   // read 1, face on
 
-    results.cognitive_signals = second.promise
+    apiState.summary = second.promise
     await userEvent.click(screen.getByRole('switch'))   // read 2, face off
-    results.cognitive_signals = third.promise
+    apiState.summary = third.promise
     await userEvent.click(screen.getByRole('switch'))   // read 3, face on again
 
-    third.resolve({ data: [{ focus: 0.6, stress: 0.3, engagement: 0.5 }], error: null })
+    third.resolve({ ...SUMMARY, focus: 0.6 })
     await waitFor(() => expect(tile('Focus Score').getByText('60%')).toBeInTheDocument())
 
-    second.resolve({ data: [{ focus: 0.2, stress: 0.3, engagement: 0.5 }], error: null })
-    first.resolve({ data: [{ focus: 0.1, stress: 0.3, engagement: 0.5 }], error: null })
-    await waitFor(() => expect(fromCalls.filter(t => t === 'cognitive_signals')).toHaveLength(3))
+    second.resolve({ ...SUMMARY_FACE_OFF, focus: 0.2 })
+    first.resolve({ ...SUMMARY, focus: 0.1 })
+    await waitFor(() => expect(summaryCalls()).toHaveLength(3))
 
     expect(tile('Focus Score').getByText('60%')).toBeInTheDocument()
     expect(screen.queryByText('10%')).not.toBeInTheDocument()
+    expect(screen.queryByText('20%')).not.toBeInTheDocument()
   })
 })
 
 describe('the "nothing recorded" note', () => {
   it('does not claim no sessions on the strength of facial data it never read', async () => {
-    // faceSignalCount is 0 by construction with the switch off, so including
-    // it in the condition unconditionally let this assert "no sessions" for a
-    // student whose only recorded activity was the facial signals we were
-    // asked not to look at.
-    setTables({ cognitive: [], face: [{ attention: 0.9, emotion: 'happy' }] })
-    results.user_stats = { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null }
+    // face_samples is 0 by construction with the switch off, so including it in
+    // the condition unconditionally let this assert "no sessions" for a student
+    // whose only recorded activity was the facial signals we were asked not to
+    // look at.
+    setData({
+      summary: { ...SUMMARY_FACE_OFF, cognitive_samples: 0 },
+      userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
+    })
 
     render(<Students />)
     await userEvent.click(await screen.findByRole('switch'))
@@ -280,8 +352,10 @@ describe('the "nothing recorded" note', () => {
   })
 
   it('still says so when everything was read and there was nothing', async () => {
-    setTables({ cognitive: [], face: [] })
-    results.user_stats = { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null }
+    setData({
+      summary: { ...SUMMARY, cognitive_samples: 0, face_samples: 0 },
+      userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
+    })
 
     render(<Students />)
     await expandAda()

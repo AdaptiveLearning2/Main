@@ -180,16 +180,29 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
     include_face=False is passed down into the aggregate, so no facial row is
     read at all -- the same guarantee _weekly_signal_report makes, rather than
     a null applied on the way out.
+
+    Carries dominant_emotion, which _signal_summaries does not: only the
+    single-student RPC computes it, because only the surfaces that read one
+    student at a time render it.
     """
+    row = None
     try:
         res = _summary_rpc("student_signal_summary",
                            {"p_student_id": student_id, "p_days": days}, include_face)
     except Exception as e:
         print(f"[signal_summary] {e}")
-        return _shape_summary(None, include_face)
-    rows = res.data or []
-    row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    return _shape_summary(row, include_face)
+    else:
+        rows = res.data or []
+        row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
+    summary = _shape_summary(row, include_face)
+    # Set here rather than in _shape_summary, which is shared with the batch
+    # RPC: putting it there would add an always-null dominant_emotion to every
+    # child on the parent dashboard, reporting "no emotion recorded" for a
+    # figure that was never asked for. Explicitly None with the opt-out on for
+    # the same reason the SQL yields NULL there -- and on the deploy-window
+    # fallback path, where the old signature has no such column at all.
+    summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_face else None
+    return summary
 
 
 _EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
@@ -314,13 +327,35 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
 
+    # Three states per table per day, not two. The cap trims oldest-first, so
+    # the oldest day that came back is the day it cut *into*: part of that day
+    # is here and the rest is not.
+    #
+    # Calling that day retrieved published a figure computed from whatever
+    # fraction survived -- a biased average, and for sessions a flat undercount
+    # -- with nothing to distinguish it from an exact one. Calling it absent
+    # would throw the day away instead. It is neither, so the value is withheld
+    # and the retrieved flag says so, while the day stays in the series because
+    # something was read for it.
+    #
+    # A cap that happened to stop exactly on a day boundary leaves an oldest
+    # day that really is complete, and that is not distinguishable from here
+    # without another query. It resolves the conservative way: a complete day
+    # understated as partial, rather than a partial day published as complete.
+    def _coverage(cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
+        """(nothing was retrieved for this day, this day is complete)."""
+        if not (cut and oldest_day):
+            return False, True          # nothing was trimmed, so every day is whole
+        if day < oldest_day:
+            return True, False          # the cap stopped before this day entirely
+        return False, day > oldest_day  # == oldest_day is the day it cut into
+
     daily = []
     for i in range(days - 1, -1, -1):
         day = (_utc_now() - timedelta(days=i)).date().isoformat()
-        # "We could not retrieve this day", judged per table.
-        cog_missing = bool(cog_cut and cog_oldest_day and day < cog_oldest_day)
-        face_missing = bool(face_cut and face_oldest_day and day < face_oldest_day)
-        ses_missing = bool(ses_cut and ses_oldest_day and day < ses_oldest_day)
+        cog_missing, cog_whole = _coverage(cog_cut, cog_oldest_day, day)
+        face_missing, face_whole = _coverage(face_cut, face_oldest_day, day)
+        ses_missing, ses_whole = _coverage(ses_cut, ses_oldest_day, day)
         # Skip only when nothing we actually asked for could be retrieved. With
         # face reporting off there is no face request to fail, so the day hinges
         # on the other two -- otherwise an always-False face_missing would keep
@@ -336,23 +371,30 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
         daily.append({
             "date": day,
-            "focus": None if cog_missing else _avg([r.get("focus") for r in day_cog]),
-            "stress": None if cog_missing else _avg([r.get("stress") for r in day_cog]),
-            "engagement": None if cog_missing else _avg([r.get("engagement") for r in day_cog]),
-            "attention": None if face_missing else _avg([r.get("attention") for r in day_face]),
+            # Withheld unless the day is whole. A partly-retrieved day averages
+            # only the fraction that survived the cap, which reads exactly like
+            # a measurement of the whole day.
+            "focus": _avg([r.get("focus") for r in day_cog]) if cog_whole else None,
+            "stress": _avg([r.get("stress") for r in day_cog]) if cog_whole else None,
+            "engagement": _avg([r.get("engagement") for r in day_cog]) if cog_whole else None,
+            "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
             # None rather than 0, on the same reasoning as the metrics above: a
             # day the cap kept us from reading did not have zero sessions, and
-            # `sessions_retrieved` is what tells the two apart.
-            "sessions": None if ses_missing else
-                        len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
-            # False means "the cap stopped us fetching this", which a null
-            # metric alone cannot distinguish from "nothing was recorded".
+            # `sessions_retrieved` is what tells the two apart. A count is the
+            # clearest case for withholding a partial day -- half a day's rows
+            # give exactly half the sessions, with no hint that it is half.
+            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
+                        if ses_whole else None,
+            # False means "the cap stopped us fetching this day in full", which
+            # a null metric alone cannot distinguish from "nothing was
+            # recorded". It covers both the days the cap never reached and the
+            # single day it cut into.
             # None means "not requested" -- face reporting is off, so there was
             # no retrieval to succeed or fail, and the consumers that count
             # `=== false` must not treat the opt-out as a retrieval failure.
-            "cognitive_retrieved": not cog_missing,
-            "face_retrieved": (not face_missing) if include_face else None,
-            "sessions_retrieved": not ses_missing,
+            "cognitive_retrieved": cog_whole,
+            "face_retrieved": face_whole if include_face else None,
+            "sessions_retrieved": ses_whole,
         })
 
     emotion_counts: dict[str, int] = {}
@@ -735,6 +777,37 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
         "student_name": p.get("display_name") or p.get("email") or "Student",
         **_weekly_signal_report(student_id, max(1, min(days, 30)), include_face=include_face),
     }
+
+
+@app.get("/api/students/{student_id}/signal-summary")
+def student_signal_summary(student_id: str, request: Request, days: int = 7, include_face: bool = True):
+    """Headline signal averages for a student, aggregated in Postgres.
+
+    Role-neutral, like the weekly report: gated on the viewer's relationship to
+    the student rather than on a role claim.
+
+    Exists because the teacher student list needs these four averages and
+    cannot get them honestly from the browser client. It used to read
+    cognitive_signals and face_signals directly under a 200-row cap. At the
+    poller's default 1 Hz that cap binds after about three minutes, so the
+    tiles labelled "last 7d" were in fact averaging the newest three minutes of
+    a single sitting -- and the sample counts, pinned at exactly 200, were
+    presented as a count of the week. A teacher and a parent looking at the
+    same student that week saw different numbers, which is precisely what
+    matching the window was meant to prevent.
+
+    Raising the cap is not the fix: seven days at 1 Hz is upwards of half a
+    million rows per student. The aggregate answers in one round-trip and
+    transfers no rows, which is what _signal_summary was added for.
+
+    The summary RPC is granted to service_role only, so this has to be a
+    server-side endpoint rather than an rpc() call from the browser. That gives
+    up nothing: _can_view_student's teacher branch -- owns a class the student
+    is a member of -- is the same relationship the "cog: teacher read" and
+    "face: teacher read" RLS policies encode, so the scope is unchanged.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    return _signal_summary(student_id, max(1, min(days, 30)), include_face=include_face)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -1519,6 +1592,14 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # This returns raw EEG and facial-emotion samples for a session, so resolve
     # whose session it is and apply the same access rule as the student-scoped
     # endpoints rather than trusting any authenticated caller.
+    #
+    # No include_face, deliberately. The facial-recognition opt-out covers the
+    # reporting surfaces -- the weekly report, the signal summaries and the
+    # children endpoint, all of which render the switch -- and session review,
+    # this endpoint's only caller, does not. See the scope note in
+    # frontend/src/lib/facePref.js; adding the parameter here without putting
+    # the switch on that page would make the control silently change a view it
+    # is absent from.
     user = get_user(request)
     try:
         sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
@@ -1542,6 +1623,15 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
+    """Live signals for the students of a class the caller owns.
+
+    No include_face, deliberately, for the reason session_signals gives above:
+    the facial-recognition opt-out covers the reporting surfaces, which render
+    the switch, and the live monitor does not. It is built around whether the
+    camera is currently working -- the attention gauge, the current emotion and
+    a camera-on badge -- which a reporting-window preference has no sensible
+    reading on. See the scope note in frontend/src/lib/facePref.js.
+    """
     user = get_user(request)
     # Was: `owner != user AND role != "teacher"` -- which only rejected callers
     # who were neither, so ANY teacher could read ANY class's live signals.

@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap} from 'lucide-react'
 import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
 import { readFacePref, writeFacePref } from '../../lib/facePref'
+import { apiFetch } from '../../lib/api'
 
 // How far back the expanded row's signal averages look. Matches the weekly
 // report and the summary RPCs' p_days default, so a teacher and a parent
@@ -18,109 +19,91 @@ const WINDOW_NOTE = `last ${SIGNAL_WINDOW_DAYS}d`
 const eegSub  = (n) => (n ? `${n} EEG readings · ${WINDOW_NOTE}` : `no EEG data · ${WINDOW_NOTE}`)
 const faceSub = (n, text) => (n ? `${text} · ${WINDOW_NOTE}` : `no face data · ${WINDOW_NOTE}`)
 
-// Hoisted out of the component: none of this reads component state, and
-// leaving it inside put a Date.now() call in the render path as far as the
-// react-hooks/purity rule is concerned -- it is only ever reached from an
-// event handler, but the rule cannot see that, and the honest fix is for the
-// data layer not to live in the render body at all.
+// Hoisted out of the component: none of this reads component state, and the
+// honest place for a data layer is not the render body.
+//
 // Signals are stored as 0..1 ratios in cognitive_signals and face_signals,
 // which is the interpretation the original placeholders were waiting on. The
 // rest of the app scales them by 100 at render (Live.jsx's Gauge,
-// SignalPanel's pct), so these do too.
+// SignalPanel's pct), so this does too.
 //
-// Nulls are dropped before the conversion, not after: every signal column is
-// nullable, and Number(null) is 0 -- which Number.isFinite happily accepts,
-// pulling the average down and turning a student with no usable readings into
-// a confident "0%" rather than "no data".
-const avg = (rows, key) => {
-  const vals = rows
-    .map(r => r[key])
-    .filter(v => v !== null && v !== undefined)
-    .map(Number)
-    .filter(Number.isFinite)
-  if (!vals.length) return null
-  return vals.reduce((a, b) => a + b, 0) / vals.length
+// null for anything that is not a measurement, which the tiles below render as
+// "—". Guarding on the converted value rather than the raw one, because
+// Number(null) is 0 and Number(undefined) is NaN: a field the summary did not
+// carry would otherwise reach a teacher as a confident "0%" or as "NaN%". Same
+// reasoning as SignalPanel's pct.
+const asPct = (value) => {
+  if (value === null || value === undefined) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? `${Math.round(n * 100)}%` : null
 }
 
-const asPct = (ratio) => (ratio === null ? null : `${Math.round(ratio * 100)}%`)
-
-// Function to retrieve student data from user_stats, cognitive_signals,
-// face_signals and topic performance in supabase.
+// Function to retrieve student data from user_stats, the signal-summary
+// endpoint and topic performance.
 //
-// Read with the browser client, so RLS applies: the "cog: teacher read" and
-// "face: teacher read" policies scope these to students in a class the
-// signed-in teacher owns. A teacher outside that relationship gets zero rows
-// rather than an error.
+// user_stats and topic performance are read with the browser client, so RLS
+// applies to them.
 //
-// withFace=false skips the face_signals query outright rather than hiding the
-// result, matching what the weekly-report endpoint does for the same switch:
-// the point of the control is that the data is not read.
+// The signal averages are not, and deliberately. They used to be a direct read
+// of cognitive_signals and face_signals capped at 200 rows -- and at the
+// poller's default 1 Hz that cap binds after roughly three minutes, so tiles
+// labelled "last 7d" were averaging the newest three minutes of one sitting,
+// with a reading count pinned at exactly 200 and presented as a count of the
+// week. The parent dashboard, aggregating the same week in Postgres, showed
+// different numbers for the same student. Raising the cap is not available:
+// seven days at 1 Hz is upwards of half a million rows.
 //
-// Both signal reads are bounded by time as well as by row count. The row cap
-// alone left these averages describing an unbounded span -- the newest 200
-// readings, whenever they happened -- while the labels called it a window and
-// the panel sat beside a weekly-framed toggle. A student who stopped using
-// the app months ago showed months-old averages as current. Seven days to
-// match every other surface: the weekly report, and the summary RPCs' p_days
-// default. The row cap stays as the ceiling for a heavy week.
+// So the four averages come from /api/students/{id}/signal-summary, which is
+// the same student_signal_summary aggregate the parent dashboard reads --
+// exact over the whole window, no rows transferred, and no cap to bind. The
+// scope is unchanged: that endpoint's _can_view_student teacher branch encodes
+// the same relationship as the "cog: teacher read" and "face: teacher read"
+// policies this query used to lean on.
+//
+// withFace=false is threaded into the aggregate, which reads no face_signals
+// row at all -- the same guarantee, rather than a value hidden on the way out.
 async function getStudentStats(studentId, withFace = true)
 {
-   const since = new Date(Date.now() - SIGNAL_WINDOW_DAYS * 86400000).toISOString()
-   const [statsRes, signalsRes, faceRes, topicRes] = await Promise.all([
+   const [statsRes, summary, topicRes] = await Promise.all([
     supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
-    supabase.from('cognitive_signals')
-      .select('focus, stress, engagement, ts')
-      .eq('user_id', studentId)
-      .gte('ts', since)
-      .order('ts', { ascending: false })
-      .limit(200),
-    withFace
-      ? supabase.from('face_signals')
-          .select('attention, emotion, ts')
-          .eq('user_id', studentId)
-          .gte('ts', since)
-          .order('ts', { ascending: false })
-          .limit(200)
-      : Promise.resolve({ data: [], error: null }),
+    // Caught here rather than left to reject the Promise.all: a signal-summary
+    // outage should cost the four signal tiles, not the academic ones sitting
+    // beside them that loaded fine.
+    apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}&include_face=${withFace}`)
+      .catch(err => { console.error('Failed to load signal summary:', err); return null }),
     supabase.from('user_math_performance')
       .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
       .eq('user_id', studentId)
   ])
 
   if (statsRes.error) console.error('Failed to load user_stats:', statsRes.error)
-  if (signalsRes.error) console.error('Failed to load cognitive_signals:', signalsRes.error)
-  if (faceRes.error) console.error('Failed to load face_signals:', faceRes.error)
   if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
 
   const userStats = statsRes.data
-  const signals = signalsRes.data || []
-  const faceSignals = faceRes.data || []
+  const signals = summary || {}
 
   const totalAccuracy = userStats && userStats.total_questions > 0
     ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
     : null
-
-  const emotionCounts = {}
-  for (const f of faceSignals) {
-    if (f.emotion) emotionCounts[f.emotion] = (emotionCounts[f.emotion] || 0) + 1
-  }
-  const dominantEmotion = Object.entries(emotionCounts)
-    .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
 
   return {
     totalAccuracy,
     totalQuestions: userStats?.total_questions ?? 0,
     currentStreak: userStats?.current_streak ?? 0,
     bestStreak: userStats?.best_streak ?? 0,
-    focusScore: asPct(avg(signals, 'focus')),
-    stressLevel: asPct(avg(signals, 'stress')),
-    engagement: asPct(avg(signals, 'engagement')),
-    faceAttention: asPct(avg(faceSignals, 'attention')),
-    dominantEmotion,
-    signalCount: signals.length,
-    faceSignalCount: faceSignals.length,
-    // Lets the panel say "Off" rather than "—": a switched-off control is a
-    // different statement from a student with no facial readings.
+    focusScore: asPct(signals.focus),
+    stressLevel: asPct(signals.stress),
+    engagement: asPct(signals.engagement),
+    faceAttention: asPct(signals.face_attention),
+    dominantEmotion: signals.dominant_emotion ?? null,
+    // Exact counts of non-null measurements over the window, from the
+    // aggregate -- not a length that stops at a row cap.
+    signalCount: signals.cognitive_samples ?? 0,
+    faceSignalCount: signals.face_samples ?? 0,
+    // What was asked for, not what came back: with the summary request failed
+    // the tiles should still say "Off" rather than "—" when the switch is off.
+    // Lets the panel distinguish a switched-off control from a student with no
+    // facial readings.
     faceIncluded: withFace,
     topics: (topicRes.data || []).map(row => {
       const attempted = row.attempted_questions || 0

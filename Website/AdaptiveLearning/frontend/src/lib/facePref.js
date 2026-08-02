@@ -2,12 +2,39 @@
 // surfaces that show it.
 //
 // SCOPE, stated because the alternative reading is a much stronger promise
-// than this keeps: it is a *viewer-side read control*, not stored consent. It
-// governs what the browser in front of you asks for, and every surface honours
-// it by not issuing the query. It does NOT stop facial signals being recorded
-// about a student, and it does not travel with the student -- a parent
-// switching it off changes what their own browser reads, while another viewer
-// with their own switch on still sees that child's facial data.
+// than this keeps: it is a *viewer-side read control over the reporting
+// surfaces*, not stored consent. It governs what the browser in front of you
+// asks those surfaces for, and each of them honours it by not issuing the
+// query. It does NOT stop facial signals being recorded about a student, and
+// it does not travel with the student -- a parent switching it off changes
+// what their own browser reads, while another viewer with their own switch on
+// still sees that child's facial data.
+//
+// The surfaces it covers, which are the ones that render the switch:
+//
+//   - the student progress report (weekly-report endpoint, teacher and parent)
+//   - the parent dashboard (the children endpoint and the summary RPCs)
+//   - the teacher student list (the signal-summary endpoint)
+//
+// And the ones it does NOT, both teacher-only and neither of which renders the
+// switch. Named rather than left implied, because "every surface honours it"
+// is the claim a reader will otherwise carry away from this file, and it is
+// the claim that would make the control untrustworthy if someone checked:
+//
+//   - live class monitoring (pages/teacher/Live.jsx via
+//     /api/teacher/classes/{id}/live), which shows a live attention gauge, the
+//     current emotion and a camera-on badge
+//   - session review (pages/teacher/SessionReview.jsx via
+//     /api/signals/session/{id}), which plots one finished session's raw
+//     facial samples
+//
+// That is a deliberate boundary rather than an oversight: both are real-time
+// or per-session monitoring views built around whether the camera is working,
+// which a reporting-window preference has no sensible reading on. Extending
+// the control to them is a product decision, not a bug fix -- and it would
+// need the switch rendered there, since a control that silently changes a page
+// it is absent from is worse than one with a stated edge. Both call sites
+// carry a pointer back here so the two halves cannot drift apart.
 //
 // Making it consent over a child's biometrics would be a different feature: a
 // per-student setting held server-side and enforced where face_signals is
@@ -17,10 +44,11 @@
 // written to match this scope ("this does not switch a camera on or off") --
 // keep the two in step.
 //
-// Shared rather than owned by one component: the student progress report and
-// the teacher student list both read facial signals, and a privacy switch that
-// one surface honours while a sibling ignores it is worse than no switch --
-// it implies a guarantee the app does not keep.
+// Shared rather than owned by one component: every reporting surface listed
+// above reads facial signals, and a privacy switch that one of them honours
+// while a sibling ignores it is worse than no switch -- it implies a guarantee
+// the app does not keep. Adding a reporting surface means wiring it to this
+// preference and adding it to that list, not assuming it is covered.
 //
 // Deliberately one setting covering every student rather than one key per
 // student. Off means off everywhere; a per-student key would quietly re-enable

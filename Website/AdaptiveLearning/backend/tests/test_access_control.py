@@ -5,6 +5,7 @@ bypasses RLS -- so the checks in main.py are the only thing standing between a
 caller and another student's data. Six of them shipped with no ownership check
 at all, which is what these tests exist to prevent recurring.
 """
+import inspect
 import os
 import sys
 import threading
@@ -412,6 +413,93 @@ def test_weekly_report_nulls_a_day_whose_sessions_were_cut(monkeypatch):
         assert d["sessions"] is None, "0 would read as a day with no sessions"
 
 
+# ── the day the cap cut into ─────────────────────────────────────────────
+#
+# The cap trims oldest-first, so the oldest day that came back is the day it
+# cut through: part of it is here, the rest is not. That day used to be
+# reported as retrieved, carrying a figure computed from whatever fraction
+# survived -- indistinguishable from an exact one.
+
+def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
+    """Three readings a day for three days, and a cap of four.
+
+    That keeps all of day 0 and one of day 1's three, so day 1 is the day the
+    cap cut through. Averaging its single surviving reading and calling the
+    result day 1's focus reads as a measurement of the whole day.
+    """
+    cog = [{"user_id": "student-1", "ts": _ts(d, hour=h),
+            "focus": 0.5, "stress": 0.4, "engagement": 0.6}
+           for d in range(0, 3) for h in (9, 12, 15)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables(cog), max_rows={"cognitive_signals": 4}))
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    assert report["sample_counts"]["cognitive"] == 4, "fixture must actually be cut"
+    days = {d["date"]: d for d in report["daily"]}
+    whole, boundary, beyond = _ts(0)[:10], _ts(1)[:10], _ts(2)[:10]
+
+    # The day entirely inside the cap is untouched.
+    assert days[whole]["cognitive_retrieved"] is True
+    assert days[whole]["focus"] == 0.5
+
+    # The day it cut through is withheld -- but kept in the series, because
+    # something was read for it.
+    assert boundary in days, "a partly-read day must not be dropped as absent"
+    assert days[boundary]["cognitive_retrieved"] is False
+    assert days[boundary]["focus"] is None
+    assert days[boundary]["stress"] is None
+    assert days[boundary]["engagement"] is None
+
+    # And the day it never reached is flagged the same way.
+    assert days[beyond]["cognitive_retrieved"] is False
+    assert days[beyond]["focus"] is None
+
+
+def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
+    """The clearest case for withholding a partial day.
+
+    An average over a fraction of a day is at least a biased estimate of it. A
+    count over a fraction of a day is simply wrong -- one third of the rows
+    gives exactly one third of the sessions, with nothing to say it is a third.
+    """
+    sessions = [{"id": f"s{d}-{h}", "user_id": "student-1", "started_at": _ts(d, hour=h)}
+                for d in range(0, 3) for h in (9, 12, 15)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables([], session_rows=sessions), max_rows={"sessions": 4}))
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    days = {d["date"]: d for d in report["daily"]}
+    whole, boundary = _ts(0)[:10], _ts(1)[:10]
+
+    assert days[whole]["sessions_retrieved"] is True
+    assert days[whole]["sessions"] == 3
+    # Not 1, which is what a third of the day's rows counts to.
+    assert days[boundary]["sessions_retrieved"] is False
+    assert days[boundary]["sessions"] is None
+
+
+def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monkeypatch):
+    """One reading a day and a cap of three: the cut falls exactly between two
+    days, so the oldest day retrieved really is complete.
+
+    Nothing available here can tell that apart from a day cut through the
+    middle -- both leave an oldest retrieved row and some trimmed rows older
+    than it, and distinguishing them means another query. So it resolves the
+    conservative way, and this pins which way that is: a complete day reported
+    as partial, never a partial day reported as complete. Deliberate, not an
+    off-by-one to tidy up.
+    """
+    cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 5)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _signal_tables(cog), max_rows={"cognitive_signals": 3}))
+    report = main._weekly_signal_report("student-1", include_face=False)
+
+    days = {d["date"]: d for d in report["daily"]}
+    assert days[_ts(0)[:10]]["cognitive_retrieved"] is True
+    assert days[_ts(2)[:10]]["cognitive_retrieved"] is False
+    assert days[_ts(2)[:10]]["focus"] is None
+
+
 # ── database behind the build ────────────────────────────────────────────
 
 _PGRST202 = "PGRST202: Could not find the function public.student_signal_summary" \
@@ -513,7 +601,9 @@ def test_a_broken_rpc_is_not_retried(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
 
     out = main._signal_summary("student-1")
-    assert out == {**main._EMPTY_SUMMARY, "face_included": True}
+    # dominant_emotion is part of the single-student shape on every path,
+    # including the ones that never reached a row.
+    assert out == {**main._EMPTY_SUMMARY, "face_included": True, "dominant_emotion": None}
     assert len(fake.rpc_calls) == 1
 
 
@@ -532,7 +622,7 @@ def test_signal_summary_surfaces_sample_counts(monkeypatch):
 def test_signal_summary_returns_empty_shape_when_rpc_yields_nothing(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={}))
     out = main._signal_summary("student-1")
-    assert out == main._EMPTY_SUMMARY
+    assert out == {**main._EMPTY_SUMMARY, "dominant_emotion": None}
     assert out is not main._EMPTY_SUMMARY, "callers must not share the module-level dict"
 
 
@@ -616,6 +706,160 @@ def test_children_endpoint_threads_the_opt_out(monkeypatch):
     # the flag too, or the dashboard renders "N/A" where it should say "Off".
     assert all(c["signal_summary"]["face_included"] is False for c in children)
     assert children, "fixture should link at least one child to this parent"
+
+
+# ── /api/students/{id}/signal-summary ────────────────────────────────────
+#
+# The teacher student list used to read cognitive_signals and face_signals
+# straight from the browser under a 200-row cap. At the poller's 1 Hz default
+# that cap binds after about three minutes, so tiles labelled "last 7d" were
+# averaging the newest three minutes of one sitting, and the reading count sat
+# pinned at exactly 200 while being presented as a count of the week. These
+# cover the endpoint that replaced it.
+
+_SUMMARY_ROW = {
+    "focus": 0.7, "stress": 0.3, "engagement": 0.5, "face_attention": 0.8,
+    "sessions": 4, "cognitive_samples": 51840, "face_samples": 51840,
+    "dominant_emotion": "focused",
+}
+
+
+def _summary_fake(monkeypatch, viewer, row=None):
+    fake = _FakeSupabase(TABLES, rpc_results={
+        "student_signal_summary": [row if row is not None else _SUMMARY_ROW],
+    })
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: viewer)
+    return fake
+
+
+def test_signal_summary_endpoint_rejects_a_viewer_with_no_relationship(monkeypatch):
+    fake = _summary_fake(monkeypatch, STRANGER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_signal_summary("student-1", None)
+    assert exc.value.status_code == 403
+    assert fake.rpc_calls == [], "access is decided before the aggregate runs"
+
+
+def test_signal_summary_endpoint_allows_a_teacher_of_the_students_class(monkeypatch):
+    """The same relationship the "cog: teacher read" RLS policy encodes, which
+    is what the browser-client read this replaced was leaning on."""
+    _summary_fake(monkeypatch, TEACHER)
+    out = main.student_signal_summary("student-1", None)
+    assert out["focus"] == 0.7
+
+
+def test_signal_summary_endpoint_rejects_a_teacher_of_a_different_class(monkeypatch):
+    _summary_fake(monkeypatch, OTHER_TEACHER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_signal_summary("student-1", None)
+    assert exc.value.status_code == 403
+
+
+def test_signal_summary_endpoint_allows_a_linked_parent(monkeypatch):
+    """Role-neutral path, per CLAUDE.md: gated on the relationship, so it is
+    not the teacher list's private endpoint just because that is its caller."""
+    _summary_fake(monkeypatch, PARENT)
+    assert main.student_signal_summary("student-1", None)["focus"] == 0.7
+
+
+def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypatch):
+    """The figure a teacher sees is Postgres's count over the window.
+
+    51840 is seven days at 1 Hz across a few sittings -- a number the 200-row
+    browser read this replaced could not have produced, and the reason it could
+    not is the bug: it would have reported 200 and called it the week.
+    """
+    _summary_fake(monkeypatch, TEACHER)
+    out = main.student_signal_summary("student-1", None)
+    assert out["cognitive_samples"] == 51840
+    assert out["face_samples"] == 51840
+
+
+def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
+    fake = _summary_fake(monkeypatch, TEACHER)
+    main.student_signal_summary("student-1", None, include_face=False)
+    assert fake.rpc_calls[0][1]["p_include_face"] is False
+
+    fake.rpc_calls.clear()
+    main.student_signal_summary("student-1", None)
+    assert fake.rpc_calls[0][1]["p_include_face"] is True, "included unless asked otherwise"
+
+
+def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
+    """Same bounds as the weekly report, so a caller cannot ask for an
+    unbounded scan by putting a large number in the query string."""
+    fake = _summary_fake(monkeypatch, TEACHER)
+    main.student_signal_summary("student-1", None, days=9999)
+    assert fake.rpc_calls[0][1]["p_days"] == 30
+
+    fake.rpc_calls.clear()
+    main.student_signal_summary("student-1", None, days=0)
+    assert fake.rpc_calls[0][1]["p_days"] == 1
+
+
+def test_signal_summary_carries_the_dominant_emotion(monkeypatch):
+    """Computed in the aggregate rather than by counting emotions client-side,
+    for the same reason the averages are: a capped row read only ever saw the
+    newest few minutes of them."""
+    _summary_fake(monkeypatch, TEACHER)
+    assert main.student_signal_summary("student-1", None)["dominant_emotion"] == "focused"
+
+
+def test_signal_summary_withholds_the_dominant_emotion_when_the_opt_out_is_on(monkeypatch):
+    """emotion is a facial reading. A stale value surviving the opt-out would
+    put facial data back on screen with the switch reading "off"."""
+    _summary_fake(monkeypatch, TEACHER)
+    out = main.student_signal_summary("student-1", None, include_face=False)
+    assert out["dominant_emotion"] is None
+    assert out["face_included"] is False
+
+
+def test_batch_summaries_carry_no_dominant_emotion(monkeypatch):
+    """Only the single-student RPC computes it. Adding it to the shared shape
+    would report an always-null "no emotion recorded" for every child on the
+    parent dashboard, for a figure that page never asks for or renders."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={
+        "student_signal_summary_many": [
+            {"student_id": "student-1", "focus": 0.4, "sessions": 1, "cognitive_samples": 3},
+        ],
+    }))
+    assert "dominant_emotion" not in main._signal_summaries(["student-1"])["student-1"]
+
+
+# ── where the facial-recognition opt-out reaches, and where it does not ──
+#
+# The control covers the reporting surfaces, each of which renders the switch.
+# Live monitoring and session review deliberately sit outside it: both are
+# teacher-only views built around whether the camera is currently working, and
+# neither renders the switch, so honouring it there would silently change a
+# page the control is absent from.
+#
+# That boundary is documented in frontend/src/lib/facePref.js and at both call
+# sites. These two tests are what make moving it fail loudly rather than
+# leaving the note quietly wrong -- the same reason the parent dashboard's
+# hasSignalSummary carries a test for the tile it deliberately omits.
+
+def test_every_reporting_endpoint_takes_the_opt_out():
+    for fn in (main.student_weekly_report, main.student_signal_summary, main.my_children):
+        assert "include_face" in inspect.signature(fn).parameters, (
+            f"{fn.__name__} renders facial data on a surface that shows the switch"
+        )
+
+
+def test_the_opt_out_deliberately_does_not_reach_live_or_session_review():
+    """Asserting an absence, on purpose.
+
+    If either of these grows an include_face, the scope note in facePref.js has
+    become wrong and the switch needs to appear on the page as well -- so this
+    should fail and send whoever added it to that note, rather than letting the
+    two halves drift apart silently.
+    """
+    for fn in (main.class_live, main.session_signals):
+        assert "include_face" not in inspect.signature(fn).parameters, (
+            f"{fn.__name__} now honours the opt-out; update the scope note in "
+            "frontend/src/lib/facePref.js and render the switch on that page"
+        )
 
 
 def test_missing_class_returns_404_not_500():

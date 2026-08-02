@@ -12,6 +12,13 @@
 -- itself: with p_include_face false, no face_signals row is read into the
 -- aggregate at all, matching what the other two surfaces do.
 
+-- The single-student function also gains dominant_emotion, so that the teacher
+-- student list can read its facial tiles from this aggregate rather than
+-- pulling raw face_signals rows into the browser. See the endpoint comment on
+-- /api/students/{id}/signal-summary for why that read had to move: a row cap
+-- that binds long before the time window turns "last 7 days" into "the last
+-- few minutes", quietly.
+--
 -- DROP rather than CREATE OR REPLACE: adding a parameter changes the
 -- signature, so CREATE OR REPLACE would leave the old two-argument function in
 -- place as an overload -- still granted, still callable, and still blind to the
@@ -19,6 +26,13 @@
 -- nothing outside this file needs to change in step.
 DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer);
 DROP FUNCTION IF EXISTS "public"."student_signal_summary_many"("uuid"[], integer);
+-- The three-argument signature too. CREATE OR REPLACE cannot change a
+-- function's return type, and this migration's single-student function gained
+-- a column after the three-argument version had already been applied to
+-- development databases -- so without this drop, re-running the file there
+-- fails on "cannot change return type of existing function" rather than
+-- picking up dominant_emotion.
+DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer, boolean);
 
 -- Still SECURITY INVOKER (the default), for the reasons the original migration
 -- gives: the backend calls this with the service-role key after its own
@@ -36,7 +50,8 @@ RETURNS TABLE (
   "face_attention" double precision,
   "sessions" bigint,
   "cognitive_samples" bigint,
-  "face_samples" bigint
+  "face_samples" bigint,
+  "dominant_emotion" "text"
 )
 LANGUAGE "sql"
 STABLE
@@ -64,7 +79,13 @@ AS $$
     -- no facial readings, which is why the caller also gets face_included to
     -- tell the two apart.
     SELECT avg(f.attention)   AS attention,
-           count(f.attention) AS n
+           count(f.attention) AS n,
+           -- The most frequent recorded emotion over the window. FILTERed
+           -- explicitly rather than relying on how the ordered-set aggregate
+           -- treats NULLs: emotion is nullable, and "no emotion was read" must
+           -- not be able to win the vote and render as a mood.
+           mode() WITHIN GROUP (ORDER BY f.emotion)
+             FILTER (WHERE f.emotion IS NOT NULL) AS emotion
     FROM face_signals f, bounds b
     WHERE p_include_face AND f.user_id = p_student_id AND f.ts >= b.since
   ),
@@ -74,10 +95,14 @@ AS $$
     WHERE s.user_id = p_student_id AND s.started_at >= b.since
   )
   SELECT cog.focus, cog.stress, cog.engagement, fac.attention,
-         ses.n, cog.n, fac.n
+         ses.n, cog.n, fac.n, fac.emotion
   FROM cog, fac, ses;
 $$;
 
+-- Deliberately without the single-student function's dominant_emotion. This one
+-- feeds the parent dashboard, which has no emotion tile, and the column would
+-- be a mode() per child computed on every dashboard load for nothing. Add it
+-- here only alongside somewhere that renders it.
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
   "p_days" integer DEFAULT 7,

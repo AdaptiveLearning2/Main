@@ -186,15 +186,22 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
     student at a time render it.
     """
     row = None
+    retrieved = True
     try:
         res = _summary_rpc("student_signal_summary",
                            {"p_student_id": student_id, "p_days": days}, include_face)
     except Exception as e:
         print(f"[signal_summary] {e}")
+        # The figures below are about to become defaults rather than
+        # measurements, and nothing downstream could tell the difference: the
+        # endpoint answers 200 either way, so a caller saw zero samples and a
+        # null average -- the same shape as a student who recorded nothing.
+        # Surfaces then reported an absence in data that failed to load.
+        retrieved = False
     else:
         rows = res.data or []
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    summary = _shape_summary(row, include_face)
+    summary = _shape_summary(row, include_face, retrieved)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
@@ -208,12 +215,25 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
 _EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "sessions": 0,
                   "cognitive_samples": 0, "face_samples": 0,
-                  "face_included": True}
+                  "face_included": True, "retrieved": True}
 
 
-def _shape_summary(row, include_face: bool = True) -> dict:
+def _shape_summary(row, include_face: bool = True, retrieved: bool = True) -> dict:
+    """The summary payload.
+
+    `retrieved` is the third thing a caller has to be able to tell apart, after
+    "nothing was recorded" and "facial data was not requested": the aggregate
+    query itself failed. Both helpers below swallow that exception so one
+    broken read does not blank a dashboard -- but the payload they return is
+    all defaults, and answered with a 200, so without this flag a zero sample
+    count and a null average were indistinguishable from a quiet week. Every
+    surface that renders "no data" has to consult it before saying so.
+
+    True by default: it is the answer for every path that actually reached the
+    database, including one that legitimately came back with no rows.
+    """
     if not row:
-        return {**_EMPTY_SUMMARY, "face_included": include_face}
+        return {**_EMPTY_SUMMARY, "face_included": include_face, "retrieved": retrieved}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -230,15 +250,26 @@ def _shape_summary(row, include_face: bool = True) -> dict:
         # identical to a student the camera never saw. Same distinction the
         # weekly report draws with its own face_included.
         "face_included": include_face,
+        # A row got here, so the read succeeded by construction. Carried
+        # anyway rather than hardcoded True, so the field is present on every
+        # payload and a consumer never has to treat "absent" as a third state.
+        "retrieved": retrieved,
     }
 
 
 def _signal_summaries(student_ids: list[str], days: int = 7,
-                      include_face: bool = True) -> dict[str, dict]:
+                      include_face: bool = True) -> dict[str, dict] | None:
     """Headline averages for many students in one round-trip.
 
     The single-student RPC removes the row transfer but still costs one
     round-trip per child on a dashboard that loads every visit.
+
+    None means the read failed, as opposed to {} for a call that succeeded and
+    had nothing to return. The caller needs the difference: it fills in a
+    default summary for any child missing from the result, and that default has
+    to say whether it stands in for a failed query or for a child the aggregate
+    genuinely reported nothing about. Returning {} for both had the dashboard
+    tell a parent their child had recorded nothing whenever the RPC broke.
     """
     if not student_ids:
         return {}
@@ -247,7 +278,7 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
                            {"p_student_ids": student_ids, "p_days": days}, include_face)
     except Exception as e:
         print(f"[signal_summaries] {e}")
-        return {}
+        return None
     rows = res.data or []
     if isinstance(rows, dict):
         rows = [rows]
@@ -1081,6 +1112,14 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     return {
         "days": days,
         "face_included": summary["face_included"],
+        # Carried through to `basis` in the response. A failed aggregate leaves
+        # every average None, which the rules below already read as "no signal
+        # to act on" -- so the advice degrades to the generic list rather than
+        # being tuned to zeros, which is the right outcome. What was missing is
+        # saying so: without this, a caller comparing `basis.averages` against
+        # the week could not tell advice built from a quiet week from advice
+        # built from a query that never ran.
+        "retrieved": summary["retrieved"],
         "averages": {
             "focus": summary["focus"],
             "stress": summary["stress"],
@@ -1358,6 +1397,12 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
         "basis": {
             "days": days,
             "face_included": payload.include_face,
+            # False means the averages beside it are defaults, not a quiet
+            # week, so these strategies are the generic list rather than one
+            # tuned to the student. Same distinction the summary endpoint
+            # makes; stated here because this response is what a parent acts
+            # on.
+            "signals_retrieved": report.get("retrieved", True),
             "averages": report.get("averages") or {},
             # Named fields rather than the whole _topic_breakdown row, which
             # also carries topic_id, a stress reading and updated_at — none of
@@ -1922,6 +1967,12 @@ def my_children(request: Request, include_face: bool = True):
     # added here, not the endpoint's overall shape.
     summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])],
                                   include_face=include_face)
+    # None is the failed read; {} is a read that returned nothing. Both leave
+    # every child falling back below, and the fallback has to say which one it
+    # is standing in for -- otherwise a broken RPC reaches a parent as "your
+    # child recorded nothing this week".
+    summaries_retrieved = summaries is not None
+    summaries = summaries or {}
     children = []
     for lnk in (links.data or []):
         cid = lnk["child_id"]
@@ -1941,7 +1992,8 @@ def my_children(request: Request, include_face: bool = True):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": summaries.get(str(cid)) or _shape_summary(None, include_face),
+            "signal_summary": summaries.get(str(cid))
+                              or _shape_summary(None, include_face, summaries_retrieved),
         })
     return children
 

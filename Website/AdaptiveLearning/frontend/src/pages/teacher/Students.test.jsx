@@ -383,6 +383,43 @@ describe('the "nothing recorded" note', () => {
     expect(screen.queryByText(/facial signals were not read/i)).not.toBeInTheDocument()
   })
 
+  it('does not claim no sessions when the endpoint answered 200 with defaults', async () => {
+    // The other half of the same finding. The backend swallows a failed
+    // aggregate so one broken read does not blank the page, and answers 200
+    // with an all-default summary -- so the request succeeds, and only
+    // retrieved=false distinguishes it from a student who recorded nothing.
+    setData({
+      summary: { ...SUMMARY, focus: null, stress: null, engagement: null,
+                 face_attention: null, sessions: 0, cognitive_samples: 0,
+                 face_samples: 0, dominant_emotion: null, retrieved: false },
+      userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
+    })
+
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(screen.getByText(/couldn't be loaded/i)).toBeInTheDocument())
+    expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
+    expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument()
+  })
+
+  it('treats a retrieved summary with nothing in it as a quiet week', async () => {
+    // The mirror: retrieved=true with zero samples is a real answer about a
+    // student who recorded nothing, and must still say so. Marking it as a
+    // failure would collapse the distinction from the other side.
+    setData({
+      summary: { ...SUMMARY, cognitive_samples: 0, face_samples: 0, retrieved: true },
+      userStats: { data: { total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }, error: null },
+    })
+
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() =>
+      expect(screen.getByText(/hasn't completed any sessions yet/i)).toBeInTheDocument())
+    expect(screen.queryByText(/couldn't be loaded/i)).not.toBeInTheDocument()
+  })
+
   it('does not report a failed request as an absence of readings on the tiles', async () => {
     // "no EEG data · last 7d" is the same claim in miniature: the count it
     // quotes is zero because nothing came back, not because nothing was

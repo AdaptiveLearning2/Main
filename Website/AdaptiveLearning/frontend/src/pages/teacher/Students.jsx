@@ -118,7 +118,14 @@ async function getStudentStats(studentId, withFace = true)
     // recorded nothing unless the failure is carried alongside them. Without
     // it the copy below told a teacher a student had completed no sessions on
     // the strength of a request that never returned.
-    signalsFailed: summary === null,
+    //
+    // Two ways to not have the data, and the tiles cannot tell them apart:
+    // summary === null is the request itself failing, and retrieved === false
+    // is the endpoint answering 200 with defaults because the aggregate query
+    // behind it failed. The backend swallows that one so a broken read does not
+    // blank a page, which is right -- but it means a successful-looking
+    // response can still be carrying nothing, and only the flag says so.
+    signalsFailed: summary === null || signals.retrieved === false,
     // What was asked for, not what came back: with the summary request failed
     // the tiles should still say "Off" rather than "—" when the switch is off.
     // Lets the panel distinguish a switched-off control from a student with no

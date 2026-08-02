@@ -236,6 +236,48 @@ it('says facial signals were not read when there is nothing else to show', async
   expect(screen.queryByText(/facial-recognition signal data yet/i)).not.toBeInTheDocument()
 })
 
+it('does not tell a parent their child recorded nothing when the read failed', async () => {
+  // The endpoint swallows a failed aggregate so one broken RPC does not blank
+  // the dashboard, and answers 200 with an all-default summary. Every check on
+  // this page read that as a quiet week, so a broken read reached a parent as
+  // "no weekly EEG or facial-recognition signal data yet" -- an absence
+  // asserted from data that never loaded.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: {
+      focus: null, stress: null, engagement: null, face_attention: null,
+      sessions: 0, cognitive_samples: 0, face_samples: 0,
+      face_included: true, retrieved: false,
+    },
+  }]))
+
+  renderDashboard()
+
+  await screen.findByText(/signal data couldn't be loaded/i)
+  expect(screen.queryByText(/no weekly EEG or facial-recognition signal data yet/i)).not.toBeInTheDocument()
+  // The academic figures come from user_stats and are unaffected by it.
+  expect(tile('Questions').getByText('10')).toBeInTheDocument()
+  expect(tile('Accuracy').getByText('60%')).toBeInTheDocument()
+})
+
+it('still reports a genuine quiet week when the read succeeded', async () => {
+  // The mirror of the above, so the new flag cannot be satisfied by treating
+  // every empty summary as a failure.
+  apiFetch.mockImplementation(() => Promise.resolve([{
+    ...withFace[0],
+    signal_summary: {
+      focus: null, stress: null, engagement: null, face_attention: null,
+      sessions: 0, cognitive_samples: 0, face_samples: 0,
+      face_included: true, retrieved: true,
+    },
+  }]))
+
+  renderDashboard()
+
+  await screen.findByText(/no weekly EEG or facial-recognition signal data yet/i)
+  expect(screen.queryByText(/couldn't be loaded/i)).not.toBeInTheDocument()
+})
+
 it('keeps the rows up when a toggle refresh fails, rather than blanking the page', async () => {
   // The children effect re-runs when the facial switch flips, so a failed
   // refetch used to replace a screenful of academic stats and sessions -- none

@@ -23,6 +23,16 @@ function hasSignalSummary(summary) {
   return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null || summary.face_attention != null))
 }
 
+// Whether the aggregate behind those values was actually read. The endpoint
+// swallows a failed summary query so one broken read does not blank the
+// dashboard, and answers 200 with defaults -- which every check above reads as
+// a quiet week. Without this the page told a parent their child had recorded
+// nothing whenever the RPC was broken. Absent on payloads predating the field,
+// which came from a working read by definition.
+function signalsRetrieved(summary) {
+  return summary?.retrieved !== false
+}
+
 export default function ParentDashboard() {
   const { user } = useAuth()
   const [children, setChildren]   = useState([])
@@ -112,7 +122,11 @@ export default function ParentDashboard() {
               ? Math.round((child.stats.total_correct / child.stats.total_questions) * 100)
               : 0
             const signals = child.signal_summary || {}
-            const showSignals = hasSignalSummary(signals)
+            const retrieved = signalsRetrieved(signals)
+            // Only render the tiles from figures that were actually read. A
+            // failed aggregate leaves them all at their defaults, which
+            // hasSignalSummary reads as a quiet week.
+            const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
               <motion.div key={child.user_id}
@@ -180,11 +194,20 @@ export default function ParentDashboard() {
                           hasSignalSummary reached "no data" without consulting
                           any facial reading, and the copy has to be clear that
                           is the scope of the claim rather than leaving a
-                          parent to read it as covering everything. */}
-                      {faceIncluded(signals)
-                        ? 'No weekly EEG or facial-recognition signal data yet.'
-                        : 'No weekly EEG signal data yet, and facial signals were not read.'}
-                      {' '}Open the full report after the student completes an AI session.
+                          parent to read it as covering everything.
+
+                          A failed read is not an absence at all, so it gets
+                          neither claim. Nothing was measured to report on, and
+                          the invitation to open the full report would send a
+                          parent to a page reading from the same aggregate. */}
+                      {!retrieved
+                        ? "This week's signal data couldn't be loaded just now — the figures above are unaffected."
+                        : <>
+                            {faceIncluded(signals)
+                              ? 'No weekly EEG or facial-recognition signal data yet.'
+                              : 'No weekly EEG signal data yet, and facial signals were not read.'}
+                            {' '}Open the full report after the student completes an AI session.
+                          </>}
                     </div>
                   </div>
                 )}

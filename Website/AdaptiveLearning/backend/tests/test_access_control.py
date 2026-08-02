@@ -602,8 +602,12 @@ def test_a_broken_rpc_is_not_retried(monkeypatch):
 
     out = main._signal_summary("student-1")
     # dominant_emotion is part of the single-student shape on every path,
-    # including the ones that never reached a row.
-    assert out == {**main._EMPTY_SUMMARY, "face_included": True, "dominant_emotion": None}
+    # including the ones that never reached a row. retrieved is False here for
+    # the same reason the call was not retried: the function exists and the
+    # read failed, so these figures are defaults rather than a quiet week, and
+    # the payload has to say so.
+    assert out == {**main._EMPTY_SUMMARY, "face_included": True,
+                   "retrieved": False, "dominant_emotion": None}
     assert len(fake.rpc_calls) == 1
 
 
@@ -648,6 +652,106 @@ def test_signal_summaries_skips_the_round_trip_for_no_children(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
     assert main._signal_summaries([]) == {}
     assert fake.rpc_calls == []
+
+
+# ── a failed aggregate is not a quiet week ───────────────────────────────
+#
+# Both helpers swallow the exception so one broken read does not blank a
+# dashboard, and the endpoints answer 200 either way. That makes the payload
+# they return -- null averages, zero samples -- identical to a student who
+# recorded nothing, and every "no data yet" string downstream was reading it
+# that way.
+
+def test_a_failed_summary_says_so_rather_than_reporting_zero_samples(monkeypatch):
+    def boom(name, params):
+        return RuntimeError("connection reset")
+    monkeypatch.setattr(main, "supabase",
+                        _FakeSupabase({}, rpc_results={}, rpc_raises=boom))
+    out = main._signal_summary("student-1")
+    assert out["retrieved"] is False
+    # The figures are still defaults -- the point is that they are now
+    # labelled as such rather than passed off as measurements.
+    assert out["cognitive_samples"] == 0
+    assert out["focus"] is None
+
+
+def test_a_summary_that_reached_the_database_is_retrieved_even_with_no_rows(monkeypatch):
+    """The flag is about whether the query ran, not whether it found anything.
+
+    A student who genuinely recorded nothing this week must stay
+    distinguishable from a query that failed -- that is the whole distinction,
+    and marking an empty result as unretrieved would collapse it from the other
+    side.
+    """
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={}))
+    assert main._signal_summary("student-1")["retrieved"] is True
+
+
+def test_a_failed_batch_summary_is_distinguishable_from_an_empty_one(monkeypatch):
+    """None for a failed read, {} for one that succeeded and had nothing.
+
+    my_children fills in a default for every child missing from the result, and
+    that default has to say which case it stands in for. Returning {} for both
+    had a broken RPC reach a parent as "your child recorded nothing".
+    """
+    def boom(name, params):
+        return RuntimeError("connection reset")
+    monkeypatch.setattr(main, "supabase",
+                        _FakeSupabase({}, rpc_results={}, rpc_raises=boom))
+    assert main._signal_summaries(["student-1"]) is None
+
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={}))
+    assert main._signal_summaries(["student-1"]) == {}
+
+
+def test_children_endpoint_marks_a_failed_batch_summary_as_unretrieved(monkeypatch):
+    """The parent dashboard renders "no data yet" straight off this payload."""
+    def boom(name, params):
+        return RuntimeError("connection reset")
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "parent_child_links": [{"parent_id": "parent-1", "child_id": "student-1",
+                                "created_at": "2026-01-01"}],
+        "user_stats": [], "sessions": [], "user_math_performance": [],
+    }, rpc_results={}, rpc_raises=boom))
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "parent-1"})
+
+    children = main.my_children(None)
+    assert children[0]["signal_summary"]["retrieved"] is False
+
+
+def test_children_endpoint_reports_a_working_read_with_no_rows_as_retrieved(monkeypatch):
+    """The mirror of the above: a child the aggregate returned nothing for is a
+    quiet week, and must not be labelled a failure."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "parent_child_links": [{"parent_id": "parent-1", "child_id": "student-1",
+                                "created_at": "2026-01-01"}],
+        "user_stats": [], "sessions": [], "user_math_performance": [],
+    }, rpc_results={}))
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "parent-1"})
+
+    children = main.my_children(None)
+    assert children[0]["signal_summary"]["retrieved"] is True
+
+
+def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch):
+    """A failed aggregate leaves every average None, which the rules already
+    read as "no signal to act on" -- so the advice degrades to the generic list,
+    which is right. What was missing is saying so, on the response a parent
+    acts on."""
+    def boom(name, params):
+        if name == "student_signal_summary":
+            return RuntimeError("connection reset")
+        return None
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "user_math_performance": [],
+    }, rpc_results={}, rpc_raises=boom))
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "student-1"})
+
+    out = main.student_learning_strategies(
+        "student-1", None, main.LearningStrategyRequest())
+    assert out["basis"]["signals_retrieved"] is False
+    assert out["source"] == "rule-based"
+    assert len(out["strategies"]) >= 3
 
 
 # ── the opt-out on the headline summaries (parent dashboard) ─────────────

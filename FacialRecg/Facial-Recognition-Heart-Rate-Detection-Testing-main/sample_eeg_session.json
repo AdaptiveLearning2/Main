@@ -1,0 +1,44 @@
+{
+  "samples": [
+    {
+      "session_id": "test-session",
+      "user_id": "test-user",
+      "ts": "2026-07-29T02:28:42.900000Z",
+      "focus": 0.62,
+      "engagement": 0.78,
+      "stress": 0.31,
+      "alpha": -3.14,
+      "beta": -2.87,
+      "theta": -3.41,
+      "delta": -2.55,
+      "gamma": -4.02,
+      "raw": {
+        "state": {
+          "label": "focused",
+          "reason": "beta/theta ratio above threshold",
+          "confidence": 0.78,
+          "focus_score": 62.0,
+          "calm_score": 69.0
+        },
+        "signal_quality": "good"
+      }
+    },
+    {
+      "session_id": "test-session",
+      "user_id": "test-user",
+      "ts": "2026-07-29T02:28:43.900000Z",
+      "focus": 0.58,
+      "engagement": 0.74,
+      "stress": 0.36,
+      "raw": {
+        "state": {
+          "label": "focused",
+          "confidence": 0.74,
+          "focus_score": 58.0,
+          "calm_score": 64.0
+        },
+        "signal_quality": "good"
+      }
+    }
+  ]
+}

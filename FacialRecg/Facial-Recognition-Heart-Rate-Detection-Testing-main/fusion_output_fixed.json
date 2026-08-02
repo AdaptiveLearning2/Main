@@ -1,0 +1,5610 @@
+{
+  "schemaVersion": "multimodal-fusion-v0.1",
+  "weights": {
+    "focus": {
+      "eeg": 0.85,
+      "emotion": 0.15
+    },
+    "stress": {
+      "eeg": 0.5,
+      "facialRppg": 0.3,
+      "emotion": 0.2
+    }
+  },
+  "matching": {
+    "maximumTimestampGapSeconds": 1.5,
+    "eegRowsLoaded": 2,
+    "facialRowsLoaded": 143
+  },
+  "snapshots": [
+    {
+      "timestamp": "2026-07-29T02:28:42.907647Z",
+      "matchedEegGapSeconds": 0.008,
+      "inputs": {
+        "eeg": {
+          "focus": 0.62,
+          "stress": 0.31,
+          "confidence": 0.78,
+          "quality": "good",
+          "trusted": true
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.268798828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8018191456794739,
+          "focusSupport": 0.5801819145679474,
+          "stressSupport": 0.29954521358013153,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": 0.614,
+        "stress": 0.307,
+        "focusLevel": "moderate",
+        "stressLevel": "low",
+        "sourcesUsed": [
+          "eeg",
+          "emotion"
+        ],
+        "state": "multimodal_state_available"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "Signals were incomplete, mixed, or not strong enough to justify a change."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:43.977110Z",
+      "matchedEegGapSeconds": 0.077,
+      "inputs": {
+        "eeg": {
+          "focus": 0.58,
+          "stress": 0.36,
+          "confidence": 0.74,
+          "quality": "good",
+          "trusted": true
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.961137056350708,
+          "focusSupport": 0.5961137056350708,
+          "stressSupport": 0.259715735912323,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": 0.5824,
+        "stress": 0.3313,
+        "focusLevel": "moderate",
+        "stressLevel": "low",
+        "sourcesUsed": [
+          "eeg",
+          "emotion"
+        ],
+        "state": "multimodal_state_available"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "Signals were incomplete, mixed, or not strong enough to justify a change."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:45.033205Z",
+      "matchedEegGapSeconds": 1.133,
+      "inputs": {
+        "eeg": {
+          "focus": 0.58,
+          "stress": 0.36,
+          "confidence": 0.74,
+          "quality": "good",
+          "trusted": true
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2568359375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9335598945617676,
+          "focusSupport": 0.5933559894561767,
+          "stressSupport": 0.2666100263595581,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": 0.582,
+        "stress": 0.3333,
+        "focusLevel": "moderate",
+        "stressLevel": "low",
+        "sourcesUsed": [
+          "eeg",
+          "emotion"
+        ],
+        "state": "multimodal_state_available"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "Signals were incomplete, mixed, or not strong enough to justify a change."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:46.080533Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2705078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.7232340574264526,
+          "focusSupport": 0.5723234057426452,
+          "stressSupport": 0.31919148564338684,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:47.129204Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.262451171875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.697157084941864,
+          "focusSupport": 0.5697157084941864,
+          "stressSupport": 0.325710728764534,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:48.206006Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.24169921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.701382040977478,
+          "focusSupport": 0.5701382040977478,
+          "stressSupport": 0.3246544897556305,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:49.263898Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.265869140625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.6966862678527832,
+          "focusSupport": 0.5696686267852783,
+          "stressSupport": 0.3258284330368042,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:50.310137Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.277099609375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.741595983505249,
+          "focusSupport": 0.5741595983505249,
+          "stressSupport": 0.31460100412368774,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:51.402821Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294677734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9256790280342102,
+          "focusSupport": 0.592567902803421,
+          "stressSupport": 0.26858024299144745,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:52.491203Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.272216796875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9376444816589355,
+          "focusSupport": 0.5937644481658936,
+          "stressSupport": 0.2655888795852661,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:53.569621Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294677734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9645135998725891,
+          "focusSupport": 0.5964513599872588,
+          "stressSupport": 0.2588716000318527,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:54.632988Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.282958984375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9439391493797302,
+          "focusSupport": 0.594393914937973,
+          "stressSupport": 0.26401521265506744,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:55.687633Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27197265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9602625966072083,
+          "focusSupport": 0.5960262596607208,
+          "stressSupport": 0.25993435084819794,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:56.751377Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.271484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.949239194393158,
+          "focusSupport": 0.5949239194393158,
+          "stressSupport": 0.2626902014017105,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:57.803401Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.258056640625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9598360657691956,
+          "focusSupport": 0.5959836065769195,
+          "stressSupport": 0.2600409835577011,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:58.876201Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.278564453125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9716905951499939,
+          "focusSupport": 0.5971690595149993,
+          "stressSupport": 0.2570773512125015,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:28:59.929521Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294189453125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.981090784072876,
+          "focusSupport": 0.5981090784072876,
+          "stressSupport": 0.254727303981781,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:00.992177Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294677734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9416503310203552,
+          "focusSupport": 0.5941650331020355,
+          "stressSupport": 0.2645874172449112,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:02.033975Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.300537109375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9623249769210815,
+          "focusSupport": 0.5962324976921082,
+          "stressSupport": 0.2594187557697296,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:03.167766Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294677734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.945446252822876,
+          "focusSupport": 0.5945446252822876,
+          "stressSupport": 0.263638436794281,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:04.205116Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2890625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9727734923362732,
+          "focusSupport": 0.5972773492336273,
+          "stressSupport": 0.2568066269159317,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:05.247386Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.283447265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8688424825668335,
+          "focusSupport": 0.5868842482566833,
+          "stressSupport": 0.2827893793582916,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:06.301136Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.258544921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9628191590309143,
+          "focusSupport": 0.5962819159030914,
+          "stressSupport": 0.2592952102422714,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:07.343794Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.264892578125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9624989032745361,
+          "focusSupport": 0.5962498903274536,
+          "stressSupport": 0.25937527418136597,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:08.442298Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.28076171875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9774169921875,
+          "focusSupport": 0.59774169921875,
+          "stressSupport": 0.255645751953125,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:09.504967Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2685546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9711227416992188,
+          "focusSupport": 0.5971122741699219,
+          "stressSupport": 0.2572193145751953,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:10.551764Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.28466796875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9715386629104614,
+          "focusSupport": 0.5971538662910462,
+          "stressSupport": 0.25711533427238464,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:11.621469Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.3095703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.944915771484375,
+          "focusSupport": 0.5944915771484375,
+          "stressSupport": 0.26377105712890625,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:12.672993Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.276123046875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9277956485748291,
+          "focusSupport": 0.5927795648574828,
+          "stressSupport": 0.2680510878562927,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:13.769579Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.279052734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9809377789497375,
+          "focusSupport": 0.5980937778949738,
+          "stressSupport": 0.2547655552625656,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:14.823966Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9745021462440491,
+          "focusSupport": 0.5974502146244048,
+          "stressSupport": 0.25637446343898773,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:15.884894Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2432861328125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9750705361366272,
+          "focusSupport": 0.5975070536136627,
+          "stressSupport": 0.2562323659658432,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:16.955788Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.24267578125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.983303427696228,
+          "focusSupport": 0.5983303427696228,
+          "stressSupport": 0.254174143075943,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:18.024612Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.247802734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9763853549957275,
+          "focusSupport": 0.5976385354995727,
+          "stressSupport": 0.2559036612510681,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:19.103460Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2427978515625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9671051502227783,
+          "focusSupport": 0.5967105150222778,
+          "stressSupport": 0.2582237124443054,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:20.142956Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.26123046875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9888230562210083,
+          "focusSupport": 0.5988823056221008,
+          "stressSupport": 0.2527942359447479,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:21.182080Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.24267578125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9830065369606018,
+          "focusSupport": 0.5983006536960601,
+          "stressSupport": 0.25424836575984955,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:22.253825Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.248291015625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9593990445137024,
+          "focusSupport": 0.5959399044513702,
+          "stressSupport": 0.2601502388715744,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:23.308043Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.256103515625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9353586435317993,
+          "focusSupport": 0.59353586435318,
+          "stressSupport": 0.26616033911705017,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:24.389966Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2724609375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9308420419692993,
+          "focusSupport": 0.5930842041969299,
+          "stressSupport": 0.26728948950767517,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:25.454085Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2176513671875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.985666811466217,
+          "focusSupport": 0.5985666811466217,
+          "stressSupport": 0.25358329713344574,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:26.510085Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.235107421875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9818306565284729,
+          "focusSupport": 0.5981830656528473,
+          "stressSupport": 0.2545423358678818,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:27.548912Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.248046875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9768012762069702,
+          "focusSupport": 0.597680127620697,
+          "stressSupport": 0.25579968094825745,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:28.590071Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.272216796875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.979357123374939,
+          "focusSupport": 0.5979357123374939,
+          "stressSupport": 0.25516071915626526,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:29.692112Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2880859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.976141095161438,
+          "focusSupport": 0.5976141095161438,
+          "stressSupport": 0.2559647262096405,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:30.857894Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2464599609375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9649502635002136,
+          "focusSupport": 0.5964950263500214,
+          "stressSupport": 0.2587624341249466,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:31.916924Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.290283203125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8444672226905823,
+          "focusSupport": 0.5844467222690582,
+          "stressSupport": 0.28888319432735443,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:32.957915Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.272705078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9806397557258606,
+          "focusSupport": 0.5980639755725861,
+          "stressSupport": 0.25484006106853485,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:34.014019Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2548828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9541845917701721,
+          "focusSupport": 0.5954184591770172,
+          "stressSupport": 0.26145385205745697,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:35.116877Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.248779296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9449936747550964,
+          "focusSupport": 0.5944993674755096,
+          "stressSupport": 0.2637515813112259,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:36.158514Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2685546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.957108736038208,
+          "focusSupport": 0.5957108736038208,
+          "stressSupport": 0.260722815990448,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:37.213648Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.316162109375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.980593740940094,
+          "focusSupport": 0.5980593740940093,
+          "stressSupport": 0.2548515647649765,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:38.253327Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.29052734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9733938574790955,
+          "focusSupport": 0.5973393857479096,
+          "stressSupport": 0.25665153563022614,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:39.307702Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9812538623809814,
+          "focusSupport": 0.5981253862380981,
+          "stressSupport": 0.25468653440475464,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:40.414216Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2445068359375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9731109738349915,
+          "focusSupport": 0.5973110973834991,
+          "stressSupport": 0.25672225654125214,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:41.468301Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.255859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.972005307674408,
+          "focusSupport": 0.5972005307674407,
+          "stressSupport": 0.256998673081398,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:42.537334Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.241455078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9090130925178528,
+          "focusSupport": 0.5909013092517853,
+          "stressSupport": 0.2727467268705368,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:43.598941Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.241455078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9636080265045166,
+          "focusSupport": 0.5963608026504517,
+          "stressSupport": 0.25909799337387085,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:44.670682Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.235595703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9637902975082397,
+          "focusSupport": 0.5963790297508239,
+          "stressSupport": 0.25905242562294006,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:45.761214Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2205810546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9694867134094238,
+          "focusSupport": 0.5969486713409423,
+          "stressSupport": 0.25762832164764404,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:46.798845Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.268310546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.96353679895401,
+          "focusSupport": 0.596353679895401,
+          "stressSupport": 0.2591158002614975,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:47.852893Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2415771484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9717725515365601,
+          "focusSupport": 0.5971772551536559,
+          "stressSupport": 0.25705686211586,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:48.892874Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.225830078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9763498902320862,
+          "focusSupport": 0.5976349890232086,
+          "stressSupport": 0.25591252744197845,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:49.966096Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2222900390625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9798972010612488,
+          "focusSupport": 0.5979897201061248,
+          "stressSupport": 0.2550256997346878,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:51.043683Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.23095703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.974990963935852,
+          "focusSupport": 0.5974990963935852,
+          "stressSupport": 0.256252259016037,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:52.094917Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.28271484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9667101502418518,
+          "focusSupport": 0.5966710150241852,
+          "stressSupport": 0.25832246243953705,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:53.134154Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.279296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9595407843589783,
+          "focusSupport": 0.5959540784358978,
+          "stressSupport": 0.26011480391025543,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:54.190797Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2802734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9695594310760498,
+          "focusSupport": 0.5969559431076049,
+          "stressSupport": 0.25761014223098755,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:55.228780Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27294921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9736599326133728,
+          "focusSupport": 0.5973659932613372,
+          "stressSupport": 0.2565850168466568,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:56.320666Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.289306640625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9770807027816772,
+          "focusSupport": 0.5977080702781677,
+          "stressSupport": 0.2557298243045807,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:57.361010Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2342529296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9514384269714355,
+          "focusSupport": 0.5951438426971435,
+          "stressSupport": 0.2621403932571411,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:58.407484Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2105712890625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9322395920753479,
+          "focusSupport": 0.5932239592075348,
+          "stressSupport": 0.266940101981163,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:29:59.481040Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2003173828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9397148489952087,
+          "focusSupport": 0.5939714848995209,
+          "stressSupport": 0.2650712877511978,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:00.540210Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2352294921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8864015936851501,
+          "focusSupport": 0.588640159368515,
+          "stressSupport": 0.27839960157871246,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:01.661378Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2081298828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9061923623085022,
+          "focusSupport": 0.5906192362308502,
+          "stressSupport": 0.27345190942287445,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:02.721152Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2418212890625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9619629979133606,
+          "focusSupport": 0.596196299791336,
+          "stressSupport": 0.25950925052165985,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:03.766698Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.252685546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9474596977233887,
+          "focusSupport": 0.5947459697723388,
+          "stressSupport": 0.26313507556915283,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:04.835569Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.26171875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9541991353034973,
+          "focusSupport": 0.5954199135303497,
+          "stressSupport": 0.26145021617412567,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:05.914748Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.267333984375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9635166525840759,
+          "focusSupport": 0.5963516652584075,
+          "stressSupport": 0.259120836853981,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:07.029305Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.253173828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8623526692390442,
+          "focusSupport": 0.5862352669239044,
+          "stressSupport": 0.28441183269023895,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:08.104800Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.258544921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9667127132415771,
+          "focusSupport": 0.5966712713241576,
+          "stressSupport": 0.2583218216896057,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:09.172722Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.263671875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9037852883338928,
+          "focusSupport": 0.5903785288333893,
+          "stressSupport": 0.2740536779165268,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:10.249420Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.271484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.582197904586792,
+          "focusSupport": 0.5582197904586792,
+          "stressSupport": 0.354450523853302,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:11.318415Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.278076171875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9566836357116699,
+          "focusSupport": 0.5956683635711669,
+          "stressSupport": 0.2608290910720825,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:12.405143Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.294921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9620012044906616,
+          "focusSupport": 0.5962001204490661,
+          "stressSupport": 0.2594996988773346,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:13.471936Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.26220703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9691845178604126,
+          "focusSupport": 0.5969184517860412,
+          "stressSupport": 0.25770387053489685,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:14.519012Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.25439453125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9677783846855164,
+          "focusSupport": 0.5967778384685516,
+          "stressSupport": 0.2580554038286209,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:15.582033Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2467041015625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9609491229057312,
+          "focusSupport": 0.5960949122905731,
+          "stressSupport": 0.2597627192735672,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:16.642065Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.208740234375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9380133152008057,
+          "focusSupport": 0.5938013315200805,
+          "stressSupport": 0.2654966711997986,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:17.826859Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.21875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9577502608299255,
+          "focusSupport": 0.5957750260829925,
+          "stressSupport": 0.2605624347925186,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:18.887789Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27001953125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9581579566001892,
+          "focusSupport": 0.5958157956600189,
+          "stressSupport": 0.2604605108499527,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:19.947528Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.273681640625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9655599594116211,
+          "focusSupport": 0.596555995941162,
+          "stressSupport": 0.2586100101470947,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:21.094361Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9491205215454102,
+          "focusSupport": 0.594912052154541,
+          "stressSupport": 0.26271986961364746,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:22.149980Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.3037109375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9708039164543152,
+          "focusSupport": 0.5970803916454315,
+          "stressSupport": 0.2572990208864212,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:23.246697Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.29345703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9353685975074768,
+          "focusSupport": 0.5935368597507477,
+          "stressSupport": 0.2661578506231308,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:24.313088Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2421875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9271975159645081,
+          "focusSupport": 0.5927197515964507,
+          "stressSupport": 0.268200621008873,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:25.382377Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2030029296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9458435773849487,
+          "focusSupport": 0.5945843577384948,
+          "stressSupport": 0.2635391056537628,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:26.449938Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2249755859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9694795608520508,
+          "focusSupport": 0.596947956085205,
+          "stressSupport": 0.2576301097869873,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:27.504993Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2362060546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9425219893455505,
+          "focusSupport": 0.594252198934555,
+          "stressSupport": 0.26436950266361237,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:28.575763Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2476806640625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.969474732875824,
+          "focusSupport": 0.5969474732875824,
+          "stressSupport": 0.257631316781044,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:29.624044Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.261474609375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9422386288642883,
+          "focusSupport": 0.5942238628864288,
+          "stressSupport": 0.2644403427839279,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:30.707991Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.243896484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.936882734298706,
+          "focusSupport": 0.5936882734298706,
+          "stressSupport": 0.2657793164253235,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:31.782553Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.241455078125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9547349810600281,
+          "focusSupport": 0.5954734981060028,
+          "stressSupport": 0.261316254734993,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:32.857033Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.26953125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9461891055107117,
+          "focusSupport": 0.5946189105510712,
+          "stressSupport": 0.2634527236223221,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:33.963797Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27001953125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9473035931587219,
+          "focusSupport": 0.5947303593158721,
+          "stressSupport": 0.2631741017103195,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:35.030056Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.243408203125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9463726878166199,
+          "focusSupport": 0.594637268781662,
+          "stressSupport": 0.26340682804584503,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:36.085973Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.29296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9410367012023926,
+          "focusSupport": 0.5941036701202392,
+          "stressSupport": 0.26474082469940186,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:37.158257Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.31884765625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9424116611480713,
+          "focusSupport": 0.5942411661148072,
+          "stressSupport": 0.2643970847129822,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:38.234757Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.3212890625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9568222761154175,
+          "focusSupport": 0.5956822276115418,
+          "stressSupport": 0.26079443097114563,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:39.332045Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.32763671875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.781732976436615,
+          "focusSupport": 0.5781732976436615,
+          "stressSupport": 0.30456675589084625,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:40.380882Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.252685546875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9649658203125,
+          "focusSupport": 0.59649658203125,
+          "stressSupport": 0.258758544921875,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:41.429625Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.261962890625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9402117729187012,
+          "focusSupport": 0.5940211772918701,
+          "stressSupport": 0.2649470567703247,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:42.479457Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.257568359375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9641165137290955,
+          "focusSupport": 0.5964116513729095,
+          "stressSupport": 0.25897087156772614,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:43.534271Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2471923828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9671458005905151,
+          "focusSupport": 0.5967145800590515,
+          "stressSupport": 0.2582135498523712,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:44.611173Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.218505859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.961634635925293,
+          "focusSupport": 0.5961634635925293,
+          "stressSupport": 0.25959134101867676,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:45.680222Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.299072265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.6248261332511902,
+          "focusSupport": 0.5624826133251191,
+          "stressSupport": 0.34379346668720245,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:46.731847Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.298583984375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.5460610389709473,
+          "focusSupport": 0.5546061038970946,
+          "stressSupport": 0.3634847402572632,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:47.791657Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.30322265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9008175730705261,
+          "focusSupport": 0.5900817573070526,
+          "stressSupport": 0.27479560673236847,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:48.840395Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.281005859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9145305156707764,
+          "focusSupport": 0.5914530515670776,
+          "stressSupport": 0.2713673710823059,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:49.934120Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.274169921875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "happy",
+          "confidence": 0.71896892786026,
+          "focusSupport": 0.679742231965065,
+          "stressSupport": 0.212412428855896,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:50.998258Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.23779296875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8789113759994507,
+          "focusSupport": 0.587891137599945,
+          "stressSupport": 0.28027215600013733,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:52.056138Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.232421875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.577107310295105,
+          "focusSupport": 0.5577107310295104,
+          "stressSupport": 0.35572317242622375,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:53.120864Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2154541015625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8703685998916626,
+          "focusSupport": 0.5870368599891662,
+          "stressSupport": 0.28240785002708435,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:54.174090Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.213134765625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "surprise",
+          "confidence": 0.7416415214538574,
+          "focusSupport": 0.5,
+          "stressSupport": 0.46291792392730713,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:55.254653Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.255859375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8588610291481018,
+          "focusSupport": 0.5858861029148101,
+          "stressSupport": 0.28528474271297455,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:56.334488Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.297607421875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8812126517295837,
+          "focusSupport": 0.5881212651729584,
+          "stressSupport": 0.27969683706760406,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:57.393003Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.282470703125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8078091740608215,
+          "focusSupport": 0.5807809174060821,
+          "stressSupport": 0.2980477064847946,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:58.462199Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.275146484375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.6374759078025818,
+          "focusSupport": 0.5637475907802582,
+          "stressSupport": 0.34063102304935455,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:30:59.539309Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2744140625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.5715400576591492,
+          "focusSupport": 0.5571540057659149,
+          "stressSupport": 0.3571149855852127,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:00.642792Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.288818359375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9197062849998474,
+          "focusSupport": 0.5919706284999847,
+          "stressSupport": 0.27007342875003815,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:01.696316Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.231689453125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9035834074020386,
+          "focusSupport": 0.5903583407402039,
+          "stressSupport": 0.27410414814949036,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:02.746687Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2083740234375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9534792304039001,
+          "focusSupport": 0.59534792304039,
+          "stressSupport": 0.26163019239902496,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:03.793273Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2122802734375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9039412140846252,
+          "focusSupport": 0.5903941214084625,
+          "stressSupport": 0.2740146964788437,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:04.833995Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2408447265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.939872145652771,
+          "focusSupport": 0.593987214565277,
+          "stressSupport": 0.26503196358680725,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:05.900863Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2354736328125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8781296014785767,
+          "focusSupport": 0.5878129601478577,
+          "stressSupport": 0.28046759963035583,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:06.991072Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.27392578125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9269635081291199,
+          "focusSupport": 0.5926963508129119,
+          "stressSupport": 0.26825912296772003,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:08.051388Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.30322265625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8494933843612671,
+          "focusSupport": 0.5849493384361267,
+          "stressSupport": 0.2876266539096832,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:09.155352Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.28466796875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9727007150650024,
+          "focusSupport": 0.5972700715065002,
+          "stressSupport": 0.2568248212337494,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:10.194844Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.267333984375,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9347569346427917,
+          "focusSupport": 0.5934756934642792,
+          "stressSupport": 0.26631076633930206,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:11.236514Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2509765625,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9442668557167053,
+          "focusSupport": 0.5944266855716706,
+          "stressSupport": 0.26393328607082367,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:12.311282Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2147216796875,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9238417744636536,
+          "focusSupport": 0.5923841774463653,
+          "stressSupport": 0.2690395563840866,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:13.408293Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.23486328125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8196793794631958,
+          "focusSupport": 0.5819679379463196,
+          "stressSupport": 0.29508015513420105,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    },
+    {
+      "timestamp": "2026-07-29T02:31:14.459569Z",
+      "matchedEegGapSeconds": null,
+      "inputs": {
+        "eeg": {
+          "focus": null,
+          "stress": null,
+          "confidence": null,
+          "quality": "missing",
+          "trusted": false
+        },
+        "facialRppg": {
+          "stress": null,
+          "sqi": 0.2393798828125,
+          "trusted": false
+        },
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9228934049606323,
+          "focusSupport": 0.5922893404960632,
+          "stressSupport": 0.2692766487598419,
+          "trusted": true
+        }
+      },
+      "final": {
+        "focus": null,
+        "stress": null,
+        "focusLevel": "unknown",
+        "stressLevel": "unknown",
+        "sourcesUsed": [
+          "emotion"
+        ],
+        "state": "insufficient_signal"
+      },
+      "decision": {
+        "action": "hold_difficulty",
+        "reason": "EEG and trusted physiological stress data were unavailable; emotion alone was not used to create final scores."
+      }
+    }
+  ],
+  "summary": {
+    "fusedSnapshotCount": 143,
+    "averageFinalFocus": 0.5928,
+    "averageFinalStress": 0.3239,
+    "decisionDistribution": {
+      "hold_difficulty": 143
+    },
+    "note": "This is a provisional engineering fusion rule. It is not a clinical or validated psychological assessment."
+  }
+}

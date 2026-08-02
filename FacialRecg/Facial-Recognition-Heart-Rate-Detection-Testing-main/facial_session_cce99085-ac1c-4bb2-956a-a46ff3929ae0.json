@@ -1,0 +1,5503 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+    "studentId": null,
+    "startedAt": "2026-08-01T15:26:29.622605Z",
+    "endedAt": "2026-08-01T15:29:13.998944Z",
+    "samplingIntervalSeconds": 1,
+    "baseline": {
+      "status": "calibrating",
+      "requiredTrustedSnapshots": 20,
+      "trustedSnapshotsUsed": 2,
+      "heartRateBpm": null,
+      "rmssdMs": null,
+      "completedAt": null,
+      "version": "facial-baseline-v0.1"
+    }
+  },
+  "snapshots": [
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:31.263495Z",
+      "elapsedSeconds": 60.03020739555359,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.32000000000001,
+        "sqi": 0.349609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.349609375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9550613760948181,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.349609375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:32.337235Z",
+      "elapsedSeconds": 61.11724543571472,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.21000000000001,
+        "sqi": 0.3125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9750646352767944,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:33.404522Z",
+      "elapsedSeconds": 62.20266532897949,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.17999999999999,
+        "sqi": 0.3154296875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3154296875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9604613780975342,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3154296875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:34.473571Z",
+      "elapsedSeconds": 63.27410316467285,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.86,
+        "sqi": 0.312744140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.312744140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9725277423858643,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.312744140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:35.559371Z",
+      "elapsedSeconds": 64.33470845222473,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.59,
+        "sqi": 0.298583984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.298583984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9568929672241211,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.298583984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:36.618215Z",
+      "elapsedSeconds": 65.4014163017273,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 79.2,
+        "sqi": 0.288330078125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.288330078125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.952093780040741,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.288330078125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:37.671180Z",
+      "elapsedSeconds": 66.4723870754242,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.0,
+        "sqi": 0.277587890625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.277587890625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9605771899223328,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.277587890625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.28 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.28 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:38.728050Z",
+      "elapsedSeconds": 67.53014540672302,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.4,
+        "sqi": 0.302001953125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.302001953125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9174696803092957,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 92% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.302001953125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:39.758974Z",
+      "elapsedSeconds": 68.57084274291992,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.77000000000001,
+        "sqi": 0.317626953125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.317626953125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9718270301818848,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.317626953125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:40.899942Z",
+      "elapsedSeconds": 69.58070182800293,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.12,
+        "sqi": 0.316650390625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.316650390625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9708446264266968,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.316650390625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:41.989496Z",
+      "elapsedSeconds": 70.77524995803833,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.36,
+        "sqi": 0.311767578125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.311767578125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9703776240348816,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.311767578125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:43.044508Z",
+      "elapsedSeconds": 71.83513927459717,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.04,
+        "sqi": 0.305908203125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.305908203125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "happy",
+          "confidence": 0.774219810962677,
+          "trusted": true,
+          "reason": "Emotion classified as happy with 77% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.305908203125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:44.113130Z",
+      "elapsedSeconds": 72.90641140937805,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.68,
+        "sqi": 0.30810546875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.30810546875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9696943759918213,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.30810546875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:45.186727Z",
+      "elapsedSeconds": 73.97896409034729,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.57000000000001,
+        "sqi": 0.294921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.294921875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9633006453514099,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.294921875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:46.265232Z",
+      "elapsedSeconds": 75.04326796531677,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.46,
+        "sqi": 0.2958984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.2958984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9723076820373535,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.2958984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:47.343011Z",
+      "elapsedSeconds": 76.13908410072327,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.4,
+        "sqi": 0.2861328125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.2861328125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9660666584968567,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.2861328125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:48.414026Z",
+      "elapsedSeconds": 77.20843553543091,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.86,
+        "sqi": 0.30029296875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.30029296875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9720872044563293,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.30029296875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.30 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:49.490079Z",
+      "elapsedSeconds": 78.28279900550842,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.85000000000001,
+        "sqi": 0.282958984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.282958984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9730088710784912,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.282958984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.28 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.28 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:50.547957Z",
+      "elapsedSeconds": 79.33892679214478,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.39,
+        "sqi": 0.289794921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.289794921875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9649681448936462,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.289794921875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.29 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:51.636744Z",
+      "elapsedSeconds": 80.40880727767944,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.95,
+        "sqi": 0.314697265625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.314697265625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9758893251419067,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.314697265625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.31 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:52.712173Z",
+      "elapsedSeconds": 81.51378130912781,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.329345703125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.329345703125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9649289846420288,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.329345703125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:53.778392Z",
+      "elapsedSeconds": 82.56882071495056,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 79.11,
+        "sqi": 0.326416015625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.326416015625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9611490368843079,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.326416015625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:54.853079Z",
+      "elapsedSeconds": 83.63917207717896,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.75,
+        "sqi": 0.32666015625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.32666015625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9579992294311523,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.32666015625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:55.924183Z",
+      "elapsedSeconds": 84.71569108963013,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.76,
+        "sqi": 0.323974609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.323974609375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9611611366271973,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.323974609375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.32 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:57.003912Z",
+      "elapsedSeconds": 85.78819966316223,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.85000000000001,
+        "sqi": 0.32763671875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.32763671875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.951196551322937,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.32763671875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.33 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:58.094475Z",
+      "elapsedSeconds": 86.87427020072937,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.13000000000001,
+        "sqi": 0.358642578125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.358642578125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9653313755989075,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.358642578125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:27:59.158571Z",
+      "elapsedSeconds": 87.94448399543762,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.05000000000001,
+        "sqi": 0.363525390625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.363525390625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9628729820251465,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.363525390625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:00.221758Z",
+      "elapsedSeconds": 89.01722979545593,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.24,
+        "sqi": 0.3603515625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3603515625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9593816995620728,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3603515625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:01.284068Z",
+      "elapsedSeconds": 90.07452011108398,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.59,
+        "sqi": 0.35107421875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.35107421875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9626338481903076,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.35107421875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:02.415411Z",
+      "elapsedSeconds": 91.14669108390808,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.58,
+        "sqi": 0.364013671875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.364013671875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9662351608276367,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.364013671875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:03.492380Z",
+      "elapsedSeconds": 92.28313112258911,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.97,
+        "sqi": 0.337646484375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.337646484375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9647054672241211,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.337646484375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.34 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.34 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:04.568854Z",
+      "elapsedSeconds": 93.3554036617279,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.25,
+        "sqi": 0.35498046875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.35498046875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9719234108924866,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.35498046875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:05.643786Z",
+      "elapsedSeconds": 94.43804955482483,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.34,
+        "sqi": 0.360107421875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.360107421875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9501583576202393,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.360107421875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:06.723382Z",
+      "elapsedSeconds": 95.51433897018433,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.52,
+        "sqi": 0.361083984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.361083984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9759111404418945,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.361083984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:07.836268Z",
+      "elapsedSeconds": 96.58822798728943,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.98,
+        "sqi": 0.349365234375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.349365234375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9511236548423767,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.349365234375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.35 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:08.915870Z",
+      "elapsedSeconds": 97.6920473575592,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.07,
+        "sqi": 0.390869140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.390869140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9755364656448364,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.390869140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:09.987694Z",
+      "elapsedSeconds": 98.77484655380249,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.16,
+        "sqi": 0.385009765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.385009765625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9663030505180359,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.385009765625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:11.056869Z",
+      "elapsedSeconds": 99.85009622573853,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.8,
+        "sqi": 0.3994140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3994140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9748832583427429,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3994140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:12.119019Z",
+      "elapsedSeconds": 100.91888999938965,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.42999999999999,
+        "sqi": 0.3876953125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3876953125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9698558449745178,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3876953125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:13.212453Z",
+      "elapsedSeconds": 101.94624638557434,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.71,
+        "sqi": 0.37353515625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.37353515625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9593673944473267,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.37353515625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.37 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.37 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:14.307801Z",
+      "elapsedSeconds": 103.08243441581726,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.36474609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.36474609375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9616352915763855,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.36474609375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:15.362183Z",
+      "elapsedSeconds": 104.15443110466003,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.44,
+        "sqi": 0.376220703125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.376220703125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9595906138420105,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.376220703125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:16.430862Z",
+      "elapsedSeconds": 105.2264609336853,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.89,
+        "sqi": 0.3779296875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3779296875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9650294184684753,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3779296875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:17.489014Z",
+      "elapsedSeconds": 106.281907081604,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.3876953125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3876953125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9691140055656433,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3876953125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:18.598092Z",
+      "elapsedSeconds": 107.35533499717712,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.27000000000001,
+        "sqi": 0.393798828125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.393798828125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9492101073265076,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.393798828125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:19.800847Z",
+      "elapsedSeconds": 108.45576405525208,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.63000000000001,
+        "sqi": 0.40771484375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.40771484375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9487037062644958,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.40771484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:20.854987Z",
+      "elapsedSeconds": 109.65522837638855,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.417724609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.417724609375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9612458348274231,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.417724609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:21.940399Z",
+      "elapsedSeconds": 110.72691082954407,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.36,
+        "sqi": 0.41259765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.41259765625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9633784294128418,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.41259765625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:23.021753Z",
+      "elapsedSeconds": 111.81521582603455,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.27000000000001,
+        "sqi": 0.3994140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3994140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9504243731498718,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3994140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:24.114734Z",
+      "elapsedSeconds": 112.89028239250183,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.38818359375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.38818359375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9482289552688599,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.38818359375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:25.168107Z",
+      "elapsedSeconds": 113.96177458763123,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.72,
+        "sqi": 0.383544921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.383544921875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9533213376998901,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.383544921875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:26.223540Z",
+      "elapsedSeconds": 115.0160653591156,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.36,
+        "sqi": 0.3642578125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3642578125,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9487764835357666,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3642578125,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:27.310853Z",
+      "elapsedSeconds": 116.08975577354431,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.45,
+        "sqi": 0.38818359375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.38818359375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.95125412940979,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.38818359375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.39 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:28.367089Z",
+      "elapsedSeconds": 117.16156673431396,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.72,
+        "sqi": 0.3759765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3759765625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9444531202316284,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 94% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3759765625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:29.471044Z",
+      "elapsedSeconds": 118.23380494117737,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.72,
+        "sqi": 0.379150390625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.379150390625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9486727118492126,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.379150390625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:30.529007Z",
+      "elapsedSeconds": 119.31799244880676,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.408447265625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.408447265625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9434887766838074,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 94% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.408447265625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:31.603027Z",
+      "elapsedSeconds": 120.39387726783752,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.41943359375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.41943359375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9452973008155823,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.41943359375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:32.669852Z",
+      "elapsedSeconds": 121.46239376068115,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.81,
+        "sqi": 0.4140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4140625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9471085071563721,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4140625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:33.723263Z",
+      "elapsedSeconds": 122.5221586227417,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.26,
+        "sqi": 0.4169921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4169921875,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9529026746749878,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4169921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:34.849966Z",
+      "elapsedSeconds": 123.59513211250305,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.4189453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4189453125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9728928208351135,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4189453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:35.906333Z",
+      "elapsedSeconds": 124.69799375534058,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.63000000000001,
+        "sqi": 0.44482421875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.44482421875,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9728929400444031,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.44482421875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:36.975292Z",
+      "elapsedSeconds": 125.76922988891602,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.81,
+        "sqi": 0.447509765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.447509765625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9622403383255005,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.447509765625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:38.026181Z",
+      "elapsedSeconds": 126.82425546646118,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.454833984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.454833984375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9705509543418884,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.454833984375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:39.101701Z",
+      "elapsedSeconds": 127.89021158218384,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.4453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4453125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9710555672645569,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:40.234950Z",
+      "elapsedSeconds": 128.97173285484314,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.63000000000001,
+        "sqi": 0.4541015625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4541015625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9704849720001221,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4541015625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:41.309227Z",
+      "elapsedSeconds": 130.10436463356018,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.434814453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.434814453125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9753823280334473,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.434814453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:42.374597Z",
+      "elapsedSeconds": 131.1512050628662,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.444580078125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.444580078125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9706102609634399,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.444580078125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:43.438418Z",
+      "elapsedSeconds": 132.23025608062744,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.434814453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.434814453125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9657809138298035,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.434814453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:44.567179Z",
+      "elapsedSeconds": 133.30493140220642,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.46044921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.46044921875,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9638968110084534,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.46044921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 0,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:45.679385Z",
+      "elapsedSeconds": 134.4448161125183,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.50341796875,
+        "rmssdMs": 73.72217845370406
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.50341796875,
+        "signalQuality": "usable",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9714773893356323,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50341796875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 1,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:46.733951Z",
+      "elapsedSeconds": 135.52942872047424,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.08,
+        "sqi": 0.493896484375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.493896484375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.94373619556427,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 94% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.493896484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 1,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:47.825220Z",
+      "elapsedSeconds": 136.601060628891,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.50341796875,
+        "rmssdMs": 76.94469514600317
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.50341796875,
+        "signalQuality": "usable",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9785314798355103,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 98% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50341796875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:48.876360Z",
+      "elapsedSeconds": 137.67353057861328,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.480712890625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.480712890625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9660430550575256,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.480712890625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:49.992329Z",
+      "elapsedSeconds": 138.73080396652222,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.48974609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.48974609375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9613120555877686,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48974609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:51.045332Z",
+      "elapsedSeconds": 139.83310723304749,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.17,
+        "sqi": 0.447509765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.447509765625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9721273183822632,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.447509765625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:52.110038Z",
+      "elapsedSeconds": 140.9040162563324,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.4384765625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4384765625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9694387912750244,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4384765625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:53.185883Z",
+      "elapsedSeconds": 141.9779453277588,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.449462890625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.449462890625,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9656035900115967,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.449462890625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:54.241326Z",
+      "elapsedSeconds": 143.03482365608215,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.35,
+        "sqi": 0.446533203125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.446533203125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9643083214759827,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.446533203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:55.401451Z",
+      "elapsedSeconds": 144.10996961593628,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.62,
+        "sqi": 0.447021484375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.447021484375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9700618386268616,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.447021484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:56.464728Z",
+      "elapsedSeconds": 145.24589109420776,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.26,
+        "sqi": 0.436279296875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.436279296875,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9727970361709595,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.436279296875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:57.519792Z",
+      "elapsedSeconds": 146.313068151474,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.434326171875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.434326171875,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9422979950904846,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 94% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.434326171875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:58.570159Z",
+      "elapsedSeconds": 147.37002396583557,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.17,
+        "sqi": 0.443359375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.443359375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9292959570884705,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 93% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.443359375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:28:59.652691Z",
+      "elapsedSeconds": 148.44213843345642,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.53,
+        "sqi": 0.433349609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.433349609375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.8998587131500244,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 90% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.433349609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:00.961337Z",
+      "elapsedSeconds": 149.49826216697693,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.08,
+        "sqi": 0.419189453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.419189453125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9024703502655029,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 90% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.419189453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:02.023255Z",
+      "elapsedSeconds": 150.8107614517212,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.44,
+        "sqi": 0.413330078125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.413330078125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9657911658287048,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.413330078125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:03.083120Z",
+      "elapsedSeconds": 151.88199639320374,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.8,
+        "sqi": 0.3984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9466034770011902,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:04.224380Z",
+      "elapsedSeconds": 152.9378364086151,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.61,
+        "sqi": 0.402099609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.402099609375,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9667341113090515,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 97% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.402099609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:05.277826Z",
+      "elapsedSeconds": 154.07163858413696,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.7,
+        "sqi": 0.405517578125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.405517578125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9049196839332581,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 90% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.405517578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:06.388163Z",
+      "elapsedSeconds": 155.14101600646973,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.98,
+        "sqi": 0.40283203125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.40283203125,
+        "signalQuality": "limited",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9579026103019714,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.40283203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:07.458659Z",
+      "elapsedSeconds": 156.24753165245056,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.25,
+        "sqi": 0.37744140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.37744140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9536110162734985,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.37744140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:08.508782Z",
+      "elapsedSeconds": 157.30636358261108,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.7,
+        "sqi": 0.3994140625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3994140625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9500832557678223,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3994140625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.40 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:09.586525Z",
+      "elapsedSeconds": 158.36537647247314,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.61,
+        "sqi": 0.37890625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.37890625,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9580936431884766,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 96% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.37890625,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:10.652116Z",
+      "elapsedSeconds": 159.44972205162048,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.34,
+        "sqi": 0.3701171875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.3701171875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9488334655761719,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.3701171875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.37 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.37 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:11.726272Z",
+      "elapsedSeconds": 160.50661420822144,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.52,
+        "sqi": 0.36083984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.36083984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9489128589630127,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.36083984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:12.780473Z",
+      "elapsedSeconds": 161.57736945152283,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.06,
+        "sqi": 0.361083984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.361083984375,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9466822147369385,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 95% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.361083984375,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.36 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-08-01T15:29:13.847054Z",
+      "elapsedSeconds": 162.6412708759308,
+      "sessionId": "cce99085-ac1c-4bb2-956a-a46ff3929ae0",
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.88,
+        "sqi": 0.375732421875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.375732421875,
+        "signalQuality": "poor",
+        "emotion": {
+          "label": "neutral",
+          "confidence": 0.9449865818023682,
+          "trusted": true,
+          "reason": "Emotion classified as neutral with 94% confidence."
+        },
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "poor",
+        "confidence": 0.375732421875,
+        "flags": [
+          "poor_signal_quality",
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40."
+      },
+      "state": "insufficient_signal",
+      "reason": "The reading is untrusted because SQI 0.38 is below the provisional usable threshold of 0.40.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    }
+  ],
+  "summary": {
+    "snapshotCount": 96,
+    "averageHeartRateBpm": 72.99,
+    "averageSqi": 0.50341796875,
+    "averageRmssdMs": 75.33343679985362,
+    "trustedSnapshotCount": 2,
+    "untrustedSnapshotCount": 94,
+    "trustedSnapshotPercent": 2.08,
+    "allSnapshotAverageHeartRateBpm": 74.78156249999996,
+    "allSnapshotAverageSqi": 0.381683349609375,
+    "allSnapshotAverageRmssdMs": 75.33343679985362,
+    "stressDistribution": {
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "unknown": 0,
+      "calibrating": 96
+    },
+    "stressPieChart": [
+      {
+        "category": "low",
+        "count": 0
+      },
+      {
+        "category": "moderate",
+        "count": 0
+      },
+      {
+        "category": "high",
+        "count": 0
+      }
+    ],
+    "scoredStressSnapshotCount": 0,
+    "emotionDistribution": {
+      "neutral": 95,
+      "happy": 1
+    },
+    "emotionPieChart": [
+      {
+        "emotion": "neutral",
+        "count": 95
+      },
+      {
+        "emotion": "happy",
+        "count": 1
+      }
+    ],
+    "trustedEmotionSnapshotCount": 96
+  }
+}

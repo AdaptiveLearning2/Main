@@ -1113,7 +1113,21 @@ _strategy_hits_lock = threading.Lock()
 # the threshold with that many *active* callers, every request scanned the
 # whole dict and deleted nothing, holding the lock to do it. Pairing size with
 # an interval keeps the sweep proportional to time rather than to traffic.
-_strategy_sweep_at = 0.0
+#
+# Seeded from the clock the comparison uses, NOT from 0.0. time.monotonic()'s
+# reference point is undefined -- on Linux it is boot time -- so 0.0 is not a
+# "never swept" sentinel, it is a claim that the last sweep happened at boot.
+# On a host less than _STRATEGY_SWEEP_EVERY seconds old, `now - 0.0 >=
+# _STRATEGY_SWEEP_EVERY` is False, and the sweep is suppressed until the
+# machine has been up for the interval -- the reclaim silently not running
+# during exactly the window a fresh container spends starting up.
+#
+# It also made the sweep tests depend on the runner's uptime rather than on
+# anything they assert: green on a workstation up for days, red on a fresh CI
+# runner where monotonic() had only reached ~56s. Seeding here makes the
+# interval mean "since the last sweep, or since this process started", which is
+# what it was always meant to mean, on any host.
+_strategy_sweep_at = time.monotonic()
 _STRATEGY_SWEEP_EVERY = 60.0
 _STRATEGY_SWEEP_ABOVE = 1024
 

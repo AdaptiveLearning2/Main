@@ -2148,10 +2148,25 @@ def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch):
         assert exc.value.status_code == 403
 
 
+def _sweep_is_due(monkeypatch):
+    """Put the last sweep far enough in the past that the interval has elapsed.
+
+    Set explicitly rather than left to the ambient clock. These tests used to
+    lean on _strategy_sweep_at being 0.0 plus time.monotonic() already being
+    larger than _STRATEGY_SWEEP_EVERY -- true on a machine up for more than a
+    minute, false on a fresh CI runner, where monotonic() is measured from boot
+    and had only reached ~56s. That is a property of the runner, not of
+    anything these tests are about.
+    """
+    monkeypatch.setattr(main, "_strategy_sweep_at",
+                        time.monotonic() - main._STRATEGY_SWEEP_EVERY)
+
+
 def test_rate_limit_sweep_reclaims_callers_whose_window_has_passed(monkeypatch):
     """The dict grows with everyone who has ever used the endpoint."""
     monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
     monkeypatch.setattr(main, "_STRATEGY_RATE_WINDOW", 0.0)   # every hit already expired
+    _sweep_is_due(monkeypatch)
     for i in range(4):
         main._rate_limit_strategies(f"user-{i}")
     # The sweep runs on the call that crosses the threshold, so the caller
@@ -2164,6 +2179,7 @@ def test_rate_limit_sweep_does_not_run_on_every_request(monkeypatch):
     to reclaim, and a size-only trigger rescanned the whole dict on every
     request -- under the lock -- to discover that each time."""
     monkeypatch.setattr(main, "_STRATEGY_SWEEP_ABOVE", 2)
+    _sweep_is_due(monkeypatch)
     scans = []
     real_items = dict.items
     monkeypatch.setattr(main, "_strategy_hits",

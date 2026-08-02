@@ -1340,6 +1340,39 @@ def test_validated_strategies_rejects_clinical_language(bad):
     assert main._validated_strategies(f"{_THREE_SAFE}\n{bad}") is None
 
 
+@pytest.mark.parametrize("ok", [
+    # The adjective, which a `patient\w*` stem matched along with "patiently".
+    # Both are ordinary words in advice about helping a child with maths, and
+    # the filter rejects the *whole* reply -- so one of these silently switched
+    # the model pass off and left `source` reading "rule-based (model output
+    # rejected)" for good. Over-blocking and a genuinely unsafe model look
+    # identical from outside, which is what makes it worth pinning here.
+    #
+    # The first two failed against the old stem; the third is the mirror case
+    # ("patience" has no "t" after "patien", so it was never matched) and is
+    # here so a later widening of the stem cannot quietly start catching it.
+    "4. Be patient when they get stuck on a question",
+    "4. Working through it slowly and patiently helps more than speed",
+    "4. Practising patience with word problems pays off later",
+])
+def test_validated_strategies_allows_ordinary_uses_of_patience(ok):
+    out = main._validated_strategies(f"{_THREE_SAFE}\n{ok}")
+    assert out is not None
+    assert len(out) == 4
+
+
+def test_validated_strategies_still_rejects_the_clinical_sense_of_patient():
+    """The narrower stem is not a hole in the filter.
+
+    `patients?` still catches the noun, which is the sense that has no place in
+    advice about a child's maths practice.
+    """
+    assert main._validated_strategies(
+        f"{_THREE_SAFE}\n4. Treat them as a patient rather than a learner") is None
+    assert main._validated_strategies(
+        f"{_THREE_SAFE}\n4. Other patients show the same pattern") is None
+
+
 def test_validated_strategies_rejects_clinical_language_outside_the_list():
     """Checked against the whole reply, not just the lines that survive parsing.
 

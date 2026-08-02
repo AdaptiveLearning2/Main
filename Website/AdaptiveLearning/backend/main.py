@@ -1142,11 +1142,39 @@ _STRATEGY_MIN_CHARS = 25
 # asked for study tips will still occasionally volunteer a diagnosis. Output
 # containing any of these is discarded wholesale rather than edited: a sentence
 # that needed a word removed to be safe is not a sentence to hand a parent.
+#
+# Each term is stemmed only as far as its clinical sense reaches. The filter
+# rejects the whole reply, so an over-broad stem does not merely trim a word --
+# it silently switches the model pass off for every reply containing an
+# ordinary one, and the only symptom is `source` permanently reading
+# "rule-based (model output rejected)". Over-blocking and a genuinely unsafe
+# model are indistinguishable from outside, which is why the stems below are
+# written narrowly rather than defensively:
+#
+#   - "patient" is matched only in the forms that are unambiguously the *noun*:
+#     the plural, and the singular behind a determiner. `patient\w*` caught the
+#     adjective and "patiently"; even `patients?` still catches the adjective in
+#     "be patient when they get stuck" -- which is about as likely a sentence as
+#     exists in advice on helping a child with maths. The adjective is the
+#     common reading here and the noun is the clinical one, so the pattern has
+#     to tell them apart rather than stem across both. ("patience" was never
+#     caught -- it has no "t" after "patien" -- but "patiently" and the bare
+#     adjective both were.)
+#
+#     What this gives up: a bare predicative noun ("they are not patient" in
+#     the clinical sense) is not caught. That reading is vanishingly rare in
+#     study advice, and a reply actually framing a child as a medical patient
+#     will almost certainly trip one of the other terms in the same sentence.
+#     Over-blocking every "be patient" is the worse trade, because it is silent.
+#   - `meds` and `treatment\w*` are kept as they were -- unlike the adjective
+#     "patient", both carry the clinical sense in every reading that fits this
+#     prompt, so there is no ordinary use here for a narrower stem to protect.
 _CLINICAL_TERMS = re.compile(
     r"\b(diagnos\w*|disorder\w*|disabilit\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
     r"depress(?:ion|ive)|anxiet\w*|anxious|medicat\w*|meds|prescri\w*|psychiatr\w*|"
     r"psycholog\w*|counsel\w*|clinical\w*|symptom\w*|disease\w*|syndrome\w*|"
-    r"patient\w*|therap(?:y|ist|ies)|treatment\w*|neurolog\w*|"
+    r"patients|(?:a|an|the|any|your|their)\s+patient|"
+    r"therap(?:y|ist|ies)|treatment\w*|neurolog\w*|"
     r"cognitive impairment|special (?:needs|education\w*)|iep)\b",
     re.IGNORECASE,
 )

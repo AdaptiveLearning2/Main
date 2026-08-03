@@ -123,6 +123,14 @@ export default function Live() {
     let killed = false
     const tick = async () => {
       try {
+        // Reads facial signals (the attention gauge, the current emotion and
+        // the camera badge below) and deliberately does NOT honour the
+        // facial-recognition switch in lib/facePref.js -- that control covers
+        // the reporting surfaces, which render it, and this page does not.
+        // See the scope note there before wiring it in: doing so also means
+        // putting the switch on this page, because a control that silently
+        // changes a page it is absent from is worse than one with a stated
+        // edge.
         const rows = await apiFetch(`/api/teacher/classes/${classId}/live`)
         if (killed) return
         // append to per-student history (last 60 points)

@@ -25,6 +25,11 @@ export default function SessionReview() {
   useEffect(() => {
     let killed = false
     setLoading(true)
+    // Returns one session's raw facial samples, plotted below, and
+    // deliberately does NOT honour the facial-recognition switch in
+    // lib/facePref.js -- that control covers the reporting surfaces, which
+    // render it, and this page does not. See the scope note there before
+    // wiring it in.
     apiFetch(`/api/signals/session/${sessionId}`)
       .then(d => { if (!killed) setData(d) })
       .catch(e => { if (!killed) setErr(e.message || String(e)) })

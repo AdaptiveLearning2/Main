@@ -98,5 +98,16 @@ def test_is_alive_after_poller_finishes_does_not_raise():
     p = eeg_poller._Poller(_FakeSupabase(), "user-a", "session-1", "station-a")
     p.start()
     p.stop()
-    p.join(timeout=2.0)
-    assert p.is_alive() is False
+    # Wait until the thread finishes rather than asserting on a fixed deadline.
+    # stop() only sets an event, and the run loop checks it after a
+    # non-interruptible time.sleep(POLL_INTERVAL) -- 1.0s at the default
+    # EEG_POLL_HZ=1 -- so a join(timeout=2.0) left barely one interval of
+    # headroom, and a loaded runner made is_alive() legitimately True.
+    #
+    # The regression this guards is is_alive()/join() *raising*, not the thread
+    # being quick, so the loop below exercises it on every iteration and the
+    # generous deadline only fires for a poller that genuinely never exits.
+    deadline = time.monotonic() + 15.0
+    while p.is_alive() and time.monotonic() < deadline:
+        p.join(timeout=0.05)
+    assert p.is_alive() is False, "poller thread did not exit after stop()"

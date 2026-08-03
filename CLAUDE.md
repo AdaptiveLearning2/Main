@@ -68,6 +68,35 @@ Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, 
 design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses
 `pyproject.toml` plus `requirements*.lock`.
 
+### The Supabase CLI is a repo-local npm install
+
+It is **not on `PATH`** — `which supabase` and `Get-Command supabase` both report it missing, which
+looks like "not installed" and isn't. It lives at
+`node_modules/@supabase/cli-windows-x64/bin/supabase.exe` (platform-suffixed, so the directory name
+differs on mac). Run it through npx from the repo root:
+
+```bash
+npx supabase migration list --linked
+```
+
+`supabase/.temp/project-ref` holds the linked project ref, which is what `--linked` resolves
+against.
+
+### How a migration reaches production
+
+**Check before assuming either way.** `npx supabase migration list --linked` prints local and
+remote columns side by side; a version present in Local and absent from Remote has not been
+applied. That command is the answer to "did the migration land", and it is worth running before
+any deploy whose code depends on a new signature — see the deploy-ordering rule below.
+
+What is known: there is **no deploy or migration workflow in `.github/workflows/`** (only `ci.yml`,
+which runs tests), yet `20260801000000` reached production without anyone applying it by hand. The
+Supabase GitHub integration is connected — it contributes the "Supabase Preview" check on PRs — so
+that is the likely mechanism, but it is configured in the Supabase dashboard rather than in this
+repo, and nobody has confirmed which branch event triggers it. **Do not rely on it applying
+migrations for you until someone has.** The local `.env` files point at a local stack, not
+production, so nothing here can verify a production schema without the linked CLI.
+
 ## Configuration
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,

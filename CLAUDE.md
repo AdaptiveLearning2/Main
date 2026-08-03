@@ -92,10 +92,9 @@ any deploy whose code depends on a new signature — see the deploy-ordering rul
 What is known: there is **no deploy or migration workflow in `.github/workflows/`** (only `ci.yml`,
 which runs tests), yet `20260801000000` reached production without anyone applying it by hand. The
 Supabase GitHub integration is connected — it contributes the "Supabase Preview" check on PRs — so
-that is the likely mechanism, but it is configured in the Supabase dashboard rather than in this
-repo, and nobody has confirmed which branch event triggers it. **Do not rely on it applying
-migrations for you until someone has.** The local `.env` files point at a local stack, not
-production, so nothing here can verify a production schema without the linked CLI.
+that is the likely mechanism; it is configured in the Supabase dashboard rather than in this repo,
+which is why the trigger is not visible from here. The local `.env` files point at a local stack,
+not production, so nothing here can verify a production schema without the linked CLI.
 
 ## Configuration
 

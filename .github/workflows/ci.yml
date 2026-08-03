@@ -107,9 +107,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, and pinned to match the repo-local CLI in package.json
+      # ("supabase": "^2.108.0"), which is what developers actually run. On
+      # `latest` this job validates migrations against a different CLI -- and a
+      # different bundled Postgres image -- than anyone uses locally, and an
+      # unrelated CLI release can turn it red on a PR that touched no SQL.
+      # Bump this and the package.json range together.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.108.0
 
       # Excludes the services that have no bearing on whether SQL applies.
       # The database, and the auth/rest containers that own the roles and

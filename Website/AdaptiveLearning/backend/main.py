@@ -132,55 +132,20 @@ def _topic_breakdown(student_id: str):
     return out
 
 
-def _rpc_signature_missing(exc) -> bool:
-    """Whether a failed RPC means *this signature* is absent, not that it broke.
-
-    PostgREST answers PGRST202 when nothing matches the name and argument list;
-    Postgres itself uses SQLSTATE 42883 (undefined_function).
-
-    The fallback to matching the string form is deliberately loose -- these
-    clients do not expose a code attribute consistently, and "42883" could in
-    principle appear in unrelated error text. That is safe here because of where
-    the answer is used: _summary_rpc only retries when include_face is True, and
-    the retry just drops an argument whose new-signature default is also True.
-    A false positive therefore costs one extra round-trip and returns the same
-    rows. Do not reuse this to decide anything where a wrong True is not free.
-    """
-    code = getattr(exc, "code", None)
-    if code in ("PGRST202", "42883"):
-        return True
-    text = str(exc)
-    return "PGRST202" in text or "42883" in text
-
-
 def _summary_rpc(name: str, params: dict, include_face: bool):
-    """Call a summary RPC, tolerating a database that predates p_include_face.
+    """Call a summary RPC with the facial opt-out threaded in.
 
-    The parameter arrived with its own migration, so between deploying this
-    code and applying that migration every call carries an argument the
-    database has no signature for. Left alone the endpoint answers with empty
-    summaries -- blank dashboards, no error -- for the length of the window.
+    This used to retry without p_include_face when the database had no matching
+    signature, covering the window between deploying the code and applying
+    20260801000000_signal_summary_include_face.sql. That migration is applied,
+    so the branch was unreachable and is gone (#48).
 
-    The retry is deliberately conditional on include_face. With the opt-out on
-    there is no safe fallback: the old signature has no way to be told, so
-    calling it would read exactly the facial rows the caller asked us not to.
-    A blank tile is the correct outcome there, and the UI already renders it as
-    "Off" rather than as a measurement.
-
-    REMOVABLE once 20260801000000_signal_summary_include_face.sql is applied
-    everywhere this code runs. It exists only for the window between deploying
-    this build and running that migration, and after that the fallback branch is
-    unreachable -- but it has to outlive the deploy it guards, so it cannot go in
-    the same change that introduced it. Deleting it early re-opens exactly the
-    blank-dashboard failure it was added for.
+    A schema mismatch is therefore an error again, which is the point: while the
+    fallback existed, a database missing p_include_face for any *other* reason
+    -- a bad rollback, an environment provisioned from an old dump -- degraded
+    to a silently wrong answer instead of failing.
     """
-    try:
-        return supabase.rpc(name, {**params, "p_include_face": include_face}).execute()
-    except Exception as e:
-        if not (include_face and _rpc_signature_missing(e)):
-            raise
-        print(f"[{name}] p_include_face missing; database is behind this build")
-        return supabase.rpc(name, params).execute()
+    return supabase.rpc(name, {**params, "p_include_face": include_face}).execute()
 
 
 def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -> dict:

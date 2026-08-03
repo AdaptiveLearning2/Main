@@ -90,6 +90,64 @@ jobs:
             echo "no tests/ directory yet — skipping"
           fi
 
+  database-migrations:
+    name: Database migrations
+    runs-on: ubuntu-latest
+    # Nothing in CI applied the migrations before this job. The "Supabase
+    # Preview" check reported by the Supabase GitHub app is a per-PR preview
+    # branch on the hosted project, and it reports "skipped" -- the feature is
+    # switched off in the project's integration settings, so a migration could
+    # reach main having never been executed anywhere but a developer's laptop.
+    #
+    # This runs the real thing rather than a bare postgres: the migrations
+    # reference auth.uid() and grant to the anon / authenticated / service_role
+    # roles, none of which exist in stock postgres. The local Supabase stack
+    # ships all of them, so a migration that passes here is one that will apply
+    # against the hosted project.
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned, and pinned to match the repo-local CLI in package.json
+      # ("supabase": "^2.108.0"), which is what developers actually run. On
+      # `latest` this job validates migrations against a different CLI -- and a
+      # different bundled Postgres image -- than anyone uses locally, and an
+      # unrelated CLI release can turn it red on a PR that touched no SQL.
+      # Bump this and the package.json range together.
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.108.0
+
+      # Excludes the services that take no part in applying SQL. The database
+      # container still comes up, and it is the one that ships the anon /
+      # authenticated / service_role roles and auth.uid() -- so does gotrue,
+      # which owns the auth schema the migrations reference.
+      #
+      # logflare and vector are excluded even though config.toml has
+      # [analytics] enabled = true, which is a coupling the CLI is entitled to
+      # start rejecting. It is fine on the pinned version above, and validated
+      # by this job's own run -- so re-check it when bumping that pin.
+      - name: Start local Supabase
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector
+
+      # `supabase start` above already applied the migrations to an empty
+      # database, so this is a second application and not, by itself, a
+      # stronger test than the first. It earns its place by isolating the
+      # assertion: a failure in this step is a migration failure, where a
+      # failure in `start` could equally be an image pull or a container that
+      # would not come up.
+      #
+      # --no-seed states the same narrowness. config.toml has [db.seed]
+      # enabled pointing at ./seed.sql, but that file is gitignored, so in CI
+      # there is nothing to seed and an unflagged reset just warns about the
+      # missing pattern. The flag drops the warning now, and keeps this step
+      # asserting only that the migrations apply if seed.sql is ever tracked.
+      - name: Apply migrations from scratch
+        run: supabase db reset --no-seed
+
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup
+
   frontend-build:
     name: Frontend tests, build & lint
     runs-on: ubuntu-latest

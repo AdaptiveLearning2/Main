@@ -2147,3 +2147,60 @@ def test_learning_strategies_clamps_the_day_range(monkeypatch):
         "student-1", None, main.LearningStrategyRequest(days=999))["basis"]["days"] == 30
     assert main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest(days=0))["basis"]["days"] == 1
+# ── leaderboard ──────────────────────────────────────────────────────────
+#
+# This endpoint reads through the service-role client, so RLS does not apply
+# and nothing but the code below bounds what it hands back -- with names on it.
+
+def _leaderboard_tables(n=5):
+    # Scores stay three digits across the range used here: _Query.order sorts
+    # by str(), so mixed-width numbers would rank 99 above 100 and the ordering
+    # assertions below would be testing the fake rather than the endpoint.
+    return {"user_stats": [
+        {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
+         "current_streak": 1, "best_streak": 2}
+        for i in range(n)
+    ]}
+
+
+def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
+    """?limit=999999 returned every user and their display_name to any signed-in
+    caller -- a full directory of the platform, not a top-N board."""
+    # More rows available than the cap, so a failure to clamp is visible.
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(main._LEADERBOARD_MAX + 50)))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
+    assert len(main.leaderboard(None, limit=999999)) == main._LEADERBOARD_MAX
+
+
+def test_leaderboard_rejects_a_nonsense_limit(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(5)))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
+    assert len(main.leaderboard(None, limit=0)) == 1
+    assert len(main.leaderboard(None, limit=-5)) == 1
+
+
+def test_leaderboard_never_returns_user_ids(monkeypatch):
+    """Returning user_id next to display_name handed every caller a
+    UUID -> name map for the whole board, which is what made the open read on
+    user_stats attributable to named students."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
+    rows = main.leaderboard(None)
+    assert rows, "fixture must produce rows"
+    for row in rows:
+        assert "user_id" not in row
+
+
+def test_leaderboard_marks_the_callers_own_row(monkeypatch):
+    """The page needs to know which row is the viewer's; that is the only
+    reason it ever needed an id, so the server answers it directly."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)   # student-1
+    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
+    rows = main.leaderboard(None)
+    mine = [r for r in rows if r["is_me"]]
+    assert len(mine) == 1
+    assert mine[0]["rank"] == 2   # student-1 is second by total_correct

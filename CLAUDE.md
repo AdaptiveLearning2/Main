@@ -45,7 +45,7 @@ uvicorn src.app.main:app --host 127.0.0.1 --port 8001 --reload
 npm run dev
 ```
 
-Tests — all four run in CI (`.github/workflows/ci.yml`) on PRs and pushes to `main`:
+Tests — all five jobs run in CI (`.github/workflows/ci.yml`) on PRs and pushes to `main`:
 
 ```bash
 python -m pytest tests/ -q
@@ -85,11 +85,20 @@ against.
 ### How a migration reaches production
 
 **Merging to `main` applies the migration to production, a few minutes later.** The Supabase
-GitHub integration does it — it is the same integration that contributes the "Supabase Preview"
-check on PRs, and it is configured in the Supabase dashboard, which is why nothing in
-`.github/workflows/` describes it (`ci.yml` only runs tests). Confirmed on `20260801000000` and
-`20260803000000`; there is nothing to run by hand, and `npx supabase db push` answers "Remote
-database is up to date".
+GitHub integration does it — it is configured in the Supabase dashboard, which is why nothing in
+`.github/workflows/` describes it. Confirmed on `20260801000000` and `20260803000000`; there is
+nothing to run by hand, and `npx supabase db push` answers "Remote database is up to date".
+
+The **"Supabase Preview"** check on PRs comes from that same integration and verifies nothing:
+per-PR preview branches are switched off in the project's integration settings, so it reports
+`skipped` every time. Never read it as the migration having been exercised.
+
+**CI applies the migrations; it does not gate the merge.** The `Database migrations` job applies
+every migration to an empty local Supabase stack, so one that cannot apply goes red on the PR.
+Nothing enforces that — branch protection and rulesets need a paid plan on this private repo, so
+every job in `ci.yml` is advisory and a red PR still merges. Read the check before merging; it is
+the only thing standing between a laptop-only migration and production. It proves the SQL
+*applies*, not that the grants below are right.
 
 **The delay is the trap.** It is minutes, not seconds, so a check run straight after the merge
 reports the migration as *not applied* — Local populated, Remote blank — and that is

@@ -1267,6 +1267,51 @@ def test_unknown_device_id_returns_404_across_endpoints():
     assert client.post("/api/v1/muse/refresh", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
 
 
+async def _counter_advances(manager, baseline: int, timeout: float = 5.0) -> bool:
+    """Whether `manager.samples_processed` gets past `baseline` within timeout.
+
+    Waiting for the counter to move rather than sleeping a fixed window, because
+    the two are not the same test. The stream loop ticks once per
+    1 / settings.eeg_sample_hz seconds -- 0.25s at the default 4 Hz -- and the
+    fixed window this replaces was itself 5 x 0.05s = 0.25s. A window exactly one
+    tick long catches a tick only if the phase happens to line up, so any jitter
+    that pushed the tick past the boundary left the counter unchanged and failed
+    the assertion (seen in CI as `assert 2 > 2` on a docs-only PR).
+
+    The timeout is generous on purpose: what the callers below are testing is
+    that a loop keeps running at all, so only a genuinely frozen one should
+    reach the deadline. A slow runner still passes, which is the distinction a
+    fixed window could not draw.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while manager.samples_processed <= baseline:
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
+def test_counter_advance_helper_detects_a_stopped_loop():
+    """The negative direction, so the assertions above are not vacuous.
+
+    _counter_advances is what every progress claim in this file now rests on,
+    and a version of it that returned True unconditionally would satisfy all of
+    them. A stopped manager's counter never moves, so this pins that the helper
+    can actually fail -- with a short timeout, since it is expected to expire.
+    """
+    async def run_case():
+        manager = _make_session("dev-stopped")
+        manager.adapter = SimulatedMuseIngestionAdapter()
+        await manager.start()
+        assert await _counter_advances(manager, 0), "loop never started"
+        await manager.stop()
+        frozen_at = manager.samples_processed
+        return await _counter_advances(manager, frozen_at, timeout=0.5)
+
+    assert asyncio.run(run_case()) is False
+
+
 def test_two_sim_devices_run_independently():
     async def run_case():
         manager_a = _make_session("dev-a")
@@ -1275,26 +1320,29 @@ def test_two_sim_devices_run_independently():
         manager_b.adapter = SimulatedMuseIngestionAdapter()
         await manager_a.start()
         await manager_b.start()
-        for _ in range(5):
-            await asyncio.sleep(0.05)
+        a_started = await _counter_advances(manager_a, 0)
+        b_started = await _counter_advances(manager_b, 0)
         b_before = manager_b.samples_processed
         await manager_a.stop()
-        for _ in range(5):
-            await asyncio.sleep(0.05)
+        # The property under test: stopping A must not freeze or reset B's
+        # counter. A real regression leaves it stuck for good, which the
+        # timeout catches; a merely slow tick does not.
+        b_kept_going = await _counter_advances(manager_b, b_before)
         # Snapshot B's state here, before stopping it too, since stop() itself
         # zeroes latest_payload -- capturing after both stops would prove
         # nothing about B being independent of A's stop.
-        b_after = manager_b.samples_processed
         b_signal_quality = manager_b.latest_payload["features"]["signal_quality"]
         await manager_b.stop()
-        return manager_a, manager_b, b_before, b_after, b_signal_quality
+        return (manager_a, manager_b, a_started, b_started,
+                b_kept_going, b_signal_quality)
 
-    manager_a, manager_b, b_before, b_after, b_signal_quality = asyncio.run(run_case())
-    assert manager_a.samples_processed > 0
-    assert b_before > 0
+    (manager_a, manager_b, a_started, b_started,
+     b_kept_going, b_signal_quality) = asyncio.run(run_case())
+    assert a_started, "device A never processed a sample"
+    assert b_started, "device B never processed a sample"
     # Independent counters -- stopping device A doesn't freeze or reset
     # device B's tally, which keeps advancing on its own loop.
-    assert b_after > b_before
+    assert b_kept_going, "device B's counter stopped advancing when A was stopped"
     assert manager_a.latest_payload["features"]["signal_quality"] == "no_signal"
     assert b_signal_quality != "no_signal"
     assert manager_a.device_id == "dev-a"

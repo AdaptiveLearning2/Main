@@ -513,17 +513,6 @@ def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monk
     assert days[_ts(2)[:10]]["focus"] is None
 
 
-# ── database behind the build ────────────────────────────────────────────
-
-_PGRST202 = "PGRST202: Could not find the function public.student_signal_summary" \
-            "(p_days, p_include_face, p_student_id) in the schema cache"
-
-
-def _rejects_include_face(_name, params):
-    """A database that has these functions but not the p_include_face form."""
-    return RuntimeError(_PGRST202) if "p_include_face" in params else None
-
-
 def test_weekly_report_counts_every_session_not_just_the_retrieved_rows(monkeypatch):
     """sample_counts is rows-retrieved throughout, and rendering its sessions
     figure as the report headline showed a heavy week as exactly the cap --
@@ -672,69 +661,28 @@ def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
     assert report["sessions_recorded"] == 0
 
 
-def test_signal_summary_survives_a_database_without_the_flag(monkeypatch):
-    """p_include_face arrived with its own migration. Between deploying this
-    code and applying it, every call carries an argument the database has no
-    signature for -- and an unhandled one blanks the dashboard silently for the
-    length of the window rather than erroring."""
-    fake = _FakeSupabase({}, rpc_results={
-        "student_signal_summary": [{"focus": 0.6, "stress": 0.3, "engagement": 0.5,
-                                    "face_attention": 0.8, "sessions": 2,
-                                    "cognitive_samples": 9, "face_samples": 4}],
-    }, rpc_raises=_rejects_include_face)
-    monkeypatch.setattr(main, "supabase", fake)
+def test_a_failed_rpc_reports_not_retrieved(monkeypatch):
+    """A broken aggregate must not read as a quiet week.
 
-    out = main._signal_summary("student-1")
-    assert out["focus"] == 0.6, "the retry must actually produce the summary"
-    assert out["face_included"] is True
-    # Tried the new signature first; only then fell back.
-    assert "p_include_face" in fake.rpc_calls[0][1]
-    assert "p_include_face" not in fake.rpc_calls[1][1]
+    _signal_summary swallows the exception so one failed read does not blank a
+    dashboard, and answers with defaults -- null averages beside zero sample
+    counts, which is the same shape a student who recorded nothing produces.
+    `retrieved` is the only thing telling the two apart, and every surface that
+    renders "no data" consults it.
 
-
-def test_signal_summaries_survive_a_database_without_the_flag(monkeypatch):
-    fake = _FakeSupabase({}, rpc_results={
-        "student_signal_summary_many": [{"student_id": "student-1", "focus": 0.4,
-                                         "sessions": 1, "cognitive_samples": 3}],
-    }, rpc_raises=_rejects_include_face)
-    monkeypatch.setattr(main, "supabase", fake)
-
-    out = main._signal_summaries(["student-1"])
-    assert out["student-1"]["focus"] == 0.4
-
-
-def test_no_fallback_when_the_opt_out_is_on(monkeypatch):
-    """The old signature has no way to be told to skip facial rows, so retrying
-    against it would read exactly what the caller asked us not to. A blank tile
-    is the right outcome; the UI already renders it as "Off"."""
-    fake = _FakeSupabase({}, rpc_results={
-        "student_signal_summary": [{"focus": 0.6, "face_attention": 0.8,
-                                    "face_samples": 4}],
-    }, rpc_raises=_rejects_include_face)
-    monkeypatch.setattr(main, "supabase", fake)
-
-    out = main._signal_summary("student-1", include_face=False)
-    assert out["face_attention"] is None
-    assert out["focus"] is None
-    assert out["face_included"] is False
-    assert len(fake.rpc_calls) == 1, "a retry here would read the facial rows"
-
-
-def test_a_broken_rpc_is_not_retried(monkeypatch):
-    """Only a missing *signature* justifies the fallback. Retrying a function
-    that exists and failed would double every error's cost."""
+    This is what is left of test_a_broken_rpc_is_not_retried after the
+    p_include_face fallback was removed (#48). The retry-specific half went
+    with it; the payload assertion below is round 10's behaviour and stands on
+    its own.
+    """
     fake = _FakeSupabase({}, rpc_raises=lambda *_a: RuntimeError("57014: statement timeout"))
     monkeypatch.setattr(main, "supabase", fake)
 
     out = main._signal_summary("student-1")
     # dominant_emotion is part of the single-student shape on every path,
-    # including the ones that never reached a row. retrieved is False here for
-    # the same reason the call was not retried: the function exists and the
-    # read failed, so these figures are defaults rather than a quiet week, and
-    # the payload has to say so.
+    # including the ones that never reached a row.
     assert out == {**main._EMPTY_SUMMARY, "face_included": True,
                    "retrieved": False, "dominant_emotion": None}
-    assert len(fake.rpc_calls) == 1
 
 
 def test_signal_summary_surfaces_sample_counts(monkeypatch):

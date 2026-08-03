@@ -136,9 +136,15 @@ carries a fresh ACL, so repeat the revokes and the `service_role` grant against 
 That leaves a window. Backend code calling the new signature against a database that has not run
 the migration yet gets PostgREST's `PGRST202`, which the callers here catch — so the failure is
 silent, and the symptom is empty data rather than an error. **Apply the migration before rolling
-out the code that depends on it.** Where an in-between state would be visible to a user,
-degrade explicitly: `_summary_rpc` in `Website/AdaptiveLearning/backend/main.py` retries against
-the old signature, but only where doing so cannot violate what the caller asked for.
+out the code that depends on it.**
+
+Where an in-between state would be visible to a user, a temporary retry against the old signature
+is a reasonable bridge — but only where doing so cannot violate what the caller asked for, and
+only if it is removed once the migration is applied everywhere. Left in, it is dead code that
+looks live, and it makes any *later* schema mismatch — a bad rollback, an environment built from
+an old dump — degrade to a quietly wrong answer instead of an error. `_summary_rpc` in
+`Website/AdaptiveLearning/backend/main.py` carried one for `p_include_face`; it was removed in
+#48 once `20260801000000` was applied, and the git history is the worked example.
 
 ### Do not "fix" the RLS helper functions
 
@@ -197,9 +203,9 @@ saying so**, and a new aggregate helper has to carry them the same way.
 
 `include_face=False` skips the query outright — `_weekly_signal_report` never touches
 `face_signals`, and the summary RPCs take `p_include_face` so the aggregate reads no facial row
-either. Nulling values on the way out is not an implementation of this. Where there's no way to
-tell the database (the pre-migration fallback in `_summary_rpc`), the correct answer is a blank
-tile, not a read.
+either. Nulling values on the way out is not an implementation of this. If there is ever no way to
+tell the database to skip the rows, the correct answer is a blank tile, not a read — never fall
+back to a query that reads what the caller opted out of.
 
 Scope is documented at the top of `frontend/src/lib/facePref.js` and is narrower than the name
 suggests: a **viewer-side read control over the reporting surfaces**, not stored consent over a

@@ -1,5 +1,89 @@
 # Project conventions
 
+AdaptiveLearning is an EEG- and camera-assisted adaptive maths platform: students answer
+LLM-generated questions while a Muse headband and a webcam feed cognitive and facial signals into
+per-session records; teachers and parents read those back as live views and weekly reports.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~2.3k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which run against a local Ollama. |
+| `Website/AdaptiveLearning/frontend` | React 19 + Vite + Tailwind SPA on port 5173. Routed by role: `src/pages/{student,teacher,parent,auth}`, one layout each. `src/lib/api.js` wraps the backend; `src/lib/supabase.js` holds the anon client. |
+| `EEGResearch` | Separate FastAPI sidecar on port 8001 (`src/app`), packaged as `eeg-learning-platform`. Owns headband access and signal derivation; the website backend talks to it over HTTP only, via `backend/eeg_client.py`. |
+| `EEGResearch/native_bridge` | C++ bridge to the libMuse SDK, TCP on 8765. Windows-only (`winsock2`), and the interesting half is behind `ENABLE_LIBMUSE`. |
+| `FacialRecg` | Vendored rPPG / facial-recognition reference code. |
+| `supabase/migrations` | The schema. Timestamp-prefixed, applied in order. |
+
+Two backends, deliberately: the website backend never reads a headband directly, and every caller
+gates on `eeg_client.is_alive()` first, so the whole EEG stack is optional at runtime. Don't add a
+hard dependency on port 8001 to a path that must work without hardware.
+
+## Running and testing
+
+Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own window):
+
+```bash
+./start.ps1
+```
+
+Add `-Muse` for the real headband — it builds the native bridge if needed, copies `libmuse.dll`
+next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you get `EEG_SOURCE=sim`.
+`start.sh` is the mac equivalent; per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
+
+Individually, from each directory:
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+```bash
+uvicorn src.app.main:app --host 127.0.0.1 --port 8001 --reload
+```
+
+```bash
+npm run dev
+```
+
+Tests — all four run in CI (`.github/workflows/ci.yml`) on PRs and pushes to `main`:
+
+```bash
+python -m pytest tests/ -q
+```
+
+```bash
+npm test
+```
+
+Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set to anything non-empty; they
+never reach a real database. EEGResearch tests need `EEG_SOURCE=sim`, `API_TOKEN`, `ADMIN_TOKEN`.
+The native bridge is compile-checked on `windows-latest` with `ENABLE_LIBMUSE=OFF`, which covers
+syntax and signatures but *not* the packet handling inside the guards — that still needs a manual
+Windows build with the SDK before release.
+
+`npm run lint` is non-blocking in CI against a backlog of ~48 pre-existing errors. Don't add to it,
+and don't make it blocking until the backlog is gone.
+
+Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
+design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses
+`pyproject.toml` plus `requirements*.lock`.
+
+## Configuration
+
+Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
+`EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*`
+group below. Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`,
+`VITE_EEG_DEBUG`. EEGResearch reads `.env` through `src/app/config.py` — `API_TOKEN` and
+`ADMIN_TOKEN` are required, `EEG_SOURCE` picks sim vs muse, and `EEG_DEVICES`
+(`station1:muse@8765,...`) drives the multi-headband registry.
+
+Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
+These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
+one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`
+check, `nan` fails every comparison, and both break call sites in ways that look like the feature
+being off) and clamps below the floor. Give every one a floor: a number is not automatically a
+usable setting.
+
 ## Database — Postgres functions are world-executable by default
 
 **Every `CREATE FUNCTION` in the `public` schema is EXECUTE-able by every logged-in user unless
@@ -40,6 +124,22 @@ Also:
   table is already large, build the index manually with `CONCURRENTLY` outside a transaction
   first; the `IF NOT EXISTS` in the migration then no-ops.
 
+### When changing an existing function's signature
+
+Adding a parameter creates a **new** function rather than replacing the old one, so the migration
+has to `DROP FUNCTION` the previous signature explicitly — `CREATE OR REPLACE` alone leaves it
+behind as an overload that is still granted, still callable, and unaware of whatever the new
+parameter controls. Keeping both is not an option either: with named-argument RPC calls that
+match more than one signature, Postgres rejects the call as ambiguous. The new signature also
+carries a fresh ACL, so repeat the revokes and the `service_role` grant against it.
+
+That leaves a window. Backend code calling the new signature against a database that has not run
+the migration yet gets PostgREST's `PGRST202`, which the callers here catch — so the failure is
+silent, and the symptom is empty data rather than an error. **Apply the migration before rolling
+out the code that depends on it.** Where an in-between state would be visible to a user,
+degrade explicitly: `_summary_rpc` in `Website/AdaptiveLearning/backend/main.py` retries against
+the old signature, but only where doing so cannot violate what the caller asked for.
+
 ### Do not "fix" the RLS helper functions
 
 `is_member_of_class` and `is_teacher_of_class`
@@ -76,3 +176,54 @@ under `/api/teacher/` when parents legitimately read it too, and don't gate on
 
 Access-control tests live in `Website/AdaptiveLearning/backend/tests/test_access_control.py` and
 run in CI.
+
+## Reporting — a failed read must not look like a quiet week
+
+Every reporting helper swallows its exception so one broken query doesn't blank a dashboard, and
+answers 200 with a default payload. Zero samples and a null average are then indistinguishable
+from a student who genuinely recorded nothing — which is how surfaces came to report an absence in
+data that never loaded. Three states, and the payload has to separate all three:
+
+- **nothing recorded** — the read succeeded and found no rows.
+- **not requested** — `face_included: false`, the facial opt-out was on.
+- **not retrieved** — `retrieved: false`, the query itself failed.
+
+`_shape_summary` carries both flags on every payload, so a consumer never treats "field absent" as
+a fourth state. `_signal_summaries` returns `None` for a failed batch read versus `{}` for one that
+succeeded with nothing to return. **Any surface that renders "no data" must consult these before
+saying so**, and a new aggregate helper has to carry them the same way.
+
+## The facial opt-out means the data is not read
+
+`include_face=False` skips the query outright — `_weekly_signal_report` never touches
+`face_signals`, and the summary RPCs take `p_include_face` so the aggregate reads no facial row
+either. Nulling values on the way out is not an implementation of this. Where there's no way to
+tell the database (the pre-migration fallback in `_summary_rpc`), the correct answer is a blank
+tile, not a read.
+
+Scope is documented at the top of `frontend/src/lib/facePref.js` and is narrower than the name
+suggests: a **viewer-side read control over the reporting surfaces**, not stored consent over a
+child's biometrics. It doesn't stop recording and doesn't travel with the student. Live class
+monitoring and session review are deliberately outside it and deliberately don't render the switch.
+Both call sites point back at that file — keep them in sync, and if you extend the control, render
+the switch there too. A control that silently changes a page it's absent from is worse than one
+with a stated edge.
+
+## The strategies model pass is optional and bounded
+
+`/api/students/{id}/learning-strategies` always has a deterministic rule-based answer;
+`STRATEGY_LLM_ENABLED` (default off) only decides whether a model gets a chance to replace it. Off,
+the endpoint never opens a socket — which is what CI and any deployment without a local Ollama
+should do. Every failure path degrades to the rules rather than erroring.
+
+The bounds exist because this is a sync endpoint, so each waiting request holds one of anyio's ~40
+threadpool slots: `STRATEGY_LLM_TIMEOUT` enforced by waiting on a future (an httpx timeout is
+per-operation, not per-call), a 2-worker pool, `STRATEGY_LLM_MAX_WAITERS` on how many callers may
+block at once, and `STRATEGY_RATE_LIMIT`/`STRATEGY_RATE_WINDOW` per user id. An abandoned wait
+cancels its future, or a stalled server turns every timeout into work that still runs later. If you
+add another model-backed endpoint, it needs the same four bounds — the per-user rate limit alone
+does not protect the threadpool.
+
+Model output is untrusted text: it's parsed, length-bounded, stripped of markdown emphasis and list
+markers, and run through a clinical-term filter, and anything failing validation falls back to the
+rules. Extend `_validated_strategies` rather than rendering raw output.

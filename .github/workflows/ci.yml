@@ -117,20 +117,31 @@ jobs:
         with:
           version: 2.108.0
 
-      # Excludes the services that have no bearing on whether SQL applies.
-      # The database, and the auth/rest containers that own the roles and
-      # schema the migrations reference, still come up.
+      # Excludes the services that take no part in applying SQL. The database
+      # container still comes up, and it is the one that ships the anon /
+      # authenticated / service_role roles and auth.uid() -- so does gotrue,
+      # which owns the auth schema the migrations reference.
+      #
+      # logflare and vector are excluded even though config.toml has
+      # [analytics] enabled = true, which is a coupling the CLI is entitled to
+      # start rejecting. It is fine on the pinned version above, and validated
+      # by this job's own run -- so re-check it when bumping that pin.
       - name: Start local Supabase
         run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector
 
-      # `supabase start` applies migrations on the way up, so this is the
-      # second application -- deliberately. It proves the set applies cleanly
-      # from an empty database in filename order, which is the property that
-      # matters when the hosted project runs them, and it fails loudly on a
-      # migration that only works against a database that already has its
-      # changes (the "works on my machine because I ran it by hand" case).
+      # `supabase start` above already applied the migrations to an empty
+      # database, so this is a second application and not, by itself, a
+      # stronger test than the first. It earns its place by isolating the
+      # assertion: a failure in this step is a migration failure, where a
+      # failure in `start` could equally be an image pull or a container that
+      # would not come up.
+      #
+      # --no-seed for the same reason. config.toml has [db.seed] enabled, so
+      # an unflagged reset also runs supabase/seed.sql, and a seed that has
+      # drifted from the schema would fail this step reading as though a
+      # migration broke.
       - name: Apply migrations from scratch
-        run: supabase db reset
+        run: supabase db reset --no-seed
 
       - name: Stop local Supabase
         if: always()

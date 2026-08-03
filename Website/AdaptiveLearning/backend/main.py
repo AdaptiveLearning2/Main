@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os, requests, random, string, threading
+import os, math, re, requests, random, string, threading, time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
@@ -21,7 +23,20 @@ if not SUPABASE_URL or not SERVICE_ROLE_KEY:
 
 supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-app = FastAPI(title="AdaptiveLearning API")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Process-lifetime hooks. Everything before the yield is startup.
+
+    A lifespan handler rather than @app.on_event, which FastAPI deprecated --
+    and which has to be attached to the app object, so it would have pulled
+    this handler up here anyway. The names below resolve when the handler runs,
+    which lets each one stay defined beside the state it owns.
+    """
+    yield
+    _shutdown_strategy_pool()
+
+
+app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,6 +81,9 @@ def _profile(uid: str) -> dict:
 # OLDEST samples -- see _weekly_signal_report for why the day buckets are built
 # from what actually came back rather than from the requested date range.
 _REPORT_ROW_CAP = 5000
+# Sessions are far coarser than signal samples -- one row per sitting, not per
+# reading -- so they get their own, much smaller cap.
+_SESSION_ROW_CAP = 100
 
 
 def _avg(values):
@@ -114,33 +132,122 @@ def _topic_breakdown(student_id: str):
     return out
 
 
-def _signal_summary(student_id: str, days: int = 7) -> dict:
+def _rpc_signature_missing(exc) -> bool:
+    """Whether a failed RPC means *this signature* is absent, not that it broke.
+
+    PostgREST answers PGRST202 when nothing matches the name and argument list;
+    Postgres itself uses SQLSTATE 42883 (undefined_function).
+
+    The fallback to matching the string form is deliberately loose -- these
+    clients do not expose a code attribute consistently, and "42883" could in
+    principle appear in unrelated error text. That is safe here because of where
+    the answer is used: _summary_rpc only retries when include_face is True, and
+    the retry just drops an argument whose new-signature default is also True.
+    A false positive therefore costs one extra round-trip and returns the same
+    rows. Do not reuse this to decide anything where a wrong True is not free.
+    """
+    code = getattr(exc, "code", None)
+    if code in ("PGRST202", "42883"):
+        return True
+    text = str(exc)
+    return "PGRST202" in text or "42883" in text
+
+
+def _summary_rpc(name: str, params: dict, include_face: bool):
+    """Call a summary RPC, tolerating a database that predates p_include_face.
+
+    The parameter arrived with its own migration, so between deploying this
+    code and applying that migration every call carries an argument the
+    database has no signature for. Left alone the endpoint answers with empty
+    summaries -- blank dashboards, no error -- for the length of the window.
+
+    The retry is deliberately conditional on include_face. With the opt-out on
+    there is no safe fallback: the old signature has no way to be told, so
+    calling it would read exactly the facial rows the caller asked us not to.
+    A blank tile is the correct outcome there, and the UI already renders it as
+    "Off" rather than as a measurement.
+
+    REMOVABLE once 20260801000000_signal_summary_include_face.sql is applied
+    everywhere this code runs. It exists only for the window between deploying
+    this build and running that migration, and after that the fallback branch is
+    unreachable -- but it has to outlive the deploy it guards, so it cannot go in
+    the same change that introduced it. Deleting it early re-opens exactly the
+    blank-dashboard failure it was added for.
+    """
+    try:
+        return supabase.rpc(name, {**params, "p_include_face": include_face}).execute()
+    except Exception as e:
+        if not (include_face and _rpc_signature_missing(e)):
+            raise
+        print(f"[{name}] p_include_face missing; database is behind this build")
+        return supabase.rpc(name, params).execute()
+
+
+def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
     numbers, which is fine for one student on a detail page and wasteful on a
     list that loads every visit. This returns the same headline figures without
     transferring any rows -- see the student_signal_summary migration.
+
+    include_face=False is passed down into the aggregate, so no facial row is
+    read at all -- the same guarantee _weekly_signal_report makes, rather than
+    a null applied on the way out.
+
+    Carries dominant_emotion, which _signal_summaries does not: only the
+    single-student RPC computes it, because only the surfaces that read one
+    student at a time render it.
     """
+    row = None
+    retrieved = True
     try:
-        res = supabase.rpc("student_signal_summary",
-                           {"p_student_id": student_id, "p_days": days}).execute()
+        res = _summary_rpc("student_signal_summary",
+                           {"p_student_id": student_id, "p_days": days}, include_face)
     except Exception as e:
         print(f"[signal_summary] {e}")
-        return _EMPTY_SUMMARY.copy()
-    rows = res.data or []
-    row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    return _shape_summary(row)
+        # The figures below are about to become defaults rather than
+        # measurements, and nothing downstream could tell the difference: the
+        # endpoint answers 200 either way, so a caller saw zero samples and a
+        # null average -- the same shape as a student who recorded nothing.
+        # Surfaces then reported an absence in data that failed to load.
+        retrieved = False
+    else:
+        rows = res.data or []
+        row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
+    summary = _shape_summary(row, include_face, retrieved)
+    # Set here rather than in _shape_summary, which is shared with the batch
+    # RPC: putting it there would add an always-null dominant_emotion to every
+    # child on the parent dashboard, reporting "no emotion recorded" for a
+    # figure that was never asked for. Explicitly None with the opt-out on for
+    # the same reason the SQL yields NULL there -- and on the deploy-window
+    # fallback path, where the old signature has no such column at all.
+    summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_face else None
+    return summary
 
 
 _EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "sessions": 0,
-                  "cognitive_samples": 0, "face_samples": 0}
+                  "cognitive_samples": 0, "face_samples": 0,
+                  "face_included": True, "retrieved": True}
 
 
-def _shape_summary(row) -> dict:
+def _shape_summary(row, include_face: bool = True, retrieved: bool = True) -> dict:
+    """The summary payload.
+
+    `retrieved` is the third thing a caller has to be able to tell apart, after
+    "nothing was recorded" and "facial data was not requested": the aggregate
+    query itself failed. Both helpers below swallow that exception so one
+    broken read does not blank a dashboard -- but the payload they return is
+    all defaults, and answered with a 200, so without this flag a zero sample
+    count and a null average were indistinguishable from a quiet week. Every
+    surface that renders "no data" has to consult it before saying so.
+
+    True by default: it is the answer for every path that actually reached the
+    database, including one that legitimately came back with no rows.
+    """
     if not row:
-        return _EMPTY_SUMMARY.copy()
+        return {**_EMPTY_SUMMARY, "face_included": include_face, "retrieved": retrieved}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -153,39 +260,63 @@ def _shape_summary(row) -> dict:
         # measurements specifically so that distinction holds.
         "cognitive_samples": row.get("cognitive_samples") or 0,
         "face_samples": row.get("face_samples") or 0,
+        # With the opt-out on, face_attention is null and face_samples 0 --
+        # identical to a student the camera never saw. Same distinction the
+        # weekly report draws with its own face_included.
+        "face_included": include_face,
+        # A row got here, so the read succeeded by construction. Carried
+        # anyway rather than hardcoded True, so the field is present on every
+        # payload and a consumer never has to treat "absent" as a third state.
+        "retrieved": retrieved,
     }
 
 
-def _signal_summaries(student_ids: list[str], days: int = 7) -> dict[str, dict]:
+def _signal_summaries(student_ids: list[str], days: int = 7,
+                      include_face: bool = True) -> dict[str, dict] | None:
     """Headline averages for many students in one round-trip.
 
     The single-student RPC removes the row transfer but still costs one
     round-trip per child on a dashboard that loads every visit.
+
+    None means the read failed, as opposed to {} for a call that succeeded and
+    had nothing to return. The caller needs the difference: it fills in a
+    default summary for any child missing from the result, and that default has
+    to say whether it stands in for a failed query or for a child the aggregate
+    genuinely reported nothing about. Returning {} for both had the dashboard
+    tell a parent their child had recorded nothing whenever the RPC broke.
     """
     if not student_ids:
         return {}
     try:
-        res = supabase.rpc("student_signal_summary_many",
-                           {"p_student_ids": student_ids, "p_days": days}).execute()
+        res = _summary_rpc("student_signal_summary_many",
+                           {"p_student_ids": student_ids, "p_days": days}, include_face)
     except Exception as e:
         print(f"[signal_summaries] {e}")
-        return {}
+        return None
     rows = res.data or []
     if isinstance(rows, dict):
         rows = [rows]
-    return {str(r.get("student_id")): _shape_summary(r) for r in rows if r.get("student_id")}
+    return {str(r.get("student_id")): _shape_summary(r, include_face)
+            for r in rows if r.get("student_id")}
 
 
-def _weekly_signal_report(student_id: str, days: int = 7):
+def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = True):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
     Returns averages, highlights and per-day buckets. Callers must have already
     established that the requester may see this student.
+
+    include_face=False skips the face_signals query outright rather than
+    fetching and discarding: the point of the opt-out is that facial data isn't
+    read at all, and it also drops the heaviest of the three queries. Every
+    face-derived field then comes back None, and `face_included` tells the
+    caller that means "not requested" rather than "nothing recorded".
     """
     since = _iso_days_ago(days)
 
-    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool]:
-        """Rows (newest first) plus whether the server withheld any.
+    def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None, bool]:
+        """Rows (newest first), whether the server withheld any, the total, and
+        whether the read happened at all.
 
         Truncation is detected from an exact count rather than from
         len(rows) >= limit. PostgREST applies its own db-max-rows ceiling
@@ -193,6 +324,17 @@ def _weekly_signal_report(student_id: str, days: int = 7):
         silently trim the result while len(rows) never reached _REPORT_ROW_CAP
         -- leaving truncated=False and the whole guard disabled. Comparing
         against the count the server reports works whichever limit binds.
+
+        That count is worth returning as well as comparing: for sessions it is
+        the figure the report is actually about, and it is exact whether or not
+        the cap bound. None means the server reported no count.
+
+        The last element is the same distinction the summary payloads draw with
+        `retrieved`, reached the other way. This function swallows its exception
+        so one broken table does not blank a report -- but the empty list it
+        returns is indistinguishable from a student who recorded nothing, and
+        every figure downstream is then a default presented as a measurement.
+        The caller has to be told which it is holding.
         """
         try:
             res = supabase.table(table).select("*", count="exact") \
@@ -200,17 +342,26 @@ def _weekly_signal_report(student_id: str, days: int = 7):
                 .order(ts_col, desc=True).limit(limit).execute()
             rows = res.data or []
             total = getattr(res, "count", None)
-            # count=None means the client/server didn't report one; fall back
+            if not isinstance(total, int):
+                total = None
+            # total=None means the client/server didn't report one; fall back
             # to the length heuristic rather than claiming nothing was cut.
-            was_cut = (total > len(rows)) if isinstance(total, int) else len(rows) >= limit
-            return rows, was_cut
+            was_cut = (total > len(rows)) if total is not None else len(rows) >= limit
+            return rows, was_cut, total, True
         except Exception as e:
             print(f"[weekly_report:{table}] {e}")
-            return [], False
+            return [], False, None, False
 
-    cog, cog_cut = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    face, face_cut = _fetch("face_signals", "ts", _REPORT_ROW_CAP)
-    sessions, _ = _fetch("sessions", "started_at", 100)
+    cog, cog_cut, _, cog_ok = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
+    # ok=True with the opt-out on: nothing failed, there was simply nothing to
+    # ask for. `face_included` is what says the query never ran, and conflating
+    # the two would have the opt-out reported as a broken read.
+    face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face \
+        else ([], False, None, True)
+    # Truncation kept, not discarded. A student over the cap was shown a count
+    # that silently stopped at it -- and with the other two tables under their
+    # own cap, `truncated` stayed False and nothing said so.
+    sessions, ses_cut, ses_total, ses_ok = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
 
     # The row cap trims oldest-first, so on a heavy week the earliest days come
     # back empty and would be reported as "no activity" rather than "not
@@ -225,34 +376,98 @@ def _weekly_signal_report(student_id: str, days: int = 7):
     def _oldest(rows: list, ts_col: str) -> str:
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
-    truncated = cog_cut or face_cut
+    truncated = cog_cut or face_cut or ses_cut
     cog_oldest_day = _oldest(cog, "ts")[:10]
     face_oldest_day = _oldest(face, "ts")[:10]
+    ses_oldest_day = _oldest(sessions, "started_at")[:10]
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
 
+    # Three states per table per day, not two. The cap trims oldest-first, so
+    # the oldest day that came back is the day it cut *into*: part of that day
+    # is here and the rest is not.
+    #
+    # Calling that day retrieved published a figure computed from whatever
+    # fraction survived -- a biased average, and for sessions a flat undercount
+    # -- with nothing to distinguish it from an exact one. Calling it absent
+    # would throw the day away instead. It is neither, so the value is withheld
+    # and the retrieved flag says so, while the day stays in the series because
+    # something was read for it.
+    #
+    # A cap that happened to stop exactly on a day boundary leaves an oldest
+    # day that really is complete, and that is not distinguishable from here
+    # without another query. It resolves the conservative way: a complete day
+    # understated as partial, rather than a partial day published as complete.
+    #
+    # A failed query is the fourth state and the flattest of them: the table was
+    # not read for any day in the range, so every day is missing rather than
+    # merely trimmed. It has to be judged here rather than left to the cap
+    # logic, which sees only an empty result and a truncation flag of False --
+    # and would therefore call every day complete and publish the resulting
+    # empty averages and zero session counts as measurements.
+    def _coverage(ok: bool, cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
+        """(nothing was retrieved for this day, this day is complete)."""
+        if not ok:
+            return True, False          # the read failed; no day was covered
+        if not cut:
+            return False, True          # nothing was trimmed, so every day is whole
+        if not oldest_day:
+            # Trimmed, and nothing came back to say how far it reached -- a
+            # server cap of zero, or rows carrying no usable timestamp. Folded
+            # into "nothing was trimmed" before, which called every day whole
+            # and published the resulting empty averages as measurements, on
+            # the one input that says the least about what was retrieved.
+            return True, False
+        if day < oldest_day:
+            return True, False          # the cap stopped before this day entirely
+        return False, day > oldest_day  # == oldest_day is the day it cut into
+
     daily = []
     for i in range(days - 1, -1, -1):
         day = (_utc_now() - timedelta(days=i)).date().isoformat()
-        # "We could not retrieve this day", judged per table.
-        cog_missing = bool(cog_cut and cog_oldest_day and day < cog_oldest_day)
-        face_missing = bool(face_cut and face_oldest_day and day < face_oldest_day)
-        if cog_missing and face_missing:
-            continue  # nothing retrievable for this day at all
+        cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
+        face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
+        ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
+        # Skip only when nothing we actually asked for could be retrieved. With
+        # face reporting off there is no face request to fail, so the day hinges
+        # on the other two -- otherwise an always-False face_missing would keep
+        # days that hold no retrievable data at all.
+        #
+        # Sessions count here too: they come from their own query under its own
+        # cap, so a day whose signals were trimmed can still have a session
+        # count that was retrieved intact. Dropping the day threw that away and
+        # reported the day as absent rather than partial.
+        if cog_missing and (face_missing or not include_face) and ses_missing:
+            continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
         daily.append({
             "date": day,
-            "focus": None if cog_missing else _avg([r.get("focus") for r in day_cog]),
-            "stress": None if cog_missing else _avg([r.get("stress") for r in day_cog]),
-            "engagement": None if cog_missing else _avg([r.get("engagement") for r in day_cog]),
-            "attention": None if face_missing else _avg([r.get("attention") for r in day_face]),
-            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day]),
-            # False means "the cap stopped us fetching this", which a null
-            # metric alone cannot distinguish from "nothing was recorded".
-            "cognitive_retrieved": not cog_missing,
-            "face_retrieved": not face_missing,
+            # Withheld unless the day is whole. A partly-retrieved day averages
+            # only the fraction that survived the cap, which reads exactly like
+            # a measurement of the whole day.
+            "focus": _avg([r.get("focus") for r in day_cog]) if cog_whole else None,
+            "stress": _avg([r.get("stress") for r in day_cog]) if cog_whole else None,
+            "engagement": _avg([r.get("engagement") for r in day_cog]) if cog_whole else None,
+            "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
+            # None rather than 0, on the same reasoning as the metrics above: a
+            # day the cap kept us from reading did not have zero sessions, and
+            # `sessions_retrieved` is what tells the two apart. A count is the
+            # clearest case for withholding a partial day -- half a day's rows
+            # give exactly half the sessions, with no hint that it is half.
+            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
+                        if ses_whole else None,
+            # False means "we did not fetch this day in full", which a null
+            # metric alone cannot distinguish from "nothing was recorded". It
+            # covers the days the cap never reached, the single day it cut
+            # into, and every day of a table whose query failed outright.
+            # None means "not requested" -- face reporting is off, so there was
+            # no retrieval to succeed or fail, and the consumers that count
+            # `=== false` must not treat the opt-out as a retrieval failure.
+            "cognitive_retrieved": cog_whole,
+            "face_retrieved": face_whole if include_face else None,
+            "sessions_retrieved": ses_whole,
         })
 
     emotion_counts: dict[str, int] = {}
@@ -278,15 +493,72 @@ def _weekly_signal_report(student_id: str, days: int = 7):
         bits.append(f"average stress was {_as_pct(avg_stress)}%")
     if avg_attention is not None:
         bits.append(f"average face attention was {_as_pct(avg_attention)}%")
-    summary = ("This week, " + ", ".join(bits) + ".") if bits else \
-        "No EEG or facial recognition samples were recorded this week."
+    if bits:
+        summary = "This week, " + ", ".join(bits) + "."
+    else:
+        # An absence is only assertable about a table that was actually read.
+        # A failed query leaves exactly the empty result a quiet week does, so
+        # without splitting these the sentence reported "nothing was recorded"
+        # on the strength of a query that never returned -- the same mistake
+        # the opt-out branch below was written to avoid, reached by a different
+        # route. Each table lands in one list or the other, and only the read
+        # ones get an absence claimed about them.
+        measured, unread = [], []
+        (measured if cog_ok else unread).append("EEG")
+        # Naming facial recognition at all would report on something that was
+        # never measured, since the caller opted out of reading it.
+        if include_face:
+            (measured if face_ok else unread).append("facial recognition")
+
+        def _sentence_case(text: str) -> str:
+            # Not .capitalize(), which lowercases the rest and turns "EEG" into
+            # "Eeg".
+            return text[:1].upper() + text[1:]
+
+        parts = []
+        if measured:
+            parts.append(f"No {' or '.join(measured)} samples were recorded this week.")
+        if unread:
+            parts.append(_sentence_case(f"{' and '.join(unread)} data could not be loaded."))
+        summary = " ".join(parts)
 
     return {
         "student_id": student_id,
         "days": days,
         "since": since,
         "truncated": truncated,
+        # Distinguishes "facial reporting is switched off for this view" from
+        # "the camera recorded nothing". Both leave every face field null.
+        "face_included": include_face,
+        # Which of the three reads actually happened. Everything else in this
+        # payload is a figure computed from whatever came back, and a query that
+        # failed contributes the same empty rows as a student who recorded
+        # nothing -- so a null average, a zero sample count and an absent day
+        # are all ambiguous without this. Per table, because the reads fail
+        # independently and one broken table should not retract the other two.
+        #
+        # face is None with the opt-out on, matching the per-day
+        # `face_retrieved`: there was no retrieval to succeed or fail, and a
+        # consumer checking `is False` must not read the opt-out as a failure.
+        "retrieved": {
+            "cognitive": cog_ok,
+            "face": face_ok if include_face else None,
+            "sessions": ses_ok,
+        },
         "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
+        # How many sessions there *were*, as opposed to how many rows came back
+        # under _SESSION_ROW_CAP. sample_counts is rows-retrieved throughout, so
+        # rendering its sessions figure as the report's headline showed a heavy
+        # week as exactly the cap -- while the parent dashboard, which counts in
+        # Postgres, showed the real number for the same child and week. Falls
+        # back to the row count when the server reported no exact count, which
+        # is the same fallback the truncation check makes.
+        #
+        # None when the read failed, rather than the len() of the empty list it
+        # returned: "0 sessions this week" is a claim, and there is nothing
+        # behind it on that path. `retrieved.sessions` says which it is, and the
+        # panel renders the null as a dash.
+        "sessions_recorded": (ses_total if ses_total is not None else len(sessions)) if ses_ok else None,
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
@@ -602,25 +874,808 @@ def student_performance(student_id: str, request: Request):
 
 
 @app.get("/api/students/{student_id}/weekly-report")
-def student_weekly_report(student_id: str, request: Request, days: int = 7):
+def student_weekly_report(student_id: str, request: Request, days: int = 7, include_face: bool = True):
     """Aggregated EEG/facial signals for a student over the last `days`.
 
     Role-neutral path: teachers and parents both read this for the students
     they're entitled to see, so namespacing it under /api/teacher/ would be
     misleading. Access is decided by relationship, not by role name.
+
+    include_face=false omits facial-recognition data from the report entirely;
+    see _weekly_signal_report.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
     return {
         "student_name": p.get("display_name") or p.get("email") or "Student",
-        **_weekly_signal_report(student_id, max(1, min(days, 30))),
+        **_weekly_signal_report(student_id, max(1, min(days, 30)), include_face=include_face),
     }
+
+
+@app.get("/api/students/{student_id}/signal-summary")
+def student_signal_summary(student_id: str, request: Request, days: int = 7, include_face: bool = True):
+    """Headline signal averages for a student, aggregated in Postgres.
+
+    Role-neutral, like the weekly report: gated on the viewer's relationship to
+    the student rather than on a role claim.
+
+    Exists because the teacher student list needs these four averages and
+    cannot get them honestly from the browser client. It used to read
+    cognitive_signals and face_signals directly under a 200-row cap. At the
+    poller's default 1 Hz that cap binds after about three minutes, so the
+    tiles labelled "last 7d" were in fact averaging the newest three minutes of
+    a single sitting -- and the sample counts, pinned at exactly 200, were
+    presented as a count of the week. A teacher and a parent looking at the
+    same student that week saw different numbers, which is precisely what
+    matching the window was meant to prevent.
+
+    Raising the cap is not the fix: seven days at 1 Hz is upwards of half a
+    million rows per student. The aggregate answers in one round-trip and
+    transfers no rows, which is what _signal_summary was added for.
+
+    The summary RPC is granted to service_role only, so this has to be a
+    server-side endpoint rather than an rpc() call from the browser. That gives
+    up nothing: _can_view_student's teacher branch -- owns a class the student
+    is a member of -- is the same relationship the "cog: teacher read" and
+    "face: teacher read" RLS policies encode, so the scope is unchanged.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    return _signal_summary(student_id, max(1, min(days, 30)), include_face=include_face)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
 def student_topic_breakdown(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
     return _topic_breakdown(student_id)
+
+
+# ─── at-home learning strategies ─────────────────────────────────────────
+
+def _env_number(name: str, default, cast, minimum=None):
+    """A numeric setting from the environment, falling back on a bad value.
+
+    These are read at import, so a typo in a deployment's environment would
+    otherwise raise ValueError before the app object exists -- taking down every
+    endpoint over a tuning parameter for one optional feature. Falling back to
+    the shipped default keeps the process up, and the log line is what says the
+    setting is not the one that was configured.
+
+    `minimum` extends that to values that parse but are not usable. A number is
+    not automatically a setting: every caller here has a floor below which the
+    value does not tune the feature but disables or breaks it, quietly and in
+    whichever direction the parameter happens to point -- see the call sites.
+    Clamping rather than falling back to the default, because a deployer who
+    wrote a small number was asking for a small number, and the nearest usable
+    one is closer to that than the shipped value is.
+
+    The non-finite check is separate from both, and falls back rather than
+    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
+    comparison -- inf because it is above every floor, nan because every
+    comparison against it is False -- so neither of the guards above sees them,
+    and they are not magnitudes there is a nearest usable value to clamp to.
+    They reach the call sites as settings that break rather than tune:
+    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
+    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
+    makes future.result() time out instantly, switching the model pass off for
+    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
+    the cast, so this only bites the float callers.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        print(f"[config] {name}={raw!r} is not a number; using {default}")
+        return default
+    if not math.isfinite(value):
+        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
+        return default
+    if minimum is not None and value < minimum:
+        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
+        return minimum
+    return value
+
+
+# The model pass is opt-in. Off, the endpoint answers from the deterministic
+# rules below and never opens a socket -- which is what CI, and any deployment
+# without a local Ollama, should do. Enabling it changes only whether the
+# rule-based answer gets a chance to be replaced.
+STRATEGY_LLM_ENABLED = os.getenv("STRATEGY_LLM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
+# Wall-clock budget for the whole model call. A hung Ollama server is not an
+# exception, so without an explicit timeout the endpoint would block one of a
+# small pool of worker threads indefinitely instead of falling back to the
+# rule-based answer the caller is guaranteed.
+#
+# Floored: at zero or below, future.result() times out before the model can
+# answer at all, so the pass is permanently switched off while STRATEGY_LLM_
+# ENABLED still says it is on -- and the only symptom is every reply being
+# "rule-based (model output rejected)".
+STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
+
+# The model call runs here rather than on the request's own thread so the
+# deadline can actually be enforced.
+#
+# Handing the timeout to the client is not enough on its own: httpx applies it
+# per operation (connect, then each read), not to the call as a whole, so a
+# server that dribbles a byte inside every window keeps the request alive well
+# past STRATEGY_LLM_TIMEOUT. Waiting on a future instead bounds what the caller
+# experiences, whatever the transport does.
+#
+# The client-side timeout stays on for the other half of the problem: once the
+# wait is abandoned the worker is still in there, and the per-operation deadline
+# is what eventually frees it. max_workers caps how many can pile up; past that,
+# submissions queue and time out on the same deadline, which degrades to the
+# rule-based answer rather than to unbounded threads.
+#
+# max_workers bounds the threads but not the queue behind them, so an abandoned
+# wait also cancels its future -- see _llm_strategies_bounded. Without that, a
+# stalled server turns every timed-out request into a work item that still runs
+# later, and the backlog is unbounded even though the thread count is not.
+#
+# None until the first model call. Built on demand rather than at import
+# because the model pass is opt-in and off by default: CI, and any deployment
+# without a local Ollama, would otherwise carry an executor nothing ever
+# submits to. Tests substitute this global directly, so _strategy_pool hands
+# back whatever is already here rather than insisting on building it itself.
+_STRATEGY_LLM_POOL: ThreadPoolExecutor | None = None
+_strategy_pool_lock = threading.Lock()
+
+
+def _strategy_pool() -> ThreadPoolExecutor:
+    """The model-call pool, created on first use.
+
+    Locked, because two requests can reach a cold pool at once and the loser of
+    that race would otherwise hand back an executor that is not the one in the
+    global -- leaving its worker outside the max_workers ceiling and outside
+    the shutdown below.
+    """
+    global _STRATEGY_LLM_POOL
+    with _strategy_pool_lock:
+        if _STRATEGY_LLM_POOL is None:
+            _STRATEGY_LLM_POOL = ThreadPoolExecutor(max_workers=2,
+                                                    thread_name_prefix="strategy-llm")
+        return _STRATEGY_LLM_POOL
+
+
+def _shutdown_strategy_pool():
+    """Drop the queue on the way out. Called from _lifespan.
+
+    wait=False and cancel_futures=True rather than a clean join: the whole
+    point of the pool is that a worker can be stuck in a socket read against a
+    stalled Ollama for as long as the client timeout allows, and nobody is
+    waiting on that answer by the time the process is going down. Cancelling
+    discards the queued work; the running worker cannot be interrupted, and the
+    interpreter's own atexit join is what eventually collects it.
+
+    The global goes back to None so a pool shut down here is never handed to a
+    later caller -- submit() on a shut-down executor raises, which
+    _llm_strategies_bounded degrades to the rule-based answer, but a reload in
+    the same process should get a working pool rather than that fallback.
+    """
+    global _STRATEGY_LLM_POOL
+    with _strategy_pool_lock:
+        pool, _STRATEGY_LLM_POOL = _STRATEGY_LLM_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+# How many requests may be *waiting* on the model at once, process-wide.
+#
+# Distinct from max_workers, which bounds the threads doing the generating.
+# This bounds the callers blocked on the result -- and those are the scarce
+# resource, because this endpoint is a sync def. FastAPI runs sync endpoints on
+# anyio's threadpool (40 slots by default), so every request sitting in
+# future.result() holds one of those slots for up to STRATEGY_LLM_TIMEOUT
+# seconds. The per-caller rate limit does not help here: it is per user id, so
+# ~40 distinct parents clicking Generate against a stalled Ollama could occupy
+# the entire threadpool for 20s at a time -- taking down every other sync
+# endpoint in the app, none of which has anything to do with this feature.
+#
+# Past the cap the model pass is skipped rather than queued. That is not a
+# degradation the caller has to be protected from: the rule-based list is the
+# guaranteed answer and always the fallback, so the cost of being over the cap
+# is generic advice instead of tuned advice, which is exactly what a rejected
+# or timed-out model reply already costs.
+#
+# Floored at 1: at zero or below the semaphore never admits anyone, so the
+# model pass would be permanently off while STRATEGY_LLM_ENABLED says it is on
+# -- the silent-disable failure _env_number's minimum exists to prevent.
+_STRATEGY_LLM_MAX_WAITERS = _env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1)
+_strategy_llm_waiters = threading.BoundedSemaphore(_STRATEGY_LLM_MAX_WAITERS)
+
+
+# Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
+# trigger by clicking a button -- an aggregate over both signal tables, a topic
+# breakdown, and optionally a model call -- and the button is repeatable at
+# whatever rate they can click. The model call dominates, which is why the
+# limit stayed after _strategy_basis dropped the row transfer.
+#
+# In-process, so with multiple uvicorn workers the effective ceiling is this
+# many per worker. That is deliberate: the point is to blunt one caller looping
+# on the button, and a shared counter would mean a cache or a table to keep it
+# in. Move it to one if the ceiling ever needs to be exact.
+#
+# Both floored, and they fail in opposite directions. A limit of zero or less
+# makes `len(hits) >= limit` true on the first request, so every caller gets
+# 429 and the feature is bricked over a tuning parameter -- the failure mode
+# _env_number exists to prevent for a typo, reached by a value that parses. A
+# window of zero or less makes every recorded hit already expired, so nothing
+# is ever counted and the ceiling silently is not there. Neither is a way to
+# turn the limiter off: there is no such setting, and if one is ever wanted it
+# should be explicit rather than an out-of-range number.
+_STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
+_STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
+_strategy_hits: dict[str, list[float]] = {}
+_strategy_hits_lock = threading.Lock()
+# When the sweep below last ran. Size alone was not a sufficient trigger: past
+# the threshold with that many *active* callers, every request scanned the
+# whole dict and deleted nothing, holding the lock to do it. Pairing size with
+# an interval keeps the sweep proportional to time rather than to traffic.
+#
+# Seeded from the clock the comparison uses, NOT from 0.0. time.monotonic()'s
+# reference point is undefined -- on Linux it is boot time -- so 0.0 is not a
+# "never swept" sentinel, it is a claim that the last sweep happened at boot.
+# On a host less than _STRATEGY_SWEEP_EVERY seconds old, `now - 0.0 >=
+# _STRATEGY_SWEEP_EVERY` is False, and the sweep is suppressed until the
+# machine has been up for the interval -- the reclaim silently not running
+# during exactly the window a fresh container spends starting up.
+#
+# It also made the sweep tests depend on the runner's uptime rather than on
+# anything they assert: green on a workstation up for days, red on a fresh CI
+# runner where monotonic() had only reached ~56s. Seeding here makes the
+# interval mean "since the last sweep, or since this process started", which is
+# what it was always meant to mean, on any host.
+_strategy_sweep_at = time.monotonic()
+_STRATEGY_SWEEP_EVERY = 60.0
+_STRATEGY_SWEEP_ABOVE = 1024
+
+
+def _rate_limit_strategies(user_id: str):
+    """Raise 429 if this caller has already had its allowance this window.
+
+    Timed on monotonic(), not wall-clock: a clock adjustment would otherwise
+    either wipe the window or extend it arbitrarily.
+    """
+    global _strategy_sweep_at
+    now = time.monotonic()
+    with _strategy_hits_lock:
+        # The dict is keyed by caller, so it grows with everyone who has ever
+        # used the endpoint. Sweeping it only once it is large keeps the common
+        # path a single lookup rather than a scan of every known caller, and
+        # only once per interval keeps it that way when the dict is large
+        # because the callers are real -- where a size-only trigger scanned
+        # everything on every request and freed nothing.
+        if (len(_strategy_hits) > _STRATEGY_SWEEP_ABOVE
+                and now - _strategy_sweep_at >= _STRATEGY_SWEEP_EVERY):
+            _strategy_sweep_at = now
+            for uid in [u for u, ts in _strategy_hits.items()
+                        if all(now - t >= _STRATEGY_RATE_WINDOW for t in ts)]:
+                del _strategy_hits[uid]
+
+        hits = [t for t in _strategy_hits.get(user_id, ()) if now - t < _STRATEGY_RATE_WINDOW]
+        if len(hits) >= _STRATEGY_RATE_LIMIT:
+            _strategy_hits[user_id] = hits
+            # Measured from the oldest hit still counted -- that is the one
+            # whose expiry frees a slot.
+            retry_after = max(1, int(_STRATEGY_RATE_WINDOW - (now - min(hits))) + 1)
+            raise HTTPException(
+                429,
+                "Too many strategy requests. Try again shortly.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        hits.append(now)
+        _strategy_hits[user_id] = hits
+
+_STRATEGY_COUNT = 5
+_STRATEGY_MAX_CHARS = 320
+# A floor as well as a ceiling. Without one, a truncated or degenerate reply
+# ("1. a\n2. b\n3. c") passed every check and was served to a parent as
+# model-refined advice. Nothing useful to someone helping a child with maths
+# fits in fewer characters than this, and the rule-based list is always there
+# to fall back to.
+_STRATEGY_MIN_CHARS = 25
+
+# Clinical vocabulary that must not reach a parent from this endpoint. These
+# are learning-state indicators, not measurements of health, and a local model
+# asked for study tips will still occasionally volunteer a diagnosis. Output
+# containing any of these is discarded wholesale rather than edited: a sentence
+# that needed a word removed to be safe is not a sentence to hand a parent.
+#
+# Each term is stemmed only as far as its clinical sense reaches. The filter
+# rejects the whole reply, so an over-broad stem does not merely trim a word --
+# it silently switches the model pass off for every reply containing an
+# ordinary one, and the only symptom is `source` permanently reading
+# "rule-based (model output rejected)". Over-blocking and a genuinely unsafe
+# model are indistinguishable from outside, which is why the stems below are
+# written narrowly rather than defensively:
+#
+#   - "patient" is matched only in the forms that are unambiguously the *noun*:
+#     the plural, and the singular behind a determiner. `patient\w*` caught the
+#     adjective and "patiently"; even `patients?` still catches the adjective in
+#     "be patient when they get stuck" -- which is about as likely a sentence as
+#     exists in advice on helping a child with maths. The adjective is the
+#     common reading here and the noun is the clinical one, so the pattern has
+#     to tell them apart rather than stem across both. ("patience" was never
+#     caught -- it has no "t" after "patien" -- but "patiently" and the bare
+#     adjective both were.)
+#
+#     What this gives up: a bare predicative noun ("they are not patient" in
+#     the clinical sense) is not caught. That reading is vanishingly rare in
+#     study advice, and a reply actually framing a child as a medical patient
+#     will almost certainly trip one of the other terms in the same sentence.
+#     Over-blocking every "be patient" is the worse trade, because it is silent.
+#   - `meds` and `treatment\w*` are kept as they were -- unlike the adjective
+#     "patient", both carry the clinical sense in every reading that fits this
+#     prompt, so there is no ordinary use here for a narrower stem to protect.
+_CLINICAL_TERMS = re.compile(
+    r"\b(diagnos\w*|disorder\w*|disabilit\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
+    r"depress(?:ion|ive)|anxiet\w*|anxious|medicat\w*|meds|prescri\w*|psychiatr\w*|"
+    r"psycholog\w*|counsel\w*|clinical\w*|symptom\w*|disease\w*|syndrome\w*|"
+    r"patients|(?:a|an|the|any|your|their)\s+patient|"
+    r"therap(?:y|ist|ies)|treatment\w*|neurolog\w*|"
+    r"cognitive impairment|special (?:needs|education\w*)|iep)\b",
+    re.IGNORECASE,
+)
+
+# Leading "1.", "2)", "-", "*", "•" from a numbered or bulleted model reply.
+_LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
+
+# Markdown emphasis a model wraps an item in ("1. **Keep sessions short**").
+# Stripped rather than left alone: nothing renders markdown between here and
+# the parent, so the asterisks would reach them as literal punctuation.
+#
+# Both delimiters need a word-boundary guard, for the same reason: the pattern
+# deletes its delimiters rather than spacing them, so a pair that was never
+# emphasis in the first place fuses the text around it into a garbled word --
+# well formed, the right length, and past every other check on its way to a
+# parent.
+#
+# Underscores: an item naming topics in the form the tables store them came out
+# as "review anglerelationships and meanmedian" from "review
+# angle_relationships and mean_median".
+#
+# Asterisks: not "they do not occur inside words" -- they do not occur inside
+# *words*, but this is a maths app and "*" is the multiplication sign. Two
+# products in one line pair up exactly as two snake_case terms did: "practise
+# 7*8 and 9*6" became "practise 78 and 96". CommonMark does allow intraword "*"
+# emphasis, so the unguarded pattern was spec-faithful -- but spec-fidelity is
+# not what this is for, and a model writing arithmetic here is at least as
+# likely as one writing two topic ids.
+#
+# Genuine emphasis is unaffected in both cases: the delimiters of "**Keep
+# sessions short**" and "_problem felt hardest_" are flanked by whitespace or
+# the line ends, and a bolded whole item ("**2. Take a break**") still unwraps
+# before the list marker is read.
+_MD_ASTERISK = re.compile(r"(?<![\w*])(\*{1,3})(?=\S)(.+?)(?<=\S)\1(?![\w*])")
+_MD_UNDERSCORE = re.compile(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
+
+
+def _strip_emphasis(line: str) -> str:
+    return _MD_UNDERSCORE.sub(r"\2", _MD_ASTERISK.sub(r"\2", line))
+
+
+def _weakest_topic(topics: list[dict]):
+    """Lowest-accuracy topic the student has actually attempted.
+
+    Topics with no attempts are excluded: _topic_breakdown reports them at 0%,
+    which would otherwise always win and send a parent to revise a topic their
+    child has never been given.
+    """
+    attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
+    if not attempted:
+        return None
+    return min(attempted, key=lambda t: t.get("accuracy") or 0)
+
+
+def _weakest_topic_summary(topics: list[dict]) -> dict | None:
+    """Just the fields the strategies response is about."""
+    weakest = _weakest_topic(topics)
+    if not weakest:
+        return None
+    return {
+        "topic_name": weakest.get("topic_name"),
+        "accuracy": weakest.get("accuracy"),
+        "attempted_questions": weakest.get("attempted_questions"),
+    }
+
+
+def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
+    """The slice of a weekly report this endpoint actually reads.
+
+    Built from the aggregate RPC rather than _weekly_signal_report. Between
+    them _rule_based_strategies and _strategy_prompt use six numbers, and the
+    full report transfers up to _REPORT_ROW_CAP rows from each signal table
+    plus the sessions query to arrive at them -- the same waste _signal_summary
+    was added to remove from the parent dashboard, on the endpoint that is also
+    the heaviest thing a click can trigger.
+
+    Shaped like a report because the two consumers read report keys, and both
+    are also called directly on real reports by the weekly-report tests.
+
+    Two differences from the report's own figures, both improvements:
+    sessions is Postgres's count rather than a row count capped at
+    _SESSION_ROW_CAP, and averages carries no identity_confidence -- a
+    face-recognition confidence score that this response was never about and
+    that only reached `basis` because the whole averages dict was passed along.
+
+    include_face is threaded down into the aggregate, so with the opt-out on no
+    facial row is read here either.
+    """
+    summary = _signal_summary(student_id, days, include_face=include_face)
+    return {
+        "days": days,
+        "face_included": summary["face_included"],
+        # Carried through to `basis` in the response. A failed aggregate leaves
+        # every average None, which the rules below already read as "no signal
+        # to act on" -- so the advice degrades to the generic list rather than
+        # being tuned to zeros, which is the right outcome. What was missing is
+        # saying so: without this, a caller comparing `basis.averages` against
+        # the week could not tell advice built from a quiet week from advice
+        # built from a query that never ran.
+        #
+        # Named signals_retrieved, NOT `retrieved`, even though that is the key
+        # the summary payload uses. This dict is deliberately shaped like a
+        # weekly report -- _rule_based_strategies and _strategy_prompt read
+        # report keys and are called on both -- and a real report's `retrieved`
+        # is a dict of three per-table booleans, not one. Two shapes under one
+        # key across two payloads with shared consumers is a wrong answer
+        # waiting for the first caller to write
+        # `report.get("retrieved", {}).get("cognitive")`. The response field
+        # below has always been called signals_retrieved; this just stops the
+        # collision existing internally as well.
+        "signals_retrieved": summary["retrieved"],
+        "averages": {
+            "focus": summary["focus"],
+            "stress": summary["stress"],
+            "engagement": summary["engagement"],
+            "face_attention": summary["face_attention"],
+        },
+        "sample_counts": {"sessions": summary["sessions"]},
+    }
+
+
+def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
+    """Deterministic at-home strategies derived from the weekly report.
+
+    Always computed, and always what the endpoint falls back to. Thresholds are
+    on the 0..1 ratios the signal tables store.
+    """
+    averages = report.get("averages") or {}
+    strategies = []
+
+    weakest = _weakest_topic(topics)
+    if weakest:
+        label = str(weakest.get("topic_name") or "the weakest topic").replace("_", " ")
+        strategies.append(
+            f"Spend 10-15 minutes on {label} before new material — it is currently "
+            f"the lowest-scoring topic at {weakest.get('accuracy')}%."
+        )
+    else:
+        strategies.append(
+            "Start with a short review and ask your child to explain one solved "
+            "problem out loud, which shows where their understanding actually stops."
+        )
+
+    stress = averages.get("stress")
+    if stress is not None and float(stress) >= 0.65:
+        strategies.append(
+            "Break practice into shorter blocks with a two-minute pause between "
+            "them — stress indicators ran high this week."
+        )
+    else:
+        strategies.append(
+            "Keep practice to 15-20 minute blocks, each followed by quick feedback "
+            "on what went well."
+        )
+
+    focus = averages.get("focus")
+    if focus is not None and float(focus) < 0.45:
+        strategies.append(
+            "Clear the workspace of phones and second screens, and set one small "
+            "goal per block — focus indicators were low this week."
+        )
+    else:
+        strategies.append(
+            "Keep the study setup and time of day consistent, since the current "
+            "routine is holding up."
+        )
+
+    attention = averages.get("face_attention")
+    if report.get("face_included") and attention is not None and float(attention) < 0.5:
+        strategies.append(
+            "Try working problems on paper together or tying them to a real "
+            "situation when attention drifts."
+        )
+
+    strategies.append(
+        "Close each session by asking which problem felt hardest and what helped "
+        "most — it makes the next session easier to plan."
+    )
+    return strategies[:_STRATEGY_COUNT]
+
+
+def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> str:
+    """Prompt text built from aggregates only.
+
+    Deliberately excludes the student id, name, and the raw `latest` rows the
+    report carries: the model needs the shape of the week, not a record that
+    identifies a child.
+    """
+    averages = report.get("averages") or {}
+
+    def _pct(v):
+        return "unavailable" if v is None else f"{round(float(v) * 100)}%"
+
+    weakest = _weakest_topic(topics)
+    topic_line = (
+        f"{str(weakest.get('topic_name')).replace('_', ' ')} at {weakest.get('accuracy')}%"
+        if weakest else "no attempted topics yet"
+    )
+    face_line = (
+        f"average facial attention {_pct(averages.get('face_attention'))}"
+        if report.get("face_included") else "facial reporting is switched off"
+    )
+    return (
+        "You are helping a parent support their child's maths practice at home.\n"
+        "Use only the weekly summary below. These are classroom learning "
+        "indicators, not medical measurements — do not diagnose, do not name any "
+        "condition, and do not give medical advice.\n"
+        f"Return exactly {_STRATEGY_COUNT} short, practical, at-home strategies as "
+        "a numbered list. One sentence each, no preamble.\n\n"
+        f"Weekly summary (last {report.get('days', 7)} days):\n"
+        f"- average focus {_pct(averages.get('focus'))}\n"
+        f"- average stress {_pct(averages.get('stress'))}\n"
+        f"- average engagement {_pct(averages.get('engagement'))}\n"
+        f"- {face_line}\n"
+        f"- weakest attempted topic: {topic_line}\n"
+        f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
+        "For reference, here is a safe baseline answer:\n"
+        + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(baseline))
+    )
+
+
+def _parse_strategy_lines(raw: str) -> list[str]:
+    """The list items of a model reply, in order.
+
+    Only lines that actually carried a list marker count. The prompt asks for a
+    numbered list and says no preamble, but nothing makes the model obey: taking
+    every non-empty line turned a lead-in like "Here are five strategies for
+    your child:" into strategy #1, handing a parent a numbered instruction the
+    model never wrote. Unmarked trailing chatter goes the same way, and a
+    strategy wrapped across two lines keeps only its marked first line rather
+    than splitting into two half-sentences.
+
+    Emphasis is unwrapped before the marker is stripped, not after: a model that
+    bolds the whole item ("**1. Keep sessions short**") puts an asterisk in
+    front of the number, which the marker pattern would otherwise consume as a
+    bullet and leave the digits behind as text.
+    """
+    lines = []
+    for line in (raw or "").splitlines():
+        cleaned, marked = _LIST_MARKER.subn("", _strip_emphasis(line))
+        cleaned = cleaned.strip()
+        if marked and cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _validated_strategies(raw: str) -> list[str] | None:
+    """Model output, or None if it fails any check.
+
+    Returning None means the caller keeps the deterministic list. There is no
+    partial acceptance: a reply that breaks one rule has shown it is not
+    following the prompt, and the rest of it has not earned more trust.
+    """
+    # Judged on the whole reply, not just the lines that survive parsing. A
+    # model that volunteered a diagnosis in a preamble is not one whose
+    # remaining items have earned trust for being well punctuated -- and
+    # checking post-parse would let exactly that text set the framing while
+    # passing the filter.
+    if _CLINICAL_TERMS.search(raw or ""):
+        return None
+    lines = _parse_strategy_lines(raw)
+    if len(lines) < 3:
+        return None
+    # Bounded at both ends. The ceiling catches a model that ran on; the floor
+    # catches one that produced list scaffolding with nothing in it -- "1. a"
+    # is well-formed, survives every other check, and is not advice.
+    if any(not _STRATEGY_MIN_CHARS <= len(line) <= _STRATEGY_MAX_CHARS for line in lines):
+        return None
+    return lines[:_STRATEGY_COUNT]
+
+
+def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | None:
+    """One local-model attempt, or None on any failure.
+
+    ollama is imported here rather than at module scope so this module stays
+    importable — and the endpoint stays usable on the rule-based path — in an
+    environment where the package is missing. requirements.txt pins it, so that
+    is a slimmed-down or partially-installed deployment rather than the normal
+    case; the routine failure this guards is the *server* being absent, which
+    surfaces as an exception from the call below.
+
+    Goes through an explicit Client so the call carries a timeout at all. The
+    module-level ollama.generate() has no deadline, and a server that accepts
+    the connection and then stalls never raises — so the promise that any
+    failure is a fallback rather than a 500 only holds with one attached.
+
+    `timeout` is what remains of the caller's budget, which is not the same as
+    the budget itself once a submission has queued: the work item was created
+    when the caller started waiting, but it starts running whenever a worker
+    frees up. Charging it the full STRATEGY_LLM_TIMEOUT from there let it hold
+    a worker for nearly twice the setting, against a deadline the caller had
+    already given up on. Defaults to the full budget for a direct call, which
+    is not queued behind anything.
+    """
+    try:
+        from ollama import Client
+        resp = Client(timeout=STRATEGY_LLM_TIMEOUT if timeout is None else timeout).generate(
+            model=STRATEGY_LLM_MODEL,
+            prompt=prompt,
+            options={"temperature": 0.4},
+        )
+        raw = resp.get("response") if isinstance(resp, dict) else getattr(resp, "response", "")
+    except Exception as e:
+        print(f"[learning_strategies:llm] {e}")
+        return None
+    return _validated_strategies(raw or "")
+
+
+def _llm_strategies_bounded(prompt: str) -> list[str] | None:
+    """_llm_strategies under a deadline the caller actually feels, if admitted.
+
+    Admission first. See _STRATEGY_LLM_MAX_WAITERS: this endpoint is a sync
+    def, so a caller blocked on the model is holding one of anyio's threadpool
+    slots, and those are shared with every other sync endpoint in the app.
+    Bounding the workers and bounding the pool's queue -- both of which the
+    deadline logic below already does -- do not bound the *waiters*, and the
+    waiters are what the rest of the app contends with.
+    """
+    # Non-blocking: a caller who cannot get in must not queue on the semaphore
+    # too, which would reintroduce the wait this cap exists to prevent -- just
+    # one lock deeper, and without a deadline on it.
+    if not _strategy_llm_waiters.acquire(blocking=False):
+        # Not an error, and deliberately not raised to the caller: the
+        # rule-based list is the guaranteed answer, so being over the cap costs
+        # generic advice rather than tuned advice. `source` reports it as
+        # "rule-based (model output rejected)" alongside a rejected reply,
+        # which is the same thing from the reader's point of view -- the model
+        # did not produce a usable answer for this request.
+        print(f"[learning_strategies:llm] at capacity "
+              f"({_STRATEGY_LLM_MAX_WAITERS} in flight); using the rule-based answer")
+        return None
+    try:
+        return _llm_strategies_admitted(prompt)
+    finally:
+        _strategy_llm_waiters.release()
+
+
+def _llm_strategies_admitted(prompt: str) -> list[str] | None:
+    """The wait itself, once _llm_strategies_bounded has admitted the caller.
+
+    Split out so the semaphore's release is a plain finally around a single
+    call rather than wrapping every return path here.
+
+    See _STRATEGY_LLM_POOL: the client-side timeout is per operation, so this
+    is what holds when the transport keeps resetting it. Abandoning the wait
+    leaves a *started* worker running -- there is no way to interrupt a blocking
+    socket read -- but the caller is no longer behind it, and the answer they
+    get is the rule-based one that was always the fallback.
+
+    One deadline, shared by the wait and the work. The two used to be the same
+    *duration* measured from different moments: a submission that queued behind
+    a busy worker spent most of the caller's budget waiting, then started with
+    a fresh STRATEGY_LLM_TIMEOUT of its own -- so the pool could stay saturated
+    for close to twice the configured setting, generating against a deadline
+    nobody was waiting on any more.
+    """
+    deadline = time.monotonic() + STRATEGY_LLM_TIMEOUT
+
+    def _run():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # Started after the caller gave up. Nothing this could return would
+            # be used, so it does not open a socket at all -- the cancel below
+            # catches the queued items, and this catches the one that had
+            # already been handed to a worker.
+            return None
+        return _llm_strategies(prompt, remaining)
+
+    future = None
+    try:
+        # Inside the try: submit() itself raises if the pool is shutting down,
+        # which the handler below turns into the rule-based fallback.
+        future = _strategy_pool().submit(_run)
+        return future.result(timeout=STRATEGY_LLM_TIMEOUT)
+    except FutureTimeoutError:
+        # Cancel, rather than just dropping the reference. Bounding the workers
+        # does not bound the queue behind them: with both busy on a stalled
+        # server, every further submission sits in the pool's work queue and
+        # still runs once a worker frees up. A sustained outage would otherwise
+        # accumulate a backlog of prompts nobody is waiting for any more, and
+        # then generate every one of them against the recovered server.
+        #
+        # Returns False for a task already running, which genuinely cannot be
+        # stopped -- but True for one that never started, which is exactly the
+        # case that piles up.
+        future.cancel()
+        print(f"[learning_strategies:llm] abandoned after {STRATEGY_LLM_TIMEOUT}s")
+        return None
+    except Exception as e:
+        # _llm_strategies swallows its own failures, so reaching here means the
+        # pool itself refused the work (shutting down, for instance).
+        print(f"[learning_strategies:llm] {e}")
+        return None
+
+
+class LearningStrategyRequest(BaseModel):
+    include_face: bool = True
+    days: int = 7
+
+
+@app.post("/api/students/{student_id}/learning-strategies")
+def student_learning_strategies(student_id: str, request: Request, payload: LearningStrategyRequest):
+    """At-home practice strategies derived from a student's weekly report.
+
+    Role-neutral, like the weekly report it reads: gated on the viewer's
+    relationship to the student, not on a role claim.
+
+    Always answers. The deterministic rules produce the response unless the
+    optional model pass is enabled *and* its output passes _validated_strategies,
+    and `source` says which of those happened.
+
+    Reads its signal figures through _strategy_basis, which aggregates in
+    Postgres -- the full weekly report pulls thousands of rows to produce the
+    handful of numbers the rules and the prompt use.
+
+    Rate limited per caller. The access check runs first so a caller with no
+    relationship to the student still gets 403 rather than having the answer
+    masked by a 429; the limit then guards the expensive part below.
+    """
+    viewer = get_user(request)
+    _verify_can_view_student(viewer, student_id)
+    _rate_limit_strategies(viewer["id"])
+
+    days = max(1, min(payload.days, 30))
+    report = _strategy_basis(student_id, days, payload.include_face)
+    topics = _topic_breakdown(student_id)
+
+    strategies = _rule_based_strategies(report, topics)
+    source = "rule-based"
+
+    if STRATEGY_LLM_ENABLED:
+        refined = _llm_strategies_bounded(_strategy_prompt(report, topics, strategies))
+        if refined:
+            strategies, source = refined, "model-refined"
+        else:
+            # Named distinctly from the plain rule-based case: "the model was
+            # asked and its answer was not usable" is worth seeing in the UI.
+            source = "rule-based (model output rejected)"
+
+    return {
+        "student_id": student_id,
+        "generated_at": _utc_now().isoformat(),
+        "strategies": strategies,
+        "source": source,
+        "basis": {
+            "days": days,
+            "face_included": payload.include_face,
+            # False means the averages beside it are defaults, not a quiet
+            # week, so these strategies are the generic list rather than one
+            # tuned to the student. Same distinction the summary endpoint
+            # makes; stated here because this response is what a parent acts
+            # on.
+            "signals_retrieved": report.get("signals_retrieved", True),
+            "averages": report.get("averages") or {},
+            # Named fields rather than the whole _topic_breakdown row, which
+            # also carries topic_id, a stress reading and updated_at — none of
+            # which this response is about, and all of which would become part
+            # of its contract by accident.
+            "weakest_topic": _weakest_topic_summary(topics),
+        },
+    }
 
 
 # ─── leaderboard ─────────────────────────────────────────────────────────
@@ -862,6 +1917,14 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # This returns raw EEG and facial-emotion samples for a session, so resolve
     # whose session it is and apply the same access rule as the student-scoped
     # endpoints rather than trusting any authenticated caller.
+    #
+    # No include_face, deliberately. The facial-recognition opt-out covers the
+    # reporting surfaces -- the weekly report, the signal summaries and the
+    # children endpoint, all of which render the switch -- and session review,
+    # this endpoint's only caller, does not. See the scope note in
+    # frontend/src/lib/facePref.js; adding the parameter here without putting
+    # the switch on that page would make the control silently change a view it
+    # is absent from.
     user = get_user(request)
     try:
         sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
@@ -885,6 +1948,15 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
+    """Live signals for the students of a class the caller owns.
+
+    No include_face, deliberately, for the reason session_signals gives above:
+    the facial-recognition opt-out covers the reporting surfaces, which render
+    the switch, and the live monitor does not. It is built around whether the
+    camera is currently working -- the attention gauge, the current emotion and
+    a camera-on badge -- which a reporting-window preference has no sensible
+    reading on. See the scope note in frontend/src/lib/facePref.js.
+    """
     user = get_user(request)
     # Was: `owner != user AND role != "teacher"` -- which only rejected callers
     # who were neither, so ANY teacher could read ANY class's live signals.
@@ -1143,7 +2215,14 @@ def link_child(payload: LinkChildRequest, request: Request):
     return {"ok": True, "child_id": payload.child_id, "child_name": p.get("display_name") or "Student"}
 
 @app.get("/api/parent/children")
-def my_children(request: Request):
+def my_children(request: Request, include_face: bool = True):
+    """A parent's linked children with their headline signal averages.
+
+    include_face=false carries the facial-recognition opt-out down into the
+    aggregate, so the dashboard honours the same control as the child's report.
+    Without it, switching facial reporting off on a report and navigating back
+    put facial attention straight back on screen.
+    """
     user = get_user(request)
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
@@ -1151,7 +2230,14 @@ def my_children(request: Request):
     # child inside the loop below. Note the rest of this loop is still a query
     # per child (stats, sessions, performance, profile); this fixes the query
     # added here, not the endpoint's overall shape.
-    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])])
+    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])],
+                                  include_face=include_face)
+    # None is the failed read; {} is a read that returned nothing. Both leave
+    # every child falling back below, and the fallback has to say which one it
+    # is standing in for -- otherwise a broken RPC reaches a parent as "your
+    # child recorded nothing this week".
+    summaries_retrieved = summaries is not None
+    summaries = summaries or {}
     children = []
     for lnk in (links.data or []):
         cid = lnk["child_id"]
@@ -1171,7 +2257,8 @@ def my_children(request: Request):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": summaries.get(str(cid)) or _EMPTY_SUMMARY.copy(),
+            "signal_summary": summaries.get(str(cid))
+                              or _shape_summary(None, include_face, summaries_retrieved),
         })
     return children
 

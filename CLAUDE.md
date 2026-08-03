@@ -84,17 +84,29 @@ against.
 
 ### How a migration reaches production
 
-**Check before assuming either way.** `npx supabase migration list --linked` prints local and
-remote columns side by side; a version present in Local and absent from Remote has not been
-applied. That command is the answer to "did the migration land", and it is worth running before
-any deploy whose code depends on a new signature — see the deploy-ordering rule below.
+**Merging to `main` applies the migration to production, a few minutes later.** The Supabase
+GitHub integration does it — it is the same integration that contributes the "Supabase Preview"
+check on PRs, and it is configured in the Supabase dashboard, which is why nothing in
+`.github/workflows/` describes it (`ci.yml` only runs tests). Confirmed on `20260801000000` and
+`20260803000000`; there is nothing to run by hand, and `npx supabase db push` answers "Remote
+database is up to date".
 
-What is known: there is **no deploy or migration workflow in `.github/workflows/`** (only `ci.yml`,
-which runs tests), yet `20260801000000` reached production without anyone applying it by hand. The
-Supabase GitHub integration is connected — it contributes the "Supabase Preview" check on PRs — so
-that is the likely mechanism; it is configured in the Supabase dashboard rather than in this repo,
-which is why the trigger is not visible from here. The local `.env` files point at a local stack,
-not production, so nothing here can verify a production schema without the linked CLI.
+**The delay is the trap.** It is minutes, not seconds, so a check run straight after the merge
+reports the migration as *not applied* — Local populated, Remote blank — and that is
+indistinguishable from an integration that never fired. Don't conclude anything from one look
+immediately after merging; re-check before acting on a negative:
+
+```bash
+npx supabase migration list --linked
+```
+
+A version in Local and absent from Remote has genuinely not landed only if it stays that way. That
+command is the answer to "did the migration land", and it is worth running before any deploy whose
+code depends on a new signature — see the deploy-ordering rule below.
+
+It confirms only that the migration *ran*. The CLI has no arbitrary-SQL command, so verifying the
+resulting schema — policies, ACLs — means the dashboard SQL editor. The local `.env` files point
+at a local stack, not production, so nothing in the working tree reaches the production database.
 
 ## Configuration
 

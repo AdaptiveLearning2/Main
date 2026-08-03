@@ -136,10 +136,11 @@ jobs:
       # failure in `start` could equally be an image pull or a container that
       # would not come up.
       #
-      # --no-seed for the same reason. config.toml has [db.seed] enabled, so
-      # an unflagged reset also runs supabase/seed.sql, and a seed that has
-      # drifted from the schema would fail this step reading as though a
-      # migration broke.
+      # --no-seed states the same narrowness. config.toml has [db.seed]
+      # enabled pointing at ./seed.sql, but that file is gitignored, so in CI
+      # there is nothing to seed and an unflagged reset just warns about the
+      # missing pattern. The flag drops the warning now, and keeps this step
+      # asserting only that the migrations apply if seed.sql is ever tracked.
       - name: Apply migrations from scratch
         run: supabase db reset --no-seed
 

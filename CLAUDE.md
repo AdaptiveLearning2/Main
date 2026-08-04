@@ -4,6 +4,11 @@ AdaptiveLearning is an EEG- and camera-assisted adaptive maths platform: student
 LLM-generated questions while a Muse headband and a webcam feed cognitive and facial signals into
 per-session records; teachers and parents read those back as live views and weekly reports.
 
+**Keep this file current.** This is the only thing loaded into every chat, so anything a future
+session must know before it starts — a changed convention, a new constraint, a gotcha that cost
+someone an afternoon — belongs here, as the rule and its reason. Update it in the same change that
+makes it true, not afterwards. Keep entries short; it is read in full every time.
+
 ## Layout
 
 | Path | What it is |

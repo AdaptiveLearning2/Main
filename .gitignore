@@ -27,3 +27,22 @@ coverage/
 # specific file at the repository root, not a name that should match at any
 # depth.
 /MANUAL_QA_CHECKLIST.md
+
+# rPPG capture output and model weights. The capture script rewrites its whole
+# session report every second and downloads a 35MB ONNX model into the working
+# directory, so a single run leaves both behind next to the source. An earlier
+# branch committed them: ~630k lines of session JSON (one file was 582,612
+# lines), the 35MB model, three .pyc, and a .tmp left by a crashed atomic write.
+#
+# The model is fetched on first run rather than committed -- a binary that large
+# is not worth carrying in git for something reproducible from a URL.
+*.onnx
+facial_session*.json
+fusion_output*.json
+session_report.html
+.rppg_export_*.tmp
+
+# Python bytecode. Unanchored, like the venv rules above, so it matches at any
+# depth rather than only where someone remembered to add a rule.
+__pycache__/
+*.pyc

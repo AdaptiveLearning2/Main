@@ -115,8 +115,9 @@ def _row(**over):
         "user_id": "student-1",
         "eeg_enabled": True, "headband_optical_enabled": True, "camera_enabled": True,
         "eeg_revoked_at": None, "headband_optical_revoked_at": None, "camera_revoked_at": None,
+        "eeg_revoked_by": None, "headband_optical_revoked_by": None, "camera_revoked_by": None,
         "updated_by": "parent-1", "updated_at": "2026-08-01T00:00:00+00:00",
-        "student_ack_at": "2026-08-01T00:00:00+00:00",
+        "parent_enabled_at": None, "student_ack_at": None,
     }
     base.update(over)
     return base
@@ -223,7 +224,7 @@ def test_revoked_by_is_a_role_not_an_identity(monkeypatch):
     made it is none of their business, so no id reaches the payload."""
     _fake(monkeypatch, TEACHER,
           consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
-                           updated_by="parent-1"))
+                           camera_revoked_by="parent-1"))
     channel = main.get_consent("student-1", None)["channels"]["camera"]
     assert channel["revoked_by"] == "parent"
     assert "parent-1" not in str(channel)
@@ -232,7 +233,23 @@ def test_revoked_by_is_a_role_not_an_identity(monkeypatch):
 def test_revoked_by_reports_the_student_when_they_withdrew(monkeypatch):
     _fake(monkeypatch, TEACHER,
           consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
-                           updated_by="student-1"))
+                           camera_revoked_by="student-1"))
+    assert main.get_consent("student-1", None)["channels"]["camera"]["revoked_by"] == "student"
+
+
+def test_revoked_by_is_per_channel_not_per_row(monkeypatch):
+    """The row has one updated_by; the channels are revoked independently.
+
+    Student turns the camera off, parent later turns eeg on. Deriving the role
+    from the row's updated_by would report the parent as having withdrawn the
+    camera -- which is precisely the distinction this field exists to make."""
+    _fake(monkeypatch, TEACHER, consent_row=_row(
+        camera_enabled=False,
+        camera_revoked_at="2026-08-02T00:00:00+00:00",
+        camera_revoked_by="student-1",
+        updated_by="parent-1",              # the later, unrelated eeg write
+        updated_at="2026-08-03T00:00:00+00:00",
+    ))
     assert main.get_consent("student-1", None)["channels"]["camera"]["revoked_by"] == "student"
 
 
@@ -243,28 +260,109 @@ def test_enabled_channel_reports_no_revoker(monkeypatch):
     assert main.get_consent("student-1", None)["channels"]["camera"]["revoked_by"] is None
 
 
-def test_parent_change_raises_a_notice_for_the_student(monkeypatch):
+def test_a_disable_records_who_did_it(monkeypatch):
+    fake = _fake(monkeypatch, STUDENT, consent_row=_row())
+    main.update_consent("student-1", main.ConsentUpdate(camera_enabled=False), None)
+    assert fake.store["signal_consent"][0]["camera_revoked_by"] == "student-1"
+
+
+def test_re_enabling_clears_the_revoker(monkeypatch):
+    """The migration's CHECK makes an enabled channel with a revoker
+    unrepresentable, so leaving it would fail the write outright."""
+    fake = _fake(monkeypatch, PARENT, consent_row=_row(
+        camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
+        camera_revoked_by="student-1"))
+    main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    row = fake.store["signal_consent"][0]
+    assert row["camera_revoked_by"] is None and row["camera_revoked_at"] is None
+
+
+def test_parent_re_enabling_raises_a_notice_for_the_student(monkeypatch):
     """A student must not discover a sensor resumed by noticing data reappear."""
-    _fake(monkeypatch, STUDENT,
-          consent_row=_row(updated_by="parent-1", updated_at="2026-08-03T00:00:00+00:00",
-                           student_ack_at=None))
-    assert main.get_consent("student-1", None)["needs_student_ack"] is True
+    _fake(monkeypatch, PARENT, consent_row=_row(
+        camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
+        camera_revoked_by="student-1"))
+    out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    assert out["needs_student_ack"] is True
+
+
+def test_parent_disabling_raises_no_notice(monkeypatch):
+    """Narrower than "any parent write", and deliberately so: the student loses
+    nothing they had, and can see the state in settings."""
+    _fake(monkeypatch, PARENT, consent_row=_row())
+    out = main.update_consent("student-1", main.ConsentUpdate(camera_enabled=False), None)
+    assert out["needs_student_ack"] is False
 
 
 def test_acknowledging_clears_the_notice(monkeypatch):
     fake = _fake(monkeypatch, STUDENT,
-                 consent_row=_row(updated_by="parent-1", updated_at="2026-08-03T00:00:00+00:00",
+                 consent_row=_row(parent_enabled_at="2026-08-03T00:00:00+00:00",
                                   student_ack_at=None))
+    assert main.get_consent("student-1", None)["needs_student_ack"] is True
     main.ack_consent(None)
     assert fake.store["signal_consent"][0]["student_ack_at"] is not None
     assert main.get_consent("student-1", None)["needs_student_ack"] is False
 
 
+def test_ack_with_no_consent_row_is_not_a_success(monkeypatch):
+    """Reporting ok for a write that matched nothing leaves the client believing
+    it dismissed a notice that is still there."""
+    _fake(monkeypatch, STUDENT, consent_row=None)
+    with pytest.raises(main.HTTPException) as exc:
+        main.ack_consent(None)
+    assert exc.value.status_code == 404
+
+
 def test_a_students_own_change_does_not_notify_them(monkeypatch):
     _fake(monkeypatch, STUDENT,
-          consent_row=_row(updated_by="student-1", updated_at="2026-08-03T00:00:00+00:00",
-                           student_ack_at=None))
+          consent_row=_row(camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
+                           camera_revoked_by="student-1"))
     assert main.get_consent("student-1", None)["needs_student_ack"] is False
+
+
+def test_ack_comparison_tolerates_mixed_timestamp_spellings(monkeypatch):
+    """Z and +00:00 denote the same instant and sort differently as strings.
+
+    This comparison decides whether a student is shown a notice about their own
+    consent, so it parses rather than resting on both sides staying normalized."""
+    _fake(monkeypatch, STUDENT,
+          consent_row=_row(parent_enabled_at="2026-08-03T00:00:00Z",
+                           student_ack_at="2026-08-04T00:00:00+00:00"))
+    assert main.get_consent("student-1", None)["needs_student_ack"] is False
+
+
+# ── concurrency ──────────────────────────────────────────────────────────────
+
+def test_write_is_refused_when_the_state_moved_underneath_it(monkeypatch):
+    """Read-then-write is not atomic, and the racing pair here is a student's
+    withdrawal against a parent's re-enable on the same channel. Losing that
+    race silently would mean recording against a refusal."""
+    fake = _fake(monkeypatch, PARENT, consent_row=_row(
+        camera_enabled=False, camera_revoked_at="2026-08-02T00:00:00+00:00",
+        camera_revoked_by="student-1"))
+
+    real_table = fake.table
+    state = {"swapped": False}
+
+    def table(name):
+        q = real_table(name)
+        if name == "signal_consent" and not state["swapped"]:
+            # Between the read and the write, someone else sets it back on.
+            original_update = q.update
+
+            def update(row, **kw):
+                state["swapped"] = True
+                fake.store["signal_consent"][0]["camera_enabled"] = True
+                return original_update(row, **kw)
+
+            q.update = update
+        return q
+
+    monkeypatch.setattr(fake, "table", table)
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    assert exc.value.status_code == 409
 
 
 # ── no-op writes ─────────────────────────────────────────────────────────────

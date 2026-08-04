@@ -279,13 +279,21 @@ frontend bundle. `main.py` is the enforcement:
 - a **teacher may read but not write** — they need to see a channel is off, or a blank tile reads as
   a broken query, but consent is not theirs to change. Use `_consent_actor`, not
   `_verify_can_view_student`, which admits teachers
-- `revoked_by` is surfaced as a **role, never an identity**
+- `revoked_by` is surfaced as a **role, never an identity**, and is stored **per channel**. The row
+  has one `updated_by` and the channels are revoked independently, so deriving the role from it
+  would report a parent's later unrelated write as having made the student's earlier revocation
 
 RLS `WITH CHECK` cannot see the previous row, so "off-direction only" is not expressible as a
 policy — which is why the student gets no update policy at all rather than a narrowed one.
 
-A parent re-enabling a channel raises `needs_student_ack`, cleared by `POST /api/consent/ack`.
-Discovering a resumed sensor by noticing data reappear is not consent.
+Writes are **conditional on the state they were decided against** (`.eq()` on each flag being
+changed) and answer 409 if it moved. Read-then-write is not atomic, and the pair that races here is
+a student's withdrawal against a parent's re-enable on the same channel — losing that silently
+means recording against a refusal.
+
+A parent turning a channel **back on** sets `parent_enabled_at` and raises `needs_student_ack`,
+cleared by `POST /api/consent/ack`. A parent turning one *off* raises nothing. Discovering a
+resumed sensor by noticing data reappear is not consent.
 
 Tests: `backend/tests/test_consent.py`.
 

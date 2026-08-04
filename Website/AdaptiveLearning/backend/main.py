@@ -1844,10 +1844,32 @@ CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
 _CONSENT_DENIED = {
     **{f"{c}_enabled": False for c in CONSENT_CHANNELS},
     **{f"{c}_revoked_at": None for c in CONSENT_CHANNELS},
+    **{f"{c}_revoked_by": None for c in CONSENT_CHANNELS},
     "updated_by": None,
     "updated_at": None,
+    "parent_enabled_at": None,
     "student_ack_at": None,
 }
+
+
+def _parse_ts(value) -> datetime | None:
+    """Parse a PostgREST timestamp, tolerating the trailing-Z spelling.
+
+    Comparing these as strings happens to work for the formats in play, but only
+    while both sides stay normalized -- a Z-suffixed value and a +00:00 one
+    denote the same instant and sort differently. The comparison here decides
+    whether a student is shown a notice about their own consent, so it is worth
+    not resting on that.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _consent(student_id: str) -> dict:
@@ -1868,10 +1890,12 @@ def _consent(student_id: str) -> dict:
             .eq("user_id", student_id).limit(1).execute().data or []
     except Exception as e:
         print(f"[consent:read] {student_id}: {e}")
-        return {**_CONSENT_DENIED, "retrieved": False}
+        return {**_CONSENT_DENIED, "retrieved": False, "exists": False}
     if not rows:
-        return {**_CONSENT_DENIED, "retrieved": True}
-    return {**_CONSENT_DENIED, **rows[0], "retrieved": True}
+        # `exists` is not `retrieved`: no row and a failed read both deny, but
+        # only the first one means a write should insert rather than update.
+        return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
+    return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
 
 
 def _is_linked_parent(viewer_id: str, student_id: str) -> bool:
@@ -1907,36 +1931,41 @@ def _shape_consent(row: dict, student_id: str) -> dict:
     decision was made and roughly by whom -- "student opted out" reads very
     differently from "parent opted out" when you are looking at a blank tile --
     but which guardian made it is none of their business.
-    """
-    updated_by = row.get("updated_by")
-    role = None
-    if updated_by:
-        role = "student" if updated_by == student_id else "parent"
 
+    The role is derived per channel from that channel's own revoker, not from
+    the row's `updated_by`. The row has one `updated_by` and the channels are
+    revoked independently, so a student withdrawing the camera followed by a
+    parent enabling eeg would otherwise report the parent as having withdrawn
+    the camera.
+    """
     channels = {}
     for c in CONSENT_CHANNELS:
         enabled = bool(row.get(f"{c}_enabled"))
+        revoker = row.get(f"{c}_revoked_by")
         channels[c] = {
             "enabled": enabled,
             "revoked_at": row.get(f"{c}_revoked_at"),
             # Only meaningful while the channel is off; a role attached to an
             # enabled channel would read as "turned on by", which it is not.
-            "revoked_by": None if enabled else role,
+            "revoked_by": (
+                None if enabled or not revoker
+                else ("student" if revoker == student_id else "parent")
+            ),
         }
 
-    updated_at = row.get("updated_at")
-    ack_at = row.get("student_ack_at")
+    enabled_at = _parse_ts(row.get("parent_enabled_at"))
+    ack_at = _parse_ts(row.get("student_ack_at"))
     return {
         "student_id": student_id,
         "channels": channels,
         "retrieved": row.get("retrieved", True),
-        "updated_at": updated_at,
-        # A parent turning something back on has to be visible to the student.
-        # Discovering it by noticing data reappear is not consent, it is a
-        # surprise.
+        "updated_at": row.get("updated_at"),
+        # A parent turning something back ON has to be visible to the student:
+        # discovering a resumed sensor by noticing data reappear is a surprise,
+        # not consent. A parent turning one OFF raises nothing -- the student
+        # loses nothing they had, and can see the state in settings.
         "needs_student_ack": bool(
-            updated_by and updated_by != student_id and updated_at
-            and (ack_at is None or ack_at < updated_at)
+            enabled_at and (ack_at is None or ack_at < enabled_at)
         ),
     }
 
@@ -1968,11 +1997,14 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
 
     now = _utc_now().isoformat()
     fields: dict = {}
+    guards: dict = {}
+    re_enabled = False
     for c in CONSENT_CHANNELS:
         requested = getattr(payload, f"{c}_enabled")
         if requested is None:
             continue
-        if requested == bool(current[f"{c}_enabled"]):
+        was = bool(current[f"{c}_enabled"])
+        if requested == was:
             continue
 
         # The asymmetry. A student may withdraw at any time and that decision
@@ -1986,33 +2018,68 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
 
         fields[f"{c}_enabled"] = requested
         fields[f"{c}_revoked_at"] = None if requested else now
+        fields[f"{c}_revoked_by"] = None if requested else user["id"]
+        # The state this decision was made against, asserted on the write below.
+        guards[f"{c}_enabled"] = was
+        if requested and actor == "parent":
+            re_enabled = True
 
     if not fields:
+        # No-op. Deliberately does not restamp updated_by/updated_at: a parent
+        # re-saving unchanged settings would otherwise raise a notice at the
+        # student about a change that did not happen.
         return _shape_consent(current, student_id)
 
     fields["updated_by"] = user["id"]
     fields["updated_at"] = now
+    if re_enabled:
+        fields["parent_enabled_at"] = now
 
     try:
-        supabase.table("signal_consent") \
-            .upsert({"user_id": student_id, **fields}, on_conflict="user_id").execute()
+        if not current["exists"]:
+            # No row yet. Insert rather than upsert so a row created by a
+            # concurrent request collides instead of being silently overwritten
+            # with a decision made against a state that no longer holds.
+            supabase.table("signal_consent") \
+                .insert({"user_id": student_id, **fields}).execute()
+            return _shape_consent(_consent(student_id), student_id)
+
+        # Conditional on every flag this call decided against. Read-then-write
+        # is not atomic, and the two racing writes here are a student's
+        # withdrawal and a parent's re-enable landing on the same channel -- so
+        # losing the race silently would mean recording against a refusal. If
+        # the state moved underneath us the update matches nothing, and the
+        # caller is told to look again rather than being told it worked.
+        q = supabase.table("signal_consent").update(fields).eq("user_id", student_id)
+        for col, was in guards.items():
+            q = q.eq(col, was)
+        written = q.execute().data or []
     except Exception as e:
         print(f"[consent:write] {student_id}: {e}")
         raise HTTPException(500, "Could not save consent")
+
+    if not written:
+        raise HTTPException(409, "Consent changed while you were editing it; reload and try again")
 
     return _shape_consent(_consent(student_id), student_id)
 
 
 @app.post("/api/consent/ack")
 def ack_consent(request: Request):
-    """Student dismisses the notice that a parent changed their consent."""
+    """Student dismisses the notice that a parent turned a channel back on."""
     user = get_user(request)
     try:
-        supabase.table("signal_consent").update({"student_ack_at": _utc_now().isoformat()}) \
-            .eq("user_id", user["id"]).execute()
+        written = supabase.table("signal_consent") \
+            .update({"student_ack_at": _utc_now().isoformat()}) \
+            .eq("user_id", user["id"]).execute().data or []
     except Exception as e:
         print(f"[consent:ack] {user['id']}: {e}")
         raise HTTPException(500, "Could not acknowledge")
+    # A student with no consent row has nothing to acknowledge. Reporting
+    # success for a write that matched nothing would leave a client believing a
+    # notice was dismissed that is still there.
+    if not written:
+        raise HTTPException(404, "No consent record to acknowledge")
     return {"ok": True}
 
 

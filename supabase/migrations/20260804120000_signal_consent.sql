@@ -31,13 +31,24 @@ CREATE TABLE IF NOT EXISTS "public"."signal_consent" (
     "headband_optical_enabled" boolean DEFAULT false NOT NULL,
     "camera_enabled" boolean DEFAULT false NOT NULL,
 
-    -- When the student turned each one off. Cleared when a parent turns it back
-    -- on. These exist so a report can say "recording stopped on 14 Aug" instead
-    -- of showing a channel that silently goes flat -- an absence with a date is
-    -- a fact, an absence without one is indistinguishable from a broken query.
+    -- When each one was turned off, and by whom. Cleared when it goes back on.
+    -- These exist so a report can say "recording stopped on 14 Aug" instead of
+    -- showing a channel that silently goes flat -- an absence with a date is a
+    -- fact, an absence without one is indistinguishable from a broken query.
+    --
+    -- revoked_by is PER CHANNEL rather than derived from the row's updated_by,
+    -- because the row has one updated_by and the channels are revoked
+    -- independently. A student turning the camera off, followed by a parent
+    -- turning eeg on, leaves updated_by pointing at the parent -- and a
+    -- teacher would then be told the parent withdrew the camera when the
+    -- student did. That is precisely the distinction this field exists to
+    -- make, so it has to be stored where the revocation happened.
     "eeg_revoked_at" timestamp with time zone,
+    "eeg_revoked_by" "uuid",
     "headband_optical_revoked_at" timestamp with time zone,
+    "headband_optical_revoked_by" "uuid",
     "camera_revoked_at" timestamp with time zone,
+    "camera_revoked_by" "uuid",
 
     -- Who last wrote the row. Drives two things: the reason a teacher is shown
     -- ("student opted out" vs "parent opted out"), and whether the student gets
@@ -45,12 +56,20 @@ CREATE TABLE IF NOT EXISTS "public"."signal_consent" (
     "updated_by" "uuid",
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
 
-    -- When the student dismissed the last parent-made change. A parent
-    -- re-enabling a channel has to be visible to the student -- discovering it
-    -- by noticing data reappear is not acceptable -- and this is the cheapest
-    -- mechanism that does not mean building a notifications table for one
-    -- message. Banner condition is: updated_by <> user_id AND (student_ack_at
-    -- IS NULL OR student_ack_at < updated_at).
+    -- The last time a parent turned a channel back ON, and when the student
+    -- dismissed the notice about it.
+    --
+    -- Deliberately narrower than "the last parent write". A parent turning a
+    -- channel OFF needs no notice -- the student loses nothing they had and
+    -- gains a restriction they can see in settings -- and firing on every
+    -- parent write would mean the code did something other than what the
+    -- comment and the docs said it did. Tracking the enable specifically also
+    -- decouples the notice from updated_at, so an unrelated later write cannot
+    -- re-raise a notice the student already dismissed.
+    --
+    -- Banner condition: parent_enabled_at IS NOT NULL AND (student_ack_at IS
+    -- NULL OR student_ack_at < parent_enabled_at).
+    "parent_enabled_at" timestamp with time zone,
     "student_ack_at" timestamp with time zone
 );
 
@@ -67,14 +86,28 @@ ALTER TABLE ONLY "public"."signal_consent"
     ADD CONSTRAINT "signal_consent_updated_by_fkey" FOREIGN KEY ("updated_by")
     REFERENCES "public"."profiles"("id") ON DELETE SET NULL;
 
--- A revoked_at without the flag being off is a contradiction, and the pair is
--- read as a unit by every consumer. Cheaper to make it unrepresentable than to
--- teach five call sites which one wins.
 ALTER TABLE ONLY "public"."signal_consent"
-    ADD CONSTRAINT "signal_consent_revoked_at_matches_flag" CHECK (
-        ("eeg_enabled" IS FALSE OR "eeg_revoked_at" IS NULL)
-        AND ("headband_optical_enabled" IS FALSE OR "headband_optical_revoked_at" IS NULL)
-        AND ("camera_enabled" IS FALSE OR "camera_revoked_at" IS NULL)
+    ADD CONSTRAINT "signal_consent_eeg_revoked_by_fkey" FOREIGN KEY ("eeg_revoked_by")
+    REFERENCES "public"."profiles"("id") ON DELETE SET NULL;
+
+ALTER TABLE ONLY "public"."signal_consent"
+    ADD CONSTRAINT "signal_consent_headband_optical_revoked_by_fkey" FOREIGN KEY ("headband_optical_revoked_by")
+    REFERENCES "public"."profiles"("id") ON DELETE SET NULL;
+
+ALTER TABLE ONLY "public"."signal_consent"
+    ADD CONSTRAINT "signal_consent_camera_revoked_by_fkey" FOREIGN KEY ("camera_revoked_by")
+    REFERENCES "public"."profiles"("id") ON DELETE SET NULL;
+
+-- A revocation date or revoker on a channel that is switched on is a
+-- contradiction, and the three are read as a unit by every consumer. Cheaper to
+-- make it unrepresentable than to teach five call sites which one wins.
+ALTER TABLE ONLY "public"."signal_consent"
+    ADD CONSTRAINT "signal_consent_revocation_matches_flag" CHECK (
+        ("eeg_enabled" IS FALSE OR ("eeg_revoked_at" IS NULL AND "eeg_revoked_by" IS NULL))
+        AND ("headband_optical_enabled" IS FALSE
+             OR ("headband_optical_revoked_at" IS NULL AND "headband_optical_revoked_by" IS NULL))
+        AND ("camera_enabled" IS FALSE
+             OR ("camera_revoked_at" IS NULL AND "camera_revoked_by" IS NULL))
     );
 
 ALTER TABLE "public"."signal_consent" ENABLE ROW LEVEL SECURITY;
@@ -91,6 +124,12 @@ CREATE POLICY "consent: parent read" ON "public"."signal_consent"
       WHERE (("l"."child_id" = "signal_consent"."user_id")
         AND ("l"."parent_id" = "auth"."uid"())))));
 
+-- Inlined rather than routed through is_teacher_of_class, which answers "am I
+-- the teacher of THIS class" and takes a class_id -- the question here is "am I
+-- the teacher of any class this student is in", which that helper does not
+-- express. Same shape as the existing "profiles: teacher reads students"
+-- policy, and it reads class_memberships and classes rather than a table with a
+-- policy that reads back, so there is no recursion for the helper to break.
 CREATE POLICY "consent: teacher read" ON "public"."signal_consent"
     FOR SELECT USING ((EXISTS ( SELECT 1
        FROM ("public"."class_memberships" "cm"
@@ -115,7 +154,11 @@ CREATE POLICY "consent: teacher read" ON "public"."signal_consent"
 -- not expressible as a policy; granting the student UPDATE would let them call
 -- PostgREST directly and re-enable a channel a parent had control of, which is
 -- the whole point of the parent-restore rule.
-GRANT SELECT ON TABLE "public"."signal_consent" TO "anon";
+-- No grant to anon. Every policy above is auth.uid()-scoped, and auth.uid() is
+-- null for anon, so the grant would return nothing -- but a reader would have
+-- to work that out to know it, and a SELECT grant to anon on a table of
+-- children's consent reads as a deliberate anonymous-read path. Leaving it out
+-- says what is meant.
 GRANT SELECT ON TABLE "public"."signal_consent" TO "authenticated";
 GRANT ALL ON TABLE "public"."signal_consent" TO "service_role";
 

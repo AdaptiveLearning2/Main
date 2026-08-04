@@ -1827,6 +1827,195 @@ def class_students(class_id: str, request: Request):
     return students
 
 
+# ─── consent: what may be recorded, per student ───────────────────────────
+#
+# Three channels, named for the sensor rather than the signal derived from it.
+# `camera` covers expression AND the rPPG heart-rate fallback: one device, one
+# decision, so a heart-rate failover can never quietly open a webcam the student
+# declined.
+#
+# Everything is off until a linked parent turns it on, and this is the only
+# write path -- signal_consent has no insert/update RLS policy for anyone, so
+# the anon key in the frontend bundle cannot reach it through PostgREST. The
+# rules below are therefore the enforcement, not a convenience layer over it.
+
+CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
+
+_CONSENT_DENIED = {
+    **{f"{c}_enabled": False for c in CONSENT_CHANNELS},
+    **{f"{c}_revoked_at": None for c in CONSENT_CHANNELS},
+    "updated_by": None,
+    "updated_at": None,
+    "student_ack_at": None,
+}
+
+
+def _consent(student_id: str) -> dict:
+    """Consent flags for a student. Absent row and failed read both deny.
+
+    Failing closed is the whole point: the reporting helpers elsewhere in this
+    module swallow their exceptions and answer with an empty payload, which is
+    the right call for a dashboard. It is the wrong call here -- defaulting to
+    "enabled" on a failed read would record data the student declined, and the
+    failure would be invisible because recording looks identical either way.
+
+    `retrieved` distinguishes the two denials for callers that need to say why:
+    "nothing is recorded because nobody consented" and "we could not find out"
+    are not the same sentence to put in front of a parent.
+    """
+    try:
+        rows = supabase.table("signal_consent").select("*") \
+            .eq("user_id", student_id).limit(1).execute().data or []
+    except Exception as e:
+        print(f"[consent:read] {student_id}: {e}")
+        return {**_CONSENT_DENIED, "retrieved": False}
+    if not rows:
+        return {**_CONSENT_DENIED, "retrieved": True}
+    return {**_CONSENT_DENIED, **rows[0], "retrieved": True}
+
+
+def _is_linked_parent(viewer_id: str, student_id: str) -> bool:
+    try:
+        link = supabase.table("parent_child_links").select("id") \
+            .eq("parent_id", viewer_id).eq("child_id", student_id).limit(1).execute().data or []
+        return bool(link)
+    except Exception as e:
+        print(f"[consent:parent_link] {e}")
+        return False
+
+
+def _consent_actor(viewer: dict, student_id: str) -> str:
+    """Who is writing: the student themselves, or a linked parent.
+
+    Deliberately narrower than _verify_can_view_student, which also admits
+    teachers. A teacher can see that a channel is off -- they need to, or a
+    blank tile reads as a broken query -- but consent over a child's body is not
+    theirs to change. Reading and writing are different relationships here, so
+    this does not reuse that helper.
+    """
+    if viewer["id"] == student_id:
+        return "student"
+    if _is_linked_parent(viewer["id"], student_id):
+        return "parent"
+    raise HTTPException(403, "Only the student or a linked parent can change consent")
+
+
+def _shape_consent(row: dict, student_id: str) -> dict:
+    """Per-channel payload: enabled, when it was revoked, and by which role.
+
+    `revoked_by` is a role, never an identity. A teacher needs to know a
+    decision was made and roughly by whom -- "student opted out" reads very
+    differently from "parent opted out" when you are looking at a blank tile --
+    but which guardian made it is none of their business.
+    """
+    updated_by = row.get("updated_by")
+    role = None
+    if updated_by:
+        role = "student" if updated_by == student_id else "parent"
+
+    channels = {}
+    for c in CONSENT_CHANNELS:
+        enabled = bool(row.get(f"{c}_enabled"))
+        channels[c] = {
+            "enabled": enabled,
+            "revoked_at": row.get(f"{c}_revoked_at"),
+            # Only meaningful while the channel is off; a role attached to an
+            # enabled channel would read as "turned on by", which it is not.
+            "revoked_by": None if enabled else role,
+        }
+
+    updated_at = row.get("updated_at")
+    ack_at = row.get("student_ack_at")
+    return {
+        "student_id": student_id,
+        "channels": channels,
+        "retrieved": row.get("retrieved", True),
+        "updated_at": updated_at,
+        # A parent turning something back on has to be visible to the student.
+        # Discovering it by noticing data reappear is not consent, it is a
+        # surprise.
+        "needs_student_ack": bool(
+            updated_by and updated_by != student_id and updated_at
+            and (ack_at is None or ack_at < updated_at)
+        ),
+    }
+
+
+class ConsentUpdate(BaseModel):
+    eeg_enabled:              bool | None = None
+    headband_optical_enabled: bool | None = None
+    camera_enabled:           bool | None = None
+
+
+@app.get("/api/consent/{student_id}")
+def get_consent(student_id: str, request: Request):
+    user = get_user(request)
+    _verify_can_view_student(user, student_id)
+    return _shape_consent(_consent(student_id), student_id)
+
+
+@app.put("/api/consent/{student_id}")
+def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
+    user = get_user(request)
+    actor = _consent_actor(user, student_id)
+
+    current = _consent(student_id)
+    if not current["retrieved"]:
+        # Writing blind would mean deciding the student's current state from a
+        # read that failed. A 503 is recoverable; a wrongly-enabled channel is
+        # not.
+        raise HTTPException(503, "Could not read current consent; not changing it")
+
+    now = _utc_now().isoformat()
+    fields: dict = {}
+    for c in CONSENT_CHANNELS:
+        requested = getattr(payload, f"{c}_enabled")
+        if requested is None:
+            continue
+        if requested == bool(current[f"{c}_enabled"]):
+            continue
+
+        # The asymmetry. A student may withdraw at any time and that decision
+        # stands until a parent revisits it; a student cannot re-enable, or the
+        # parent's control would be nominal.
+        if requested and actor == "student":
+            raise HTTPException(
+                403,
+                f"You can turn {c} off, but only a parent can turn it back on",
+            )
+
+        fields[f"{c}_enabled"] = requested
+        fields[f"{c}_revoked_at"] = None if requested else now
+
+    if not fields:
+        return _shape_consent(current, student_id)
+
+    fields["updated_by"] = user["id"]
+    fields["updated_at"] = now
+
+    try:
+        supabase.table("signal_consent") \
+            .upsert({"user_id": student_id, **fields}, on_conflict="user_id").execute()
+    except Exception as e:
+        print(f"[consent:write] {student_id}: {e}")
+        raise HTTPException(500, "Could not save consent")
+
+    return _shape_consent(_consent(student_id), student_id)
+
+
+@app.post("/api/consent/ack")
+def ack_consent(request: Request):
+    """Student dismisses the notice that a parent changed their consent."""
+    user = get_user(request)
+    try:
+        supabase.table("signal_consent").update({"student_ack_at": _utc_now().isoformat()}) \
+            .eq("user_id", user["id"]).execute()
+    except Exception as e:
+        print(f"[consent:ack] {user['id']}: {e}")
+        raise HTTPException(500, "Could not acknowledge")
+    return {"ok": True}
+
+
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────
 
 class CognitiveSample(BaseModel):

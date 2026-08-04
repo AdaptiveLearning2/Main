@@ -118,6 +118,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # The parser first. A regex over SQL has two failure modes and both are
+      # quiet: missing a real leak, and failing correct SQL so the next person
+      # learns to ignore the job. The cases cover an unqualified CREATE (lands
+      # in public and is world-executable there), comma-separated grantees in
+      # one statement, commented-out CREATEs and REVOKEs, and a revoke that
+      # arrives in a later migration than the CREATE.
+      - name: Self-test the parser
+        run: python scripts/check_function_grants.py --self-test
+
       - name: Check public-schema functions revoke EXECUTE
         run: python scripts/check_function_grants.py
 

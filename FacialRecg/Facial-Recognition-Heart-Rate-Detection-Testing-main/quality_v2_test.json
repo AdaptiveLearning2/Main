@@ -1,0 +1,1567 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "startedAt": "2026-07-22T16:52:05.295551Z",
+    "endedAt": "2026-07-22T16:54:41.556970Z",
+    "samplingIntervalSeconds": 1
+  },
+  "snapshots": [
+    {
+      "timestamp": "2026-07-22T16:53:06.866602Z",
+      "elapsedSeconds": 60.02751851081848,
+      "heartRateBpm": 74.7,
+      "sqi": 0.415771484375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.415771484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:07.917804Z",
+      "elapsedSeconds": 61.08317589759827,
+      "heartRateBpm": 76.14000000000001,
+      "sqi": 0.426513671875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.426513671875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:08.991493Z",
+      "elapsedSeconds": 62.155364990234375,
+      "heartRateBpm": 75.14999999999999,
+      "sqi": 0.439697265625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.439697265625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:10.036117Z",
+      "elapsedSeconds": 63.196035861968994,
+      "heartRateBpm": 73.35,
+      "sqi": 0.451904296875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.451904296875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:11.101340Z",
+      "elapsedSeconds": 64.25403118133545,
+      "heartRateBpm": 74.61,
+      "sqi": 0.460693359375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.460693359375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:12.163552Z",
+      "elapsedSeconds": 65.32419180870056,
+      "heartRateBpm": 75.42,
+      "sqi": 0.484130859375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.484130859375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:13.224040Z",
+      "elapsedSeconds": 66.38384175300598,
+      "heartRateBpm": 75.33,
+      "sqi": 0.49267578125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49267578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:14.293715Z",
+      "elapsedSeconds": 67.45272397994995,
+      "heartRateBpm": 74.42999999999999,
+      "sqi": 0.49169921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49169921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:15.356285Z",
+      "elapsedSeconds": 68.52315902709961,
+      "heartRateBpm": 75.06,
+      "sqi": 0.47998046875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.47998046875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:16.401647Z",
+      "elapsedSeconds": 69.56322836875916,
+      "heartRateBpm": 75.24,
+      "sqi": 0.46484375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.46484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:17.461721Z",
+      "elapsedSeconds": 70.6067385673523,
+      "heartRateBpm": 75.06,
+      "sqi": 0.5009765625,
+      "rmssdMs": 57.607180989763734,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5009765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:18.531715Z",
+      "elapsedSeconds": 71.69140982627869,
+      "heartRateBpm": 73.8,
+      "sqi": 0.5166015625,
+      "rmssdMs": 57.60718098976356,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5166015625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:19.609236Z",
+      "elapsedSeconds": 72.75467491149902,
+      "heartRateBpm": 73.8,
+      "sqi": 0.5087890625,
+      "rmssdMs": 57.60718098976356,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5087890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:20.679998Z",
+      "elapsedSeconds": 73.81925058364868,
+      "heartRateBpm": 75.33,
+      "sqi": 0.51025390625,
+      "rmssdMs": 57.60718098976369,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51025390625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:21.770488Z",
+      "elapsedSeconds": 74.89423537254333,
+      "heartRateBpm": 75.33,
+      "sqi": 0.50439453125,
+      "rmssdMs": 57.60718098976369,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50439453125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:22.841849Z",
+      "elapsedSeconds": 75.9964063167572,
+      "heartRateBpm": 74.16,
+      "sqi": 0.475830078125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.475830078125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:23.899095Z",
+      "elapsedSeconds": 77.06810283660889,
+      "heartRateBpm": 75.33,
+      "sqi": 0.476806640625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.476806640625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:24.957906Z",
+      "elapsedSeconds": 78.11678314208984,
+      "heartRateBpm": 75.96000000000001,
+      "sqi": 0.478271484375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.478271484375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:25.996647Z",
+      "elapsedSeconds": 79.16378474235535,
+      "heartRateBpm": 74.78999999999999,
+      "sqi": 0.481689453125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.481689453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:27.132568Z",
+      "elapsedSeconds": 80.20535564422607,
+      "heartRateBpm": 73.71,
+      "sqi": 0.5009765625,
+      "rmssdMs": 57.55725238045465,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5009765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:28.203316Z",
+      "elapsedSeconds": 81.35538363456726,
+      "heartRateBpm": 73.62,
+      "sqi": 0.52783203125,
+      "rmssdMs": 58.57545809626871,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.52783203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:29.269623Z",
+      "elapsedSeconds": 82.42730927467346,
+      "heartRateBpm": 74.7,
+      "sqi": 0.5205078125,
+      "rmssdMs": 58.0003078809563,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5205078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:30.340627Z",
+      "elapsedSeconds": 83.49915885925293,
+      "heartRateBpm": 73.44,
+      "sqi": 0.51611328125,
+      "rmssdMs": 59.71445586552938,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51611328125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:31.424155Z",
+      "elapsedSeconds": 84.56312775611877,
+      "heartRateBpm": 71.91000000000001,
+      "sqi": 0.50927734375,
+      "rmssdMs": 60.60865358089491,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50927734375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:32.481393Z",
+      "elapsedSeconds": 85.62824440002441,
+      "heartRateBpm": 72.63000000000001,
+      "sqi": 0.496337890625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.496337890625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:33.534004Z",
+      "elapsedSeconds": 86.69970965385437,
+      "heartRateBpm": 75.50999999999999,
+      "sqi": 0.43310546875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.43310546875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:34.569377Z",
+      "elapsedSeconds": 87.7392225265503,
+      "heartRateBpm": 74.42999999999999,
+      "sqi": 0.427734375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.427734375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:35.629624Z",
+      "elapsedSeconds": 88.79547691345215,
+      "heartRateBpm": 73.17,
+      "sqi": 0.4453125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:36.661796Z",
+      "elapsedSeconds": 89.83533430099487,
+      "heartRateBpm": 75.33,
+      "sqi": 0.42626953125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.42626953125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:37.751640Z",
+      "elapsedSeconds": 90.87507963180542,
+      "heartRateBpm": 75.78,
+      "sqi": 0.44921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.44921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:38.785245Z",
+      "elapsedSeconds": 91.95335984230042,
+      "heartRateBpm": 73.62,
+      "sqi": 0.493408203125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.493408203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:39.845697Z",
+      "elapsedSeconds": 93.0031750202179,
+      "heartRateBpm": 72.45,
+      "sqi": 0.492919921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.492919921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:40.905596Z",
+      "elapsedSeconds": 94.07545232772827,
+      "heartRateBpm": 73.44,
+      "sqi": 0.4921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:41.963188Z",
+      "elapsedSeconds": 95.13228511810303,
+      "heartRateBpm": 74.16,
+      "sqi": 0.48828125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48828125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:43.051528Z",
+      "elapsedSeconds": 96.17427444458008,
+      "heartRateBpm": 73.17,
+      "sqi": 0.48681640625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48681640625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:44.111807Z",
+      "elapsedSeconds": 97.27621293067932,
+      "heartRateBpm": 72.63000000000001,
+      "sqi": 0.467041015625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.467041015625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:45.165884Z",
+      "elapsedSeconds": 98.32579350471497,
+      "heartRateBpm": 72.9,
+      "sqi": 0.4794921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4794921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:46.204593Z",
+      "elapsedSeconds": 99.37197828292847,
+      "heartRateBpm": 73.98,
+      "sqi": 0.460205078125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.460205078125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:47.251751Z",
+      "elapsedSeconds": 100.40937924385071,
+      "heartRateBpm": 73.53,
+      "sqi": 0.45849609375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.45849609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:48.357952Z",
+      "elapsedSeconds": 101.46873664855957,
+      "heartRateBpm": 73.08,
+      "sqi": 0.4638671875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4638671875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:49.409421Z",
+      "elapsedSeconds": 102.5719964504242,
+      "heartRateBpm": 71.64,
+      "sqi": 0.4970703125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4970703125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:50.459715Z",
+      "elapsedSeconds": 103.61165642738342,
+      "heartRateBpm": 73.89,
+      "sqi": 0.483154296875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.483154296875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:51.501839Z",
+      "elapsedSeconds": 104.66881680488586,
+      "heartRateBpm": 72.36,
+      "sqi": 0.46826171875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.46826171875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:52.554537Z",
+      "elapsedSeconds": 105.70862412452698,
+      "heartRateBpm": 71.01,
+      "sqi": 0.459716796875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.459716796875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:53.655208Z",
+      "elapsedSeconds": 106.78050971031189,
+      "heartRateBpm": 70.83000000000001,
+      "sqi": 0.458251953125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.458251953125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:54.722898Z",
+      "elapsedSeconds": 107.88534379005432,
+      "heartRateBpm": 72.27000000000001,
+      "sqi": 0.4267578125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4267578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:55.770567Z",
+      "elapsedSeconds": 108.93935775756836,
+      "heartRateBpm": 71.10000000000001,
+      "sqi": 0.4443359375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4443359375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:56.828275Z",
+      "elapsedSeconds": 109.97314858436584,
+      "heartRateBpm": 70.11,
+      "sqi": 0.4765625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4765625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:57.885275Z",
+      "elapsedSeconds": 111.02986598014832,
+      "heartRateBpm": 70.11,
+      "sqi": 0.48291015625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48291015625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:53:58.988141Z",
+      "elapsedSeconds": 112.10901594161987,
+      "heartRateBpm": 72.0,
+      "sqi": 0.49658203125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49658203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:00.057807Z",
+      "elapsedSeconds": 113.21156525611877,
+      "heartRateBpm": 69.47999999999999,
+      "sqi": 0.51953125,
+      "rmssdMs": 78.21006850025735,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:01.126322Z",
+      "elapsedSeconds": 114.28347706794739,
+      "heartRateBpm": 68.76,
+      "sqi": 0.50439453125,
+      "rmssdMs": 79.9215496989412,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50439453125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:02.182070Z",
+      "elapsedSeconds": 115.33665633201599,
+      "heartRateBpm": 68.4,
+      "sqi": 0.5107421875,
+      "rmssdMs": 81.4442549641581,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5107421875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:03.252497Z",
+      "elapsedSeconds": 116.41155123710632,
+      "heartRateBpm": 67.95,
+      "sqi": 0.495849609375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.495849609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:04.323745Z",
+      "elapsedSeconds": 117.45439767837524,
+      "heartRateBpm": 68.94,
+      "sqi": 0.505859375,
+      "rmssdMs": 81.44425496415788,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.505859375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:05.383990Z",
+      "elapsedSeconds": 118.53903865814209,
+      "heartRateBpm": 68.58,
+      "sqi": 0.5029296875,
+      "rmssdMs": 81.24790595592387,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5029296875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:06.454759Z",
+      "elapsedSeconds": 119.61090564727783,
+      "heartRateBpm": 68.85,
+      "sqi": 0.52978515625,
+      "rmssdMs": 83.41975006468776,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.52978515625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:07.526214Z",
+      "elapsedSeconds": 120.68413925170898,
+      "heartRateBpm": 68.04,
+      "sqi": 0.54296875,
+      "rmssdMs": 83.38184698966371,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54296875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:08.592347Z",
+      "elapsedSeconds": 121.75536298751831,
+      "heartRateBpm": 67.59,
+      "sqi": 0.5380859375,
+      "rmssdMs": 84.63342380597084,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5380859375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:09.691538Z",
+      "elapsedSeconds": 122.81138253211975,
+      "heartRateBpm": 68.13,
+      "sqi": 0.521484375,
+      "rmssdMs": 84.67280018865408,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.521484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:10.749815Z",
+      "elapsedSeconds": 123.91533613204956,
+      "heartRateBpm": 69.57,
+      "sqi": 0.484619140625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.484619140625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:11.798640Z",
+      "elapsedSeconds": 124.95556855201721,
+      "heartRateBpm": 72.63000000000001,
+      "sqi": 0.4794921875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4794921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:12.872714Z",
+      "elapsedSeconds": 126.04324340820312,
+      "heartRateBpm": 67.77,
+      "sqi": 0.47412109375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.47412109375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:13.926747Z",
+      "elapsedSeconds": 127.08365273475647,
+      "heartRateBpm": 68.22,
+      "sqi": 0.456787109375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.456787109375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:15.039040Z",
+      "elapsedSeconds": 128.15581464767456,
+      "heartRateBpm": 69.12,
+      "sqi": 0.466552734375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.466552734375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:16.091738Z",
+      "elapsedSeconds": 129.25958800315857,
+      "heartRateBpm": 68.94,
+      "sqi": 0.47314453125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.47314453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:17.156271Z",
+      "elapsedSeconds": 130.3152642250061,
+      "heartRateBpm": 67.59,
+      "sqi": 0.50634765625,
+      "rmssdMs": 78.529682993829,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50634765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:18.222089Z",
+      "elapsedSeconds": 131.3788321018219,
+      "heartRateBpm": 68.31,
+      "sqi": 0.50830078125,
+      "rmssdMs": 78.529682993829,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50830078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:19.255336Z",
+      "elapsedSeconds": 132.42432594299316,
+      "heartRateBpm": 69.66,
+      "sqi": 0.49560546875,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49560546875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:20.346367Z",
+      "elapsedSeconds": 133.48445630073547,
+      "heartRateBpm": 67.68,
+      "sqi": 0.48974609375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48974609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:21.386040Z",
+      "elapsedSeconds": 134.55329728126526,
+      "heartRateBpm": 67.77,
+      "sqi": 0.48486328125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48486328125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:22.455299Z",
+      "elapsedSeconds": 135.6229453086853,
+      "heartRateBpm": 68.94,
+      "sqi": 0.468017578125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.468017578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:23.518256Z",
+      "elapsedSeconds": 136.68299198150635,
+      "heartRateBpm": 70.65,
+      "sqi": 0.48291015625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48291015625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:24.561687Z",
+      "elapsedSeconds": 137.719966173172,
+      "heartRateBpm": 72.18,
+      "sqi": 0.481689453125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.481689453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:25.634425Z",
+      "elapsedSeconds": 138.76442456245422,
+      "heartRateBpm": 67.86,
+      "sqi": 0.49365234375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49365234375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:26.691509Z",
+      "elapsedSeconds": 139.84525728225708,
+      "heartRateBpm": 68.85,
+      "sqi": 0.50634765625,
+      "rmssdMs": 79.59078673648915,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50634765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:27.764326Z",
+      "elapsedSeconds": 140.90779852867126,
+      "heartRateBpm": 69.3,
+      "sqi": 0.51416015625,
+      "rmssdMs": 81.08140628062833,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51416015625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:28.843751Z",
+      "elapsedSeconds": 141.99544501304626,
+      "heartRateBpm": 68.67,
+      "sqi": 0.5078125,
+      "rmssdMs": 78.14272214451198,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:29.942744Z",
+      "elapsedSeconds": 143.08864998817444,
+      "heartRateBpm": 68.22,
+      "sqi": 0.50390625,
+      "rmssdMs": 77.3977820526306,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50390625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:31.033651Z",
+      "elapsedSeconds": 144.15496182441711,
+      "heartRateBpm": 68.4,
+      "sqi": 0.50341796875,
+      "rmssdMs": 78.14272214451233,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50341796875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:32.086485Z",
+      "elapsedSeconds": 145.25861477851868,
+      "heartRateBpm": 68.85,
+      "sqi": 0.48193359375,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48193359375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:33.150430Z",
+      "elapsedSeconds": 146.29866456985474,
+      "heartRateBpm": 67.77,
+      "sqi": 0.4853515625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4853515625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:34.181592Z",
+      "elapsedSeconds": 147.35535979270935,
+      "heartRateBpm": 67.59,
+      "sqi": 0.477783203125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.477783203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:35.226131Z",
+      "elapsedSeconds": 148.39446711540222,
+      "heartRateBpm": 68.58,
+      "sqi": 0.478515625,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.478515625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:36.310711Z",
+      "elapsedSeconds": 149.44466710090637,
+      "heartRateBpm": 69.3,
+      "sqi": 0.483642578125,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.483642578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:37.365089Z",
+      "elapsedSeconds": 150.52295088768005,
+      "heartRateBpm": 68.13,
+      "sqi": 0.50439453125,
+      "rmssdMs": 78.04950945346074,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50439453125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:38.437116Z",
+      "elapsedSeconds": 151.59505558013916,
+      "heartRateBpm": 67.59,
+      "sqi": 0.5126953125,
+      "rmssdMs": 74.23881935248222,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5126953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:39.496487Z",
+      "elapsedSeconds": 152.6665005683899,
+      "heartRateBpm": 68.49,
+      "sqi": 0.5,
+      "rmssdMs": null,
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.5,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+    },
+    {
+      "timestamp": "2026-07-22T16:54:40.561768Z",
+      "elapsedSeconds": 153.72287940979004,
+      "heartRateBpm": 76.50000000000001,
+      "sqi": 0.50830078125,
+      "rmssdMs": 67.87318724890577,
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50830078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+    }
+  ],
+  "summary": {
+    "snapshotCount": 89,
+    "averageHeartRateBpm": 70.65620689655171,
+    "averageSqi": 0.5126616379310345,
+    "averageRmssdMs": 72.15324790643506,
+    "trustedSnapshotCount": 29,
+    "untrustedSnapshotCount": 60,
+    "trustedSnapshotPercent": 32.58,
+    "allSnapshotAverageHeartRateBpm": 71.61067415730341,
+    "allSnapshotAverageSqi": 0.4851266239466292,
+    "allSnapshotAverageRmssdMs": 72.15324790643506
+  }
+}

@@ -1,0 +1,353 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "startedAt": "2026-07-22T16:36:48.300460Z",
+    "endedAt": "2026-07-22T16:38:40.561921Z",
+    "samplingIntervalSeconds": 1
+  },
+  "snapshots": [
+    {
+      "timestamp": "2026-07-22T16:37:49.769898Z",
+      "elapsedSeconds": 60.011526346206665,
+      "heartRateBpm": 68.31,
+      "sqi": 0.44677734375,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:37:50.804722Z",
+      "elapsedSeconds": 61.05132699012756,
+      "heartRateBpm": 68.4,
+      "sqi": 0.487548828125,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:37:51.843733Z",
+      "elapsedSeconds": 62.091283321380615,
+      "heartRateBpm": 69.12,
+      "sqi": 0.4833984375,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:37:52.900272Z",
+      "elapsedSeconds": 63.14813280105591,
+      "heartRateBpm": 69.12,
+      "sqi": 0.47509765625,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:37:53.976137Z",
+      "elapsedSeconds": 64.19892120361328,
+      "heartRateBpm": 68.31,
+      "sqi": 0.4873046875,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:37:55.021971Z",
+      "elapsedSeconds": 65.25941562652588,
+      "heartRateBpm": 68.76,
+      "sqi": 0.55126953125,
+      "rmssdMs": 65.23499401735523
+    },
+    {
+      "timestamp": "2026-07-22T16:37:56.079199Z",
+      "elapsedSeconds": 66.31521725654602,
+      "heartRateBpm": 69.47999999999999,
+      "sqi": 0.55859375,
+      "rmssdMs": 65.23499401735528
+    },
+    {
+      "timestamp": "2026-07-22T16:37:57.150219Z",
+      "elapsedSeconds": 67.3878755569458,
+      "heartRateBpm": 69.3,
+      "sqi": 0.52734375,
+      "rmssdMs": 64.50193795538158
+    },
+    {
+      "timestamp": "2026-07-22T16:37:58.224074Z",
+      "elapsedSeconds": 68.4592490196228,
+      "heartRateBpm": 68.85,
+      "sqi": 0.52783203125,
+      "rmssdMs": 67.30898899849775
+    },
+    {
+      "timestamp": "2026-07-22T16:37:59.307284Z",
+      "elapsedSeconds": 69.53840255737305,
+      "heartRateBpm": 68.76,
+      "sqi": 0.5244140625,
+      "rmssdMs": 67.30898899849775
+    },
+    {
+      "timestamp": "2026-07-22T16:38:00.350701Z",
+      "elapsedSeconds": 70.58820605278015,
+      "heartRateBpm": 70.56,
+      "sqi": 0.5439453125,
+      "rmssdMs": 68.90962365217145
+    },
+    {
+      "timestamp": "2026-07-22T16:38:01.423040Z",
+      "elapsedSeconds": 71.6603147983551,
+      "heartRateBpm": 70.19999999999999,
+      "sqi": 0.54638671875,
+      "rmssdMs": 67.6725503736484
+    },
+    {
+      "timestamp": "2026-07-22T16:38:02.493543Z",
+      "elapsedSeconds": 72.73103427886963,
+      "heartRateBpm": 69.83999999999999,
+      "sqi": 0.55029296875,
+      "rmssdMs": 67.26689791833333
+    },
+    {
+      "timestamp": "2026-07-22T16:38:03.556349Z",
+      "elapsedSeconds": 73.78752064704895,
+      "heartRateBpm": 70.19999999999999,
+      "sqi": 0.54931640625,
+      "rmssdMs": 67.76648357629459
+    },
+    {
+      "timestamp": "2026-07-22T16:38:04.659425Z",
+      "elapsedSeconds": 74.84077906608582,
+      "heartRateBpm": 70.83000000000001,
+      "sqi": 0.54833984375,
+      "rmssdMs": 67.31970015519538
+    },
+    {
+      "timestamp": "2026-07-22T16:38:05.727773Z",
+      "elapsedSeconds": 75.96317410469055,
+      "heartRateBpm": 70.74000000000001,
+      "sqi": 0.5849609375,
+      "rmssdMs": 67.38393134047946
+    },
+    {
+      "timestamp": "2026-07-22T16:38:06.791922Z",
+      "elapsedSeconds": 77.02003908157349,
+      "heartRateBpm": 70.83000000000001,
+      "sqi": 0.57568359375,
+      "rmssdMs": 67.38393134047948
+    },
+    {
+      "timestamp": "2026-07-22T16:38:07.857896Z",
+      "elapsedSeconds": 78.09143900871277,
+      "heartRateBpm": 71.37,
+      "sqi": 0.595703125,
+      "rmssdMs": 68.65759050752816
+    },
+    {
+      "timestamp": "2026-07-22T16:38:08.926314Z",
+      "elapsedSeconds": 79.16374564170837,
+      "heartRateBpm": 71.73,
+      "sqi": 0.5927734375,
+      "rmssdMs": 67.52401612480581
+    },
+    {
+      "timestamp": "2026-07-22T16:38:09.999338Z",
+      "elapsedSeconds": 80.23620128631592,
+      "heartRateBpm": 70.65,
+      "sqi": 0.6044921875,
+      "rmssdMs": 67.98893255151744
+    },
+    {
+      "timestamp": "2026-07-22T16:38:11.069821Z",
+      "elapsedSeconds": 81.29334139823914,
+      "heartRateBpm": 71.82000000000001,
+      "sqi": 0.546875,
+      "rmssdMs": 67.98893255151769
+    },
+    {
+      "timestamp": "2026-07-22T16:38:12.124765Z",
+      "elapsedSeconds": 82.36261868476868,
+      "heartRateBpm": 72.54,
+      "sqi": 0.5537109375,
+      "rmssdMs": 67.98893255151755
+    },
+    {
+      "timestamp": "2026-07-22T16:38:13.200302Z",
+      "elapsedSeconds": 83.43558144569397,
+      "heartRateBpm": 72.36,
+      "sqi": 0.5498046875,
+      "rmssdMs": 69.53960464193376
+    },
+    {
+      "timestamp": "2026-07-22T16:38:14.252136Z",
+      "elapsedSeconds": 84.48342800140381,
+      "heartRateBpm": 72.09,
+      "sqi": 0.544921875,
+      "rmssdMs": 69.53960464193395
+    },
+    {
+      "timestamp": "2026-07-22T16:38:15.352653Z",
+      "elapsedSeconds": 85.56484699249268,
+      "heartRateBpm": 73.44,
+      "sqi": 0.55615234375,
+      "rmssdMs": 69.53960464193439
+    },
+    {
+      "timestamp": "2026-07-22T16:38:16.397016Z",
+      "elapsedSeconds": 86.63462734222412,
+      "heartRateBpm": 72.27000000000001,
+      "sqi": 0.5576171875,
+      "rmssdMs": 68.67168940637747
+    },
+    {
+      "timestamp": "2026-07-22T16:38:17.461879Z",
+      "elapsedSeconds": 87.6899025440216,
+      "heartRateBpm": 71.46000000000001,
+      "sqi": 0.54443359375,
+      "rmssdMs": 69.3695557553927
+    },
+    {
+      "timestamp": "2026-07-22T16:38:18.524932Z",
+      "elapsedSeconds": 88.762864112854,
+      "heartRateBpm": 71.37,
+      "sqi": 0.53271484375,
+      "rmssdMs": 70.44781003973073
+    },
+    {
+      "timestamp": "2026-07-22T16:38:19.607408Z",
+      "elapsedSeconds": 89.83608818054199,
+      "heartRateBpm": 71.73,
+      "sqi": 0.54931640625,
+      "rmssdMs": 71.87628995851927
+    },
+    {
+      "timestamp": "2026-07-22T16:38:20.695044Z",
+      "elapsedSeconds": 90.91095685958862,
+      "heartRateBpm": 71.55000000000001,
+      "sqi": 0.53125,
+      "rmssdMs": 71.87628995851902
+    },
+    {
+      "timestamp": "2026-07-22T16:38:21.747155Z",
+      "elapsedSeconds": 91.99248218536377,
+      "heartRateBpm": null,
+      "sqi": null,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:22.806060Z",
+      "elapsedSeconds": 93.03297853469849,
+      "heartRateBpm": 70.83000000000001,
+      "sqi": 0.5205078125,
+      "rmssdMs": 70.88156154597493
+    },
+    {
+      "timestamp": "2026-07-22T16:38:23.892127Z",
+      "elapsedSeconds": 94.1088376045227,
+      "heartRateBpm": 70.56,
+      "sqi": 0.5380859375,
+      "rmssdMs": 69.51103029975468
+    },
+    {
+      "timestamp": "2026-07-22T16:38:24.958118Z",
+      "elapsedSeconds": 95.19355750083923,
+      "heartRateBpm": 70.74000000000001,
+      "sqi": 0.5537109375,
+      "rmssdMs": 70.58398377416927
+    },
+    {
+      "timestamp": "2026-07-22T16:38:26.048570Z",
+      "elapsedSeconds": 96.26934337615967,
+      "heartRateBpm": 71.01,
+      "sqi": 0.53125,
+      "rmssdMs": 66.1845310995163
+    },
+    {
+      "timestamp": "2026-07-22T16:38:27.091830Z",
+      "elapsedSeconds": 97.33721232414246,
+      "heartRateBpm": 72.0,
+      "sqi": 0.4697265625,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:28.169984Z",
+      "elapsedSeconds": 98.41217875480652,
+      "heartRateBpm": 72.81,
+      "sqi": 0.4775390625,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:29.215964Z",
+      "elapsedSeconds": 99.46705603599548,
+      "heartRateBpm": 73.53,
+      "sqi": 0.45654296875,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:30.263260Z",
+      "elapsedSeconds": 100.50825238227844,
+      "heartRateBpm": 72.54,
+      "sqi": 0.466552734375,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:31.332950Z",
+      "elapsedSeconds": 101.57276844978333,
+      "heartRateBpm": 73.35,
+      "sqi": 0.45263671875,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:32.402147Z",
+      "elapsedSeconds": 102.63285756111145,
+      "heartRateBpm": 74.61,
+      "sqi": 0.5048828125,
+      "rmssdMs": 62.339105071890074
+    },
+    {
+      "timestamp": "2026-07-22T16:38:33.472074Z",
+      "elapsedSeconds": 103.70587611198425,
+      "heartRateBpm": 75.69,
+      "sqi": 0.50341796875,
+      "rmssdMs": 66.43121118951474
+    },
+    {
+      "timestamp": "2026-07-22T16:38:34.546123Z",
+      "elapsedSeconds": 104.77752017974854,
+      "heartRateBpm": 73.08,
+      "sqi": 0.5029296875,
+      "rmssdMs": 67.40668643140293
+    },
+    {
+      "timestamp": "2026-07-22T16:38:35.601767Z",
+      "elapsedSeconds": 105.83265280723572,
+      "heartRateBpm": 73.35,
+      "sqi": 0.492919921875,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:36.677820Z",
+      "elapsedSeconds": 106.90992784500122,
+      "heartRateBpm": 75.96000000000001,
+      "sqi": 0.482666015625,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:37.732587Z",
+      "elapsedSeconds": 107.9771580696106,
+      "heartRateBpm": 75.87,
+      "sqi": 0.4873046875,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:38.788755Z",
+      "elapsedSeconds": 109.03508758544922,
+      "heartRateBpm": 74.61,
+      "sqi": 0.48095703125,
+      "rmssdMs": null
+    },
+    {
+      "timestamp": "2026-07-22T16:38:39.836189Z",
+      "elapsedSeconds": 110.07684874534607,
+      "heartRateBpm": 72.27000000000001,
+      "sqi": 0.474609375,
+      "rmssdMs": null
+    }
+  ],
+  "summary": {
+    "snapshotCount": 48,
+    "averageHeartRateBpm": 71.46382978723405,
+    "averageSqi": 0.52392578125,
+    "averageRmssdMs": 68.05124953397313
+  }
+}

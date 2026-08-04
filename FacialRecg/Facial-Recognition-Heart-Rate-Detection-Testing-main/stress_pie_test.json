@@ -1,0 +1,4190 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "sessionId": null,
+    "studentId": null,
+    "startedAt": "2026-07-22T18:57:36.243378Z",
+    "endedAt": "2026-07-22T19:00:02.537150Z",
+    "samplingIntervalSeconds": 1,
+    "baseline": {
+      "status": "ready",
+      "requiredTrustedSnapshots": 20,
+      "trustedSnapshotsUsed": 20,
+      "heartRateBpm": 77.31,
+      "rmssdMs": 70.3567724258258,
+      "completedAt": "2026-07-22T18:58:58.179308Z",
+      "version": "facial-baseline-v0.1"
+    }
+  },
+  "snapshots": [
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:37.771787Z",
+      "elapsedSeconds": 60.00359010696411,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.4,
+        "sqi": 0.56396484375,
+        "rmssdMs": 78.28653000855756
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.56396484375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.56396484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 1,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:38.837073Z",
+      "elapsedSeconds": 61.08385419845581,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.22,
+        "sqi": 0.59423828125,
+        "rmssdMs": 75.66827784220384
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.59423828125,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59423828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:39.908283Z",
+      "elapsedSeconds": 62.159883975982666,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.62548828125,
+        "rmssdMs": 75.68328663941095
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.62548828125,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.62548828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 3,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:40.979877Z",
+      "elapsedSeconds": 63.23248028755188,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.3,
+        "sqi": 0.6181640625,
+        "rmssdMs": 77.79417287517983
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6181640625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6181640625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 4,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:42.034808Z",
+      "elapsedSeconds": 64.2825882434845,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.39,
+        "sqi": 0.62255859375,
+        "rmssdMs": 76.9697546914041
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.62255859375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.62255859375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 5,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:43.109581Z",
+      "elapsedSeconds": 65.35805654525757,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.58,
+        "sqi": 0.5771484375,
+        "rmssdMs": 75.09927585914573
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5771484375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5771484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 6,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:44.178080Z",
+      "elapsedSeconds": 66.43181920051575,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.22,
+        "sqi": 0.6005859375,
+        "rmssdMs": 75.05006559410305
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6005859375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6005859375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 7,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:45.237135Z",
+      "elapsedSeconds": 67.47958540916443,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.59619140625,
+        "rmssdMs": 74.27197980481697
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.59619140625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59619140625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 8,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:46.311803Z",
+      "elapsedSeconds": 68.56063103675842,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.76,
+        "sqi": 0.6083984375,
+        "rmssdMs": 73.445925152923
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6083984375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6083984375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 9,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:47.399371Z",
+      "elapsedSeconds": 69.62371110916138,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.58,
+        "sqi": 0.6083984375,
+        "rmssdMs": 73.5918737965615
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6083984375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6083984375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 10,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:48.479235Z",
+      "elapsedSeconds": 70.72106885910034,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.13000000000001,
+        "sqi": 0.65234375,
+        "rmssdMs": 65.7252042152469
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.65234375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.65234375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.65)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.65).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 11,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:49.542810Z",
+      "elapsedSeconds": 71.79176545143127,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.95,
+        "sqi": 0.6494140625,
+        "rmssdMs": 64.25509676529613
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6494140625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6494140625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.65)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.65).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 12,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:50.619532Z",
+      "elapsedSeconds": 72.86506628990173,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.22,
+        "sqi": 0.6357421875,
+        "rmssdMs": 66.93529213601316
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6357421875,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6357421875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.64)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.64).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 13,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:51.694415Z",
+      "elapsedSeconds": 73.93590259552002,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.58,
+        "sqi": 0.6162109375,
+        "rmssdMs": 66.81140538028698
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6162109375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6162109375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 14,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:52.779808Z",
+      "elapsedSeconds": 74.99324440956116,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.13000000000001,
+        "sqi": 0.6044921875,
+        "rmssdMs": 66.86252479694679
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6044921875,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6044921875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 15,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:53.858025Z",
+      "elapsedSeconds": 76.09641599655151,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.23,
+        "sqi": 0.5869140625,
+        "rmssdMs": 66.53207001040458
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5869140625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5869140625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 16,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:54.940288Z",
+      "elapsedSeconds": 77.16710424423218,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.60693359375,
+        "rmssdMs": 67.26761969872823
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.60693359375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.60693359375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 17,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:56.021792Z",
+      "elapsedSeconds": 78.25967073440552,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.62548828125,
+        "rmssdMs": 67.26761969872858
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.62548828125,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.62548828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 18,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:57.096099Z",
+      "elapsedSeconds": 79.3277497291565,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.14000000000001,
+        "sqi": 0.6083984375,
+        "rmssdMs": 67.2676196987282
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6083984375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": null,
+          "category": "calibrating",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support is unavailable while the session baseline is still calibrating."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6083984375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 19,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:58.179308Z",
+      "elapsedSeconds": 80.40125322341919,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.05000000000001,
+        "sqi": 0.6181640625,
+        "rmssdMs": 67.2676196987282
+      },
+      "features": {
+        "facialStressSupport": 50.68,
+        "facialFocusSupport": null,
+        "confidence": 0.6181640625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 50.68,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.63,
+            "rmssdDropPercent": 4.39,
+            "heartRateComponent": 46.74,
+            "rmssdComponent": 56.59
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was close to baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6181640625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:58:59.263795Z",
+      "elapsedSeconds": 81.5042405128479,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.49000000000001,
+        "sqi": 0.58740234375,
+        "rmssdMs": 73.59914968826004
+      },
+      "features": {
+        "facialStressSupport": 47.51,
+        "facialFocusSupport": null,
+        "confidence": 0.58740234375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 47.51,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.23,
+            "rmssdDropPercent": -4.61,
+            "heartRateComponent": 50.47,
+            "rmssdComponent": 43.09
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was close to baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58740234375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:00.310033Z",
+      "elapsedSeconds": 82.5604476928711,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.67,
+        "sqi": 0.59375,
+        "rmssdMs": 73.83184932878687
+      },
+      "features": {
+        "facialStressSupport": 47.6,
+        "facialFocusSupport": null,
+        "confidence": 0.59375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 47.6,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.47,
+            "rmssdDropPercent": -4.94,
+            "heartRateComponent": 50.93,
+            "rmssdComponent": 42.59
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was close to baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:01.390122Z",
+      "elapsedSeconds": 83.63248205184937,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.86,
+        "sqi": 0.58447265625,
+        "rmssdMs": 74.48050773018454
+      },
+      "features": {
+        "facialStressSupport": 45.78,
+        "facialFocusSupport": null,
+        "confidence": 0.58447265625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 45.78,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.58,
+            "rmssdDropPercent": -5.86,
+            "heartRateComponent": 48.84,
+            "rmssdComponent": 41.21
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 5.9% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58447265625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:02.455697Z",
+      "elapsedSeconds": 84.70425271987915,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.13000000000001,
+        "sqi": 0.56982421875,
+        "rmssdMs": 76.03232886529116
+      },
+      "features": {
+        "facialStressSupport": 44.88,
+        "facialFocusSupport": null,
+        "confidence": 0.56982421875,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 44.88,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.23,
+            "rmssdDropPercent": -8.07,
+            "heartRateComponent": 49.53,
+            "rmssdComponent": 37.9
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 8.1% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.56982421875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:03.571801Z",
+      "elapsedSeconds": 85.77754306793213,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.67,
+        "sqi": 0.5693359375,
+        "rmssdMs": 76.68335347607552
+      },
+      "features": {
+        "facialStressSupport": 45.16,
+        "facialFocusSupport": null,
+        "confidence": 0.5693359375,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 45.16,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.47,
+            "rmssdDropPercent": -8.99,
+            "heartRateComponent": 50.93,
+            "rmssdComponent": 36.51
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 9.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5693359375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:04.655253Z",
+      "elapsedSeconds": 86.89604687690735,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.67,
+        "sqi": 0.5458984375,
+        "rmssdMs": 77.57539144615873
+      },
+      "features": {
+        "facialStressSupport": 44.4,
+        "facialFocusSupport": null,
+        "confidence": 0.5458984375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 44.4,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.47,
+            "rmssdDropPercent": -10.26,
+            "heartRateComponent": 50.93,
+            "rmssdComponent": 34.61
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 10.3% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5458984375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:05.713214Z",
+      "elapsedSeconds": 87.9687728881836,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.14000000000001,
+        "sqi": 0.54736328125,
+        "rmssdMs": 77.57539144615873
+      },
+      "features": {
+        "facialStressSupport": 42.03,
+        "facialFocusSupport": null,
+        "confidence": 0.54736328125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 42.03,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.51,
+            "rmssdDropPercent": -10.26,
+            "heartRateComponent": 46.97,
+            "rmssdComponent": 34.61
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 10.3% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54736328125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:06.792285Z",
+      "elapsedSeconds": 89.03958511352539,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.69,
+        "sqi": 0.5302734375,
+        "rmssdMs": 77.57539144615876
+      },
+      "features": {
+        "facialStressSupport": 41.33,
+        "facialFocusSupport": null,
+        "confidence": 0.5302734375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 41.33,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -2.1,
+            "rmssdDropPercent": -10.26,
+            "heartRateComponent": 45.81,
+            "rmssdComponent": 34.61
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 2.1% below baseline and RMSSD was 10.3% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5302734375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:07.859666Z",
+      "elapsedSeconds": 90.08984994888306,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.04,
+        "sqi": 0.52294921875,
+        "rmssdMs": 77.27918151368377
+      },
+      "features": {
+        "facialStressSupport": 43.68,
+        "facialFocusSupport": null,
+        "confidence": 0.52294921875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 43.68,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.35,
+            "rmssdDropPercent": -9.84,
+            "heartRateComponent": 49.3,
+            "rmssdComponent": 35.24
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 9.8% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.52294921875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:08.949094Z",
+      "elapsedSeconds": 91.1674530506134,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.77000000000001,
+        "sqi": 0.53955078125,
+        "rmssdMs": 72.61556446121065
+      },
+      "features": {
+        "facialStressSupport": 47.24,
+        "facialFocusSupport": null,
+        "confidence": 0.53955078125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 47.24,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.7,
+            "rmssdDropPercent": -3.21,
+            "heartRateComponent": 48.6,
+            "rmssdComponent": 45.18
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was close to baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53955078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:10.033267Z",
+      "elapsedSeconds": 92.27261304855347,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.78,
+        "sqi": 0.5712890625,
+        "rmssdMs": 80.84264932952969
+      },
+      "features": {
+        "facialStressSupport": 38.68,
+        "facialFocusSupport": null,
+        "confidence": 0.5712890625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 38.68,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.98,
+            "rmssdDropPercent": -14.9,
+            "heartRateComponent": 46.04,
+            "rmssdComponent": 27.64
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 14.9% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5712890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:11.091465Z",
+      "elapsedSeconds": 93.33823823928833,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.68,
+        "sqi": 0.556640625,
+        "rmssdMs": 85.1180295082567
+      },
+      "features": {
+        "facialStressSupport": 36.43,
+        "facialFocusSupport": null,
+        "confidence": 0.556640625,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 36.43,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.81,
+            "rmssdDropPercent": -20.98,
+            "heartRateComponent": 48.37,
+            "rmssdComponent": 18.53
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 21.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.556640625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:12.155008Z",
+      "elapsedSeconds": 94.39467263221741,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.76,
+        "sqi": 0.53125,
+        "rmssdMs": 81.97789834457505
+      },
+      "features": {
+        "facialStressSupport": 40.79,
+        "facialFocusSupport": null,
+        "confidence": 0.53125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 40.79,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.58,
+            "rmssdDropPercent": -16.52,
+            "heartRateComponent": 51.16,
+            "rmssdComponent": 25.22
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.5% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:13.216724Z",
+      "elapsedSeconds": 95.47167754173279,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.31,
+        "sqi": 0.537109375,
+        "rmssdMs": 82.10722233516375
+      },
+      "features": {
+        "facialStressSupport": 39.98,
+        "facialFocusSupport": null,
+        "confidence": 0.537109375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.98,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.0,
+            "rmssdDropPercent": -16.7,
+            "heartRateComponent": 50.0,
+            "rmssdComponent": 24.95
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.7% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.537109375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:14.297648Z",
+      "elapsedSeconds": 96.51230096817017,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.04,
+        "sqi": 0.54296875,
+        "rmssdMs": 81.95823030758757
+      },
+      "features": {
+        "facialStressSupport": 39.69,
+        "facialFocusSupport": null,
+        "confidence": 0.54296875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.69,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.35,
+            "rmssdDropPercent": -16.49,
+            "heartRateComponent": 49.3,
+            "rmssdComponent": 25.27
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.5% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54296875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:15.357961Z",
+      "elapsedSeconds": 97.59862732887268,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.58,
+        "sqi": 0.5087890625,
+        "rmssdMs": 83.09558241563418
+      },
+      "features": {
+        "facialStressSupport": 39.56,
+        "facialFocusSupport": null,
+        "confidence": 0.5087890625,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.56,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.35,
+            "rmssdDropPercent": -18.11,
+            "heartRateComponent": 50.7,
+            "rmssdComponent": 22.84
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 18.1% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5087890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:16.427532Z",
+      "elapsedSeconds": 98.67227911949158,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.94,
+        "sqi": 0.50146484375,
+        "rmssdMs": 81.8923494739091
+      },
+      "features": {
+        "facialStressSupport": 41.14,
+        "facialFocusSupport": null,
+        "confidence": 0.50146484375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 41.14,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": 0.81,
+            "rmssdDropPercent": -16.4,
+            "heartRateComponent": 51.63,
+            "rmssdComponent": 25.41
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50146484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:17.494286Z",
+      "elapsedSeconds": 99.7449095249176,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.13000000000001,
+        "sqi": 0.509765625,
+        "rmssdMs": 81.89234947390925
+      },
+      "features": {
+        "facialStressSupport": 39.88,
+        "facialFocusSupport": null,
+        "confidence": 0.509765625,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.88,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.23,
+            "rmssdDropPercent": -16.4,
+            "heartRateComponent": 49.53,
+            "rmssdComponent": 25.41
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.509765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:18.575005Z",
+      "elapsedSeconds": 100.81532859802246,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.68,
+        "sqi": 0.513671875,
+        "rmssdMs": 81.89234947390919
+      },
+      "features": {
+        "facialStressSupport": 39.18,
+        "facialFocusSupport": null,
+        "confidence": 0.513671875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.18,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.81,
+            "rmssdDropPercent": -16.4,
+            "heartRateComponent": 48.37,
+            "rmssdComponent": 25.41
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.513671875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:19.648252Z",
+      "elapsedSeconds": 101.8723213672638,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.86,
+        "sqi": 0.5078125,
+        "rmssdMs": 81.71701189880848
+      },
+      "features": {
+        "facialStressSupport": 39.61,
+        "facialFocusSupport": null,
+        "confidence": 0.5078125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 39.61,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -0.58,
+            "rmssdDropPercent": -16.15,
+            "heartRateComponent": 48.84,
+            "rmssdComponent": 25.78
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.1% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:20.704886Z",
+      "elapsedSeconds": 102.9437506198883,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.41000000000001,
+        "sqi": 0.5068359375,
+        "rmssdMs": 82.03684808940682
+      },
+      "features": {
+        "facialStressSupport": 38.64,
+        "facialFocusSupport": null,
+        "confidence": 0.5068359375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 38.64,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.16,
+            "rmssdDropPercent": -16.6,
+            "heartRateComponent": 47.67,
+            "rmssdComponent": 25.1
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 16.6% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5068359375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:21.753742Z",
+      "elapsedSeconds": 104.01541304588318,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.14000000000001,
+        "sqi": 0.49951171875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49951171875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49951171875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:22.810544Z",
+      "elapsedSeconds": 105.07213068008423,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.78,
+        "sqi": 0.474609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.474609375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.474609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:23.851143Z",
+      "elapsedSeconds": 106.11213731765747,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.69,
+        "sqi": 0.477783203125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.477783203125,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.477783203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:24.920488Z",
+      "elapsedSeconds": 107.15271377563477,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.87,
+        "sqi": 0.498046875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.498046875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.498046875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:25.978545Z",
+      "elapsedSeconds": 108.23939061164856,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.96000000000001,
+        "sqi": 0.49560546875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49560546875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49560546875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:27.039615Z",
+      "elapsedSeconds": 109.28057765960693,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.24,
+        "sqi": 0.52392578125,
+        "rmssdMs": 86.14377516686856
+      },
+      "features": {
+        "facialStressSupport": 33.32,
+        "facialFocusSupport": null,
+        "confidence": 0.52392578125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 33.32,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -2.68,
+            "rmssdDropPercent": -22.44,
+            "heartRateComponent": 44.64,
+            "rmssdComponent": 16.34
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 2.7% below baseline and RMSSD was 22.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.52392578125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:28.102817Z",
+      "elapsedSeconds": 110.35135626792908,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.7,
+        "sqi": 0.5166015625,
+        "rmssdMs": 86.10085448389661
+      },
+      "features": {
+        "facialStressSupport": 32.52,
+        "facialFocusSupport": null,
+        "confidence": 0.5166015625,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 32.52,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -3.38,
+            "rmssdDropPercent": -22.38,
+            "heartRateComponent": 43.25,
+            "rmssdComponent": 16.43
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 3.4% below baseline and RMSSD was 22.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5166015625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:29.170814Z",
+      "elapsedSeconds": 111.40720558166504,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.41000000000001,
+        "sqi": 0.50048828125,
+        "rmssdMs": 85.41077215433651
+      },
+      "features": {
+        "facialStressSupport": 35.77,
+        "facialFocusSupport": null,
+        "confidence": 0.50048828125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 35.77,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.16,
+            "rmssdDropPercent": -21.4,
+            "heartRateComponent": 47.67,
+            "rmssdComponent": 17.91
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 21.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.50048828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:30.262851Z",
+      "elapsedSeconds": 112.48170638084412,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.32000000000001,
+        "sqi": 0.5205078125,
+        "rmssdMs": 85.41077215433651
+      },
+      "features": {
+        "facialStressSupport": 35.63,
+        "facialFocusSupport": null,
+        "confidence": 0.5205078125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 35.63,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -1.28,
+            "rmssdDropPercent": -21.4,
+            "heartRateComponent": 47.44,
+            "rmssdComponent": 17.91
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was close to baseline and RMSSD was 21.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5205078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:31.358117Z",
+      "elapsedSeconds": 113.58410120010376,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.07,
+        "sqi": 0.51611328125,
+        "rmssdMs": 83.43416816069241
+      },
+      "features": {
+        "facialStressSupport": 33.82,
+        "facialFocusSupport": null,
+        "confidence": 0.51611328125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 33.82,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -4.19,
+            "rmssdDropPercent": -18.59,
+            "heartRateComponent": 41.62,
+            "rmssdComponent": 22.12
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 4.2% below baseline and RMSSD was 18.6% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51611328125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:32.410138Z",
+      "elapsedSeconds": 114.65573930740356,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.62,
+        "sqi": 0.517578125,
+        "rmssdMs": 81.4718765382675
+      },
+      "features": {
+        "facialStressSupport": 34.79,
+        "facialFocusSupport": null,
+        "confidence": 0.517578125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 34.79,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -4.77,
+            "rmssdDropPercent": -15.8,
+            "heartRateComponent": 40.45,
+            "rmssdComponent": 26.3
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 4.8% below baseline and RMSSD was 15.8% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.517578125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:33.481830Z",
+      "elapsedSeconds": 115.71207690238953,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.07,
+        "sqi": 0.51171875,
+        "rmssdMs": 83.387223954116
+      },
+      "features": {
+        "facialStressSupport": 33.86,
+        "facialFocusSupport": null,
+        "confidence": 0.51171875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 33.86,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -4.19,
+            "rmssdDropPercent": -18.52,
+            "heartRateComponent": 41.62,
+            "rmssdComponent": 22.22
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 4.2% below baseline and RMSSD was 18.5% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51171875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:34.518225Z",
+      "elapsedSeconds": 116.77986812591553,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.14999999999999,
+        "sqi": 0.49658203125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49658203125,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49658203125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:35.586755Z",
+      "elapsedSeconds": 117.82502436637878,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.52,
+        "sqi": 0.49609375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49609375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49609375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:36.657413Z",
+      "elapsedSeconds": 118.91115283966064,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.07,
+        "sqi": 0.53173828125,
+        "rmssdMs": 83.2116530990079
+      },
+      "features": {
+        "facialStressSupport": 34.01,
+        "facialFocusSupport": null,
+        "confidence": 0.53173828125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 34.01,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -4.19,
+            "rmssdDropPercent": -18.27,
+            "heartRateComponent": 41.62,
+            "rmssdComponent": 22.59
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 4.2% below baseline and RMSSD was 18.3% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53173828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:37.733128Z",
+      "elapsedSeconds": 119.98298978805542,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.61,
+        "sqi": 0.5390625,
+        "rmssdMs": 86.5522812271351
+      },
+      "features": {
+        "facialStressSupport": 32.0,
+        "facialFocusSupport": null,
+        "confidence": 0.5390625,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 32.0,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -3.49,
+            "rmssdDropPercent": -23.02,
+            "heartRateComponent": 43.02,
+            "rmssdComponent": 15.47
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 3.5% below baseline and RMSSD was 23.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5390625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:38.910846Z",
+      "elapsedSeconds": 121.05522561073303,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.06,
+        "sqi": 0.56298828125,
+        "rmssdMs": 82.14348472845214
+      },
+      "features": {
+        "facialStressSupport": 36.46,
+        "facialFocusSupport": null,
+        "confidence": 0.56298828125,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 36.46,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -2.91,
+            "rmssdDropPercent": -16.75,
+            "heartRateComponent": 44.18,
+            "rmssdComponent": 24.87
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 2.9% below baseline and RMSSD was 16.8% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.56298828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:39.983427Z",
+      "elapsedSeconds": 122.22326707839966,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.34,
+        "sqi": 0.53662109375,
+        "rmssdMs": 83.23549094830362
+      },
+      "features": {
+        "facialStressSupport": 34.41,
+        "facialFocusSupport": null,
+        "confidence": 0.53662109375,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 34.41,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -3.84,
+            "rmssdDropPercent": -18.3,
+            "heartRateComponent": 42.32,
+            "rmssdComponent": 22.54
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 3.8% below baseline and RMSSD was 18.3% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53662109375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:41.060684Z",
+      "elapsedSeconds": 123.28055930137634,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.53,
+        "sqi": 0.53125,
+        "rmssdMs": 83.62310908331484
+      },
+      "features": {
+        "facialStressSupport": 32.82,
+        "facialFocusSupport": null,
+        "confidence": 0.53125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 32.82,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -4.89,
+            "rmssdDropPercent": -18.86,
+            "heartRateComponent": 40.22,
+            "rmssdComponent": 21.72
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 4.9% below baseline and RMSSD was 18.9% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:42.140433Z",
+      "elapsedSeconds": 124.38353824615479,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.26,
+        "sqi": 0.533203125,
+        "rmssdMs": 87.26281787059253
+      },
+      "features": {
+        "facialStressSupport": 29.3,
+        "facialFocusSupport": null,
+        "confidence": 0.533203125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 29.3,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -5.24,
+            "rmssdDropPercent": -24.03,
+            "heartRateComponent": 39.52,
+            "rmssdComponent": 13.96
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 5.2% below baseline and RMSSD was 24.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.533203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:43.208009Z",
+      "elapsedSeconds": 125.4558253288269,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.7,
+        "sqi": 0.51513671875,
+        "rmssdMs": 88.73064550075443
+      },
+      "features": {
+        "facialStressSupport": 30.28,
+        "facialFocusSupport": null,
+        "confidence": 0.51513671875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 30.28,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -3.38,
+            "rmssdDropPercent": -26.12,
+            "heartRateComponent": 43.25,
+            "rmssdComponent": 10.83
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 3.4% below baseline and RMSSD was 26.1% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.51513671875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:44.273212Z",
+      "elapsedSeconds": 126.52404356002808,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.25,
+        "sqi": 0.497802734375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.497802734375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.497802734375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:45.326778Z",
+      "elapsedSeconds": 127.57984805107117,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.48583984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.48583984375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.48583984375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:46.389728Z",
+      "elapsedSeconds": 128.624760389328,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.45,
+        "sqi": 0.4990234375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4990234375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4990234375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:47.446569Z",
+      "elapsedSeconds": 129.6951699256897,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.26,
+        "sqi": 0.5283203125,
+        "rmssdMs": 87.99233372090411
+      },
+      "features": {
+        "facialStressSupport": 28.67,
+        "facialFocusSupport": null,
+        "confidence": 0.5283203125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 28.67,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -5.24,
+            "rmssdDropPercent": -25.07,
+            "heartRateComponent": 39.52,
+            "rmssdComponent": 12.4
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 5.2% below baseline and RMSSD was 25.1% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5283203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:48.501464Z",
+      "elapsedSeconds": 130.7521631717682,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.5283203125,
+        "rmssdMs": 90.30779704923249
+      },
+      "features": {
+        "facialStressSupport": 26.14,
+        "facialFocusSupport": null,
+        "confidence": 0.5283203125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 26.14,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -5.7,
+            "rmssdDropPercent": -28.36,
+            "heartRateComponent": 38.59,
+            "rmssdComponent": 7.46
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 5.7% below baseline and RMSSD was 28.4% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5283203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:49.562789Z",
+      "elapsedSeconds": 131.8236267566681,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.82000000000001,
+        "sqi": 0.49853515625,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49853515625,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49853515625,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:50.617264Z",
+      "elapsedSeconds": 132.88086819648743,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.82000000000001,
+        "sqi": 0.47998046875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.47998046875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.47998046875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:51.681413Z",
+      "elapsedSeconds": 133.9211974143982,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.18,
+        "sqi": 0.497314453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.497314453125,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.497314453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:52.727034Z",
+      "elapsedSeconds": 134.99110174179077,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.45,
+        "sqi": 0.4716796875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4716796875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4716796875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:53.764316Z",
+      "elapsedSeconds": 136.03090238571167,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.09,
+        "sqi": 0.463623046875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.463623046875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.463623046875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:54.834505Z",
+      "elapsedSeconds": 137.08825516700745,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.73,
+        "sqi": 0.470458984375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.470458984375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.470458984375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:55.899794Z",
+      "elapsedSeconds": 138.15930938720703,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.09,
+        "sqi": 0.490234375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.490234375,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.490234375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:56.967577Z",
+      "elapsedSeconds": 139.2006995677948,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.54,
+        "sqi": 0.492919921875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.492919921875,
+        "signalQuality": "limited",
+        "facialStress": {
+          "score": null,
+          "category": "unknown",
+          "trusted": false,
+          "ruleVersion": "facial-stress-v0.1",
+          "reason": "Facial stress support was not calculated because the current rPPG reading was untrusted."
+        }
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.492919921875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:58.035443Z",
+      "elapsedSeconds": 140.2869532108307,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.63000000000001,
+        "sqi": 0.54638671875,
+        "rmssdMs": 85.160632532488
+      },
+      "features": {
+        "facialStressSupport": 30.11,
+        "facialFocusSupport": null,
+        "confidence": 0.54638671875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 30.11,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -6.05,
+            "rmssdDropPercent": -21.04,
+            "heartRateComponent": 37.89,
+            "rmssdComponent": 18.44
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 6.1% below baseline and RMSSD was 21.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54638671875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:59:59.107975Z",
+      "elapsedSeconds": 141.3591296672821,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.36,
+        "sqi": 0.5263671875,
+        "rmssdMs": 85.00824841655438
+      },
+      "features": {
+        "facialStressSupport": 29.82,
+        "facialFocusSupport": null,
+        "confidence": 0.5263671875,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 29.82,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -6.4,
+            "rmssdDropPercent": -20.82,
+            "heartRateComponent": 37.19,
+            "rmssdComponent": 18.76
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 6.4% below baseline and RMSSD was 20.8% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5263671875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T19:00:00.178023Z",
+      "elapsedSeconds": 142.43109250068665,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.45,
+        "sqi": 0.533203125,
+        "rmssdMs": 80.0878524032463
+      },
+      "features": {
+        "facialStressSupport": 34.16,
+        "facialFocusSupport": null,
+        "confidence": 0.533203125,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 34.16,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -6.29,
+            "rmssdDropPercent": -13.83,
+            "heartRateComponent": 37.43,
+            "rmssdComponent": 29.25
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 6.3% below baseline and RMSSD was 13.8% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.533203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T19:00:01.241258Z",
+      "elapsedSeconds": 143.4844000339508,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.36,
+        "sqi": 0.5400390625,
+        "rmssdMs": 84.21076341476288
+      },
+      "features": {
+        "facialStressSupport": 30.5,
+        "facialFocusSupport": null,
+        "confidence": 0.5400390625,
+        "signalQuality": "usable",
+        "facialStress": {
+          "score": 30.5,
+          "category": "low",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -6.4,
+            "rmssdDropPercent": -19.69,
+            "heartRateComponent": 37.19,
+            "rmssdComponent": 20.46
+          },
+          "reason": "Experimental facial stress support was classified as low because heart rate was 6.4% below baseline and RMSSD was 19.7% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5400390625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_stress_low",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T19:00:02.334930Z",
+      "elapsedSeconds": 144.5608880519867,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.27000000000001,
+        "sqi": 0.5546875,
+        "rmssdMs": 76.65932935904038
+      },
+      "features": {
+        "facialStressSupport": 36.8,
+        "facialFocusSupport": null,
+        "confidence": 0.5546875,
+        "signalQuality": "good",
+        "facialStress": {
+          "score": 36.8,
+          "category": "moderate",
+          "trusted": true,
+          "ruleVersion": "facial-stress-v0.1",
+          "components": {
+            "heartRateChangePercent": -6.52,
+            "rmssdDropPercent": -8.96,
+            "heartRateComponent": 36.96,
+            "rmssdComponent": 36.56
+          },
+          "reason": "Experimental facial stress support was classified as moderate because heart rate was 6.5% below baseline and RMSSD was 9.0% above baseline."
+        }
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5546875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.55)."
+      },
+      "state": "facial_stress_moderate",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.55).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 77.31,
+        "rmssdMs": 70.3567724258258,
+        "version": "facial-baseline-v0.1"
+      }
+    }
+  ],
+  "summary": {
+    "snapshotCount": 80,
+    "averageHeartRateBpm": 76.04274193548387,
+    "averageSqi": 0.5598695816532258,
+    "averageRmssdMs": 78.37706010294154,
+    "trustedSnapshotCount": 62,
+    "untrustedSnapshotCount": 18,
+    "trustedSnapshotPercent": 77.5,
+    "allSnapshotAverageHeartRateBpm": 75.50212499999999,
+    "allSnapshotAverageSqi": 0.543719482421875,
+    "allSnapshotAverageRmssdMs": 78.37706010294154,
+    "stressDistribution": {
+      "low": 10,
+      "moderate": 33,
+      "high": 0,
+      "unknown": 18,
+      "calibrating": 19
+    },
+    "stressPieChart": [
+      {
+        "category": "low",
+        "count": 10
+      },
+      {
+        "category": "moderate",
+        "count": 33
+      },
+      {
+        "category": "high",
+        "count": 0
+      }
+    ],
+    "scoredStressSnapshotCount": 43
+  }
+}

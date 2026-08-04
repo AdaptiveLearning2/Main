@@ -1,0 +1,2428 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "sessionId": null,
+    "studentId": null,
+    "startedAt": "2026-07-22T18:47:21.087093Z",
+    "endedAt": "2026-07-22T18:49:23.902346Z",
+    "samplingIntervalSeconds": 1,
+    "baseline": {
+      "status": "ready",
+      "requiredTrustedSnapshots": 20,
+      "trustedSnapshotsUsed": 20,
+      "heartRateBpm": 78.30000000000001,
+      "rmssdMs": 84.48780459507446,
+      "completedAt": "2026-07-22T18:48:51.335358Z",
+      "version": "facial-baseline-v0.1"
+    }
+  },
+  "snapshots": [
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:22.559824Z",
+      "elapsedSeconds": 60.011932373046875,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.08999999999999,
+        "sqi": 0.505859375,
+        "rmssdMs": 86.39244365676674
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.505859375,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.505859375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.51 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 1,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:23.634135Z",
+      "elapsedSeconds": 61.084494829177856,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 79.29,
+        "sqi": 0.5302734375,
+        "rmssdMs": 87.32060976017543
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5302734375,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5302734375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 2,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:24.695455Z",
+      "elapsedSeconds": 62.15584325790405,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.55,
+        "sqi": 0.53369140625,
+        "rmssdMs": 85.5244035998566
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.53369140625,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53369140625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 3,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:25.768713Z",
+      "elapsedSeconds": 63.228474617004395,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.27,
+        "sqi": 0.53955078125,
+        "rmssdMs": 87.32060976017564
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.53955078125,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.53955078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 4,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:26.829443Z",
+      "elapsedSeconds": 64.28389310836792,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.82,
+        "sqi": 0.54638671875,
+        "rmssdMs": 87.32060976017561
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.54638671875,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54638671875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 5,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:27.896204Z",
+      "elapsedSeconds": 65.35694766044617,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 68.85,
+        "sqi": 0.5224609375,
+        "rmssdMs": 84.33177478555996
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5224609375,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5224609375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 6,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:28.966854Z",
+      "elapsedSeconds": 66.42792415618896,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 69.12,
+        "sqi": 0.5048828125,
+        "rmssdMs": 85.36807560987504
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5048828125,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5048828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 7,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:30.011804Z",
+      "elapsedSeconds": 67.48442769050598,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.17999999999999,
+        "sqi": 0.479248046875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.479248046875,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.479248046875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 7,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:31.052402Z",
+      "elapsedSeconds": 68.5239531993866,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 67.95,
+        "sqi": 0.4716796875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4716796875,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4716796875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 7,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:32.093405Z",
+      "elapsedSeconds": 69.56520009040833,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 68.58,
+        "sqi": 0.46142578125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.46142578125,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.46142578125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 7,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:33.160298Z",
+      "elapsedSeconds": 70.62003087997437,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 68.67,
+        "sqi": 0.5751953125,
+        "rmssdMs": 80.42682033968313
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5751953125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5751953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 8,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:34.232792Z",
+      "elapsedSeconds": 71.69253087043762,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 81.44999999999999,
+        "sqi": 0.57177734375,
+        "rmssdMs": 80.60194832678704
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57177734375,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57177734375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 9,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:35.303194Z",
+      "elapsedSeconds": 72.76384735107422,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.1,
+        "sqi": 0.57275390625,
+        "rmssdMs": 80.58540443161763
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57275390625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57275390625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 10,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:36.358787Z",
+      "elapsedSeconds": 73.81995105743408,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.38,
+        "sqi": 0.57470703125,
+        "rmssdMs": 80.59739909414367
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57470703125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57470703125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 11,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:37.430820Z",
+      "elapsedSeconds": 74.87322425842285,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 68.85,
+        "sqi": 0.56298828125,
+        "rmssdMs": 80.60677298994041
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.56298828125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.56298828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 12,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:38.493324Z",
+      "elapsedSeconds": 75.96419763565063,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.19,
+        "sqi": 0.49755859375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.49755859375,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.49755859375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 12,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:39.546939Z",
+      "elapsedSeconds": 77.0197422504425,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.48,
+        "sqi": 0.473388671875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.473388671875,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.473388671875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 12,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:40.590656Z",
+      "elapsedSeconds": 78.0601053237915,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.62,
+        "sqi": 0.46875,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.46875,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.46875,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 12,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:41.645335Z",
+      "elapsedSeconds": 79.10072326660156,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.45,
+        "sqi": 0.501953125,
+        "rmssdMs": 82.12230118196376
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.501953125,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.501953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.50 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 13,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:42.759160Z",
+      "elapsedSeconds": 80.15944695472717,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 80.1,
+        "sqi": 0.515625,
+        "rmssdMs": 82.12230118196355
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.515625,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.515625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 14,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:43.833557Z",
+      "elapsedSeconds": 81.28530740737915,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 78.84,
+        "sqi": 0.5654296875,
+        "rmssdMs": 84.49153475020046
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5654296875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5654296875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 15,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:44.898885Z",
+      "elapsedSeconds": 82.36388659477234,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.69,
+        "sqi": 0.56640625,
+        "rmssdMs": 85.77737096469232
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.56640625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.56640625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 16,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:45.975420Z",
+      "elapsedSeconds": 83.43015313148499,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.0,
+        "sqi": 0.55712890625,
+        "rmssdMs": 84.51253194382201
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.55712890625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.55712890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 17,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:47.071622Z",
+      "elapsedSeconds": 84.52554273605347,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 79.38,
+        "sqi": 0.5283203125,
+        "rmssdMs": 84.48780459507446
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5283203125,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5283203125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.53 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 18,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:48.139896Z",
+      "elapsedSeconds": 85.59697461128235,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 77.76,
+        "sqi": 0.521484375,
+        "rmssdMs": 84.48780459507446
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.521484375,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.521484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 19,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:49.196945Z",
+      "elapsedSeconds": 86.6678056716919,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.42,
+        "sqi": 0.4912109375,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.4912109375,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.4912109375,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 19,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:50.267053Z",
+      "elapsedSeconds": 87.73983883857727,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.91000000000001,
+        "sqi": 0.497314453125,
+        "rmssdMs": null
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.497314453125,
+        "signalQuality": "limited"
+      },
+      "quality": {
+        "trusted": false,
+        "trustLevel": "limited",
+        "confidence": 0.497314453125,
+        "flags": [
+          "rmssd_unavailable"
+        ],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting."
+      },
+      "state": "insufficient_signal",
+      "reason": "Heart rate was available, but RMSSD was unavailable, so the snapshot is not trusted for HRV-based reporting.",
+      "baseline": {
+        "status": "calibrating",
+        "trustedSnapshotsUsed": 19,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": null,
+        "rmssdMs": null,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:51.335358Z",
+      "elapsedSeconds": 88.79656434059143,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 69.75,
+        "sqi": 0.54248046875,
+        "rmssdMs": 79.62751827519605
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.54248046875,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.54248046875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.54 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:52.405543Z",
+      "elapsedSeconds": 89.86724257469177,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 69.12,
+        "sqi": 0.57666015625,
+        "rmssdMs": 80.88748372989843
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57666015625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57666015625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:53.466259Z",
+      "elapsedSeconds": 90.91052198410034,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.42,
+        "sqi": 0.5751953125,
+        "rmssdMs": 79.61848845402487
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5751953125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5751953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:54.535884Z",
+      "elapsedSeconds": 91.99565553665161,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.74000000000001,
+        "sqi": 0.57373046875,
+        "rmssdMs": 75.6852546919001
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57373046875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57373046875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:55.611580Z",
+      "elapsedSeconds": 93.06588244438171,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.19999999999999,
+        "sqi": 0.57080078125,
+        "rmssdMs": 75.66080740897321
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57080078125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57080078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:56.674333Z",
+      "elapsedSeconds": 94.13036131858826,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.19000000000001,
+        "sqi": 0.57080078125,
+        "rmssdMs": 74.27782314619762
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.57080078125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.57080078125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.57).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:57.745007Z",
+      "elapsedSeconds": 95.18474292755127,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.78999999999999,
+        "sqi": 0.5576171875,
+        "rmssdMs": 74.27782314619758
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5576171875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5576171875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.56).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:58.807050Z",
+      "elapsedSeconds": 96.26338601112366,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.27000000000001,
+        "sqi": 0.5234375,
+        "rmssdMs": 74.56202364723148
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5234375,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.5234375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.52 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:48:59.871590Z",
+      "elapsedSeconds": 97.32829642295837,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.33,
+        "sqi": 0.548828125,
+        "rmssdMs": 74.45916838100743
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.548828125,
+        "signalQuality": "usable"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "usable",
+        "confidence": 0.548828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available. SQI 0.55 met the provisional usable threshold but remained below the good threshold.",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:00.947158Z",
+      "elapsedSeconds": 98.40396165847778,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.42,
+        "sqi": 0.6064453125,
+        "rmssdMs": 74.17729511859454
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6064453125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6064453125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:02.014172Z",
+      "elapsedSeconds": 99.45314025878906,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.34,
+        "sqi": 0.6259765625,
+        "rmssdMs": 74.87707235007801
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6259765625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6259765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:03.068277Z",
+      "elapsedSeconds": 100.52514839172363,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.8,
+        "sqi": 0.6259765625,
+        "rmssdMs": 74.54533482683189
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6259765625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6259765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:04.134435Z",
+      "elapsedSeconds": 101.58013677597046,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.41000000000001,
+        "sqi": 0.61328125,
+        "rmssdMs": 73.83023352016795
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.61328125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.61328125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:05.210911Z",
+      "elapsedSeconds": 102.66639232635498,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.62,
+        "sqi": 0.60107421875,
+        "rmssdMs": 81.57096433304105
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.60107421875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.60107421875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:06.281588Z",
+      "elapsedSeconds": 103.73945641517639,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.99,
+        "sqi": 0.58935546875,
+        "rmssdMs": 80.97440355137626
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.58935546875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58935546875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:07.352399Z",
+      "elapsedSeconds": 104.81217670440674,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.64,
+        "sqi": 0.58837890625,
+        "rmssdMs": 81.6820393694697
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.58837890625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58837890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:08.407187Z",
+      "elapsedSeconds": 105.8675799369812,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.74000000000001,
+        "sqi": 0.58251953125,
+        "rmssdMs": 82.99387806517028
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.58251953125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58251953125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:09.490143Z",
+      "elapsedSeconds": 106.94012379646301,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.18,
+        "sqi": 0.58056640625,
+        "rmssdMs": 83.77229070705532
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.58056640625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58056640625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:10.552853Z",
+      "elapsedSeconds": 108.01164197921753,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.37,
+        "sqi": 0.63134765625,
+        "rmssdMs": 77.36397860235249
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.63134765625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.63134765625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.63).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:11.606813Z",
+      "elapsedSeconds": 109.06799173355103,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.28999999999999,
+        "sqi": 0.61962890625,
+        "rmssdMs": 76.47436567374073
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.61962890625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.61962890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:12.677854Z",
+      "elapsedSeconds": 110.13968324661255,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 70.19999999999999,
+        "sqi": 0.60986328125,
+        "rmssdMs": 75.49162327825003
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.60986328125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.60986328125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:13.750412Z",
+      "elapsedSeconds": 111.21219086647034,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.9,
+        "sqi": 0.58837890625,
+        "rmssdMs": 76.1006444178243
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.58837890625,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.58837890625,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:14.835498Z",
+      "elapsedSeconds": 112.2850296497345,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.36,
+        "sqi": 0.5771484375,
+        "rmssdMs": 76.78078799859244
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.5771484375,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.5771484375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.58).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:16.023144Z",
+      "elapsedSeconds": 113.3692147731781,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 72.18,
+        "sqi": 0.59912109375,
+        "rmssdMs": 79.3708199097134
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.59912109375,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59912109375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:17.094466Z",
+      "elapsedSeconds": 114.53604626655579,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 76.05000000000001,
+        "sqi": 0.60546875,
+        "rmssdMs": 76.76350932335257
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.60546875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.60546875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.61).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:18.152357Z",
+      "elapsedSeconds": 115.60860896110535,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 75.50999999999999,
+        "sqi": 0.6044921875,
+        "rmssdMs": 77.55971276331361
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6044921875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6044921875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:19.229204Z",
+      "elapsedSeconds": 116.68415570259094,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.61,
+        "sqi": 0.599609375,
+        "rmssdMs": 77.63929281207952
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.599609375,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.599609375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:20.325448Z",
+      "elapsedSeconds": 117.7402069568634,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 71.82000000000001,
+        "sqi": 0.6171875,
+        "rmssdMs": 74.86709090657291
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.6171875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.6171875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.62).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:21.375598Z",
+      "elapsedSeconds": 118.8432879447937,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 73.71,
+        "sqi": 0.59912109375,
+        "rmssdMs": 73.65541015054099
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.59912109375,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59912109375,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:22.423694Z",
+      "elapsedSeconds": 119.88334679603577,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.16,
+        "sqi": 0.60498046875,
+        "rmssdMs": 74.65895869860556
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.60498046875,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.60498046875,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.60).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    },
+    {
+      "schemaVersion": "facial-snapshot-v0.1",
+      "source": "facial_rppg",
+      "timestamp": "2026-07-22T18:49:23.529154Z",
+      "elapsedSeconds": 120.97343254089355,
+      "sessionId": null,
+      "question": {
+        "questionAttemptId": null,
+        "text": null,
+        "subject": null
+      },
+      "rawSignal": {
+        "heartRateBpm": 74.16,
+        "sqi": 0.59423828125,
+        "rmssdMs": 76.30656791975584
+      },
+      "features": {
+        "facialStressSupport": null,
+        "facialFocusSupport": null,
+        "confidence": 0.59423828125,
+        "signalQuality": "good"
+      },
+      "quality": {
+        "trusted": true,
+        "trustLevel": "good",
+        "confidence": 0.59423828125,
+        "flags": [],
+        "ruleVersion": "facial-quality-v0.1",
+        "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59)."
+      },
+      "state": "facial_signal_available",
+      "reason": "Heart rate and RMSSD were available with good signal quality (SQI 0.59).",
+      "baseline": {
+        "status": "ready",
+        "trustedSnapshotsUsed": 20,
+        "requiredTrustedSnapshots": 20,
+        "heartRateBpm": 78.30000000000001,
+        "rmssdMs": 84.48780459507446,
+        "version": "facial-baseline-v0.1"
+      }
+    }
+  ],
+  "summary": {
+    "snapshotCount": 58,
+    "averageHeartRateBpm": 74.1186,
+    "averageSqi": 0.57201171875,
+    "averageRmssdMs": 79.69822373009306,
+    "trustedSnapshotCount": 50,
+    "untrustedSnapshotCount": 8,
+    "trustedSnapshotPercent": 86.21,
+    "allSnapshotAverageHeartRateBpm": 74.19413793103449,
+    "allSnapshotAverageSqi": 0.5593303811961207,
+    "allSnapshotAverageRmssdMs": 79.69822373009306
+  }
+}

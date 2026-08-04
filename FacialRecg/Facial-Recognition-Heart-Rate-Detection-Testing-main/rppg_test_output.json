@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "source": "facial_rppg",
+  "session": {
+    "sessionId": null,
+    "studentId": null,
+    "startedAt": "2026-07-23T05:18:58.530981Z",
+    "endedAt": null,
+    "samplingIntervalSeconds": 1,
+    "baseline": {
+      "status": "calibrating",
+      "requiredTrustedSnapshots": 20,
+      "trustedSnapshotsUsed": 0,
+      "heartRateBpm": null,
+      "rmssdMs": null,
+      "completedAt": null,
+      "version": "facial-baseline-v0.1"
+    }
+  },
+  "snapshots": [],
+  "summary": {
+    "snapshotCount": 0,
+    "averageHeartRateBpm": null,
+    "averageSqi": null,
+    "averageRmssdMs": null,
+    "trustedSnapshotCount": 0,
+    "untrustedSnapshotCount": 0,
+    "trustedSnapshotPercent": null,
+    "allSnapshotAverageHeartRateBpm": null,
+    "allSnapshotAverageSqi": null,
+    "allSnapshotAverageRmssdMs": null,
+    "stressDistribution": {
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "unknown": 0,
+      "calibrating": 0
+    },
+    "stressPieChart": [],
+    "scoredStressSnapshotCount": 0
+  }
+}

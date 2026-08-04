@@ -90,6 +90,37 @@ jobs:
             echo "no tests/ directory yet — skipping"
           fi
 
+  function-grants:
+    name: Function grants
+    runs-on: ubuntu-latest
+    # Postgres grants EXECUTE on a new function to PUBLIC automatically, and
+    # Supabase grants it to anon and authenticated by name on top of that -- so
+    # a CREATE FUNCTION with no revoke block is callable by anyone holding the
+    # anon key, which ships in the frontend bundle. The backend reads through
+    # the service-role client and bypasses RLS, so those revokes are load
+    # bearing rather than tidiness.
+    #
+    # This is a lint rather than a database default because the database
+    # default does not work: ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ON
+    # FUNCTIONS FROM PUBLIC, anon, authenticated was tried against a local
+    # Supabase stack on 2026-08-04 and new functions still came back with the
+    # PUBLIC grant, executable by both roles. The script's docstring has the
+    # full reproduction.
+    #
+    # Separate job rather than a step in database-migrations below: it is pure
+    # text analysis over supabase/migrations, needs no Docker and no Supabase
+    # stack, and finishes in under a second. Bolting it onto that job would
+    # make a fast, deterministic check wait on a container pull.
+    #
+    # Stdlib only, so no dependency install step and nothing to pin.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check public-schema functions revoke EXECUTE
+        run: python scripts/check_function_grants.py
+
   database-migrations:
     name: Database migrations
     runs-on: ubuntu-latest

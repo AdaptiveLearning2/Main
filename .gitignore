@@ -41,20 +41,32 @@ coverage/
 # became the 582k-line file. The block has been removed from the README so there
 # is one list, here, and no second copy to drift.
 #
-# Scoped to this directory rather than repo-wide: a blanket *.onnx would also
-# silently swallow a small model someone deliberately wants to commit elsewhere.
+# Unanchored, so they match at any depth. That is not tidiness -- it is the
+# whole point. Every one of these paths is a bare relative name in the source
+# (JSON_OUTPUT_PATH = "rppg_test_output.json", DEFAULT_EMOTION_MODEL_PATH =
+# "emotion-ferplus-8.onnx"), so the files land in the *working* directory, not
+# next to the script. Running the capture script from the repo root -- the
+# obvious way to invoke it by path -- drops the 35MB model and the growing JSON
+# at the repository root. Anchoring these to /FacialRecg/ leaves exactly that
+# case uncovered, which is the case most likely to happen.
 #
-# A non-default --out is not covered. The durable fix is to point every default
-# at an ignored output/ directory so one rule covers all of them, but that means
-# changing script behaviour and belongs with the port into the sidecar, not with
-# a commit whose job is to stop the artifacts being committed.
-/FacialRecg/**/*.onnx
-/FacialRecg/**/rppg_test_output.json
-/FacialRecg/**/session_fusion_output.json
-/FacialRecg/**/session_signals_raw.json
-/FacialRecg/**/fusion_output*.json
-/FacialRecg/**/session_report.html
-/FacialRecg/**/.rppg_export_*.tmp
+# The model is named specifically rather than swallowed by a blanket *.onnx: a
+# repo-wide rule on that extension would also silently ignore a small model
+# someone deliberately wants to commit somewhere else, and a gitignore that
+# hides a file you meant to add is its own kind of afternoon.
+#
+# A non-default --out is still not covered. The durable fix is to point every
+# default at an ignored output/ directory so one rule covers all of them, but
+# that changes script behaviour and belongs with the port into the sidecar --
+# where the file export goes away entirely -- not with a commit whose only job
+# is to stop the artifacts landing in git.
+emotion-ferplus-8.onnx
+rppg_test_output.json
+session_fusion_output.json
+session_signals_raw.json
+fusion_output*.json
+session_report.html
+.rppg_export_*.tmp
 
 # Python bytecode. Unanchored, like the venv rules above, so it matches at any
 # depth rather than only where someone remembered to add a rule.

@@ -154,6 +154,18 @@ Explicit grants to a named role survive a revoke aimed at the `PUBLIC` pseudo-ro
 Verified against `pg_proc.proacl` on a local instance — without the named revokes the ACL comes
 back as `{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,...}`.
 
+`scripts/check_function_grants.py` enforces this, as the `Function grants` CI job. It matches by
+function **name**, not signature, so it catches a forgotten revoke block but not a migration that
+adds an overload and revokes only the old signature — review still has to. Deliberate exceptions go
+in its `ALLOWLIST` with a reason.
+
+**Don't try to fix this with `ALTER DEFAULT PRIVILEGES`.** Making `EXECUTE` deny-by-default is the
+obvious move and it does not work here: tested on a local stack 2026-08-04, the `pg_default_acl` row
+records correctly and the `anon`/`authenticated` named grants do disappear from new functions, but
+Postgres's `PUBLIC` grant (`=X`) survives and both roles can still execute. Reproduced with three
+throwaway functions, with the grantees combined in one statement and separated, and with no event
+trigger re-granting. A default that silently fails to deny is worse than none.
+
 ### When adding a function
 
 Revoke from the named roles, then grant only what the caller needs:
@@ -212,9 +224,17 @@ They are safe by construction — both are `auth.uid()`-scoped booleans with no 
 on (they answer "am *I* in this class", not "is user X"), and both pin
 `SET search_path TO 'public'`.
 
-Audited 2026-07-21: every function in the repo is either correctly revoked, deliberately granted
-and safe as above, or uncallable (`handle_new_user` returns `trigger`, which Postgres refuses to
-invoke directly and PostgREST will not expose as RPC).
+Audited 2026-08-04 against `pg_proc.proacl` on production and a local stack: five functions in
+`public`, and the two above are the only ones granted to an application role. `handle_new_user` was
+the last permissive holdout — harmless, since it returns `trigger`, which Postgres refuses to invoke
+directly and PostgREST will not expose as RPC — and `20260804000000` revoked it anyway rather than
+leave a permissive ACL sitting next to the ones that matter. Re-audit with:
+
+```sql
+SELECT p.proname, p.proacl
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public';
+```
 
 ## Access control — check the relationship, not the role name
 

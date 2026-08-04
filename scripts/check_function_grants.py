@@ -108,6 +108,11 @@ REVOKE_RE = re.compile(
 BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
+# REVOKE ... FROM a, b, c CASCADE; -- the drop-behaviour keyword rides on the
+# last grantee, so without this "authenticated CASCADE" is not "authenticated"
+# and correct SQL gets reported as a missing revoke.
+DROP_BEHAVIOUR_RE = re.compile(r"\s+(?:CASCADE|RESTRICT)\s*$", re.IGNORECASE)
+
 
 def strip_sql_comments(sql: str) -> str:
     """Remove -- and /* */ comments.
@@ -135,9 +140,9 @@ def scan(sql: str) -> tuple[list[str], dict[str, set[str]]]:
     revoked: dict[str, set[str]] = {}
     for match in REVOKE_RE.finditer(sql):
         grantees = {
-            g.strip().strip('"').lower()
+            cleaned
             for g in match.group("grantees").split(",")
-            if g.strip()
+            if (cleaned := DROP_BEHAVIOUR_RE.sub("", g.strip()).strip('"').lower())
         }
         revoked.setdefault(match.group("name"), set()).update(grantees)
 
@@ -280,6 +285,18 @@ CASES: list[tuple[str, str, bool]] = [
         'CREATE FUNCTION "public"."f"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
         "\x00"
         'REVOKE ALL ON FUNCTION "public"."f"() FROM PUBLIC, "anon", "authenticated";',
+        True,
+    ),
+    (
+        "trailing CASCADE is not part of the last grantee",
+        'CREATE FUNCTION "public"."h"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+        'REVOKE ALL ON FUNCTION "public"."h"() FROM PUBLIC, anon, authenticated CASCADE;',
+        True,
+    ),
+    (
+        "trailing RESTRICT likewise",
+        'CREATE FUNCTION "public"."h"() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;'
+        'REVOKE ALL ON FUNCTION "public"."h"() FROM PUBLIC, anon, authenticated RESTRICT;',
         True,
     ),
     (

@@ -1,0 +1,32 @@
+# Dependencies for the rPPG capture and offline-fusion scripts in this directory.
+#
+# NOT the same guarantee as Website/AdaptiveLearning/backend/requirements.txt.
+# That file's pins are "verified working on a real venv on a stated date". These
+# are not: open-rppg has never been installed in this repo, so nothing below has
+# been resolved, imported, or run here. Treat the lower bounds as a starting
+# point and pin them properly the first time someone builds a working venv.
+#
+# Direct imports only, same convention as the backend file. open-rppg pulls in
+# opencv-python, onnxruntime and scipy itself, but the scripts here import the
+# first two by name, so they are listed rather than left to a transitive
+# resolution that could drop them.
+#
+# `open-rppg` imports as `rppg` -- the mismatch is why a plain `pip install
+# rppg` finds nothing. MIT licensed; the model weights it fetches derive from
+# academic work under their own papers' terms.
+#
+# Two things to know before depending on this:
+#   - open-rppg is 0.1.1. Pre-1.0, no API stability guarantee, and it owns the
+#     entire heart-rate signal chain -- the scripts here do no filtering or
+#     spectral work of their own.
+#   - It pulls in JAX and Keras. That is a heavy transitive footprint for
+#     anything that has to be installed on a student's machine.
+#
+# The scripts also need `emotion-ferplus-8.onnx` at the working directory. It is
+# deliberately not committed (see .gitignore); the capture script downloads it on
+# first run.
+
+open-rppg==0.1.1
+opencv-python>=4.5.5.64
+onnxruntime>=1.8
+numpy>=1.24

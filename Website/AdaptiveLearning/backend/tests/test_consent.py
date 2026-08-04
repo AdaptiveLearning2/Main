@@ -365,6 +365,58 @@ def test_write_is_refused_when_the_state_moved_underneath_it(monkeypatch):
     assert exc.value.status_code == 409
 
 
+@pytest.mark.parametrize("boom", [
+    RuntimeError('duplicate key value violates unique constraint "signal_consent_pkey"'),
+    RuntimeError({"code": "23505", "message": "duplicate key"}),
+])
+def test_losing_the_insert_race_answers_409_like_the_update_race(monkeypatch, boom):
+    """Same race, same answer. Reporting one lost race as 500 and the other as
+    409 leaves a client unable to tell that "reload and try again" fits both."""
+    fake = _fake(monkeypatch, PARENT, consent_row=None)
+
+    real_table = fake.table
+
+    def table(name):
+        q = real_table(name)
+        if name == "signal_consent":
+            def insert(_row, **_kw):
+                raise boom
+            q.insert = insert
+        return q
+
+    monkeypatch.setattr(fake, "table", table)
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    assert exc.value.status_code == 409
+
+
+def test_a_non_duplicate_insert_failure_is_still_a_500(monkeypatch):
+    """The 409 is for a lost race specifically, not for every failed write."""
+    fake = _fake(monkeypatch, PARENT, consent_row=None)
+    real_table = fake.table
+
+    def table(name):
+        q = real_table(name)
+        if name == "signal_consent":
+            def insert(_row, **_kw):
+                raise RuntimeError("connection reset")
+            q.insert = insert
+        return q
+
+    monkeypatch.setattr(fake, "table", table)
+    with pytest.raises(main.HTTPException) as exc:
+        main.update_consent("student-1", main.ConsentUpdate(camera_enabled=True), None)
+    assert exc.value.status_code == 500
+
+
+def test_unparseable_timestamp_is_logged_not_swallowed(monkeypatch, capsys):
+    """It suppresses the notice, so it must not do so quietly."""
+    _fake(monkeypatch, STUDENT, consent_row=_row(parent_enabled_at="not-a-timestamp"))
+    assert main.get_consent("student-1", None)["needs_student_ack"] is False
+    assert "unparseable timestamp" in capsys.readouterr().out
+
+
 # ── no-op writes ─────────────────────────────────────────────────────────────
 
 def test_setting_a_channel_to_its_current_value_touches_nothing(monkeypatch):

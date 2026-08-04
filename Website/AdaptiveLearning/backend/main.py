@@ -1868,6 +1868,11 @@ def _parse_ts(value) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
+        # These values are database-generated, so this should not fire. Logged
+        # because of which way it fails: an unparseable timestamp suppresses
+        # needs_student_ack, and the student is then not told a parent turned a
+        # sensor back on. Silence is the wrong direction here.
+        print(f"[consent:parse_ts] unparseable timestamp {value!r}")
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
@@ -1896,6 +1901,21 @@ def _consent(student_id: str) -> dict:
         # only the first one means a write should insert rather than update.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+
+
+def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
+    """Whether a write failed because the row already existed.
+
+    supabase-py surfaces PostgREST errors as an APIError whose shape has moved
+    between versions, so this checks the SQLSTATE (23505) and the message rather
+    than depending on a particular attribute being present.
+    """
+    code = getattr(exc, "code", None) or (
+        exc.args[0].get("code") if exc.args and isinstance(exc.args[0], dict) else None
+    )
+    if str(code) == "23505":
+        return True
+    return "duplicate key" in str(exc).lower()
 
 
 def _is_linked_parent(viewer_id: str, student_id: str) -> bool:
@@ -2040,8 +2060,19 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             # No row yet. Insert rather than upsert so a row created by a
             # concurrent request collides instead of being silently overwritten
             # with a decision made against a state that no longer holds.
-            supabase.table("signal_consent") \
-                .insert({"user_id": student_id, **fields}).execute()
+            try:
+                supabase.table("signal_consent") \
+                    .insert({"user_id": student_id, **fields}).execute()
+            except Exception as e:
+                # Same race as the conditional update below, so it gets the same
+                # answer. Without this the two paths report one lost race as a
+                # 500 and the other as a 409, and a client cannot tell that
+                # "reload and try again" is the right response to both.
+                if _IS_DUPLICATE_KEY(e):
+                    raise HTTPException(
+                        409, "Consent changed while you were editing it; reload and try again"
+                    )
+                raise
             return _shape_consent(_consent(student_id), student_id)
 
         # Conditional on every flag this call decided against. Read-then-write
@@ -2054,6 +2085,11 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         for col, was in guards.items():
             q = q.eq(col, was)
         written = q.execute().data or []
+    except HTTPException:
+        # The 409 raised for a lost insert race above. Without this the outer
+        # handler turns it back into a 500, which is the bug this whole branch
+        # exists to remove.
+        raise
     except Exception as e:
         print(f"[consent:write] {student_id}: {e}")
         raise HTTPException(500, "Could not save consent")

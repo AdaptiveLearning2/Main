@@ -257,6 +257,50 @@ under `/api/teacher/` when parents legitimately read it too, and don't gate on
 Access-control tests live in `Website/AdaptiveLearning/backend/tests/test_access_control.py` and
 run in CI.
 
+## Consent — `signal_consent` decides what may be recorded
+
+Three channels, named for the **sensor** rather than the signal derived from it: `eeg`,
+`headband_optical` (heart rate today; the Athena's `OPTICS` packet also carries fNIRS, so a
+`_ppg_` name would go stale), and `camera` — which covers expression **and** the rPPG heart-rate
+fallback. One device, one decision: a heart-rate failover must never open a webcam the student
+declined.
+
+**Everything defaults to false.** An absent row means the same as a row of falses, so there is no
+backfill and an unconfigured student records nothing. `_consent()` fails **closed** on a read error
+and carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out" — the
+opposite of the reporting helpers below, deliberately: a dashboard degrading to empty is fine, a
+consent check degrading to *enabled* records data against a refusal.
+
+**Writes only through the backend.** The table has no insert/update/delete policy for anyone, so
+with RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the
+frontend bundle. `main.py` is the enforcement:
+
+- a student may only move a flag **true → false**; only a linked parent may move it back
+- a **teacher may read but not write** — they need to see a channel is off, or a blank tile reads as
+  a broken query, but consent is not theirs to change. Use `_consent_actor`, not
+  `_verify_can_view_student`, which admits teachers
+- `revoked_by` is surfaced as a **role, never an identity**, and is stored **per channel**. The row
+  has one `updated_by` and the channels are revoked independently, so deriving the role from it
+  would report a parent's later unrelated write as having made the student's earlier revocation
+
+RLS `WITH CHECK` cannot see the previous row, so "off-direction only" is not expressible as a
+policy — which is why the student gets no update policy at all rather than a narrowed one.
+
+Writes are **conditional on the state they were decided against** (`.eq()` on each flag being
+changed) and answer 409 if it moved. Read-then-write is not atomic, and the pair that races here is
+a student's withdrawal against a parent's re-enable on the same channel — losing that silently
+means recording against a refusal.
+
+A parent turning a channel **back on** sets `parent_enabled_at` and raises `needs_student_ack`,
+cleared by `POST /api/consent/ack`. A parent turning one *off* raises nothing. Discovering a
+resumed sensor by noticing data reappear is not consent.
+
+Tests: `backend/tests/test_consent.py`.
+
+`frontend/src/lib/facePref.js` still exists and is unrelated — a viewer-side localStorage read
+filter over the reporting surfaces, not consent. It is replaced by this table in a later change;
+until then the two coexist and mean different things.
+
 ## Reporting — a failed read must not look like a quiet week
 
 Every reporting helper swallows its exception so one broken query doesn't blank a dashboard, and

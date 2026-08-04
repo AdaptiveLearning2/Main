@@ -210,15 +210,10 @@ Generated JSON files
 
 Generated HTML reports
 
-Suggested .gitignore:
-
-.env
-.venv/
-__pycache__/
-*.pyc
-facial_session*.json
-emotion_rppg_test.json
-session_report.html
+Generated output (session JSON, the fusion output, the rendered report, and the
+downloaded ONNX model) is ignored by the repository root .gitignore. Do not add a
+second list here -- the one that used to live in this spot named files no script
+writes any more and missed rppg_test_output.json, which is the one that grows.
 
 Note
 

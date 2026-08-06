@@ -97,18 +97,31 @@ ALTER TABLE ONLY "public"."heart_signals"
 -- will assume them; a derivation bug then writes a silently wrong value instead
 -- of failing, and the wrongness surfaces as an implausible chart weeks later.
 --
--- The bpm bounds are a sanity gate, not a physiological model: human maximum is
--- around 220 and a child at full exertion sits below that, so 250 is safely
--- above anything real. It exists because an rPPG pipeline losing lock reports
--- values in the hundreds, and `trusted` cannot be relied on to catch that -- it
--- is set by the same derivation that produced the bad number.
+-- One constraint per column rather than a single combined one. Postgres reports
+-- the constraint NAME on violation and not the failing expression, so a shared
+-- name says only that some number was out of range -- during ingestion
+-- bring-up, which is when these will actually fire, that is the difference
+-- between reading the error and bisecting four fields.
 ALTER TABLE ONLY "public"."heart_signals"
-    ADD CONSTRAINT "heart_signals_ranges_check" CHECK (
-        ("sqi" IS NULL OR ("sqi" >= 0 AND "sqi" <= 1))
-        AND ("stress_score" IS NULL OR ("stress_score" >= 0 AND "stress_score" <= 100))
-        AND ("heart_rate_bpm" IS NULL OR ("heart_rate_bpm" >= 20 AND "heart_rate_bpm" <= 250))
-        AND ("rmssd_ms" IS NULL OR ("rmssd_ms" >= 0 AND "rmssd_ms" <= 1000))
-    );
+    ADD CONSTRAINT "heart_signals_sqi_range"
+    CHECK (("sqi" IS NULL OR ("sqi" >= 0 AND "sqi" <= 1)));
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_stress_score_range"
+    CHECK (("stress_score" IS NULL OR ("stress_score" >= 0 AND "stress_score" <= 100)));
+
+-- A sanity gate, not a physiological model: human maximum is around 220 and a
+-- child at full exertion sits below that, so 250 clears anything real. It
+-- exists because an rPPG pipeline losing lock reports values in the hundreds,
+-- and `trusted` cannot be relied on to catch that -- it is set by the same
+-- derivation that produced the bad number.
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_heart_rate_bpm_range"
+    CHECK (("heart_rate_bpm" IS NULL OR ("heart_rate_bpm" >= 20 AND "heart_rate_bpm" <= 250)));
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_rmssd_ms_range"
+    CHECK (("rmssd_ms" IS NULL OR ("rmssd_ms" >= 0 AND "rmssd_ms" <= 1000)));
 
 CREATE INDEX "heart_session_idx" ON "public"."heart_signals" USING "btree" ("session_id");
 CREATE INDEX "heart_ts_idx" ON "public"."heart_signals" USING "btree" ("ts" DESC);

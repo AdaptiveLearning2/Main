@@ -92,9 +92,38 @@ ALTER TABLE ONLY "public"."heart_signals"
         'calibrating'::"text", 'low'::"text", 'moderate'::"text",
         'high'::"text", 'unknown'::"text"])));
 
+-- The same argument as the source constraint above, applied to the numbers.
+-- These ranges are already stated in the column comments, which means readers
+-- will assume them; a derivation bug then writes a silently wrong value instead
+-- of failing, and the wrongness surfaces as an implausible chart weeks later.
+--
+-- The bpm bounds are a sanity gate, not a physiological model: human maximum is
+-- around 220 and a child at full exertion sits below that, so 250 is safely
+-- above anything real. It exists because an rPPG pipeline losing lock reports
+-- values in the hundreds, and `trusted` cannot be relied on to catch that -- it
+-- is set by the same derivation that produced the bad number.
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_ranges_check" CHECK (
+        ("sqi" IS NULL OR ("sqi" >= 0 AND "sqi" <= 1))
+        AND ("stress_score" IS NULL OR ("stress_score" >= 0 AND "stress_score" <= 100))
+        AND ("heart_rate_bpm" IS NULL OR ("heart_rate_bpm" >= 20 AND "heart_rate_bpm" <= 250))
+        AND ("rmssd_ms" IS NULL OR ("rmssd_ms" >= 0 AND "rmssd_ms" <= 1000))
+    );
+
 CREATE INDEX "heart_session_idx" ON "public"."heart_signals" USING "btree" ("session_id");
 CREATE INDEX "heart_ts_idx" ON "public"."heart_signals" USING "btree" ("ts" DESC);
-CREATE INDEX "heart_user_idx" ON "public"."heart_signals" USING "btree" ("user_id");
+
+-- (user_id, ts DESC) rather than user_id alone, matching face_user_ts_idx from
+-- 20260721000000: the summary aggregate reads one student over a window, which
+-- is exactly this shape. A plain user_id index would be a redundant prefix of
+-- it, so it is not created at all.
+--
+-- Built now, against an empty table, because it cannot be built cheaply later.
+-- CREATE INDEX CONCURRENTLY is unavailable inside a migration -- Supabase wraps
+-- each one in a transaction -- so adding this once the table holds weeks of
+-- samples means an ACCESS EXCLUSIVE lock for the duration of the build, or a
+-- manual out-of-band CONCURRENTLY run before the migration no-ops.
+CREATE INDEX "heart_user_ts_idx" ON "public"."heart_signals" USING "btree" ("user_id", "ts" DESC);
 
 -- The failover view: "what did this session look like, per source, in order".
 -- Session review renders exactly that, and marking where the source changed is
@@ -108,8 +137,16 @@ ALTER TABLE "public"."heart_signals" ENABLE ROW LEVEL SECURITY;
 -- Mirrors face_signals: the student, and a teacher of a class they are enrolled
 -- in. Parent reads go through the backend's service-role client like every
 -- other reporting surface, so there is no parent policy here either.
+-- FOR SELECT explicitly. A policy with no FOR clause covers every command, and
+-- with no WITH CHECK Postgres reuses the USING expression as the insert/update
+-- check -- so the bare form grants a student a write path to their own
+-- biometric rows the moment anyone widens the table grant below. Inert today,
+-- since authenticated holds SELECT only and no sequence grant, but the grant
+-- and the policy should say the same thing rather than relying on one to
+-- contain the other. face_signals carries the bare form; its GRANT ALL is
+-- precisely what this table is deliberately not copying.
 CREATE POLICY "heart: own" ON "public"."heart_signals"
-    USING (("auth"."uid"() = "user_id"));
+    FOR SELECT USING (("auth"."uid"() = "user_id"));
 
 CREATE POLICY "heart: teacher read" ON "public"."heart_signals"
     FOR SELECT USING ((EXISTS ( SELECT 1
@@ -141,7 +178,15 @@ ALTER TABLE "public"."face_signals"
 -- implementation dropped the label entirely when it did not, which loses the
 -- distinction between "the model was unsure" and "no frame was analysed" --
 -- and those are different sentences to put under a pie chart.
+--
+-- emotion_trusted rather than a bare `trusted`: this table already carries
+-- identity_confidence and now emotion_confidence, so an unqualified name leaves
+-- a reader a 50/50 guess about which one it gates, and leaves no room for an
+-- identity gate later. heart_signals keeps the bare name -- one signal, no
+-- ambiguity -- which does mean the two tables spell the same idea differently.
+-- That is the lesser problem: a joined query showing two columns called
+-- `trusted` meaning different things is worse than two names.
 ALTER TABLE "public"."face_signals"
-    ADD COLUMN IF NOT EXISTS "trusted" boolean;
+    ADD COLUMN IF NOT EXISTS "emotion_trusted" boolean;
 
 NOTIFY pgrst, 'reload schema';

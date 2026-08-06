@@ -1,0 +1,147 @@
+-- Heart-rate signals, from whichever sensor produced them.
+--
+-- A separate table rather than more columns on face_signals, because heart rate
+-- is about to have two producers and only one of them is facial. The headband's
+-- optical sensor is the primary source; the camera's rPPG is the fallback for
+-- when the headband is not being worn or has lost contact. Putting
+-- headband-derived heart rate in a table called face_signals would be wrong on
+-- its face, and would tie the heart channel to camera consent -- which is the
+-- one thing the consent model exists to keep separate.
+--
+-- The split lines the schema up with signal_consent: heart_signals is gated by
+-- headband_optical_enabled or camera_enabled depending on `source`, and
+-- face_signals by camera_enabled alone.
+
+CREATE TABLE IF NOT EXISTS "public"."heart_signals" (
+    "id" bigint NOT NULL,
+    "session_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "ts" timestamp with time zone DEFAULT "now"() NOT NULL,
+
+    -- Which sensor produced this sample. Not cosmetic: the two headband paths
+    -- are different packet types on different hardware (the 2025 Athena carries
+    -- PPG inside its OPTICS packet and emits no PPG packet at all), and rPPG is
+    -- a camera looking at a face. They have different failure modes, different
+    -- quality characteristics and different baselines, so a reader that cannot
+    -- tell them apart cannot interpret a mid-session change in either.
+    "source" "text" NOT NULL,
+
+    "heart_rate_bpm" double precision,
+    "rmssd_ms" double precision,
+
+    -- Signal quality, 0..1. Kept distinct from any field named "confidence":
+    -- the reference implementation returned SQI *as* confidence, and a consumer
+    -- reading that as a generic confidence score would be reading the quality
+    -- of the optical trace as certainty about the derived value.
+    "sqi" double precision,
+
+    -- 0..100, neutral at 50, derived from heart rate and RMSSD against this
+    -- session's own baseline. Named for what it measures rather than for the
+    -- sensor, because the same rule runs over either source.
+    "stress_score" double precision,
+    "stress_category" "text",
+
+    -- Whether the sample passed its quality gate. Aggregates must filter on
+    -- this: an untrusted sample carries a heart rate, it is just not one worth
+    -- averaging.
+    "trusted" boolean,
+
+    "raw" "jsonb"
+);
+
+ALTER TABLE "public"."heart_signals" OWNER TO "postgres";
+
+CREATE SEQUENCE IF NOT EXISTS "public"."heart_signals_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE "public"."heart_signals_id_seq" OWNER TO "postgres";
+ALTER SEQUENCE "public"."heart_signals_id_seq" OWNED BY "public"."heart_signals"."id";
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ALTER COLUMN "id" SET DEFAULT "nextval"('"public"."heart_signals_id_seq"'::"regclass");
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_pkey" PRIMARY KEY ("id");
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_session_id_fkey" FOREIGN KEY ("session_id")
+    REFERENCES "public"."sessions"("id") ON DELETE CASCADE;
+
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_user_id_fkey" FOREIGN KEY ("user_id")
+    REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
+
+-- Constrained rather than free text. A typo in a source name would not fail --
+-- it would quietly create a fourth sensor that no reader knows how to weight,
+-- and the failure would surface as a chart with a gap in it weeks later.
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_source_check"
+    CHECK (("source" = ANY (ARRAY['muse_optics'::"text", 'muse_ppg'::"text", 'rppg'::"text"])));
+
+-- calibrating is a real state, not a missing value: the stress score is
+-- baseline-relative and there is no baseline for roughly the first 80 seconds
+-- of a session. It has to be distinguishable from "not stressed", or a student
+-- reads as calm for the part of the session nobody measured.
+ALTER TABLE ONLY "public"."heart_signals"
+    ADD CONSTRAINT "heart_signals_stress_category_check"
+    CHECK (("stress_category" IS NULL OR "stress_category" = ANY (ARRAY[
+        'calibrating'::"text", 'low'::"text", 'moderate'::"text",
+        'high'::"text", 'unknown'::"text"])));
+
+CREATE INDEX "heart_session_idx" ON "public"."heart_signals" USING "btree" ("session_id");
+CREATE INDEX "heart_ts_idx" ON "public"."heart_signals" USING "btree" ("ts" DESC);
+CREATE INDEX "heart_user_idx" ON "public"."heart_signals" USING "btree" ("user_id");
+
+-- The failover view: "what did this session look like, per source, in order".
+-- Session review renders exactly that, and marking where the source changed is
+-- the difference between one continuous trace and two sensors' calibrations
+-- spliced together.
+CREATE INDEX "heart_session_source_ts_idx"
+    ON "public"."heart_signals" USING "btree" ("session_id", "source", "ts");
+
+ALTER TABLE "public"."heart_signals" ENABLE ROW LEVEL SECURITY;
+
+-- Mirrors face_signals: the student, and a teacher of a class they are enrolled
+-- in. Parent reads go through the backend's service-role client like every
+-- other reporting surface, so there is no parent policy here either.
+CREATE POLICY "heart: own" ON "public"."heart_signals"
+    USING (("auth"."uid"() = "user_id"));
+
+CREATE POLICY "heart: teacher read" ON "public"."heart_signals"
+    FOR SELECT USING ((EXISTS ( SELECT 1
+       FROM ("public"."class_memberships" "cm"
+         JOIN "public"."classes" "c" ON (("c"."id" = "cm"."class_id")))
+      WHERE (("cm"."student_id" = "heart_signals"."user_id")
+        AND ("c"."teacher_id" = "auth"."uid"())))));
+
+-- Narrower than the GRANT ALL the older signal tables carry. Nothing writes
+-- these through PostgREST -- ingestion is a backend endpoint using the
+-- service-role client -- so write privileges for anon and authenticated would
+-- be granting something no caller needs. No grant to anon at all: both policies
+-- are auth.uid()-scoped and auth.uid() is null for anon, so it would return
+-- nothing while reading as a deliberate anonymous path.
+GRANT SELECT ON TABLE "public"."heart_signals" TO "authenticated";
+GRANT ALL ON TABLE "public"."heart_signals" TO "service_role";
+GRANT USAGE, SELECT ON SEQUENCE "public"."heart_signals_id_seq" TO "service_role";
+
+
+-- ── face_signals keeps expression, and gains the two fields it was missing ──
+--
+-- Heart rate, HRV, SQI and the stress score deliberately do NOT go here; they
+-- are in heart_signals above, whichever sensor produced them.
+
+ALTER TABLE "public"."face_signals"
+    ADD COLUMN IF NOT EXISTS "emotion_confidence" double precision;
+
+-- Whether the emotion label passed its confidence gate. The reference
+-- implementation dropped the label entirely when it did not, which loses the
+-- distinction between "the model was unsure" and "no frame was analysed" --
+-- and those are different sentences to put under a pie chart.
+ALTER TABLE "public"."face_signals"
+    ADD COLUMN IF NOT EXISTS "trusted" boolean;
+
+NOTIFY pgrst, 'reload schema';

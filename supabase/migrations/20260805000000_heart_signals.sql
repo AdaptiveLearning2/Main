@@ -168,12 +168,29 @@ CREATE POLICY "heart: teacher read" ON "public"."heart_signals"
       WHERE (("cm"."student_id" = "heart_signals"."user_id")
         AND ("c"."teacher_id" = "auth"."uid"())))));
 
--- Narrower than the GRANT ALL the older signal tables carry. Nothing writes
--- these through PostgREST -- ingestion is a backend endpoint using the
--- service-role client -- so write privileges for anon and authenticated would
--- be granting something no caller needs. No grant to anon at all: both policies
--- are auth.uid()-scoped and auth.uid() is null for anon, so it would return
--- nothing while reading as a deliberate anonymous path.
+-- REVOKE first. A narrow GRANT does not narrow anything here.
+--
+-- This is the table-level twin of the function trap in CLAUDE.md: Supabase
+-- ships ALTER DEFAULT PRIVILEGES granting all table privileges to anon and
+-- authenticated **by name** in public, so a new table arrives with
+-- anon=arwdDxtm before this file grants anything. Adding GRANT SELECT to that
+-- is a no-op that reads like a restriction.
+--
+-- RLS covers most of the difference -- INSERT, UPDATE and DELETE are all denied
+-- by having no policy for them -- but **TRUNCATE is not filtered by RLS**.
+-- Verified on a local stack: as anon, INSERT is blocked and TRUNCATE succeeds.
+-- Reaching it needs a direct Postgres connection rather than PostgREST, so the
+-- anon key in the frontend bundle is not a path to it, but "not reachable from
+-- the client we ship" is a weaker property than the one this block claims.
+REVOKE ALL ON TABLE "public"."heart_signals" FROM "anon";
+REVOKE ALL ON TABLE "public"."heart_signals" FROM "authenticated";
+REVOKE ALL ON SEQUENCE "public"."heart_signals_id_seq" FROM "anon";
+REVOKE ALL ON SEQUENCE "public"."heart_signals_id_seq" FROM "authenticated";
+
+-- Now the grants actually mean what they say. Nothing writes this table through
+-- PostgREST -- ingestion is a backend endpoint on the service-role client -- so
+-- authenticated needs SELECT and nothing else, and anon needs nothing at all:
+-- both policies are auth.uid()-scoped and auth.uid() is null for anon.
 GRANT SELECT ON TABLE "public"."heart_signals" TO "authenticated";
 GRANT ALL ON TABLE "public"."heart_signals" TO "service_role";
 GRANT USAGE, SELECT ON SEQUENCE "public"."heart_signals_id_seq" TO "service_role";

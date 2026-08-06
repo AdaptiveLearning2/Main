@@ -166,6 +166,32 @@ Postgres's `PUBLIC` grant (`=X`) survives and both roles can still execute. Repr
 throwaway functions, with the grantees combined in one statement and separated, and with no event
 trigger re-granting. A default that silently fails to deny is worse than none.
 
+### The same trap applies to tables — `GRANT` does not narrow, only `REVOKE` does
+
+Supabase's `ALTER DEFAULT PRIVILEGES` grants **every** table privilege to `anon` and
+`authenticated` by name in `public`, so a new table arrives as
+`anon=arwdDxtm,authenticated=arwdDxtm` before your migration grants anything. Adding
+`GRANT SELECT` on top is a no-op that reads like a restriction.
+
+RLS covers most of it — with no policy for a command, that command is denied — but **RLS does not
+filter `TRUNCATE`**. Verified on a local stack: as `anon`, `INSERT` is blocked and `TRUNCATE`
+succeeds. PostgREST does not expose `TRUNCATE`, so the anon key in the frontend bundle is not a
+path to it; it needs a direct Postgres connection. "Not reachable from the client we ship" is a
+weaker property than the one a narrow grant appears to claim.
+
+So for a new table, revoke before granting:
+
+```sql
+REVOKE ALL ON TABLE "public"."my_table" FROM "anon";
+REVOKE ALL ON TABLE "public"."my_table" FROM "authenticated";
+GRANT SELECT ON TABLE "public"."my_table" TO "authenticated";
+GRANT ALL ON TABLE "public"."my_table" TO "service_role";
+```
+
+Sequences need the same treatment. `heart_signals` and `signal_consent` are revoked;
+`face_signals`, `cognitive_signals`, `profiles` and `sessions` still carry the permissive ACL — a
+repo-wide sweep and a CI check mirroring `scripts/check_function_grants.py` are outstanding.
+
 ### When adding a function
 
 Revoke from the named roles, then grant only what the caller needs:

@@ -90,15 +90,20 @@ jobs:
             echo "no tests/ directory yet — skipping"
           fi
 
-  function-grants:
-    name: Function grants
+  database-grants:
+    name: Database grants
     runs-on: ubuntu-latest
-    # Postgres grants EXECUTE on a new function to PUBLIC automatically, and
-    # Supabase grants it to anon and authenticated by name on top of that -- so
-    # a CREATE FUNCTION with no revoke block is callable by anyone holding the
-    # anon key, which ships in the frontend bundle. The backend reads through
-    # the service-role client and bypasses RLS, so those revokes are load
-    # bearing rather than tidiness.
+    # Two checks, one trap. Supabase ships ALTER DEFAULT PRIVILEGES granting to
+    # anon and authenticated *by name* -- EXECUTE on new functions, and every
+    # privilege on new tables -- so both arrive fully granted before a migration
+    # says anything, and a narrow GRANT on top narrows nothing. Only an explicit
+    # REVOKE does.
+    #
+    # For functions that means callable by anyone holding the anon key, which
+    # ships in the frontend bundle. For tables RLS covers most of it, but not
+    # TRUNCATE, which RLS does not filter at all -- verified as anon against a
+    # local stack. The backend reads through the service-role client and
+    # bypasses RLS, so these revokes are load bearing rather than tidiness.
     #
     # This is a lint rather than a database default because the database
     # default does not work: ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ON
@@ -124,11 +129,21 @@ jobs:
       # in public and is world-executable there), comma-separated grantees in
       # one statement, commented-out CREATEs and REVOKEs, and a revoke that
       # arrives in a later migration than the CREATE.
-      - name: Self-test the parser
-        run: python scripts/check_function_grants.py --self-test
+      - name: Self-test the parsers
+        run: |
+          python scripts/check_function_grants.py --self-test
+          python scripts/check_table_grants.py --self-test
 
       - name: Check public-schema functions revoke EXECUTE
         run: python scripts/check_function_grants.py
+
+      # Tables only have to revoke; what is granted back is per-table judgement
+      # and stays with review. user_math_performance genuinely needs INSERT and
+      # UPDATE for the frontend's upsert under "perf: own"; heart_signals needs
+      # SELECT and nothing else. Encoding that here would mean encoding the
+      # whole access model in a lint.
+      - name: Check public-schema tables revoke the default grants
+        run: python scripts/check_table_grants.py
 
   database-migrations:
     name: Database migrations

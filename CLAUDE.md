@@ -188,9 +188,15 @@ GRANT SELECT ON TABLE "public"."my_table" TO "authenticated";
 GRANT ALL ON TABLE "public"."my_table" TO "service_role";
 ```
 
-Sequences need the same treatment. `heart_signals` and `signal_consent` are revoked;
-`face_signals`, `cognitive_signals`, `profiles` and `sessions` still carry the permissive ACL — a
-repo-wide sweep and a CI check mirroring `scripts/check_function_grants.py` are outstanding.
+Sequences need the same treatment. `20260805110000` swept every remaining table, and
+`scripts/check_table_grants.py` enforces it as part of the `Database grants` CI job.
+
+**What to grant back is per-table judgement, and the lint deliberately does not check it.** Most
+tables carry a `FOR ALL` "own" policy that RLS evaluates against `auth.uid()`, and the frontend
+relies on one: `Adaptive.jsx:290` upserts `user_math_performance` directly through PostgREST, so
+that table keeps `INSERT`/`UPDATE`. `math_topics` and `questions` have `USING (true)` public-read
+policies, so `anon` keeps `SELECT` on those two and nothing else anywhere. Tables written only by
+the backend get `SELECT` for `authenticated` and nothing more.
 
 ### When adding a function
 

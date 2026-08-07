@@ -7,12 +7,10 @@ These endpoints must catch it and report a status, not turn a developer's
 missing-token setup into a bare 500.
 """
 import os
-import sys
 
 # main.py builds a Supabase client at import time and raises without these.
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 

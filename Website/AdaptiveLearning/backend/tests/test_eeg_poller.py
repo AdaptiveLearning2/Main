@@ -8,11 +8,7 @@ eeg_poller.start() must reject a second user trying to claim a device_id
 another user's live poller already holds, while still letting the *same*
 user replace their own poller (e.g. switching sessions or devices).
 """
-import os
-import sys
 import time
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 
@@ -84,6 +80,40 @@ def test_can_use_device_blocks_other_user_on_live_station():
     assert eeg_poller.can_use_device("user-b", "station-b")      # unclaimed
 
 
+def test_stop_all_joins_every_poller_and_empties_the_registry():
+    """stop_all is what keeps a printing daemon thread out of interpreter
+    shutdown, where a print against an already-held stdout lock aborts the
+    process. The autouse fixture in conftest.py runs it after every test, so a
+    break here would show up as unexplained flake somewhere else entirely --
+    this pins the behaviour directly.
+
+    The unregistered poller matters: start() pops a same-user poller out of
+    _active while its thread runs on, so a stop_all that read the registry
+    instead of the live threads would leave that one running.
+
+    That state is built by popping the registry entry by hand rather than by
+    letting a third start() do it. start() also signals the poller it pops, and
+    with POLL_INTERVAL at 0.01 and the sidecar stubbed, that thread reaches its
+    teardown in well under a millisecond -- so a count taken afterwards races
+    the thread's own exit and sometimes sees one fewer. A poller nobody has
+    signalled cannot exit on its own, which makes every count below exact.
+    """
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
+    eeg_poller.start(_FakeSupabase(), "user-c", "session-3", "station-c")
+    orphan = eeg_poller._active.pop("session-1")
+
+    assert {p.session_id for p in eeg_poller.live_pollers()} == {
+        "session-1", "session-2", "session-3",
+    }
+    assert set(eeg_poller._active) == {"session-2", "session-3"}
+
+    assert eeg_poller.stop_all(timeout=15.0) == 3
+    assert eeg_poller.live_pollers() == []
+    assert eeg_poller._active == {}
+    assert not orphan.is_alive()
+
+
 def test_is_alive_after_poller_finishes_does_not_raise():
     """Regression: _Poller used to store its stop signal in an attribute named
     `_stop`, shadowing threading.Thread's own private `_stop()` method (which
@@ -99,10 +129,9 @@ def test_is_alive_after_poller_finishes_does_not_raise():
     p.start()
     p.stop()
     # Wait until the thread finishes rather than asserting on a fixed deadline.
-    # stop() only sets an event, and the run loop checks it after a
-    # non-interruptible time.sleep(POLL_INTERVAL) -- 1.0s at the default
-    # EEG_POLL_HZ=1 -- so a join(timeout=2.0) left barely one interval of
-    # headroom, and a loaded runner made is_alive() legitimately True.
+    # The run loop waits on the stop event, so this is normally immediate --
+    # but a loaded runner can still make is_alive() legitimately True for a
+    # moment, and a fixed deadline here would be flake waiting to happen.
     #
     # The regression this guards is is_alive()/join() *raising*, not the thread
     # being quick, so the loop below exercises it on every iteration and the

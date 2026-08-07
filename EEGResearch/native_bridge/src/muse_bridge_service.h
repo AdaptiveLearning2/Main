@@ -48,6 +48,22 @@ struct ContactQuality {
     bool has_is_good{false};
 };
 
+/**
+ * The headband's own account of its current settings.
+ *
+ * `known` is separate rather than being encoded as preset=="" or channels==0,
+ * for the same reason ContactQuality carries has_hsi: zero is a value, and a
+ * consumer that branches on it cannot otherwise tell "no headband", "the
+ * configuration has not arrived yet" and "the OFF build" apart from each other
+ * or from a real reading. Nothing branches on it today; this is what stops the
+ * first thing that does from having to guess.
+ */
+struct DeviceConfig {
+    std::string preset;
+    int eeg_channel_count{0};
+    bool known{false};
+};
+
 class MuseBridgeService {
 public:
     MuseBridgeService();
@@ -89,25 +105,21 @@ public:
      */
     std::string requested_preset() const;
     /**
-     * The preset the headband reports being on, from MuseConfiguration.
+     * What the headband reports about itself, read from MuseConfiguration.
      *
-     * An observation, not an echo of the request. libMuse documents the
+     * Observations, not an echo of what was requested. libMuse documents the
      * configuration as repopulated "after headband settings (like preset or
      * notch frequency) are changed" (bridge_muse.h:262-265), so this is read
-     * live on each call rather than cached at request time -- a preset applied
-     * a moment later still shows up.
+     * live rather than cached at request time -- a preset applied a moment
+     * later still shows up.
      *
-     * Empty when nothing is connected or the configuration has not arrived.
+     * Returned together, from a single get_muse_configuration() call, because
+     * they are two views of one thing. Fetching them separately means a preset
+     * change landing between the two calls puts a mismatched pair on the wire
+     * -- in the one-second window right after a switch, which is exactly when
+     * someone is watching.
      */
-    std::string active_preset() const;
-    /**
-     * EEG channel count the headband reports for the current preset.
-     *
-     * Corroborates active_preset() with something independently observable:
-     * PRESET_21 and PRESET_1031 are both 4-channel, so a jump to 8 would mean
-     * a preset nobody asked for. 0 when unknown.
-     */
-    int eeg_channel_count() const;
+    DeviceConfig device_config() const;
     /**
      * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
      *

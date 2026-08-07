@@ -439,48 +439,35 @@ std::string MuseBridgeService::requested_preset() const {
 #endif
 }
 
-std::string MuseBridgeService::active_preset() const {
+DeviceConfig MuseBridgeService::device_config() const {
 #if defined(ENABLE_LIBMUSE)
     std::shared_ptr<interaxon::bridge::Muse> muse;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         muse = active_muse_;
     }
-    // Read live rather than cached at request time. The configuration is
-    // repopulated when settings change, so a preset that lands a moment after
-    // set_preset() still shows up here -- and one that never lands keeps
-    // reporting the old value, which is the signal worth having.
-    //
-    // Deliberately outside the lock: get_muse_configuration() is thread-safe on
-    // its own, and calling into libMuse while holding the queue mutex would put
-    // an SDK call on the path the data listener needs to enqueue frames.
     if (!muse) {
         return {};
     }
+    // One call, both fields. Read live rather than cached at request time: the
+    // configuration is repopulated when settings change, so a preset that lands
+    // a moment after set_preset() still shows up -- and one that never lands
+    // keeps reporting the old value, which is the signal worth having.
+    //
+    // Deliberately outside the lock. get_muse_configuration() is thread-safe on
+    // its own, and calling into libMuse while holding the queue mutex would put
+    // an SDK call on the path the data listener needs to enqueue frames.
     const auto config = muse->get_muse_configuration();
     if (!config) {
         return {};
     }
-    return preset_name(config->get_preset());
+    DeviceConfig out;
+    out.preset = preset_name(config->get_preset());
+    out.eeg_channel_count = config->get_eeg_channel_count();
+    out.known = true;
+    return out;
 #else
     return {};
-#endif
-}
-
-int MuseBridgeService::eeg_channel_count() const {
-#if defined(ENABLE_LIBMUSE)
-    std::shared_ptr<interaxon::bridge::Muse> muse;
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        muse = active_muse_;
-    }
-    if (!muse) {
-        return 0;
-    }
-    const auto config = muse->get_muse_configuration();
-    return config ? config->get_eeg_channel_count() : 0;
-#else
-    return 0;
 #endif
 }
 

@@ -65,10 +65,21 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     // readable from source is the one field that can lie.
     o << ",\"requested_preset\":";
     append_json_quoted_string(o, svc.requested_preset());
+    // One fetch for both, so a preset change landing mid-status cannot put a
+    // preset and a channel count from either side of it on the same line.
+    const DeviceConfig device = svc.device_config();
     o << ",\"active_preset\":";
-    append_json_quoted_string(o, svc.active_preset());
-    o << ",\"eeg_channel_count\":" << svc.eeg_channel_count()
-      << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
+    append_json_quoted_string(o, device.preset);
+    // null rather than 0 when the configuration is unknown, matching hsi and
+    // is_good above: 4 is a real channel count and so is 0-as-a-sentinel, and a
+    // consumer branching on the number should not have to guess which it got.
+    o << ",\"eeg_channel_count\":";
+    if (device.known) {
+        o << device.eeg_channel_count;
+    } else {
+        o << "null";
+    }
+    o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
     const BandPowers bands = svc.band_powers();
     o << ",\"delta\":" << bands.delta
       << ",\"theta\":" << bands.theta

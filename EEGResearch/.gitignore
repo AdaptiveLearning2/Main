@@ -6,6 +6,11 @@ __pycache__/
 *.so
 *.egg-info/
 build/
+# Also the suffixed variants. Building the native bridge both ways side by side
+# -- ENABLE_LIBMUSE=OFF for what CI compiles, ON against the vendored SDK for
+# the packet handling CI cannot reach -- needs two directories, and `build/`
+# alone matches neither build_on/ nor build_off/.
+build*/
 dist/
 
 # Virtual environments

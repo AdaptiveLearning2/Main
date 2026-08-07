@@ -89,12 +89,34 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "is_good",
         "band_channels_used",
         "notch_filtered",
+        # Headband model, preset and optical capability. The whitelist is why
+        # these have to be named here at all: a field the bridge emits but this
+        # tuple omits is dropped silently, so it reaches no API surface and
+        # looks from outside exactly like a bridge that never sent it.
+        "muse_model",
+        "requested_preset",
+        "active_preset",
+        "eeg_channel_count",
+        "optical_supported",
     ):
         if key not in payload:
             continue
         if key == "band_channels_used":
             try:
                 target[key] = int(payload[key])
+            except (TypeError, ValueError):
+                continue
+        elif key == "eeg_channel_count":
+            # null is a real value here, not a parse failure: the bridge sends
+            # it when the headband's configuration has not arrived, precisely so
+            # that 0 is not overloaded to mean "unknown". Preserve the
+            # distinction rather than coercing it to an int and losing it.
+            v = payload[key]
+            if v is None:
+                target[key] = None
+                continue
+            try:
+                target[key] = int(v)
             except (TypeError, ValueError):
                 continue
         elif key in {"hsi", "is_good"}:
@@ -111,7 +133,8 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
             except (TypeError, ValueError):
                 # Ignore malformed values from bridge and keep prior metadata.
                 continue
-        elif key in {"muse_connected", "muse_discovered", "bluetooth_enabled", "notch_filtered"}:
+        elif key in {"muse_connected", "muse_discovered", "bluetooth_enabled", "notch_filtered",
+                     "optical_supported"}:
             target[key] = bool(payload[key])
         elif key == "connection_state":
             v = payload[key]

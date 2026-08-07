@@ -64,7 +64,16 @@ Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set to anythin
 never reach a real database. EEGResearch tests need `EEG_SOURCE=sim`, `API_TOKEN`, `ADMIN_TOKEN`.
 The native bridge is compile-checked on `windows-latest` with `ENABLE_LIBMUSE=OFF`, which covers
 syntax and signatures but *not* the packet handling inside the guards — that still needs a manual
-Windows build with the SDK before release.
+Windows build with the SDK before release. The SDK is vendored (and gitignored) at
+`EEGResearch/libmuse_windows_8.0.5`, so that build is a local `cmake` away and worth running on any
+change inside an `ENABLE_LIBMUSE` guard:
+
+```bash
+cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_8.0.5 && cmake --build build_on --config Release
+```
+
+It compiles what CI cannot: enum values, SDK signatures and the guarded packet handling. It still
+proves nothing about a real headband.
 
 `npm run lint` is non-blocking in CI against a backlog of ~48 pre-existing errors. Don't add to it,
 and don't make it blocking until the backlog is gone.

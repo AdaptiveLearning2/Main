@@ -51,6 +51,35 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     append_json_quoted_string(o, svc.active_muse_name());
     o << ",\"firmware_version\":";
     append_json_quoted_string(o, svc.firmware_version());
+    // Model, preset and optical capability. The preset stopped being a constant
+    // in the source, so "which preset is this session on" is now only
+    // answerable from the wire -- and optical_supported is what lets a consumer
+    // tell a headband with no PPG hardware from one whose PPG stopped.
+    o << ",\"muse_model\":";
+    append_json_quoted_string(o, svc.muse_model());
+    // Both halves. requested_preset is what this bridge asked for;
+    // active_preset is what the headband says it is running, read back from
+    // MuseConfiguration. set_preset() returns void, so the two disagreeing is
+    // the only way to see a request the device ignored -- and reporting only
+    // the intent would mean the field added because the preset is no longer
+    // readable from source is the one field that can lie.
+    o << ",\"requested_preset\":";
+    append_json_quoted_string(o, svc.requested_preset());
+    // One fetch for both, so a preset change landing mid-status cannot put a
+    // preset and a channel count from either side of it on the same line.
+    const DeviceConfig device = svc.device_config();
+    o << ",\"active_preset\":";
+    append_json_quoted_string(o, device.preset);
+    // null rather than 0 when the configuration is unknown, matching hsi and
+    // is_good above: 4 is a real channel count and so is 0-as-a-sentinel, and a
+    // consumer branching on the number should not have to guess which it got.
+    o << ",\"eeg_channel_count\":";
+    if (device.known) {
+        o << device.eeg_channel_count;
+    } else {
+        o << "null";
+    }
+    o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
     const BandPowers bands = svc.band_powers();
     o << ",\"delta\":" << bands.delta
       << ",\"theta\":" << bands.theta

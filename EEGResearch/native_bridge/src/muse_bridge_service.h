@@ -48,6 +48,22 @@ struct ContactQuality {
     bool has_is_good{false};
 };
 
+/**
+ * The headband's own account of its current settings.
+ *
+ * `known` is separate rather than being encoded as preset=="" or channels==0,
+ * for the same reason ContactQuality carries has_hsi: zero is a value, and a
+ * consumer that branches on it cannot otherwise tell "no headband", "the
+ * configuration has not arrived yet" and "the OFF build" apart from each other
+ * or from a real reading. Nothing branches on it today; this is what stops the
+ * first thing that does from having to guess.
+ */
+struct DeviceConfig {
+    std::string preset;
+    int eeg_channel_count{0};
+    bool known{false};
+};
+
 class MuseBridgeService {
 public:
     MuseBridgeService();
@@ -71,6 +87,47 @@ public:
     std::vector<std::string> muse_names() const;
     std::string active_muse_name() const;
     std::string firmware_version() const;
+    /**
+     * Headband model as reported by libMuse once connected, e.g. "MS-03" for a
+     * 2025 Muse S Athena. Empty until the CONNECTED packet arrives.
+     *
+     * Reported rather than inferred from the name, because the name is
+     * user-settable and the model decides which presets are available at all.
+     */
+    std::string muse_model() const;
+    /**
+     * The preset this bridge asked for, e.g. "PRESET_1031". An intent.
+     *
+     * Reported next to active_preset() rather than instead of it, because the
+     * two disagreeing is the whole diagnosis: set_preset() returns void, so a
+     * request that the headband ignores is indistinguishable from one it
+     * honoured unless the result is read back.
+     */
+    std::string requested_preset() const;
+    /**
+     * What the headband reports about itself, read from MuseConfiguration.
+     *
+     * Observations, not an echo of what was requested. libMuse documents the
+     * configuration as repopulated "after headband settings (like preset or
+     * notch frequency) are changed" (bridge_muse.h:262-265), so this is read
+     * live rather than cached at request time -- a preset applied a moment
+     * later still shows up.
+     *
+     * Returned together, from a single get_muse_configuration() call, because
+     * they are two views of one thing. Fetching them separately means a preset
+     * change landing between the two calls puts a mismatched pair on the wire
+     * -- in the one-second window right after a switch, which is exactly when
+     * someone is watching.
+     */
+    DeviceConfig device_config() const;
+    /**
+     * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
+     *
+     * A capability, not a dropout. Muse 2016 has no optical hardware, and a
+     * heart channel that reports "sensor failed" for a device that never had
+     * one would hand the camera fallback a job it should not be given.
+     */
+    bool optical_supported() const;
     BandPowers band_powers() const;
     /** Per-electrode fit/validity as reported by the headband itself. */
     ContactQuality contact_quality() const;
@@ -112,11 +169,27 @@ public:
     bool bluetooth_enabled() const;
 
 private:
+    /**
+     * Pick the preset for a model, once the model is actually known.
+     *
+     * Separate from connect_named because get_model() is documented to return
+     * MU_02 until the headband reaches CONNECTED, and the preset is set before
+     * that -- so this runs from the connection listener instead.
+     */
+#if defined(ENABLE_LIBMUSE)
+    void apply_model_preset(const std::shared_ptr<interaxon::bridge::Muse>& muse);
+    /** Clears everything describing the headband. Call with queue_mutex_ held. */
+    void reset_device_fields_locked();
+#endif
+
     std::atomic<bool> running_;
     long long frame_counter_;
     BandPowers latest_bands_{};
     ContactQuality latest_contact_{};
     int band_channels_used_{0};
+    std::string muse_model_;
+    std::string requested_preset_;
+    bool optical_supported_{false};
     // steady_clock ms at which the last notch-filtered packet arrived; 0 means
     // none yet. Not a bool: see notch_available().
     std::atomic<long long> last_notch_ms_{0};

@@ -80,6 +80,29 @@ def test_can_use_device_blocks_other_user_on_live_station():
     assert eeg_poller.can_use_device("user-b", "station-b")      # unclaimed
 
 
+def test_stop_all_joins_every_poller_and_empties_the_registry():
+    """stop_all is what keeps a printing daemon thread out of interpreter
+    shutdown, where a print against an already-held stdout lock aborts the
+    process. The autouse fixture in conftest.py runs it after every test, so a
+    break here would show up as unexplained flake somewhere else entirely --
+    this pins the behaviour directly.
+
+    The unregistered poller matters: start() pops a same-user poller out of
+    _active while its thread runs on, so a stop_all that read the registry
+    instead of the live threads would leave that one running.
+    """
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
+    # Replaces session-1 for the same user: popped from _active, still alive.
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-3", "station-a")
+    assert len(eeg_poller.live_pollers()) == 3
+    assert set(eeg_poller._active) == {"session-2", "session-3"}
+
+    assert eeg_poller.stop_all(timeout=15.0) == 3
+    assert eeg_poller.live_pollers() == []
+    assert eeg_poller._active == {}
+
+
 def test_is_alive_after_poller_finishes_does_not_raise():
     """Regression: _Poller used to store its stop signal in an attribute named
     `_stop`, shadowing threading.Thread's own private `_stop()` method (which

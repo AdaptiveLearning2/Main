@@ -36,8 +36,13 @@ async def _lifespan(app: FastAPI):
     # Pollers first: they are daemon threads that print on the way out, so
     # leaving them to interpreter teardown risks a fatal stdout-lock abort on
     # an otherwise clean shutdown. See eeg_poller.stop_all.
-    eeg_poller.stop_all()
-    _shutdown_strategy_pool()
+    try:
+        eeg_poller.stop_all()
+    finally:
+        # In a finally: a poller that somehow raises on the way out must not
+        # take the pool's shutdown down with it. Both are cleanup, and neither
+        # gets a second chance after this.
+        _shutdown_strategy_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)

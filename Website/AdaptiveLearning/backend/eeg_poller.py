@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Dict
 
 import eeg_client
@@ -239,14 +240,26 @@ def stop_all(timeout: float = 5.0) -> int:
     server.
 
     Signals every poller before joining any, so the whole set costs one poll
-    interval rather than one each.
+    interval rather than one each. `timeout` is likewise the budget for the
+    whole join, shared across the threads via a single deadline -- a per-thread
+    timeout would make the worst case N x timeout, and this runs on a shutdown
+    path where something is waiting on it.
+
+    Returns how many pollers were signalled -- diagnostics for a caller that
+    wants to log it; both call sites here ignore it.
     """
     pollers = live_pollers()
     for p in pollers:
         p.stop()
+    deadline = time.monotonic() + timeout
     for p in pollers:
-        p.join(timeout=timeout)
+        p.join(timeout=max(0.0, deadline - time.monotonic()))
     with _lock:
+        # Anything registered between live_pollers() above and this clear is
+        # dropped while still running. That needs a request to start a poller
+        # mid-shutdown, after the server stopped accepting them -- and the
+        # alternative, holding _lock across the joins, would deadlock against
+        # the run loop's own _lock use on the way out.
         _active.clear()
     still_running = [p.session_id[:8] for p in live_pollers()]
     if still_running:

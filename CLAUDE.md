@@ -166,6 +166,38 @@ Postgres's `PUBLIC` grant (`=X`) survives and both roles can still execute. Repr
 throwaway functions, with the grantees combined in one statement and separated, and with no event
 trigger re-granting. A default that silently fails to deny is worse than none.
 
+### The same trap applies to tables — `GRANT` does not narrow, only `REVOKE` does
+
+Supabase's `ALTER DEFAULT PRIVILEGES` grants **every** table privilege to `anon` and
+`authenticated` by name in `public`, so a new table arrives as
+`anon=arwdDxtm,authenticated=arwdDxtm` before your migration grants anything. Adding
+`GRANT SELECT` on top is a no-op that reads like a restriction.
+
+RLS covers most of it — with no policy for a command, that command is denied — but **RLS does not
+filter `TRUNCATE`**. Verified on a local stack: as `anon`, `INSERT` is blocked and `TRUNCATE`
+succeeds. PostgREST does not expose `TRUNCATE`, so the anon key in the frontend bundle is not a
+path to it; it needs a direct Postgres connection. "Not reachable from the client we ship" is a
+weaker property than the one a narrow grant appears to claim.
+
+So for a new table, revoke before granting:
+
+```sql
+REVOKE ALL ON TABLE "public"."my_table" FROM "anon";
+REVOKE ALL ON TABLE "public"."my_table" FROM "authenticated";
+GRANT SELECT ON TABLE "public"."my_table" TO "authenticated";
+GRANT ALL ON TABLE "public"."my_table" TO "service_role";
+```
+
+Sequences need the same treatment. `20260805110000` swept every remaining table, and
+`scripts/check_table_grants.py` enforces it as part of the `Database grants` CI job.
+
+**What to grant back is per-table judgement, and the lint deliberately does not check it.** Most
+tables carry a `FOR ALL` "own" policy that RLS evaluates against `auth.uid()`, and the frontend
+relies on one: `Adaptive.jsx:290` upserts `user_math_performance` directly through PostgREST, so
+that table keeps `INSERT`/`UPDATE`. `math_topics` and `questions` have `USING (true)` public-read
+policies, so `anon` keeps `SELECT` on those two and nothing else anywhere. Tables written only by
+the backend get `SELECT` for `authenticated` and nothing more.
+
 ### When adding a function
 
 Revoke from the named roles, then grant only what the caller needs:

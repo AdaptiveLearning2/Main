@@ -102,13 +102,36 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
     }
 
     const std::string body = payload + "\n";
-    const int sent = send(client_socket_, body.c_str(), static_cast<int>(body.size()), 0);
-    if (sent == SOCKET_ERROR) {
-        const int err = WSAGetLastError();
-        if (err != WSAEWOULDBLOCK) {
+    size_t offset = 0;
+    while (offset < body.size()) {
+        const int sent = send(client_socket_, body.c_str() + offset,
+                              static_cast<int>(body.size() - offset), 0);
+        if (sent == SOCKET_ERROR) {
+            const int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                close_client();
+                return;
+            }
+            if (offset == 0) {
+                // Nothing of this line went out, so the stream is still on a
+                // line boundary and dropping it whole leaves the rest parseable.
+                // Counted rather than silent: a consumer reconstructing a clock
+                // from sample index cannot tell a dropped line from a sensor
+                // that produced fewer samples.
+                dropped_lines_ += 1;
+                return;
+            }
+            // Part of the line is already on the wire. Resuming later would
+            // splice the remainder onto the front of whatever is sent next and
+            // corrupt every line after it, so the only honest option is to end
+            // the connection and let the consumer reconnect to a clean stream.
             close_client();
+            return;
         }
-        // WSAEWOULDBLOCK: buffer temporarily full, drop this frame rather than disconnect.
+        // A short but successful send is normal for a non-blocking socket and
+        // is not an error -- it was previously treated as complete, which is
+        // the same truncation by a different route.
+        offset += static_cast<size_t>(sent);
     }
 }
 

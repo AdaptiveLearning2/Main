@@ -22,6 +22,39 @@ struct EegFrame {
     double tp10;
 };
 
+/**
+ * One optical sample, as it left the headband.
+ *
+ * Carries the packet's own timestamp rather than an arrival time. Beat-to-beat
+ * intervals are the whole point of RMSSD, and at 64Hz the sample spacing is
+ * ~15.6ms -- the same order as the HRV differences being measured -- so timing
+ * jitter introduced by when this process happened to be scheduled would land
+ * directly in the output.
+ *
+ * `n` is how many channels arrived, since that is preset-dependent: 4 on
+ * PRESET_1035, 8 on 1033, 16 on the modes that break the link.
+ */
+struct OpticsFrame {
+    long long mono_ts_ms;
+    /**
+     * Monotonic sample number, assigned at enqueue and never reused.
+     *
+     * The derivation reconstructs its time base from sample index rather than
+     * from mono_ts_ms, because the stamps carry ~25ms rms of BLE batching
+     * jitter and RMSSD measures 20-50ms differences. That reconstruction is
+     * only sound if no sample goes missing, and three places can drop one --
+     * the queue bound below, a WSAEWOULDBLOCK in the TCP server, and a short
+     * send(). None is observable from the samples themselves: a lost sample
+     * just shifts the reconstructed clock by one interval for the remainder of
+     * the recording, and shows up as a single impossible beat interval.
+     *
+     * A gap in this sequence makes all three detectable for free.
+     */
+    long long seq{0};
+    std::array<double, 16> ch{};
+    int n{0};
+};
+
 struct BandPowers {
     double delta{0.0};
     double theta{0.0};
@@ -81,6 +114,14 @@ struct OpticalSignals {
     bool heart_good{false};
     bool has_ppg_good{false};
     bool has_heart_good{false};
+    /**
+     * Optical samples discarded because the queue was full.
+     *
+     * Non-zero means the reconstructed time base has lost alignment, and any
+     * RMSSD computed across the gap is wrong. Reported rather than merely
+     * bounded, because a silent drop is indistinguishable from a slow heart.
+     */
+    long long optics_dropped{0};
     /** steady_clock ms of the most recent optical packet of either kind; 0 if
      *  none. Not emitted raw -- steady_clock's epoch is arbitrary and
      *  process-local, so the number means nothing outside this process.
@@ -112,6 +153,26 @@ public:
     bool start();
     void stop();
     bool poll_frame(EegFrame& frame);
+    /**
+     * Drain one optical sample. Non-blocking, unlike poll_frame.
+     *
+     * Separate queue rather than interleaving into eeg_queue_: the two run at
+     * different rates (256Hz EEG, 64Hz optics) and a consumer wants them as
+     * separate streams.
+     *
+     * Non-blocking so this never adds a second wait of its own -- but optics
+     * latency is still bounded by poll_frame's 200ms wait, because both are
+     * drained from the same loop. At 256Hz EEG keeps that loop spinning and the
+     * bound is never approached. It matters in the case where EEG stops while
+     * optics continues, which is not hypothetical: electrode contact
+     * collapsing to [4,4,4,4] on an optics-carrying preset is a documented
+     * failure mode. Optics then emerge in 200ms batches.
+     *
+     * Not a correctness problem -- each sample carries its own timestamp and
+     * sequence number, and the queue holds ~32s -- but the coupling is real
+     * and worth knowing before someone measures latency and is surprised.
+     */
+    bool poll_optics(OpticsFrame& frame);
 
     /** "synthetic" (no libMuse) or "libmuse" when compiled with ENABLE_LIBMUSE. */
     const char* bridge_mode() const noexcept;
@@ -263,6 +324,12 @@ private:
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::queue<EegFrame> eeg_queue_;
+    std::queue<OpticsFrame> optics_queue_;
+    /** Never reset within a connection. Cleared by reset_device_fields_locked(),
+     *  which both stop() and disconnect_muse() call -- the latter being the one
+     *  a reconnect actually takes, so a new headband starts a fresh sequence
+     *  rather than appearing to continue the previous one's. */
+    long long optics_seq_{0};
     bool connected_{false};
     bool discovered_{false};
     int last_connection_state_{0};

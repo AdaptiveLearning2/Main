@@ -168,9 +168,6 @@ void MuseBridgeService::stop() {
     }
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        while (!eeg_queue_.empty()) {
-            eeg_queue_.pop();
-        }
         muse_names_.clear();
         discovered_ = false;
         reset_device_fields_locked();
@@ -368,6 +365,31 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
 }
 
 void MuseBridgeService::reset_device_fields_locked() {
+    // Queues and the sample counter belong here, not in stop().
+    //
+    // stop() runs at process shutdown; disconnect_muse() runs on every headband
+    // swap, and connect_named() calls it first -- so the reconnect path is the
+    // one that matters and was the one not resetting. Two consequences, both
+    // defeating the instrumentation added alongside them: samples kept
+    // numbering contiguously across an interval with no headband attached, so
+    // the seq gap detector reported nothing lost on precisely the event it
+    // exists to catch; and the queues survived the swap, so a reconnect resumed
+    // by emitting the previous headband's samples with their old timestamps.
+    //
+    // optics_dropped resets below, so leaving these alone also left the counter
+    // and the sequence disagreeing about what "since when" meant.
+    //
+    // The EEG queue has always had the same gap on this path. Same line, same
+    // hazard, fixed with it rather than left as the one queue that survives a
+    // reconnect.
+    while (!eeg_queue_.empty()) {
+        eeg_queue_.pop();
+    }
+    while (!optics_queue_.empty()) {
+        optics_queue_.pop();
+    }
+    optics_seq_ = 0;
+
     active_muse_name_.clear();
     firmware_version_.clear();
     // Model, preset and capability describe the headband that just went away.
@@ -633,6 +655,24 @@ int MuseBridgeService::band_channels_used() const {
 #endif
 }
 
+bool MuseBridgeService::poll_optics(OpticsFrame& frame) {
+    if (!running_.load()) {
+        return false;
+    }
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (optics_queue_.empty()) {
+        return false;
+    }
+    frame = optics_queue_.front();
+    optics_queue_.pop();
+    return true;
+#else
+    (void)frame;
+    return false;
+#endif
+}
+
 bool MuseBridgeService::poll_frame(EegFrame& frame) {
     if (!running_.load()) {
         return false;
@@ -756,6 +796,36 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         latest_optical_.ppg_values = static_cast<int>(n);
     }
     latest_optical_.last_ms = now_ms;
+
+    // Queue the sample itself, not just the counters. OPTICS only -- the PPG
+    // packet path is for 2018-2024 hardware and has its own channel mapping;
+    // streaming both into one queue would produce a series whose meaning
+    // changes with the headband.
+    if (is_optics) {
+        OpticsFrame frame{};
+        // The packet's own timestamp, in ms. libMuse reports microseconds.
+        frame.mono_ts_ms = packet->timestamp() / 1000;
+        frame.seq = ++optics_seq_;
+        const size_t n = std::min(values.size(), frame.ch.size());
+        for (size_t i = 0; i < n; ++i) {
+            frame.ch[i] = values[i];
+        }
+        frame.n = static_cast<int>(n);
+        optics_queue_.push(frame);
+        // Same bound as the EEG queue. At 64Hz this is ~32 seconds of backlog,
+        // which is far longer than the main loop can fall behind without
+        // something else being badly wrong.
+        //
+        // Counted, not just dropped. The derivation rebuilds its clock from
+        // sample index, so a silent discard shifts that clock by one interval
+        // for the rest of the session and shows up as one impossible beat
+        // interval -- which is exactly what the seq field and this counter
+        // exist to make visible rather than plausible.
+        if (optics_queue_.size() > 2048) {
+            optics_queue_.pop();
+            latest_optical_.optics_dropped += 1;
+        }
+    }
 }
 
 void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
@@ -877,6 +947,21 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
     // Do NOT call any libMuse API (e.g. get_muse_version) here.
     // libMuse holds an internal lock during callbacks; re-entering the SDK deadlocks.
     // GettingData32 avoids this by posting to the UI thread first.
+    //
+    // Deliberately does NOT drain the queues or reset optics_seq_, which looks
+    // like an omission and is not. Two reasons:
+    //
+    //  - This fires on every state transition, including transient blips. A
+    //    reset here would discard in-flight samples that are perfectly good,
+    //    and reset the sequence for a link that never actually went away.
+    //  - Every reconnect the sidecar drives goes through connect_named(),
+    //    which calls disconnect_muse() first, and that path resets properly.
+    //
+    // The residual gap is a link libMuse re-establishes entirely on its own,
+    // with no connect from above: the sequence would then continue across it
+    // and a consumer would not see the interruption. Accepted rather than
+    // fixed, because the fix belongs here and doing it here costs more than
+    // the case is worth.
     std::lock_guard<std::mutex> lock(queue_mutex_);
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);

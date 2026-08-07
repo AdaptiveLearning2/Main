@@ -4,8 +4,10 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <csignal>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -32,7 +34,14 @@ void append_json_quoted_string(std::ostringstream& o, const std::string& s) {
     o << '"';
 }
 
-void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService& svc) {
+void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService& svc,
+                                 const BridgeTcpServer* server = nullptr) {
+    if (server) {
+        // Lines the transport discarded, as opposed to samples the queue
+        // discarded. Both break a clock reconstructed from sample index, and
+        // neither is visible in the samples themselves.
+        o << ",\"tcp_dropped_lines\":" << server->dropped_lines();
+    }
     o << ",\"bridge_mode\":\"" << svc.bridge_mode() << "\""
       << ",\"muse_connected\":" << (svc.is_muse_connected() ? "true" : "false")
       << ",\"muse_discovered\":" << (svc.is_muse_discovered() ? "true" : "false")
@@ -88,6 +97,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     // designed against a guess.
     const OpticalSignals optical = svc.optical_signals();
     o << ",\"optics_packets\":" << optical.optics_packets
+      << ",\"optics_dropped\":" << optical.optics_dropped
       << ",\"ppg_packets\":" << optical.ppg_packets
       << ",\"optics_values\":" << optical.optics_values
       << ",\"ppg_values\":" << optical.ppg_values;
@@ -175,7 +185,7 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
 void send_status_line(BridgeTcpServer& server, MuseBridgeService& svc) {
     std::ostringstream payload;
     payload << "{\"kind\":\"status\"";
-    append_bridge_device_fields(payload, svc);
+    append_bridge_device_fields(payload, svc, &server);
     payload << "}";
     server.send_json_line(payload.str());
 }
@@ -324,6 +334,43 @@ int main() {
         while (server.poll_command(cmd_line)) {
             handle_bridge_command_line(cmd_line, muse_service, server);
             last_status = clock::now();
+        }
+
+        // Optics first, and drained fully rather than one per iteration: at
+        // 64Hz these arrive in bursts between the 256Hz EEG samples, and
+        // leaving them queued behind poll_frame's 200ms wait would add jitter
+        // to timestamps that RMSSD is computed from.
+        OpticsFrame optics{};
+        while (muse_service.poll_optics(optics)) {
+            std::ostringstream payload;
+            // 12 significant digits, not ostringstream's default 6. These are
+            // microamps around 5.6 with a pulsatile component of ~0.2, so 6
+            // digits is comfortable today -- but the low-order bits are exactly
+            // where the signal lives, and a preset reporting raw counts would
+            // serialize 2097152.5 as 2.09715e+06 and discard all of it.
+            payload << std::setprecision(12);
+            payload << "{\"kind\":\"optics\",\"seq\":" << optics.seq
+                    << ",\"mono_ts_ms\":" << optics.mono_ts_ms
+                    << ",\"n\":" << optics.n << ",\"ch\":[";
+            for (int i = 0; i < optics.n; ++i) {
+                if (i > 0) {
+                    payload << ',';
+                }
+                const double v = optics.ch[static_cast<size_t>(i)];
+                // nan and inf are not JSON literals, so emitting them produces
+                // a line no parser accepts -- taking the whole recording with
+                // it rather than the one bad sample.
+                if (std::isfinite(v)) {
+                    payload << v;
+                } else {
+                    payload << "null";
+                }
+            }
+            payload << "]}";
+            // Deliberately without append_bridge_device_fields: at 64Hz that
+            // would repeat every status field 64 times a second, and the status
+            // line already carries them at 5Hz.
+            server.send_json_line(payload.str());
         }
 
         if (muse_service.poll_frame(frame)) {

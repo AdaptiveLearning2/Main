@@ -16,27 +16,49 @@ diffs, which does not matter for a recording that will never be edited.
 
 ### What it shows
 
-Measured mean rate **64.271 Hz** over the 120 s span — computed as
-`frames / span`, not from the median inter-frame gap. The median is 12 ms,
-which would imply 83 Hz; it is wrong because ~7% of frames share a timestamp
-with their predecessor and drag it down. An early analysis of this recording
-used that figure and reported every rate 30% high.
+Measured mean rate **64.234 Hz** over the 120 s span — computed as
+`frames / span`, not from the median inter-frame gap. The median is 19 ms,
+which would imply 53 Hz; it is wrong because ~9% of frames share a timestamp
+with their predecessor.
 
-Per-channel spectral peak in the 0.7–3.0 Hz band:
+`seq` runs 1969–9678 with no gaps, so **no sample was lost** between the
+headband and the file. That is what makes an index-based clock legitimate here
+rather than merely convenient.
 
-| Channel | dc (µA) | sd | Peak | SNR |
-| --- | --- | --- | --- | --- |
-| 730L | 5.601 | 0.226 | 54.5 bpm | 4.0 |
-| 730R | 4.625 | 0.344 | 56.0 bpm | 4.1 |
-| 850L | 5.561 | 0.182 | **70.5 bpm** | 5.1 |
-| 850R | 4.266 | 0.256 | 56.0 bpm | 3.9 |
+### Baseline drift dominates the low end of the pulse band
 
-Three channels agree near 55 bpm and one does not — which is the case
-cross-channel agreement exists to handle, and the reason the quality gate is
-per channel rather than per device. Note it is **850L** that disagrees here,
-while in an earlier live sample 850L was the *best* channel: which emitter is
-well-seated changes between sessions, so no channel can be trusted as primary
-by construction.
+Every channel's spectrum peaks around **0.2 Hz** and decays monotonically —
+perfusion, breathing and micro-movement. Its tail is still the largest thing in
+the band at 0.7 Hz, so a plain FFT argmax over 0.7–3.0 Hz returns the band edge
+rather than a heartbeat:
+
+| Channel | dc (µA) | sd | Raw peak, 0.7–3.0 Hz | After excluding drift | SNR |
+| --- | --- | --- | --- | --- | --- |
+| 730L | 5.657 | 0.094 | 44.5 bpm | **72.5 bpm** | 5.8 |
+| 730R | 4.743 | 0.152 | 44.5 bpm | **72.5 bpm** | 3.2 |
+| 850L | 5.791 | 0.090 | 72.5 bpm | **72.5 bpm** | 11.4 |
+| 850R | 4.456 | 0.132 | 44.5 bpm | **72.5 bpm** | 5.7 |
+
+**All four channels carry the same heart rate.** The apparent disagreement was
+drift, not a poorly seated emitter — an earlier reading of this data concluded
+the opposite, twice.
+
+Note the raw column is not uniformly wrong, which is worse: 850L's pulse is
+strong enough to beat the drift tail and reads correctly, while the weaker
+three do not. So an unfiltered peak yields channels differing by ~28 bpm, each
+individually plausible as a resting rate. That is the failure mode that is hard
+to notice.
+
+Two consequences for the derivation:
+
+- **High-pass, don't just narrow the search band.** Restricting to 1.0–1.5 Hz
+  recovers the right answer here but only because the rate happens to sit
+  inside it; a genuinely slow or fast heart would fall outside a band chosen to
+  dodge drift.
+- **Cross-channel agreement is usable — downstream of detrending.** On raw
+  traces it would have reported three channels agreeing on 44.5 bpm, which is
+  not a heart rate. 850L remains the strongest channel by SNR, roughly double
+  the others, consistent with 850nm IR being the conventional PPG wavelength.
 
 ### The timestamps are not a sample clock
 

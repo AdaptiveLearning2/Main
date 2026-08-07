@@ -19,10 +19,10 @@ import pytest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "optics_rest_64hz.jsonl.gz"
 
-# Recorded on a Muse S Athena (MS-03), PRESET_1035, worn, at rest.
+# Recorded on a Muse S Athena (MS-03), PRESET_1035, worn, at rest. seq contiguous.
 EXPECTED_FRAMES = 7710
 EXPECTED_CHANNELS = 4
-EXPECTED_RATE_HZ = 64.271
+EXPECTED_RATE_HZ = 64.234
 
 
 @pytest.fixture(scope="module")
@@ -67,42 +67,79 @@ def test_fixture_timestamps_are_not_a_usable_clock(frames):
     assert max(deltas) > 2 * (1000 / EXPECTED_RATE_HZ), "expected batching gaps"
 
 
-def test_fixture_contains_a_pulse(frames):
-    """Three of four channels should agree on a plausible resting rate.
+def _peak_bpm(numpy, x, fs, lo_hz, hi_hz):
+    x = x - x.mean()
+    spec = numpy.abs(numpy.fft.rfft(x * numpy.hanning(len(x))))
+    freqs = numpy.fft.rfftfreq(len(x), d=1.0 / fs)
+    band = (freqs >= lo_hz) & (freqs <= hi_hz)
+    return float(freqs[band][numpy.argmax(spec[band])]) * 60.0
 
-    Not a test of any derivation -- a plain FFT peak. It exists so that if the
-    fixture is ever replaced with a recording that has no pulse in it, that is
-    caught here rather than as an unexplained failure in beat detection."""
+
+def test_baseline_drift_dominates_the_low_end_of_the_pulse_band(frames):
+    """Why a raw FFT peak over 0.7-3.0 Hz is not a pulse detector.
+
+    Every channel's spectrum peaks at ~0.2 Hz and decays monotonically from
+    there -- baseline wander from perfusion, breathing and micro-movement. Its
+    tail is still the largest thing in the band at 0.7 Hz, so an unfiltered
+    argmax returns ~44 bpm: the band edge, not a heartbeat.
+
+    This is pinned because it produced two wrong answers before it was
+    understood, and the derivation must high-pass rather than merely restrict
+    the search band."""
     numpy = pytest.importorskip("numpy")
     a = numpy.array([f["ch"] for f in frames], dtype=float)
     fs = EXPECTED_RATE_HZ
 
-    peaks = []
     for ch in range(a.shape[1]):
         x = a[:, ch] - a[:, ch].mean()
         spec = numpy.abs(numpy.fft.rfft(x * numpy.hanning(len(x))))
         freqs = numpy.fft.rfftfreq(len(x), d=1.0 / fs)
-        band = (freqs >= 0.7) & (freqs <= 3.0)  # 42-180 bpm
-        peaks.append(float(freqs[band][numpy.argmax(spec[band])]) * 60.0)
+        at = lambda f: spec[int(numpy.argmin(numpy.abs(freqs - f)))]  # noqa: E731
+        assert at(0.2) > at(0.7), f"channel {ch}: expected drift below the pulse band"
 
-    plausible = [p for p in peaks if 45 <= p <= 110]
-    assert len(plausible) >= 3, f"expected 3+ channels in a resting range, got {peaks}"
-
-    # The agreeing *cluster*, not every plausible channel. In this recording
-    # three channels sit near 55 bpm and one reads ~70 -- a poorly seated
-    # emitter, which is the case cross-channel agreement exists to survive.
-    # Requiring all four to agree would assert the problem away.
-    best = max(
-        (sum(1 for q in peaks if abs(q - p) <= 5) for p in peaks),
+    # The unfiltered answer is not uniformly wrong -- it is worse than that.
+    # 850L's pulse is strong enough to beat the drift tail and reads correctly;
+    # the three weaker channels do not and land near the band edge. So a raw
+    # argmax gives channels that disagree by ~28 bpm while each looks like a
+    # plausible resting rate on its own, which is precisely the failure that is
+    # hard to notice.
+    naive = [_peak_bpm(numpy, a[:, ch], fs, 0.7, 3.0) for ch in range(a.shape[1])]
+    assert max(naive) - min(naive) > 20, (
+        f"expected unfiltered peaks to disagree sharply, got {naive}"
     )
-    assert best >= 3, f"expected 3+ channels agreeing within 5 bpm, got {peaks}"
 
 
-def test_fixture_predates_the_seq_field(frames):
-    """Documents a known limitation rather than asserting a desirable property.
+def test_every_channel_agrees_on_the_pulse_once_drift_is_excluded(frames):
+    """All four channels carry the same heart rate.
 
-    This recording was captured before the bridge emitted `seq`, so sample loss
-    in it cannot be ruled out -- the queue bound, a WSAEWOULDBLOCK and a short
-    send can each drop one silently. A re-capture with the current bridge will
-    carry seq and this test should then be inverted to assert contiguity."""
-    assert all(f.get("seq") is None for f in frames)
+    Restricting to 1.0-1.5 Hz is a stand-in for the high-pass the derivation
+    will do properly; the point here is that the disagreement between channels
+    was an artefact of drift, not of one emitter being poorly seated. Once it
+    is gone they agree to within a bin.
+
+    So cross-channel agreement is usable as a confidence signal -- but only
+    downstream of detrending. Computed on raw traces it would have reported
+    three channels agreeing on a number that is not a heart rate."""
+    numpy = pytest.importorskip("numpy")
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    fs = EXPECTED_RATE_HZ
+
+    peaks = [_peak_bpm(numpy, a[:, ch], fs, 1.0, 1.5) for ch in range(a.shape[1])]
+    assert all(45 <= p <= 110 for p in peaks), f"expected resting rates, got {peaks}"
+    assert max(peaks) - min(peaks) < 5, f"channels should agree closely, got {peaks}"
+
+
+def test_fixture_lost_no_samples(frames):
+    """The property that makes an index-based clock legitimate on this data.
+
+    The derivation reconstructs time from sample index rather than from
+    mono_ts_ms. That is only sound if nothing went missing between the headband
+    and the file -- and three paths could drop a sample silently, none of them
+    visible in the samples themselves. `seq` is the bridge's monotonic counter,
+    so a contiguous run is proof rather than assumption.
+
+    An earlier version of this fixture predated `seq` and this test asserted
+    that absence as a known limitation. It has been re-captured."""
+    seqs = [f["seq"] for f in frames]
+    assert all(s is not None for s in seqs), "re-capture with a bridge that emits seq"
+    assert seqs == list(range(seqs[0], seqs[0] + len(seqs))), "sample(s) lost in capture"

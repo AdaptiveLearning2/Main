@@ -98,6 +98,18 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "active_preset",
         "eeg_channel_count",
         "optical_supported",
+        # Optical capture evidence. Counters and a latest sample rather than a
+        # stream: what needs establishing first is whether the packets arrive at
+        # all and with how many channels.
+        "optics_packets",
+        "ppg_packets",
+        "optics_values",
+        "ppg_values",
+        "last_optics",
+        "last_ppg",
+        "is_ppg_good",
+        "is_heart_good",
+        "optics_age_ms",
     ):
         if key not in payload:
             continue
@@ -119,9 +131,33 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 target[key] = int(v)
             except (TypeError, ValueError):
                 continue
-        elif key in {"hsi", "is_good"}:
-            # Per-electrode contact quality from libMuse: 4 floats, or null
-            # when the headband hasn't reported that packet type yet.
+        elif key in {"optics_packets", "ppg_packets", "optics_values", "ppg_values"}:
+            try:
+                target[key] = int(payload[key])
+            except (TypeError, ValueError):
+                continue
+        elif key == "optics_age_ms":
+            # null before the first optical packet, so "never arrived" stays
+            # distinct from "arrived this instant" -- which 0 would not.
+            v = payload[key]
+            if v is None:
+                target[key] = None
+                continue
+            try:
+                target[key] = int(v)
+            except (TypeError, ValueError):
+                continue
+        elif key in {"is_ppg_good", "is_heart_good"}:
+            # Tri-state. null means the headband has not reported on this yet,
+            # which is not the same as reporting a bad signal -- only the latter
+            # is grounds for preferring another source.
+            v = payload[key]
+            target[key] = None if v is None else bool(v)
+        elif key in {"last_optics", "last_ppg", "hsi", "is_good"}:
+            # Float arrays, or null when the headband hasn't reported that
+            # packet type yet: hsi/is_good are per-electrode contact quality
+            # (4 values), last_optics/last_ppg the most recent optical sample
+            # (up to 16 and 3 respectively, however many channels arrived).
             v = payload[key]
             if v is None:
                 target[key] = None

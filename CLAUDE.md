@@ -140,6 +140,18 @@ group below. Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_
 `ADMIN_TOKEN` are required, `EEG_SOURCE` picks sim vs muse, and `EEG_DEVICES`
 (`station1:muse@8765,...`) drives the multi-headband registry.
 
+The native bridge reads its own env directly, not through `config.py`: `MUSE_BRIDGE_PORT`
+(default 8765), `MUSE_ENABLE_OPTICS` (default off) and `MUSE_OPTICS_PRESET` (default `1035`).
+
+**`MUSE_ENABLE_OPTICS` stays off unless you are testing the heart channel.** On it, a 2025 Athena
+is moved off `PRESET_21` onto an optics-carrying preset — which is a bandwidth trade with a sharp
+edge. Measured on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE link
+within ~20s *and* collapses electrode contact from `[1,1,1,1]` to `[4,4,4,4]`; 8 CH and 4 CH both
+hold for minutes with good contact and ~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung —
+`1031`/`1032` are 16 CH, `1033`/`1034` are 8 CH, `1035`/`1036` are 4 CH (odd = low power). The
+default sits at the bottom deliberately: the 16-channel failure took EEG down with it, and that is
+not a cliff to park next to. An unrecognised value warns once and falls back.
+
 Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
 These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
 one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`

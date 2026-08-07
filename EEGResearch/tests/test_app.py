@@ -221,6 +221,74 @@ def test_apply_bridge_ingestion_fields_ignores_malformed_numeric_values():
     assert target["connection_state"] == 1
 
 
+def test_apply_bridge_ingestion_fields_passes_optical_fields_through():
+    """The whitelist is why these have to be named: a field the bridge emits
+    but the tuple omits is dropped silently, reaches no API surface, and looks
+    from outside exactly like a bridge that never sent it. That is how the
+    preset readback shipped unobservable the first time."""
+    target: dict = {}
+    _apply_bridge_ingestion_fields(target, {
+        "muse_model": "MS-03",
+        "requested_preset": "PRESET_1035",
+        "active_preset": "PRESET_1035",
+        "eeg_channel_count": 4,
+        "optical_supported": True,
+        "optics_packets": 3789,
+        "ppg_packets": 0,
+        "optics_values": 4,
+        "last_optics": [0.94, 0.57, 5.95, 4.92],
+        "is_ppg_good": True,
+        "optics_age_ms": 16,
+    })
+    assert target["muse_model"] == "MS-03"
+    assert target["active_preset"] == "PRESET_1035"
+    assert target["eeg_channel_count"] == 4
+    assert target["optical_supported"] is True
+    assert target["optics_packets"] == 3789
+    assert target["optics_values"] == 4
+    assert target["last_optics"] == [0.94, 0.57, 5.95, 4.92]
+    assert target["is_ppg_good"] is True
+    assert target["optics_age_ms"] == 16
+
+
+def test_apply_bridge_ingestion_fields_keeps_unknown_distinct_from_false_and_zero():
+    """The invariant the heart channel leans on.
+
+    null means the headband has not reported yet; False means it reported a bad
+    signal. Only the second justifies preferring another source, so collapsing
+    them would turn "we do not know" into "the sensor is bad" and hand the
+    camera a job it should not get. Same argument for eeg_channel_count and
+    optics_age_ms, where 0 is a plausible reading rather than a sentinel."""
+    target: dict = {}
+    _apply_bridge_ingestion_fields(target, {
+        "is_ppg_good": None,
+        "is_heart_good": None,
+        "eeg_channel_count": None,
+        "optics_age_ms": None,
+    })
+    assert target["is_ppg_good"] is None
+    assert target["is_heart_good"] is None
+    assert target["eeg_channel_count"] is None
+    assert target["optics_age_ms"] is None
+
+    reported_bad: dict = {}
+    _apply_bridge_ingestion_fields(reported_bad, {"is_ppg_good": False, "optics_age_ms": 0})
+    assert reported_bad["is_ppg_good"] is False
+    assert reported_bad["optics_age_ms"] == 0
+
+
+def test_apply_bridge_ingestion_fields_ignores_malformed_optical_values():
+    target = {"optics_packets": 12, "optics_age_ms": 5}
+    _apply_bridge_ingestion_fields(target, {
+        "optics_packets": "not-an-int",
+        "optics_age_ms": "also-not",
+        "last_optics": "not-a-list",
+    })
+    assert target["optics_packets"] == 12
+    assert target["optics_age_ms"] == 5
+    assert "last_optics" not in target
+
+
 def test_enrich_ingestion_dict_excludes_band_fields():
     settings = get_settings()
     ing = enrich_ingestion_dict(

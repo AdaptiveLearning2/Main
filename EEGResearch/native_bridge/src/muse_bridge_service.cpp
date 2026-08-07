@@ -947,6 +947,21 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
     // Do NOT call any libMuse API (e.g. get_muse_version) here.
     // libMuse holds an internal lock during callbacks; re-entering the SDK deadlocks.
     // GettingData32 avoids this by posting to the UI thread first.
+    //
+    // Deliberately does NOT drain the queues or reset optics_seq_, which looks
+    // like an omission and is not. Two reasons:
+    //
+    //  - This fires on every state transition, including transient blips. A
+    //    reset here would discard in-flight samples that are perfectly good,
+    //    and reset the sequence for a link that never actually went away.
+    //  - Every reconnect the sidecar drives goes through connect_named(),
+    //    which calls disconnect_muse() first, and that path resets properly.
+    //
+    // The residual gap is a link libMuse re-establishes entirely on its own,
+    // with no connect from above: the sequence would then continue across it
+    // and a consumer would not see the interruption. Accepted rather than
+    // fixed, because the fix belongs here and doing it here costs more than
+    // the case is worth.
     std::lock_guard<std::mutex> lock(queue_mutex_);
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);

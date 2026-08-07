@@ -33,6 +33,10 @@ async def _lifespan(app: FastAPI):
     which lets each one stay defined beside the state it owns.
     """
     yield
+    # Pollers first: they are daemon threads that print on the way out, so
+    # leaving them to interpreter teardown risks a fatal stdout-lock abort on
+    # an otherwise clean shutdown. See eeg_poller.stop_all.
+    eeg_poller.stop_all()
     _shutdown_strategy_pool()
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from typing import Dict
 
 import eeg_client
@@ -108,7 +107,12 @@ class _Poller(threading.Thread):
                         self.errors += 1
                         print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
                         print(f"!!! [eeg-poller] row was: {row}", flush=True)
-            time.sleep(POLL_INTERVAL)
+            # wait(), not sleep(): stop() then returns within microseconds
+            # instead of up to POLL_INTERVAL later. The lines printed below run
+            # after the loop, so a sleeping poller is one that still has output
+            # to emit -- and if the interpreter starts shutting down first, that
+            # print can hit an already-held stdout lock and abort the process.
+            self._stop_event.wait(POLL_INTERVAL)
 
         try:
             # Each device_id (station) is its own independent sidecar stream now, so
@@ -205,6 +209,49 @@ def stop_for_user(user_id: str) -> int:
                 _active.pop(sid, None)
                 stopped += 1
     return stopped
+
+
+def live_pollers() -> list[_Poller]:
+    """Every poller thread still running, registered or not.
+
+    threading.enumerate() rather than _active, deliberately: start() and
+    stop_for_user() pop a poller out of the registry the moment they signal it,
+    while its thread runs on for one more loop check. The registry therefore
+    does not name every thread that is still alive, which is exactly the set
+    that matters when the question is "has anything got output left to print".
+    """
+    # Matched by class name, not isinstance: reloading this module rebinds
+    # _Poller to a new class object, and threads started by the old one would
+    # then fail an isinstance check -- reporting "nothing running" while they
+    # are still running, which is the one wrong answer this must never give.
+    return [t for t in threading.enumerate() if type(t).__name__ == "_Poller"]
+
+
+def stop_all(timeout: float = 5.0) -> int:
+    """Stop and join every live poller. Called from main's lifespan shutdown.
+
+    A poller is a daemon thread that prints, including a block of teardown
+    lines after its loop ends. Left to interpreter shutdown, one of those
+    prints can land while the stdout BufferedWriter lock is already held, which
+    CPython treats as fatal ("_enter_buffered_busy: could not acquire lock
+    for <_io.BufferedWriter name='<stdout>'>"), aborting the process with exit
+    code 134 on a clean shutdown. Joining here means no poller outlives the
+    server.
+
+    Signals every poller before joining any, so the whole set costs one poll
+    interval rather than one each.
+    """
+    pollers = live_pollers()
+    for p in pollers:
+        p.stop()
+    for p in pollers:
+        p.join(timeout=timeout)
+    with _lock:
+        _active.clear()
+    still_running = [p.session_id[:8] for p in live_pollers()]
+    if still_running:
+        print(f"!!! [eeg-poller] did not stop within {timeout}s: {still_running}", flush=True)
+    return len(pollers)
 
 
 def status(user_id: str) -> dict:

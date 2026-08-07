@@ -12,11 +12,9 @@ and that decision stands until a parent revisits it; a student may not re-enable
 or the parent's control is nominal. Both halves are tested, in both directions.
 """
 import os
-import sys
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 

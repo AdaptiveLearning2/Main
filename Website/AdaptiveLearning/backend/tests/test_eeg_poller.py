@@ -8,11 +8,7 @@ eeg_poller.start() must reject a second user trying to claim a device_id
 another user's live poller already holds, while still letting the *same*
 user replace their own poller (e.g. switching sessions or devices).
 """
-import os
-import sys
 import time
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # noqa: E402
 
@@ -99,10 +95,9 @@ def test_is_alive_after_poller_finishes_does_not_raise():
     p.start()
     p.stop()
     # Wait until the thread finishes rather than asserting on a fixed deadline.
-    # stop() only sets an event, and the run loop checks it after a
-    # non-interruptible time.sleep(POLL_INTERVAL) -- 1.0s at the default
-    # EEG_POLL_HZ=1 -- so a join(timeout=2.0) left barely one interval of
-    # headroom, and a loaded runner made is_alive() legitimately True.
+    # The run loop waits on the stop event, so this is normally immediate --
+    # but a loaded runner can still make is_alive() legitimately True for a
+    # moment, and a fixed deadline here would be flake waiting to happen.
     #
     # The regression this guards is is_alive()/join() *raising*, not the thread
     # being quick, so the loop below exercises it on every iteration and the

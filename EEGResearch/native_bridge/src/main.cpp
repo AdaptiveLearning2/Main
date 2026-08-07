@@ -51,6 +51,15 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     append_json_quoted_string(o, svc.active_muse_name());
     o << ",\"firmware_version\":";
     append_json_quoted_string(o, svc.firmware_version());
+    // Model, preset and optical capability. The preset stopped being a constant
+    // in the source, so "which preset is this session on" is now only
+    // answerable from the wire -- and optical_supported is what lets a consumer
+    // tell a headband with no PPG hardware from one whose PPG stopped.
+    o << ",\"muse_model\":";
+    append_json_quoted_string(o, svc.muse_model());
+    o << ",\"active_preset\":";
+    append_json_quoted_string(o, svc.active_preset());
+    o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
     const BandPowers bands = svc.band_powers();
     o << ",\"delta\":" << bands.delta
       << ",\"theta\":" << bands.theta

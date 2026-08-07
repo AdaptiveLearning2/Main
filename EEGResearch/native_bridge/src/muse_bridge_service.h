@@ -71,6 +71,28 @@ public:
     std::vector<std::string> muse_names() const;
     std::string active_muse_name() const;
     std::string firmware_version() const;
+    /**
+     * Headband model as reported by libMuse once connected, e.g. "MS-03" for a
+     * 2025 Muse S Athena. Empty until the CONNECTED packet arrives.
+     *
+     * Reported rather than inferred from the name, because the name is
+     * user-settable and the model decides which presets are available at all.
+     */
+    std::string muse_model() const;
+    /**
+     * Preset actually in force, e.g. "PRESET_21". Worth reporting because it is
+     * now chosen from the model rather than being a constant, so "which preset
+     * is this session running" stops being answerable by reading the source.
+     */
+    std::string active_preset() const;
+    /**
+     * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
+     *
+     * A capability, not a dropout. Muse 2016 has no optical hardware, and a
+     * heart channel that reports "sensor failed" for a device that never had
+     * one would hand the camera fallback a job it should not be given.
+     */
+    bool optical_supported() const;
     BandPowers band_powers() const;
     /** Per-electrode fit/validity as reported by the headband itself. */
     ContactQuality contact_quality() const;
@@ -112,11 +134,25 @@ public:
     bool bluetooth_enabled() const;
 
 private:
+    /**
+     * Pick the preset for a model, once the model is actually known.
+     *
+     * Separate from connect_named because get_model() is documented to return
+     * MU_02 until the headband reaches CONNECTED, and the preset is set before
+     * that -- so this runs from the connection listener instead.
+     */
+#if defined(ENABLE_LIBMUSE)
+    void apply_model_preset(const std::shared_ptr<interaxon::bridge::Muse>& muse);
+#endif
+
     std::atomic<bool> running_;
     long long frame_counter_;
     BandPowers latest_bands_{};
     ContactQuality latest_contact_{};
     int band_channels_used_{0};
+    std::string muse_model_;
+    std::string active_preset_;
+    bool optical_supported_{false};
     // steady_clock ms at which the last notch-filtered packet arrived; 0 means
     // none yet. Not a bool: see notch_available().
     std::atomic<long long> last_notch_ms_{0};

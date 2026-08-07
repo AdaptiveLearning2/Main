@@ -83,8 +83,16 @@ class MuseBridgeService::BridgeConnectionListener final : public interaxon::brid
 public:
     explicit BridgeConnectionListener(MuseBridgeService& service) : service_(service) {}
     void receive_muse_connection_packet(const interaxon::bridge::MuseConnectionPacket& packet,
-                                        const std::shared_ptr<interaxon::bridge::Muse>&) override {
+                                        const std::shared_ptr<interaxon::bridge::Muse>& muse) override {
         service_.update_connection_state(packet.current_connection_state);
+        // The model is only trustworthy from here on. bridge_muse.h:196 is
+        // explicit that get_model() returns MU_02 for anything from 2018
+        // onwards until CONNECTED is reached -- and connect_named() sets the
+        // preset before that, so asking there would silently treat an Athena
+        // as a 2016 Muse.
+        if (packet.current_connection_state == interaxon::bridge::ConnectionState::CONNECTED) {
+            service_.apply_model_preset(muse);
+        }
     }
 
 private:
@@ -159,6 +167,14 @@ void MuseBridgeService::stop() {
         discovered_ = false;
         active_muse_name_.clear();
         firmware_version_.clear();
+        // Model and preset describe the headband that just went away. Leaving
+        // them set would report an Athena on PRESET_1031 while nothing is
+        // connected, and optical_supported would keep claiming a sensor exists
+        // -- which is the one field a heart channel would use to decide whether
+        // a missing signal justifies falling back to the camera.
+        muse_model_.clear();
+        active_preset_.clear();
+        optical_supported_ = false;
         latest_bands_ = BandPowers{};
         latest_contact_ = ContactQuality{};
         band_channels_used_ = 0;
@@ -182,6 +198,88 @@ void MuseBridgeService::refresh_scan() {
     manager_->start_listening();
 #endif
 }
+
+#if defined(ENABLE_LIBMUSE)
+namespace {
+
+// Whether to move a capable headband onto an Optics-carrying preset.
+//
+// Off by default, and deliberately so. PRESET_21 is what every session has run
+// on until now, it is verified working on a 2025 Athena despite not being
+// listed for that model, and switching preset changes EEG bit depth (12 -> 14)
+// and, on some of the alternatives, channel count. A silent EEG regression
+// would be attributed to whatever shipped alongside it rather than to this, so
+// it goes behind a flag that can be turned on for one session and turned off
+// again.
+bool optics_preset_enabled() {
+    const char* raw = std::getenv("MUSE_ENABLE_OPTICS");
+    if (!raw || !*raw) {
+        return false;
+    }
+    const std::string value(raw);
+    return value == "1" || value == "true" || value == "TRUE" || value == "yes";
+}
+
+const char* model_name(interaxon::bridge::MuseModel model) {
+    switch (model) {
+    case interaxon::bridge::MuseModel::MU_01: return "MU-01";
+    case interaxon::bridge::MuseModel::MU_02: return "MU-02";
+    case interaxon::bridge::MuseModel::MU_03: return "MU-03";
+    case interaxon::bridge::MuseModel::MU_04: return "MS-01";
+    case interaxon::bridge::MuseModel::MU_05: return "MS-02";
+    case interaxon::bridge::MuseModel::MU_06: return "MU-06";
+    case interaxon::bridge::MuseModel::MS_03: return "MS-03";
+    default: return "";
+    }
+}
+
+// Optical hardware by model, as a capability rather than a runtime observation.
+// MU-01 and MU-02 have no PPG at all; everything from the 2018 Muse 2 onwards
+// does. Saying so up front is what lets a heart channel report "this headband
+// has no optical sensor" instead of "the sensor stopped working", which are
+// different situations and only one of them justifies falling back to a camera.
+bool model_has_optical(interaxon::bridge::MuseModel model) {
+    switch (model) {
+    case interaxon::bridge::MuseModel::MU_01:
+    case interaxon::bridge::MuseModel::MU_02:
+        return false;
+    default:
+        return true;
+    }
+}
+
+} // namespace
+#endif
+
+#if defined(ENABLE_LIBMUSE)
+void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::bridge::Muse>& muse) {
+    if (!muse) {
+        return;
+    }
+    const interaxon::bridge::MuseModel model = muse->get_model();
+    const bool has_optical = model_has_optical(model);
+
+    // PRESET_21 unless we are deliberately asking for optics on a device that
+    // has them. PRESET_1031 is the 2025-only preset that keeps EEG at 4
+    // channels -- same shape as the EegSample this bridge emits and the same
+    // channel count the Python side averages over -- while adding 16-channel
+    // optics at 64Hz. The 8-channel EEG variants would change that shape, so
+    // they are not used even though they carry the same optics.
+    const char* preset_label = "PRESET_21";
+    if (optics_preset_enabled() && has_optical
+        && model == interaxon::bridge::MuseModel::MS_03) {
+        muse->set_preset(interaxon::bridge::MusePreset::PRESET_1031);
+        preset_label = "PRESET_1031";
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        muse_model_ = model_name(model);
+        active_preset_ = preset_label;
+        optical_supported_ = has_optical;
+    }
+}
+#endif
 
 bool MuseBridgeService::connect_named(const std::string& name) {
 #if defined(ENABLE_LIBMUSE)
@@ -242,6 +340,14 @@ void MuseBridgeService::disconnect_muse() {
         muse = std::move(active_muse_);
         active_muse_name_.clear();
         firmware_version_.clear();
+        // Model and preset describe the headband that just went away. Leaving
+        // them set would report an Athena on PRESET_1031 while nothing is
+        // connected, and optical_supported would keep claiming a sensor exists
+        // -- which is the one field a heart channel would use to decide whether
+        // a missing signal justifies falling back to the camera.
+        muse_model_.clear();
+        active_preset_.clear();
+        optical_supported_ = false;
         latest_bands_ = BandPowers{};
         latest_contact_ = ContactQuality{};
         band_channels_used_ = 0;
@@ -290,6 +396,36 @@ std::string MuseBridgeService::firmware_version() const {
     return firmware_version_;
 #else
     return {};
+#endif
+}
+
+// Guarded like firmware_version() above: queue_mutex_ lives inside the
+// ENABLE_LIBMUSE block, so an unguarded body would break the OFF build -- which
+// is the one CI compiles.
+std::string MuseBridgeService::muse_model() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return muse_model_;
+#else
+    return {};
+#endif
+}
+
+std::string MuseBridgeService::active_preset() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return active_preset_;
+#else
+    return {};
+#endif
+}
+
+bool MuseBridgeService::optical_supported() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return optical_supported_;
+#else
+    return false;
 #endif
 }
 

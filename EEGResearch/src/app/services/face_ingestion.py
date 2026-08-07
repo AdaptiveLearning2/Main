@@ -317,3 +317,66 @@ class FaceCaptureAdapter:
                 "face_degraded_reason": "no usable face" if degraded else None,
                 "last_error": c.last_error,
             }
+
+
+class OpenCvFrameSource:
+    """A webcam, behind the FrameSource protocol.
+
+    OpenCV is imported here rather than at module scope so `face_ingestion` can
+    be imported -- and everything above it tested -- on a machine with no camera
+    dependencies. That is the state of CI and of any deployment that never
+    enables the camera.
+
+    Converts BGR to RGB at this boundary. OpenCV hands out BGR and every layer
+    above assumes RGB; converting once here means POS's projection matrix can
+    never silently be fed reversed channels, which would not error, just quietly
+    halve the pulse.
+    """
+
+    def __init__(self, camera_index: int = 0, width: int = 640, height: int = 480,
+                 fps: float = 30.0) -> None:
+        import cv2                                   # noqa: PLC0415 -- lazy by design
+
+        self._cv2 = cv2
+        self._cap = cv2.VideoCapture(camera_index)
+        if not self._cap.isOpened():
+            raise RuntimeError(f"could not open camera index {camera_index}")
+
+        # Ask for a fixed exposure and white balance. Auto-exposure is the
+        # single worst thing for rPPG: it reacts to the scene on roughly the
+        # timescale of a heartbeat, so the camera's own gain control writes a
+        # signal into the pulse band that looks exactly like what we are trying
+        # to measure. Not all drivers honour these; failure to set them is
+        # reported rather than silently accepted.
+        self.locked = {
+            "auto_exposure": bool(self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)),
+            "auto_wb": bool(self._cap.set(cv2.CAP_PROP_AUTO_WB, 0)),
+            "fps": bool(self._cap.set(cv2.CAP_PROP_FPS, fps)),
+            "width": bool(self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)),
+            "height": bool(self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)),
+        }
+        for name, ok in self.locked.items():
+            if not ok:
+                logger.warning(
+                    "camera driver did not accept %s; rPPG accuracy may suffer", name
+                )
+
+    def read(self) -> np.ndarray | None:
+        ok, frame = self._cap.read()
+        if not ok or frame is None:
+            return None
+        return self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
+
+    def release(self) -> None:
+        self._cap.release()
+
+
+def build_face_adapter(camera_index: int, fps: float) -> FaceCaptureAdapter:
+    """A camera-backed adapter. Nothing is opened until connect() is called."""
+    from src.app.services.face_roi import FaceLocator   # noqa: PLC0415 -- needs cv2
+
+    return FaceCaptureAdapter(
+        lambda: OpenCvFrameSource(camera_index=camera_index, fps=fps),
+        FaceLocator,
+        fps=fps,
+    )

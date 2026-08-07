@@ -25,6 +25,16 @@ class Settings(BaseSettings):
     # means single-device mode -- see parse_eeg_devices below.
     eeg_devices: str = Field(default="", alias="EEG_DEVICES")
 
+    # Camera. Off by default and gated separately from EEG_SOURCE: a deployment
+    # with a headband and no webcam is the common case, and the sidecar must
+    # boot with the `face` extra uninstalled.
+    face_enabled: bool = Field(default=False, alias="FACE_ENABLED")
+    face_camera_index: int = Field(default=0, ge=0, alias="FACE_CAMERA_INDEX")
+    # Floors, not bare ints. A camera that reports 0 fps would make the POS
+    # window zero-length and the sample interval infinite; 1 fps is already
+    # useless but at least arithmetically defined.
+    face_fps: float = Field(default=30.0, gt=1.0, le=240.0, alias="FACE_FPS")
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -37,9 +47,14 @@ DEFAULT_DEVICE_ID = "default"
 @dataclass(frozen=True)
 class DeviceConfig:
     device_id: str
-    kind: str  # "sim" or "muse"
+    kind: str  # "sim", "muse" or "face"
     host: str
     port: int
+    # Only meaningful for kind == "face". A camera is addressed by index, not by
+    # host:port, so reusing `port` for it would make two different things share
+    # one field and let a face device silently collide with a muse endpoint in
+    # the uniqueness check below.
+    camera_index: int | None = None
 
 
 def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
@@ -58,6 +73,7 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
                 kind=settings.eeg_source.lower().strip(),
                 host=settings.muse_bridge_host,
                 port=settings.muse_bridge_port,
+                camera_index=settings.face_camera_index,
             )
         }
 
@@ -69,6 +85,10 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
     # just one layer down. "sim" devices have no such constraint (no shared
     # process behind them), so they're exempt.
     seen_muse_endpoints: set[tuple[str, int]] = set()
+    # The camera equivalent of the same constraint: one OpenCV capture per
+    # device index. Two devices pointed at index 0 would fight over one webcam
+    # and interleave frames from the same student into two sessions.
+    seen_camera_indices: set[int] = set()
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
@@ -79,11 +99,43 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
             raise ValueError(f"Invalid EEG_DEVICES entry: {entry!r} (expected device_id:kind[@[host:]port])")
         kind_part, _, addr_part = spec.partition("@")
         kind = kind_part.strip().lower()
-        if kind not in {"sim", "muse"}:
-            raise ValueError(f"Invalid EEG_DEVICES entry: {entry!r} (kind must be 'sim' or 'muse')")
+        if kind not in {"sim", "muse", "face"}:
+            raise ValueError(
+                f"Invalid EEG_DEVICES entry: {entry!r} "
+                "(kind must be 'sim', 'muse' or 'face')"
+            )
         host = settings.muse_bridge_host
         port = settings.muse_bridge_port
+        camera_index: int | None = None
         addr_part = addr_part.strip()
+
+        if kind == "face":
+            # "station1:face@2" means camera index 2, not port 2.
+            try:
+                camera_index = int(addr_part) if addr_part else settings.face_camera_index
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid EEG_DEVICES entry: {entry!r} "
+                    "(face takes a camera index, e.g. 'station1:face@0')"
+                ) from exc
+            if camera_index < 0:
+                raise ValueError(
+                    f"Invalid EEG_DEVICES entry: {entry!r} (camera index must be >= 0)"
+                )
+            if camera_index in seen_camera_indices:
+                raise ValueError(
+                    f"Invalid EEG_DEVICES entry: {entry!r} (camera index {camera_index} "
+                    "is already used by another face device -- one capture per camera)"
+                )
+            seen_camera_indices.add(camera_index)
+            if device_id in devices:
+                raise ValueError(f"Duplicate device_id in EEG_DEVICES: {device_id!r}")
+            devices[device_id] = DeviceConfig(
+                device_id=device_id, kind=kind, host=host, port=port,
+                camera_index=camera_index,
+            )
+            continue
+
         if addr_part:
             host_part, sep2, port_part = addr_part.rpartition(":")
             if sep2 and not host_part.strip():
@@ -106,7 +158,10 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
                     "another muse device -- each muse device needs its own bridge host:port)"
                 )
             seen_muse_endpoints.add(endpoint)
-        devices[device_id] = DeviceConfig(device_id=device_id, kind=kind, host=host, port=port)
+        devices[device_id] = DeviceConfig(
+            device_id=device_id, kind=kind, host=host, port=port,
+            camera_index=camera_index,
+        )
 
     if not devices:
         raise ValueError("EEG_DEVICES is set but no valid entries were parsed")

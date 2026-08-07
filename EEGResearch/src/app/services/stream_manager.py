@@ -35,7 +35,11 @@ class DeviceSession:
         self.settings = settings
         self.device_config = device_config
         self.adapter = build_ingestion_adapter(
-            settings, kind=device_config.kind, host=device_config.host, port=device_config.port
+            settings,
+            kind=device_config.kind,
+            host=device_config.host,
+            port=device_config.port,
+            camera_index=device_config.camera_index,
         )
         self.processor = SignalProcessor()
         self.adaptation = AdaptationEngine()

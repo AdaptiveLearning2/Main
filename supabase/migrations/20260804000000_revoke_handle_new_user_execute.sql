@@ -18,8 +18,9 @@
 -- rather than as the caller, so nothing about who may CALL this affects what it
 -- does when fired.
 --
--- Which, as of 2026-08-05, is nothing: **no migration in this repo creates a
--- trigger on auth.users**, and neither the frontend (AuthContext.jsx:37 calls
+-- Which, as of 2026-08-05, is nothing: no migration in this repo creates a
+-- trigger on auth.users, and neither the frontend
+-- (Website/AdaptiveLearning/frontend/src/context/AuthContext.jsx:36 calls
 -- supabase.auth.signUp and stops) nor the backend inserts into public.profiles.
 -- The function's body reads raw_user_meta_data->>'display_name' and 'role',
 -- which is exactly what signUp puts there, so it was plainly written to be the

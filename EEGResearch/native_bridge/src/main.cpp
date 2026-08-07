@@ -326,6 +326,28 @@ int main() {
             last_status = clock::now();
         }
 
+        // Optics first, and drained fully rather than one per iteration: at
+        // 64Hz these arrive in bursts between the 256Hz EEG samples, and
+        // leaving them queued behind poll_frame's 200ms wait would add jitter
+        // to timestamps that RMSSD is computed from.
+        OpticsFrame optics{};
+        while (muse_service.poll_optics(optics)) {
+            std::ostringstream payload;
+            payload << "{\"kind\":\"optics\",\"mono_ts_ms\":" << optics.mono_ts_ms
+                    << ",\"n\":" << optics.n << ",\"ch\":[";
+            for (int i = 0; i < optics.n; ++i) {
+                if (i > 0) {
+                    payload << ',';
+                }
+                payload << optics.ch[static_cast<size_t>(i)];
+            }
+            payload << "]}";
+            // Deliberately without append_bridge_device_fields: at 64Hz that
+            // would repeat every status field 64 times a second, and the status
+            // line already carries them at 5Hz.
+            server.send_json_line(payload.str());
+        }
+
         if (muse_service.poll_frame(frame)) {
             std::ostringstream payload;
             payload << "{\"kind\":\"eeg\",\"mono_ts_ms\":" << frame.mono_ts_ms

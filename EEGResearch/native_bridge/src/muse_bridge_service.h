@@ -22,6 +22,24 @@ struct EegFrame {
     double tp10;
 };
 
+/**
+ * One optical sample, as it left the headband.
+ *
+ * Carries the packet's own timestamp rather than an arrival time. Beat-to-beat
+ * intervals are the whole point of RMSSD, and at 64Hz the sample spacing is
+ * ~15.6ms -- the same order as the HRV differences being measured -- so timing
+ * jitter introduced by when this process happened to be scheduled would land
+ * directly in the output.
+ *
+ * `n` is how many channels arrived, since that is preset-dependent: 4 on
+ * PRESET_1035, 8 on 1033, 16 on the modes that break the link.
+ */
+struct OpticsFrame {
+    long long mono_ts_ms;
+    std::array<double, 16> ch{};
+    int n{0};
+};
+
 struct BandPowers {
     double delta{0.0};
     double theta{0.0};
@@ -112,6 +130,16 @@ public:
     bool start();
     void stop();
     bool poll_frame(EegFrame& frame);
+    /**
+     * Drain one optical sample. Non-blocking, unlike poll_frame.
+     *
+     * Separate queue rather than interleaving into eeg_queue_: the two run at
+     * different rates (256Hz EEG, 64Hz optics) and a consumer wants them as
+     * separate streams. Non-blocking because poll_frame already provides the
+     * loop's wait -- a second blocking drain would serialise the two and make
+     * each stream's latency depend on the other's arrival.
+     */
+    bool poll_optics(OpticsFrame& frame);
 
     /** "synthetic" (no libMuse) or "libmuse" when compiled with ENABLE_LIBMUSE. */
     const char* bridge_mode() const noexcept;
@@ -263,6 +291,7 @@ private:
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::queue<EegFrame> eeg_queue_;
+    std::queue<OpticsFrame> optics_queue_;
     bool connected_{false};
     bool discovered_{false};
     int last_connection_state_{0};

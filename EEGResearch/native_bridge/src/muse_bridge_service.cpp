@@ -171,6 +171,12 @@ void MuseBridgeService::stop() {
         while (!eeg_queue_.empty()) {
             eeg_queue_.pop();
         }
+        // Optics too, or a reconnect resumes by emitting the previous
+        // headband's samples with their old timestamps -- which a beat detector
+        // would read as a gap followed by an impossible interval.
+        while (!optics_queue_.empty()) {
+            optics_queue_.pop();
+        }
         muse_names_.clear();
         discovered_ = false;
         reset_device_fields_locked();
@@ -633,6 +639,24 @@ int MuseBridgeService::band_channels_used() const {
 #endif
 }
 
+bool MuseBridgeService::poll_optics(OpticsFrame& frame) {
+    if (!running_.load()) {
+        return false;
+    }
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (optics_queue_.empty()) {
+        return false;
+    }
+    frame = optics_queue_.front();
+    optics_queue_.pop();
+    return true;
+#else
+    (void)frame;
+    return false;
+#endif
+}
+
 bool MuseBridgeService::poll_frame(EegFrame& frame) {
     if (!running_.load()) {
         return false;
@@ -756,6 +780,28 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         latest_optical_.ppg_values = static_cast<int>(n);
     }
     latest_optical_.last_ms = now_ms;
+
+    // Queue the sample itself, not just the counters. OPTICS only -- the PPG
+    // packet path is for 2018-2024 hardware and has its own channel mapping;
+    // streaming both into one queue would produce a series whose meaning
+    // changes with the headband.
+    if (is_optics) {
+        OpticsFrame frame{};
+        // The packet's own timestamp, in ms. libMuse reports microseconds.
+        frame.mono_ts_ms = packet->timestamp() / 1000;
+        const size_t n = std::min(values.size(), frame.ch.size());
+        for (size_t i = 0; i < n; ++i) {
+            frame.ch[i] = values[i];
+        }
+        frame.n = static_cast<int>(n);
+        optics_queue_.push(frame);
+        // Same bound as the EEG queue. At 64Hz this is ~32 seconds of backlog,
+        // which is far longer than the main loop can fall behind without
+        // something else being badly wrong.
+        if (optics_queue_.size() > 2048) {
+            optics_queue_.pop();
+        }
+    }
 }
 
 void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {

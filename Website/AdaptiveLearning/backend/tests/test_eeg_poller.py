@@ -90,17 +90,28 @@ def test_stop_all_joins_every_poller_and_empties_the_registry():
     The unregistered poller matters: start() pops a same-user poller out of
     _active while its thread runs on, so a stop_all that read the registry
     instead of the live threads would leave that one running.
+
+    That state is built by popping the registry entry by hand rather than by
+    letting a third start() do it. start() also signals the poller it pops, and
+    with POLL_INTERVAL at 0.01 and the sidecar stubbed, that thread reaches its
+    teardown in well under a millisecond -- so a count taken afterwards races
+    the thread's own exit and sometimes sees one fewer. A poller nobody has
+    signalled cannot exit on its own, which makes every count below exact.
     """
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
     eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
-    # Replaces session-1 for the same user: popped from _active, still alive.
-    eeg_poller.start(_FakeSupabase(), "user-a", "session-3", "station-a")
-    assert len(eeg_poller.live_pollers()) == 3
+    eeg_poller.start(_FakeSupabase(), "user-c", "session-3", "station-c")
+    orphan = eeg_poller._active.pop("session-1")
+
+    assert {p.session_id for p in eeg_poller.live_pollers()} == {
+        "session-1", "session-2", "session-3",
+    }
     assert set(eeg_poller._active) == {"session-2", "session-3"}
 
     assert eeg_poller.stop_all(timeout=15.0) == 3
     assert eeg_poller.live_pollers() == []
     assert eeg_poller._active == {}
+    assert not orphan.is_alive()
 
 
 def test_is_alive_after_poller_finishes_does_not_raise():

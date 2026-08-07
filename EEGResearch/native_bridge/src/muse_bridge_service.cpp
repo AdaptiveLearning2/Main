@@ -222,6 +222,11 @@ std::string preset_name(interaxon::bridge::MusePreset preset) {
     switch (preset) {
     case interaxon::bridge::MusePreset::PRESET_21: return "PRESET_21";
     case interaxon::bridge::MusePreset::PRESET_1031: return "PRESET_1031";
+    case interaxon::bridge::MusePreset::PRESET_1032: return "PRESET_1032";
+    case interaxon::bridge::MusePreset::PRESET_1033: return "PRESET_1033";
+    case interaxon::bridge::MusePreset::PRESET_1034: return "PRESET_1034";
+    case interaxon::bridge::MusePreset::PRESET_1035: return "PRESET_1035";
+    case interaxon::bridge::MusePreset::PRESET_1036: return "PRESET_1036";
     default: return "PRESET_" + std::to_string(static_cast<int>(preset));
     }
 }
@@ -231,6 +236,51 @@ std::string preset_name(interaxon::bridge::MusePreset preset) {
 // 2021 Muse S, printed MS-01 and MS-02, while MS_03 is the 2025 Muse S. Reading
 // the enumerator name straight out would report an Athena's predecessor as
 // "MU-04", which is printed on no headband at all.
+// Which optics preset to ask an Athena for.
+//
+// Configurable because the choice is a bandwidth trade that has to be measured
+// on hardware rather than reasoned about: 4 CH EEG at 256Hz alongside 16 CH
+// optics at 64Hz was verified to break the link within ~20 seconds AND to
+// collapse electrode contact quality from [1,1,1,1] to [4,4,4,4] on a worn
+// headband, while the same build on PRESET_21 held for minutes with good
+// contact. Fewer optical channels is the obvious next thing to try, and being
+// able to try it without a rebuild is the difference between one session and
+// several.
+//
+// Losing the 16-channel mode costs the Red and Ambient channels, which exist
+// only there (bridge_optics.h:51-66). That is survivable for this purpose: red
+// is what a pulse oximeter needs to compute SpO2 by ratio-of-ratios, whereas a
+// heart rate comes from the pulsatile component of any wavelength blood
+// absorbs, and 850nm IR is the conventional choice for exactly that.
+struct OpticsPresetChoice {
+    interaxon::bridge::MusePreset preset;
+    const char* label;
+};
+
+OpticsPresetChoice optics_preset_choice() {
+    const char* raw = std::getenv("MUSE_OPTICS_PRESET");
+    const std::string value = (raw && *raw) ? std::string(raw) : std::string("1035");
+    if (value == "1031") {
+        return {interaxon::bridge::MusePreset::PRESET_1031, "PRESET_1031"};  // 16 CH, low power
+    }
+    if (value == "1032") {
+        return {interaxon::bridge::MusePreset::PRESET_1032, "PRESET_1032"};  // 16 CH, high power
+    }
+    if (value == "1033") {
+        return {interaxon::bridge::MusePreset::PRESET_1033, "PRESET_1033"};  // 8 CH, low power
+    }
+    if (value == "1034") {
+        return {interaxon::bridge::MusePreset::PRESET_1034, "PRESET_1034"};  // 8 CH, high power
+    }
+    if (value == "1036") {
+        return {interaxon::bridge::MusePreset::PRESET_1036, "PRESET_1036"};  // 4 CH, high power
+    }
+    // Default: fewest optical channels, lowest power. The least bandwidth that
+    // still carries a pulse, which is the end of the ladder most likely to
+    // coexist with EEG rather than the end that carries the most data.
+    return {interaxon::bridge::MusePreset::PRESET_1035, "PRESET_1035"};
+}
+
 const char* model_name(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01: return "MU-01";
@@ -287,8 +337,9 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
         // streaming will be restored after that." (bridge_muse.h:351-358).
         // Whether the headband honours it is a separate question, which is why
         // active_preset() reads the answer back instead of trusting this call.
-        muse->set_preset(interaxon::bridge::MusePreset::PRESET_1031);
-        requested = "PRESET_1031";
+        const OpticsPresetChoice choice = optics_preset_choice();
+        muse->set_preset(choice.preset);
+        requested = choice.label;
     }
 
     {

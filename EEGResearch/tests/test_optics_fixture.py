@@ -148,6 +148,12 @@ def test_the_recording_holds_two_comparable_components(frames):
     a = numpy.array([f["ch"] for f in frames], dtype=float)
     fs = EXPECTED_RATE_HZ
 
+    # Bin width here is 0.0083 Hz and a Hanning main lobe is ~2 bins either
+    # side, so comparing against +/-2 stays inside the same lobe and barely
+    # distinguishes a peak from a shoulder. 8 clears the lobe; every channel
+    # passes out to 24, so this is not a tuned threshold.
+    margin = 8
+
     ratios = []
     for ch in range(a.shape[1]):
         x = _butter_highpass(numpy, a[:, ch], fs)
@@ -155,12 +161,12 @@ def test_the_recording_holds_two_comparable_components(frames):
         spec = numpy.abs(numpy.fft.rfft(x * numpy.hanning(len(x))))
         freqs = numpy.fft.rfftfreq(len(x), d=1.0 / fs)
 
-        def at(f, spec=spec, freqs=freqs):
+        def at(f, freqs=freqs):
             return int(numpy.argmin(numpy.abs(freqs - f)))
 
         for f in (SLOW_HZ, FAST_HZ):
             i = at(f)
-            assert spec[i] >= spec[i - 2] and spec[i] >= spec[i + 2], (
+            assert spec[i] >= spec[i - margin] and spec[i] >= spec[i + margin], (
                 f"channel {ch}: {f * 60:.1f} bpm should be an interior local maximum"
             )
         ratios.append(spec[at(SLOW_HZ)] / spec[at(FAST_HZ)])
@@ -169,33 +175,17 @@ def test_the_recording_holds_two_comparable_components(frames):
         f"expected comparable amplitudes, got ratios {ratios}"
     )
 
-
-def test_which_component_wins_depends_on_the_detrend(frames):
-    """Why a majority vote over per-channel argmax is not a design.
-
-    Two channels sit within a few percent of a tie between the components, so
-    which one an argmax returns is decided by the filter rather than by the
-    signal. A shallow one-second moving average gives 3-1 for the fast
-    component; a 4th-order Butterworth gives 2-2 on the same data.
-
-    Pinned so that a derivation reporting a different split is not mistaken for
-    a regression -- and so that nobody rebuilds the majority-vote design this
-    recording has already falsified twice."""
-    numpy = pytest.importorskip("numpy")
-    a = numpy.array([f["ch"] for f in frames], dtype=float)
-    fs = EXPECTED_RATE_HZ
-
-    moving_avg = [_peak_bpm(numpy, _highpass(numpy, a[:, ch], fs), fs)
-                  for ch in range(a.shape[1])]
-    butter = [_peak_bpm(numpy, _butter_highpass(numpy, a[:, ch], fs), fs)
-              for ch in range(a.shape[1])]
-
-    def fast_count(peaks):
-        return sum(1 for p in peaks if abs(p - FAST_HZ * 60) < 2)
-
-    assert fast_count(moving_avg) != fast_count(butter), (
-        f"expected the split to move with the filter: {moving_avg} vs {butter}"
-    )
+    # The near-tie is the property that makes a per-channel argmax unusable:
+    # on these channels the two components are within a few percent, so which
+    # one wins is decided by whatever filter runs first rather than by the
+    # signal. A one-second moving average gives 3-1 for the fast component; a
+    # 4th-order Butterworth gives 2-2 on the same data.
+    #
+    # Asserted as a fact about the recording rather than as a disagreement
+    # between two particular filters -- the latter would go red the moment
+    # anyone retunes a helper here, with nothing about the data having changed.
+    near_ties = sum(1 for r in ratios if 0.9 < r < 1.1)
+    assert near_ties >= 2, f"expected at least two near-ties, got ratios {ratios}"
 
 
 def test_850L_is_the_only_channel_with_a_decisive_margin(frames):

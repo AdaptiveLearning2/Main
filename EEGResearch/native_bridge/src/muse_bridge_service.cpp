@@ -168,16 +168,6 @@ void MuseBridgeService::stop() {
     }
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        while (!eeg_queue_.empty()) {
-            eeg_queue_.pop();
-        }
-        // Optics too, or a reconnect resumes by emitting the previous
-        // headband's samples with their old timestamps -- which a beat detector
-        // would read as a gap followed by an impossible interval.
-        while (!optics_queue_.empty()) {
-            optics_queue_.pop();
-        }
-        optics_seq_ = 0;
         muse_names_.clear();
         discovered_ = false;
         reset_device_fields_locked();
@@ -375,6 +365,31 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
 }
 
 void MuseBridgeService::reset_device_fields_locked() {
+    // Queues and the sample counter belong here, not in stop().
+    //
+    // stop() runs at process shutdown; disconnect_muse() runs on every headband
+    // swap, and connect_named() calls it first -- so the reconnect path is the
+    // one that matters and was the one not resetting. Two consequences, both
+    // defeating the instrumentation added alongside them: samples kept
+    // numbering contiguously across an interval with no headband attached, so
+    // the seq gap detector reported nothing lost on precisely the event it
+    // exists to catch; and the queues survived the swap, so a reconnect resumed
+    // by emitting the previous headband's samples with their old timestamps.
+    //
+    // optics_dropped resets below, so leaving these alone also left the counter
+    // and the sequence disagreeing about what "since when" meant.
+    //
+    // The EEG queue has always had the same gap on this path. Same line, same
+    // hazard, fixed with it rather than left as the one queue that survives a
+    // reconnect.
+    while (!eeg_queue_.empty()) {
+        eeg_queue_.pop();
+    }
+    while (!optics_queue_.empty()) {
+        optics_queue_.pop();
+    }
+    optics_seq_ = 0;
+
     active_muse_name_.clear();
     firmware_version_.clear();
     // Model, preset and capability describe the headband that just went away.

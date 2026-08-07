@@ -27,7 +27,7 @@ public:
      * cannot see a dropped line in the data: it looks like the sensor simply
      * produced fewer samples. This is the counter that says otherwise.
      */
-    long long dropped_lines() const { return dropped_lines_; }
+    long long dropped_lines() const noexcept { return dropped_lines_; }
 
 private:
     void try_accept_client();

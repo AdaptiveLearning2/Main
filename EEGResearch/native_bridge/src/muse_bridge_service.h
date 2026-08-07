@@ -325,8 +325,10 @@ private:
     std::condition_variable queue_cv_;
     std::queue<EegFrame> eeg_queue_;
     std::queue<OpticsFrame> optics_queue_;
-    /** Never reset within a connection; reset with the rest on disconnect, so
-     *  a reconnect starts a fresh sequence rather than appearing to continue. */
+    /** Never reset within a connection. Cleared by reset_device_fields_locked(),
+     *  which both stop() and disconnect_muse() call -- the latter being the one
+     *  a reconnect actually takes, so a new headband starts a fresh sequence
+     *  rather than appearing to continue the previous one's. */
     long long optics_seq_{0};
     bool connected_{false};
     bool discovered_{false};

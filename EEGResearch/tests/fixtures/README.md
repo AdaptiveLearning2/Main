@@ -1,5 +1,60 @@
 # Test fixtures
 
+## `optics_through_exercise.jsonl.gz` — the cadence lock
+
+Captured 2026-08-07, **297 s continuous** through all three phases in one recording: ~60 s sitting
+still, ~60 s exercising, then ~170 s sitting still. 19104 frames, 64.3 Hz, `seq` contiguous — **not
+one sample lost while moving**. Watch ground truth: **104 bpm** at the moment of sitting down,
+80 bpm 30 s later, 75 bpm at the end.
+
+Captured to answer one question — does a pre-exercise anchor survive the exercise, so continuity can
+reject the first post-motion window? **It does not**, and the recording found something worse on the
+way.
+
+### During exercise the derivation reports 162–167 bpm at confidence 1.00
+
+Six consecutive windows. The wearer's heart was near 104. **166/min was their step cadence.**
+
+| Window | Reported | Truth |
+| --- | --- | --- |
+| exercise (70–145 s) | 163, 166, 167, 167, 164, 163 — all conf 1.00 | ~104, and falling only after |
+| sit-down (130–155 s) | 161.4 | 104 |
+| +30 s (150–185 s) | 49.9, 52.4 | 80 — the readings are ~½ of 104 |
+| settled (270–295 s) | **77.0** | 75 ✓ |
+
+The settled recovery is accurate. Everything under motion is wrong, in two different ways.
+
+### Why this is not fixable in this module
+
+**166/104 = 1.60.** Not 2×, not ½×, not 1.5× — it bears **no harmonic relation to the true rate**.
+The 127 bpm artefact in the recovery fixture at least sat near an octave of the truth; this does not
+sit near anything. Every discriminator available to a periodicity estimator is therefore blind to it:
+the signal genuinely contains a strong, clean, periodic component at 2.77 Hz. The estimator is not
+malfunctioning — it is correctly reporting the wrong oscillator.
+
+Confirmed against all four: cross-channel agreement (all agree), out-of-band power (rest scores
+higher), peak margin (1.00), and continuity from a pre-exercise anchor — which fails because the
+tracker rejects one window on confidence, re-acquires onto 166, and loses the 68 bpm anchor before
+recovery starts.
+
+The fix is the accelerometer, which the bridge does not yet capture. It is the only signal here
+independent of the periodicity being confused. Logged as a future addition; the plan carries the
+detail.
+
+### Two assumptions this recording overturned
+
+- **BLE survives motion.** A dropped link during exercise had been the expected failure. It did not
+  happen: constant 64.3 Hz, no gaps.
+- **Motion does not degrade into silence.** It degrades into *confidence 1.00*. Any design assuming
+  movement produces low-confidence windows that a threshold will filter out is wrong.
+
+### What this means for anything consuming a heart rate
+
+The failure is a confident, sustained, wrong number with no error raised anywhere. Until motion is
+detectable, a consumer must **discard rather than record** when movement is plausible, and no surface
+may treat the confidence score as evidence of correctness. A blank tile is the right output for a
+moving student. 166 bpm is not.
+
 ## The exertion pair — `optics_rest_60s.jsonl.gz` and `optics_recovery_150s.jsonl.gz`
 
 Captured 2026-08-07 on the same headband, minutes apart: 60 s sitting still, then

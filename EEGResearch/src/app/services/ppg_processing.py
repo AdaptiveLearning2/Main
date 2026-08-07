@@ -31,6 +31,25 @@ than the estimator: it takes 127 as an anchor, rejects the next two windows as
 discontinuous, and re-acquires, so the error clears within about 30s and the
 decay that follows is tracked from 83 bpm down to the resting rate.
 
+Motion is worse than that, and it is not solvable here
+------------------------------------------------------
+A continuous recording through rest -> exercise -> recovery (optics_through_
+exercise fixture) reports **162-167 bpm at confidence 1.00 for six consecutive
+windows** while the wearer's watch read 104. That is their step cadence. It
+bears no harmonic relation to the true rate -- 166/104 = 1.60 -- so no
+first-peak rule, octave test or margin can see it: the optical signal really
+does contain a strong clean periodicity at 2.77Hz, and this module correctly
+reports the oscillator it was given.
+
+Nothing derived from the optical channels distinguishes those two oscillators.
+The fix is the headband's accelerometer, which the bridge does not yet capture;
+it is the only available signal independent of the periodicity in question.
+
+Two consequences for callers, both the opposite of the intuitive assumption:
+motion does not degrade into silence, it degrades into confidence 1.00; and a
+confident value is therefore not evidence of a correct one. Anything recording
+a rate must discard rather than store when movement is plausible.
+
 A previous revision claimed the margin caught this window. It did not. That
 rejection came from an exclusion band narrower than the ACF peak it was
 excluding, which pushed the margin toward 1.0 on *every* short lag -- rejecting

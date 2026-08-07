@@ -258,6 +258,39 @@ def test_the_first_window_after_motion_is_wrong_and_the_tracker_clears_it():
     )
 
 
+def test_settled_recovery_matches_the_watch():
+    """The one point in the through-exercise recording with a timed reading.
+
+    Watch said 75 bpm at the end. This pins the accurate case in the same
+    fixture whose motion windows are wildly wrong, so a change that "fixes"
+    motion by desensitising the estimator fails here."""
+    data = _load("optics_through_exercise.jsonl.gz")
+    out = estimate_window(data[int(270 * FS):int(295 * FS)], FS)
+    assert out.bpm == pytest.approx(75.0, abs=5.0)
+
+
+def test_motion_is_reported_confidently_and_wrongly():
+    """A known defect, pinned so it cannot regress silently into a product.
+
+    During exercise the derivation reports the wearer's step cadence, ~166 bpm,
+    at confidence 1.00 -- against a watch reading of 104 the moment they
+    stopped. 166/104 = 1.60, no harmonic relation, so nothing in this module can
+    separate them; it needs the accelerometer.
+
+    Asserting the wrong value on purpose. If this starts failing because the
+    number moved toward 104, something real changed and this test should be
+    replaced by one asserting correctness. If it fails because bpm is None,
+    check 100-170 bpm still reports before believing motion was fixed -- that
+    exact false positive has happened here twice."""
+    data = _load("optics_through_exercise.jsonl.gz")
+    out = estimate_window(data[int(90 * FS):int(115 * FS)], FS)
+    assert out.bpm == pytest.approx(167.0, abs=6.0)
+    assert out.confidence > 0.9, (
+        "motion does not degrade into low confidence -- any consumer relying on "
+        "the confidence score to filter movement is relying on nothing"
+    )
+
+
 def test_a_bad_first_window_does_not_poison_the_rest():
     """A tracker anchored to a wrong rate rejects every later correct one, so
     one bad window would otherwise cost the following minute. Repeated

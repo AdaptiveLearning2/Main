@@ -35,47 +35,66 @@ perfusion, breathing and micro-movement. Its tail is still the largest thing in
 the band at 0.7 Hz, so a plain FFT argmax over 0.7–3.0 Hz returns the band edge
 rather than a heartbeat:
 
-| Channel | dc (µA) | sd | Raw peak, 0.7–3.0 Hz | High-passed, 0.7–3.0 Hz | SNR |
-| --- | --- | --- | --- | --- | --- |
-| 730L | 5.657 | 0.094 | 44.5 bpm | **72.5 bpm** | 5.8 |
-| 730R | 4.743 | 0.152 | 44.5 bpm | 44.5 bpm | 3.2 |
-| 850L | 5.791 | 0.090 | 72.5 bpm | **72.5 bpm** | 11.4 |
-| 850R | 4.456 | 0.132 | 44.5 bpm | **72.5 bpm** | 5.7 |
+### There are two comparable components, not one pulse
 
-The raw column is not uniformly wrong, which is worse than if it were: 850L's
-pulse beats the drift tail and reads correctly while the weaker three do not.
-An unfiltered peak therefore yields channels differing by ~28 bpm, each
-individually plausible as a resting rate.
+The recording contains **two** genuine spectral features — ~44.5 bpm
+(0.742 Hz) and ~72.5 bpm (1.208 Hz). Under a 4th-order Butterworth high-pass
+both are interior local maxima on *every* channel, so neither is a band-edge
+artefact and neither belongs to one bad emitter.
 
-After a high-pass, three channels agree on 72.5 bpm. **730R does not**, and
-that survives detrending — it has the lowest SNR of the four, and 44.5 bpm is
-a real feature of that trace rather than drift leaking in.
+Their amplitude ratio, A(44.5) / A(72.5):
 
-Two consequences for the derivation:
+| Channel | dc (µA) | sd | Ratio | SNR | Argmax: MA(1 s) | Argmax: Butterworth |
+| --- | --- | --- | --- | --- | --- | --- |
+| 730L | 5.657 | 0.094 | 0.97 | 5.8 | 72.5 | 72.5 |
+| 730R | 4.743 | 0.152 | 1.95 | 3.2 | 44.5 | 44.5 |
+| 850L | 5.791 | 0.090 | **0.49** | 11.4 | 72.5 | 72.5 |
+| 850R | 4.456 | 0.132 | 1.06 | 5.7 | 72.5 | 44.5 |
 
-- **High-pass, don't narrow the search band.** Searching 1.0–1.5 Hz recovers
-  72.5 on every channel, but only because this rate sits inside a band chosen
-  after seeing the answer; a genuinely slow or fast heart would fall outside it.
-  Removing drift and then searching 0.7–3.0 Hz (42–180 bpm) is the honest form.
-- **Cross-channel agreement, downstream of detrending.** A majority carries the
-  rate and the outlier is identifiable by its own SNR, so no channel has to be
-  nominated primary in advance. 850L is the strongest here at roughly double
-  the others — consistent with 850nm IR being the conventional PPG wavelength,
-  and it was also strongest in an earlier live sample. Two sessions is not
-  enough to promote that to a rule, which is the argument for majority
-  agreement rather than a preferred channel.
+**730L and 850R are within a few percent of a tie**, so which component an
+argmax returns is decided by the filter rather than by the signal: a shallow
+one-second moving average gives 3–1 for the fast component, a Butterworth gives
+2–2 on the same data. Only 850L has a decisive margin, and it reports 72.5
+under every method tried.
 
-### This analysis was wrong twice before it was right
+Whether 44.5 is respiration-linked, a motion artefact, or the true rate with
+72.5 as a harmonic-adjacent feature is **not settled by one at-rest
+recording**, and does not need to be here. It is named as unresolved.
 
-Recorded because the errors are instructive, and because each looked correct:
+### Consequences for the derivation
+
+- **High-pass; don't narrow the search band.** Searching 1.0–1.5 Hz returns
+  72.5 everywhere, but only because that band was chosen after seeing the
+  answer. A genuinely slow or fast heart falls outside it. Remove drift, then
+  search 0.7–3.0 Hz (42–180 bpm).
+- **Cross-channel agreement has to arbitrate a bimodal spectrum**, not merely
+  tolerate one bad emitter. A naive "take each channel's peak, then majority
+  vote" fails on this recording — the answer it gives depends on the filter. It
+  needs something that sees both components, such as comparing full spectra
+  across channels rather than reducing each to a single peak first.
+- **Per-channel confidence is still worth having.** 850L's decisive margin and
+  double SNR are visible without nominating it primary in advance. The physics
+  reason — 850nm IR is the conventional PPG wavelength — is not the same as
+  evidence that this emitter is always best seated.
+
+### This analysis was wrong three times before it was right
+
+Recorded because each looked correct at the time:
 
 1. **Sample rate from the median inter-frame gap.** The duplicate timestamps
    are exactly what breaks a median. Every bpm figure came out 30% high.
-2. **Raw FFT peak over 0.7–3.0 Hz.** Baseline drift dominates the low end, so
-   three channels returned the band edge and the conclusion drawn was that one
-   *emitter* was poorly seated — the wrong channel, for the wrong reason.
-3. **Peak over a narrowed 1.0–1.5 Hz band.** Forced agreement by construction,
-   and produced "all four channels agree", which is also not true.
+2. **Raw FFT peak over 0.7–3.0 Hz.** Drift dominates the low end, so three
+   channels returned the band edge and the conclusion named an emitter as
+   poorly seated — the wrong channel, for the wrong reason.
+3. **Peak over a narrowed 1.0–1.5 Hz band.** Manufactured agreement by
+   construction, producing "all four channels agree".
+4. **Peak after a one-second moving average.** Gain 0.685 at 0.742 Hz versus
+   0.842 at 1.208 Hz — about 19% of relative attenuation, which barely
+   separates two comparable components. The resulting 3–1 majority was the
+   filter's, not the signal's.
+
+Each was a reduction applied before the data justified it. The pattern is
+worth more than any of the individual errors.
 
 ### The timestamps are not a sample clock
 

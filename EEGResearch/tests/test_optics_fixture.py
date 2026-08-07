@@ -123,32 +123,102 @@ def test_baseline_drift_dominates_the_low_end_of_the_pulse_band(frames):
     )
 
 
-def test_high_pass_then_search_the_full_band_finds_the_pulse(frames):
-    """The recommended technique, over the band the derivation actually needs.
+# The two components this recording actually contains, in Hz.
+SLOW_HZ = 0.742   # 44.5 bpm
+FAST_HZ = 1.208   # 72.5 bpm
 
-    High-pass first, then search 0.7-3.0 Hz -- 42 to 180 bpm, wide enough for a
-    real heart rather than a band chosen to dodge drift. Three of four channels
-    land on the same rate.
 
-    The fourth is a genuine failure, not an artefact: 730R has the lowest SNR
-    of the four (3.2) and reports 44.5 bpm, and that survives detrending. This
-    is what cross-channel agreement is for -- a majority carries the answer and
-    the outlier is identifiable by its own SNR, without needing a preferred
-    channel nominated in advance."""
+def _butter_highpass(numpy, x, fs, corner_hz=0.6, order=4):
+    signal = pytest.importorskip("scipy.signal")
+    b, a = signal.butter(order, corner_hz / (fs / 2), btype="high")
+    return signal.filtfilt(b, a, x)
+
+
+def test_the_recording_holds_two_comparable_components(frames):
+    """Both 44.5 and 72.5 bpm are real, on every channel.
+
+    Under a 4th-order Butterworth high-pass each is an interior local maximum
+    on all four traces -- neither is a band-edge artefact, and neither is
+    confined to one emitter. Their amplitudes are of the same order, ranging
+    from roughly 2:1 in favour of the slow component to 2:1 against it.
+
+    This is the property the derivation has to cope with, and it is stronger
+    than what an earlier version of this file asserted."""
     numpy = pytest.importorskip("numpy")
     a = numpy.array([f["ch"] for f in frames], dtype=float)
     fs = EXPECTED_RATE_HZ
 
-    peaks = [_peak_bpm(numpy, _highpass(numpy, a[:, ch], fs), fs)
-             for ch in range(a.shape[1])]
-    # Agreement within a couple of FFT bins (~0.5 bpm each here).
-    agreeing = max(sum(1 for q in peaks if abs(q - p) <= 2) for p in peaks)
-    assert agreeing >= 3, f"expected 3+ channels agreeing after high-pass, got {peaks}"
+    ratios = []
+    for ch in range(a.shape[1]):
+        x = _butter_highpass(numpy, a[:, ch], fs)
+        x = x - x.mean()
+        spec = numpy.abs(numpy.fft.rfft(x * numpy.hanning(len(x))))
+        freqs = numpy.fft.rfftfreq(len(x), d=1.0 / fs)
 
-    majority = [p for p in peaks if sum(1 for q in peaks if abs(q - p) <= 2) >= 3]
-    assert all(45 <= p <= 110 for p in majority), (
-        f"the agreeing majority should be a resting rate, got {majority}"
+        def at(f, spec=spec, freqs=freqs):
+            return int(numpy.argmin(numpy.abs(freqs - f)))
+
+        for f in (SLOW_HZ, FAST_HZ):
+            i = at(f)
+            assert spec[i] >= spec[i - 2] and spec[i] >= spec[i + 2], (
+                f"channel {ch}: {f * 60:.1f} bpm should be an interior local maximum"
+            )
+        ratios.append(spec[at(SLOW_HZ)] / spec[at(FAST_HZ)])
+
+    assert all(0.3 < r < 3.0 for r in ratios), (
+        f"expected comparable amplitudes, got ratios {ratios}"
     )
+
+
+def test_which_component_wins_depends_on_the_detrend(frames):
+    """Why a majority vote over per-channel argmax is not a design.
+
+    Two channels sit within a few percent of a tie between the components, so
+    which one an argmax returns is decided by the filter rather than by the
+    signal. A shallow one-second moving average gives 3-1 for the fast
+    component; a 4th-order Butterworth gives 2-2 on the same data.
+
+    Pinned so that a derivation reporting a different split is not mistaken for
+    a regression -- and so that nobody rebuilds the majority-vote design this
+    recording has already falsified twice."""
+    numpy = pytest.importorskip("numpy")
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    fs = EXPECTED_RATE_HZ
+
+    moving_avg = [_peak_bpm(numpy, _highpass(numpy, a[:, ch], fs), fs)
+                  for ch in range(a.shape[1])]
+    butter = [_peak_bpm(numpy, _butter_highpass(numpy, a[:, ch], fs), fs)
+              for ch in range(a.shape[1])]
+
+    def fast_count(peaks):
+        return sum(1 for p in peaks if abs(p - FAST_HZ * 60) < 2)
+
+    assert fast_count(moving_avg) != fast_count(butter), (
+        f"expected the split to move with the filter: {moving_avg} vs {butter}"
+    )
+
+
+def test_850L_is_the_only_channel_with_a_decisive_margin(frames):
+    """The one channel-level fact that survives every method tried.
+
+    850L has roughly double the pulse SNR of the others and reports 72.5 bpm
+    under a moving average, a Butterworth and a raw peak alike, because its
+    slow-to-fast amplitude ratio is ~0.49 rather than the near-ties elsewhere.
+
+    Not grounds for nominating it primary -- one recording, and the physics
+    reason (850nm IR is the conventional PPG wavelength) is not the same as
+    evidence that this emitter is always best seated. It is grounds for a
+    per-channel confidence that can notice the difference."""
+    numpy = pytest.importorskip("numpy")
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    fs = EXPECTED_RATE_HZ
+    ch_850L = 2
+
+    for detrend in (_highpass, _butter_highpass):
+        bpm = _peak_bpm(numpy, detrend(numpy, a[:, ch_850L], fs), fs)
+        assert abs(bpm - FAST_HZ * 60) < 2, (
+            f"850L should report ~{FAST_HZ * 60:.1f} bpm under {detrend.__name__}, got {bpm:.1f}"
+        )
 
 
 def test_fixture_lost_no_samples(frames):

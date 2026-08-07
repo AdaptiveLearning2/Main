@@ -80,11 +80,34 @@ public:
      */
     std::string muse_model() const;
     /**
-     * Preset actually in force, e.g. "PRESET_21". Worth reporting because it is
-     * now chosen from the model rather than being a constant, so "which preset
-     * is this session running" stops being answerable by reading the source.
+     * The preset this bridge asked for, e.g. "PRESET_1031". An intent.
+     *
+     * Reported next to active_preset() rather than instead of it, because the
+     * two disagreeing is the whole diagnosis: set_preset() returns void, so a
+     * request that the headband ignores is indistinguishable from one it
+     * honoured unless the result is read back.
+     */
+    std::string requested_preset() const;
+    /**
+     * The preset the headband reports being on, from MuseConfiguration.
+     *
+     * An observation, not an echo of the request. libMuse documents the
+     * configuration as repopulated "after headband settings (like preset or
+     * notch frequency) are changed" (bridge_muse.h:262-265), so this is read
+     * live on each call rather than cached at request time -- a preset applied
+     * a moment later still shows up.
+     *
+     * Empty when nothing is connected or the configuration has not arrived.
      */
     std::string active_preset() const;
+    /**
+     * EEG channel count the headband reports for the current preset.
+     *
+     * Corroborates active_preset() with something independently observable:
+     * PRESET_21 and PRESET_1031 are both 4-channel, so a jump to 8 would mean
+     * a preset nobody asked for. 0 when unknown.
+     */
+    int eeg_channel_count() const;
     /**
      * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
      *
@@ -143,6 +166,8 @@ private:
      */
 #if defined(ENABLE_LIBMUSE)
     void apply_model_preset(const std::shared_ptr<interaxon::bridge::Muse>& muse);
+    /** Clears everything describing the headband. Call with queue_mutex_ held. */
+    void reset_device_fields_locked();
 #endif
 
     std::atomic<bool> running_;
@@ -151,7 +176,7 @@ private:
     ContactQuality latest_contact_{};
     int band_channels_used_{0};
     std::string muse_model_;
-    std::string active_preset_;
+    std::string requested_preset_;
     bool optical_supported_{false};
     // steady_clock ms at which the last notch-filtered packet arrived; 0 means
     // none yet. Not a bool: see notch_available().

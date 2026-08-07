@@ -57,9 +57,18 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     // tell a headband with no PPG hardware from one whose PPG stopped.
     o << ",\"muse_model\":";
     append_json_quoted_string(o, svc.muse_model());
+    // Both halves. requested_preset is what this bridge asked for;
+    // active_preset is what the headband says it is running, read back from
+    // MuseConfiguration. set_preset() returns void, so the two disagreeing is
+    // the only way to see a request the device ignored -- and reporting only
+    // the intent would mean the field added because the preset is no longer
+    // readable from source is the one field that can lie.
+    o << ",\"requested_preset\":";
+    append_json_quoted_string(o, svc.requested_preset());
     o << ",\"active_preset\":";
     append_json_quoted_string(o, svc.active_preset());
-    o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
+    o << ",\"eeg_channel_count\":" << svc.eeg_channel_count()
+      << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
     const BandPowers bands = svc.band_powers();
     o << ",\"delta\":" << bands.delta
       << ",\"theta\":" << bands.theta

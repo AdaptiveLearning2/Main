@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
+#include <string>
 #include <thread>
 
 #if defined(ENABLE_LIBMUSE)
@@ -165,18 +167,7 @@ void MuseBridgeService::stop() {
         }
         muse_names_.clear();
         discovered_ = false;
-        active_muse_name_.clear();
-        firmware_version_.clear();
-        // Model and preset describe the headband that just went away. Leaving
-        // them set would report an Athena on PRESET_1031 while nothing is
-        // connected, and optical_supported would keep claiming a sensor exists
-        // -- which is the one field a heart channel would use to decide whether
-        // a missing signal justifies falling back to the camera.
-        muse_model_.clear();
-        active_preset_.clear();
-        optical_supported_ = false;
-        latest_bands_ = BandPowers{};
-        latest_contact_ = ContactQuality{};
+        reset_device_fields_locked();
         band_channels_used_ = 0;
         last_notch_ms_.store(0);
         connected_ = false;
@@ -220,6 +211,22 @@ bool optics_preset_enabled() {
     return value == "1" || value == "true" || value == "TRUE" || value == "yes";
 }
 
+// Only the two this bridge ever asks for get names; anything else is reported
+// numerically rather than guessed at. The enum has ~90 members and a
+// hand-maintained table of them would be wrong within one SDK release.
+std::string preset_name(interaxon::bridge::MusePreset preset) {
+    switch (preset) {
+    case interaxon::bridge::MusePreset::PRESET_21: return "PRESET_21";
+    case interaxon::bridge::MusePreset::PRESET_1031: return "PRESET_1031";
+    default: return "PRESET_" + std::to_string(static_cast<int>(preset));
+    }
+}
+
+// Verified against bridge_muse_model.h:14-32. The enumerator names and the
+// markings on the hardware do not line up: MU_04 and MU_05 are the 2019 and
+// 2021 Muse S, printed MS-01 and MS-02, while MS_03 is the 2025 Muse S. Reading
+// the enumerator name straight out would report an Athena's predecessor as
+// "MU-04", which is printed on no headband at all.
 const char* model_name(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01: return "MU-01";
@@ -259,25 +266,48 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
     const interaxon::bridge::MuseModel model = muse->get_model();
     const bool has_optical = model_has_optical(model);
 
-    // PRESET_21 unless we are deliberately asking for optics on a device that
-    // has them. PRESET_1031 is the 2025-only preset that keeps EEG at 4
-    // channels -- same shape as the EegSample this bridge emits and the same
-    // channel count the Python side averages over -- while adding 16-channel
-    // optics at 64Hz. The 8-channel EEG variants would change that shape, so
-    // they are not used even though they carry the same optics.
-    const char* preset_label = "PRESET_21";
-    if (optics_preset_enabled() && has_optical
-        && model == interaxon::bridge::MuseModel::MS_03) {
+    // PRESET_21 unless we are deliberately asking for optics. MS_03 is the only
+    // model with a PRESET_10xx range at all, so it is the only one there is
+    // anything to switch to -- has_optical is true for every model from 2018
+    // onwards and is deliberately not part of this condition, where it would
+    // read as a second gate while being unable to change the outcome.
+    //
+    // PRESET_1031 rather than one of the 8-channel EEG variants that carry the
+    // same 16-channel optics: it keeps EEG at 4 channels, which is the shape
+    // EegFrame emits and the channel count the Python side averages over.
+    const char* requested = "PRESET_21";
+    if (optics_preset_enabled() && model == interaxon::bridge::MuseModel::MS_03) {
+        // libMuse documents this as legal after connection: "You can call it in
+        // the middle of execute operation, but in this case be aware that this
+        // operation will interrupt data streaming to set new preset. Data
+        // streaming will be restored after that." (bridge_muse.h:351-358).
+        // Whether the headband honours it is a separate question, which is why
+        // active_preset() reads the answer back instead of trusting this call.
         muse->set_preset(interaxon::bridge::MusePreset::PRESET_1031);
-        preset_label = "PRESET_1031";
+        requested = "PRESET_1031";
     }
 
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         muse_model_ = model_name(model);
-        active_preset_ = preset_label;
+        requested_preset_ = requested;
         optical_supported_ = has_optical;
     }
+}
+
+void MuseBridgeService::reset_device_fields_locked() {
+    active_muse_name_.clear();
+    firmware_version_.clear();
+    // Model, preset and capability describe the headband that just went away.
+    // Leaving them set would report an Athena on PRESET_1031 while nothing is
+    // connected, and optical_supported would keep claiming a sensor exists --
+    // which is the one field a heart channel would use to decide whether a
+    // missing signal justifies falling back to the camera.
+    muse_model_.clear();
+    requested_preset_.clear();
+    optical_supported_ = false;
+    latest_bands_ = BandPowers{};
+    latest_contact_ = ContactQuality{};
 }
 #endif
 
@@ -338,18 +368,7 @@ void MuseBridgeService::disconnect_muse() {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         muse = std::move(active_muse_);
-        active_muse_name_.clear();
-        firmware_version_.clear();
-        // Model and preset describe the headband that just went away. Leaving
-        // them set would report an Athena on PRESET_1031 while nothing is
-        // connected, and optical_supported would keep claiming a sensor exists
-        // -- which is the one field a heart channel would use to decide whether
-        // a missing signal justifies falling back to the camera.
-        muse_model_.clear();
-        active_preset_.clear();
-        optical_supported_ = false;
-        latest_bands_ = BandPowers{};
-        latest_contact_ = ContactQuality{};
+        reset_device_fields_locked();
         band_channels_used_ = 0;
         last_notch_ms_.store(0);
         connected_ = false;
@@ -411,12 +430,57 @@ std::string MuseBridgeService::muse_model() const {
 #endif
 }
 
-std::string MuseBridgeService::active_preset() const {
+std::string MuseBridgeService::requested_preset() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    return active_preset_;
+    return requested_preset_;
 #else
     return {};
+#endif
+}
+
+std::string MuseBridgeService::active_preset() const {
+#if defined(ENABLE_LIBMUSE)
+    std::shared_ptr<interaxon::bridge::Muse> muse;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        muse = active_muse_;
+    }
+    // Read live rather than cached at request time. The configuration is
+    // repopulated when settings change, so a preset that lands a moment after
+    // set_preset() still shows up here -- and one that never lands keeps
+    // reporting the old value, which is the signal worth having.
+    //
+    // Deliberately outside the lock: get_muse_configuration() is thread-safe on
+    // its own, and calling into libMuse while holding the queue mutex would put
+    // an SDK call on the path the data listener needs to enqueue frames.
+    if (!muse) {
+        return {};
+    }
+    const auto config = muse->get_muse_configuration();
+    if (!config) {
+        return {};
+    }
+    return preset_name(config->get_preset());
+#else
+    return {};
+#endif
+}
+
+int MuseBridgeService::eeg_channel_count() const {
+#if defined(ENABLE_LIBMUSE)
+    std::shared_ptr<interaxon::bridge::Muse> muse;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        muse = active_muse_;
+    }
+    if (!muse) {
+        return 0;
+    }
+    const auto config = muse->get_muse_configuration();
+    return config ? config->get_eeg_channel_count() : 0;
+#else
+    return 0;
 #endif
 }
 

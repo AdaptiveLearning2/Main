@@ -157,10 +157,10 @@ class HeartEstimate:
 def channel_agreement(bpm: float | None, channels: list[ChannelEstimate]) -> float:
     """Fraction of channels within 5 bpm of `bpm`.
 
-    A quality signal, NOT a correctness one. In the first 25s after motion every
-    channel agreed on ~127 bpm and every channel was wrong by an octave -- they
-    all make the same error, so unanimity proves only that the channels saw the
-    same thing.
+    A quality signal, NOT a correctness one. Measured twice: all four channels
+    agreed on ~127 bpm in the 25s after motion, and on ~166 bpm during exercise
+    against a watch-verified 104. Unanimity proves the channels saw the same
+    thing, and under motion the same thing is not the heart.
 
     Module-level so scoring a candidate rate and reporting the final one share
     one definition; the scorer runs before a HeartEstimate exists.

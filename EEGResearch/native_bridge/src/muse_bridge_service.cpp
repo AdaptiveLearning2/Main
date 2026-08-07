@@ -177,6 +177,7 @@ void MuseBridgeService::stop() {
         while (!optics_queue_.empty()) {
             optics_queue_.pop();
         }
+        optics_seq_ = 0;
         muse_names_.clear();
         discovered_ = false;
         reset_device_fields_locked();
@@ -789,6 +790,7 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         OpticsFrame frame{};
         // The packet's own timestamp, in ms. libMuse reports microseconds.
         frame.mono_ts_ms = packet->timestamp() / 1000;
+        frame.seq = ++optics_seq_;
         const size_t n = std::min(values.size(), frame.ch.size());
         for (size_t i = 0; i < n; ++i) {
             frame.ch[i] = values[i];
@@ -798,8 +800,15 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         // Same bound as the EEG queue. At 64Hz this is ~32 seconds of backlog,
         // which is far longer than the main loop can fall behind without
         // something else being badly wrong.
+        //
+        // Counted, not just dropped. The derivation rebuilds its clock from
+        // sample index, so a silent discard shifts that clock by one interval
+        // for the rest of the session and shows up as one impossible beat
+        // interval -- which is exactly what the seq field and this counter
+        // exist to make visible rather than plausible.
         if (optics_queue_.size() > 2048) {
             optics_queue_.pop();
+            latest_optical_.optics_dropped += 1;
         }
     }
 }

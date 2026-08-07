@@ -36,6 +36,21 @@ struct EegFrame {
  */
 struct OpticsFrame {
     long long mono_ts_ms;
+    /**
+     * Monotonic sample number, assigned at enqueue and never reused.
+     *
+     * The derivation reconstructs its time base from sample index rather than
+     * from mono_ts_ms, because the stamps carry ~25ms rms of BLE batching
+     * jitter and RMSSD measures 20-50ms differences. That reconstruction is
+     * only sound if no sample goes missing, and three places can drop one --
+     * the queue bound below, a WSAEWOULDBLOCK in the TCP server, and a short
+     * send(). None is observable from the samples themselves: a lost sample
+     * just shifts the reconstructed clock by one interval for the remainder of
+     * the recording, and shows up as a single impossible beat interval.
+     *
+     * A gap in this sequence makes all three detectable for free.
+     */
+    long long seq{0};
     std::array<double, 16> ch{};
     int n{0};
 };
@@ -99,6 +114,14 @@ struct OpticalSignals {
     bool heart_good{false};
     bool has_ppg_good{false};
     bool has_heart_good{false};
+    /**
+     * Optical samples discarded because the queue was full.
+     *
+     * Non-zero means the reconstructed time base has lost alignment, and any
+     * RMSSD computed across the gap is wrong. Reported rather than merely
+     * bounded, because a silent drop is indistinguishable from a slow heart.
+     */
+    long long optics_dropped{0};
     /** steady_clock ms of the most recent optical packet of either kind; 0 if
      *  none. Not emitted raw -- steady_clock's epoch is arbitrary and
      *  process-local, so the number means nothing outside this process.
@@ -135,9 +158,19 @@ public:
      *
      * Separate queue rather than interleaving into eeg_queue_: the two run at
      * different rates (256Hz EEG, 64Hz optics) and a consumer wants them as
-     * separate streams. Non-blocking because poll_frame already provides the
-     * loop's wait -- a second blocking drain would serialise the two and make
-     * each stream's latency depend on the other's arrival.
+     * separate streams.
+     *
+     * Non-blocking so this never adds a second wait of its own -- but optics
+     * latency is still bounded by poll_frame's 200ms wait, because both are
+     * drained from the same loop. At 256Hz EEG keeps that loop spinning and the
+     * bound is never approached. It matters in the case where EEG stops while
+     * optics continues, which is not hypothetical: electrode contact
+     * collapsing to [4,4,4,4] on an optics-carrying preset is a documented
+     * failure mode. Optics then emerge in 200ms batches.
+     *
+     * Not a correctness problem -- each sample carries its own timestamp and
+     * sequence number, and the queue holds ~32s -- but the coupling is real
+     * and worth knowing before someone measures latency and is surprised.
      */
     bool poll_optics(OpticsFrame& frame);
 
@@ -292,6 +325,9 @@ private:
     std::condition_variable queue_cv_;
     std::queue<EegFrame> eeg_queue_;
     std::queue<OpticsFrame> optics_queue_;
+    /** Never reset within a connection; reset with the rest on disconnect, so
+     *  a reconnect starts a fresh sequence rather than appearing to continue. */
+    long long optics_seq_{0};
     bool connected_{false};
     bool discovered_{false};
     int last_connection_state_{0};

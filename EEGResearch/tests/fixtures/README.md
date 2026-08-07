@@ -16,17 +16,22 @@ diffs, which does not matter for a recording that will never be edited.
 
 ### What it shows
 
-Measured mean rate **64.271 Hz** over the 120 s span. Per-channel spectral peak
-in the 0.7–3.0 Hz band:
+Measured mean rate **64.271 Hz** over the 120 s span — computed as
+`frames / span`, not from the median inter-frame gap. The median is 12 ms,
+which would imply 83 Hz; it is wrong because ~7% of frames share a timestamp
+with their predecessor and drag it down. An early analysis of this recording
+used that figure and reported every rate 30% high.
+
+Per-channel spectral peak in the 0.7–3.0 Hz band:
 
 | Channel | dc (µA) | sd | Peak | SNR |
 | --- | --- | --- | --- | --- |
-| 730L | 5.601 | 0.226 | 70.7 bpm | 4.0 |
-| 730R | 4.625 | 0.344 | 72.6 bpm | 4.1 |
-| 850L | 5.561 | 0.182 | **91.4 bpm** | 5.1 |
-| 850R | 4.266 | 0.256 | 72.6 bpm | 3.9 |
+| 730L | 5.601 | 0.226 | 54.5 bpm | 4.0 |
+| 730R | 4.625 | 0.344 | 56.0 bpm | 4.1 |
+| 850L | 5.561 | 0.182 | **70.5 bpm** | 5.1 |
+| 850R | 4.266 | 0.256 | 56.0 bpm | 3.9 |
 
-Three channels agree near 72 bpm and one does not — which is the case
+Three channels agree near 55 bpm and one does not — which is the case
 cross-channel agreement exists to handle, and the reason the quality gate is
 per channel rather than per device. Note it is **850L** that disagrees here,
 while in an earlier live sample 850L was the *best* channel: which emitter is

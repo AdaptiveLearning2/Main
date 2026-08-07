@@ -13,29 +13,33 @@ microamps. Two wavelengths (730nm and 850nm) on left and right. On other Muse
 models the same shape arrives via the PPG packet instead; this code does not
 care which, only that it is a set of optical channels at a known rate.
 
-Known limitation: the first window after vigorous motion
---------------------------------------------------------
-Measured on the recovery fixture, the 25s immediately after exercise produces
-~127 bpm against a true rate near 90 -- unanimously across all four channels,
-and with a decisive enough autocorrelation peak to look like a real reading.
-This code does not detect it.
+Motion, and why the peak margin carries the weight
+--------------------------------------------------
+The hardest case in the fixtures is the ~30s after vigorous exercise, where the
+signal genuinely looks periodic at roughly twice the true rate. Measured there:
+all four channels agree on ~127 bpm against a true rate near 90. Cross-channel
+agreement therefore cannot catch it -- every channel makes the same error --
+and out-of-band power does not either, because it measures pulse strength
+rather than motion (the resting recording scores *higher* than the contaminated
+one).
 
-Two candidate discriminators were tried and neither works:
+What does catch it is the margin between the chosen autocorrelation peak and
+the tallest *unrelated* rival, with "unrelated" measured in a fixed number of
+lag samples. On those windows the margin sits near 1.0, meaning two genuinely
+different periods were nearly tied; on clean windows it is 2.0-2.2. All three
+contaminated windows are rejected, and the decay that follows is tracked from
+92 bpm down to the resting rate.
 
-  * Out-of-band power, as a motion proxy. It measures pulse strength rather
-    than motion: the resting recording scored *higher* (0.092) than the
-    contaminated window (0.046).
-  * Counting peaks at multiples of the chosen lag as rivals. This does flag the
-    octave error, but it also collapses confidence for a perfectly periodic
-    signal, where the autocorrelation has equal peaks at every multiple. The
-    two requirements are in direct conflict, and the harmonic relation is
-    exactly what makes an octave error ambiguous in the first place.
+The tolerance being fixed rather than proportional is what makes this work. A
+relative tolerance widens with the multiple -- at the fourth harmonic a 12%
+band spans nearly half of best_lag -- which masks most of the search range out
+of the runner-up and inflates every margin, including the ones that should be
+low.
 
-What limits the damage is the tracker below, not the estimator: a window must
-clear a higher bar to become the reference every later window is judged
-against, so a wrong post-motion reading is reported once and does not capture
-the anchor. The honest summary is that a rate read within ~30s of vigorous
-movement should be treated as unreliable by whatever consumes it.
+The cost is that a mathematically perfect signal now scores poorly: a pure sine
+has equal autocorrelation peaks at every multiple, so nothing is ever decisive.
+Real optical traces have decaying peaks and do not hit this, but a synthetic
+test signal must carry some noise to be representative.
 """
 
 from __future__ import annotations
@@ -92,6 +96,10 @@ MAX_BPM_CHANGE_PER_S = 3.0
 # and settled recovery windows all clear it comfortably.
 MIN_CONFIDENCE = 0.55
 
+# Ceiling on how far continuity will stretch, however long the gap. Beyond this
+# the anchor has stopped being evidence about the present.
+MAX_CONTINUITY_JUMP_BPM = 40.0
+
 
 @dataclass
 class ChannelEstimate:
@@ -102,7 +110,10 @@ class ChannelEstimate:
     # means two candidates were nearly tied, which is what an octave ambiguity
     # looks like from inside a single channel.
     margin: float
-    # Pulsatile amplitude over broadband noise in the search band.
+    # Normalised autocorrelation height at the chosen period: 1.0 would be a
+    # perfectly repeating waveform, a clear pulse sits around 0.3-0.6, noise
+    # well below 0.1. Named snr for brevity; it is a periodicity strength, not
+    # a power ratio.
     snr: float
 
 
@@ -112,9 +123,13 @@ class HeartEstimate:
     bpm: float | None
     confidence: float
     channels: list[ChannelEstimate] = field(default_factory=list)
-    # Set when the estimate was rejected or adjusted, naming which rule fired.
-    # A caller showing "no reading" to a teacher should be able to say why.
+    # Human-readable, for display. Never branch on it: an earlier version keyed
+    # re-acquisition off `"moved more than" in reason`, so rewording a message
+    # would have silently disabled it with no test noticing.
     reason: str = ""
+    # Machine-readable cause, when there is one: "continuity" | "confidence" |
+    # "no_signal". This is what control flow matches on.
+    rejected_by: str | None = None
 
     @property
     def agreement(self) -> float:
@@ -167,10 +182,15 @@ def estimate_channel(x: np.ndarray, fs: float, index: int = 0) -> ChannelEstimat
     resolves the ambiguity in the right direction by construction.
     """
     x = np.asarray(x, dtype=float)
-    x = bandpass(x, fs) if len(x) > 3 * BANDPASS_ORDER * 2 else x - x.mean()
-    x = x - x.mean()
+    # Before the filter, not after: np.mean of an empty array warns.
     if x.size == 0 or not np.any(x):
         return ChannelEstimate(index, None, 0.0, 0.0)
+    # filtfilt's padlen is 3 * max(len(a), len(b)) and a Butterworth of order N
+    # has 2N+1 coefficients, so the floor is 3*(2N+1) = 27 for order 4 -- not
+    # 3*2N. At 25-27 samples the old bound let a call through that raises.
+    if len(x) > 3 * (2 * BANDPASS_ORDER + 1):
+        x = bandpass(x, fs)
+    x = x - x.mean()
 
     # Full autocorrelation via FFT, normalised so lag 0 is 1.
     n = int(2 ** math.ceil(math.log2(len(x) * 2)))
@@ -229,8 +249,13 @@ def estimate_channel(x: np.ndarray, fs: float, index: int = 0) -> ChannelEstimat
     # peaks at every multiple, giving margin 1.0 and confidence zero.
     best_lag = lag_min + best
     lags = np.arange(len(window)) + lag_min
+    # Fixed tolerance in lag samples, not a relative one. A relative tolerance
+    # widens with the multiple -- at ratio 4 a 0.12 band spans +/-0.48*best_lag
+    # of raw lag -- which masks a large part of the search range out of the
+    # runner-up and inflates the margin.
     ratio = lags / best_lag
-    near_multiple = np.abs(ratio - np.round(ratio)) < 0.12
+    lag_tol = max(2.0, 0.06 * best_lag)
+    near_multiple = np.abs(lags - np.round(ratio) * best_lag) < lag_tol
     near_self = np.abs(lags - best_lag) <= max(2, int(0.15 * best_lag))
     unrelated = ~(near_multiple | near_self)
     runner_up = float(window[unrelated].max()) if unrelated.any() else 0.0
@@ -263,14 +288,17 @@ def estimate_window(
     estimates = [estimate_channel(channels[:, c], fs, c) for c in range(channels.shape[1])]
     usable = [e for e in estimates if e.bpm is not None]
     if not usable:
-        return HeartEstimate(None, 0.0, estimates, "no channel produced a rate")
+        return HeartEstimate(None, 0.0, estimates, "no channel produced a rate",
+                             rejected_by="no_signal")
 
     # Median over channels: robust to one bad emitter without needing a
     # preferred channel nominated in advance. Which emitter is best-seated
     # varies between sessions.
     bpm = float(np.median([e.bpm for e in usable]))
 
-    within = sum(1 for e in usable if abs(e.bpm - bpm) <= 5.0) / len(usable)
+    # Computed via the same property callers read, so the number shown and the
+    # number scored can never drift apart.
+    within = HeartEstimate(bpm, 0.0, estimates).agreement
     # Three terms, because each catches a failure the others miss.
     #
     #   within  -- channel agreement. Catches one badly seated emitter. Does NOT
@@ -289,11 +317,18 @@ def estimate_window(
 
     if confidence < MIN_CONFIDENCE:
         return HeartEstimate(None, confidence, estimates,
-                             f"confidence {confidence:.2f} below {MIN_CONFIDENCE}")
+                             f"confidence {confidence:.2f} below {MIN_CONFIDENCE}",
+                             rejected_by="confidence")
 
     reason = ""
     if previous_bpm is not None and seconds_since_previous > 0:
-        allowed = MAX_BPM_CHANGE_PER_S * seconds_since_previous
+        # Capped. Unbounded, a 60s gap allows 180 bpm of movement, which lets
+        # every octave error through while still treating the stale anchor as
+        # authoritative -- the rule becomes permissive exactly when its
+        # reference is least trustworthy. Past the cap the anchor should be
+        # abandoned rather than stretched, which the tracker does.
+        allowed = min(MAX_BPM_CHANGE_PER_S * seconds_since_previous,
+                      MAX_CONTINUITY_JUMP_BPM)
         if abs(bpm - previous_bpm) > allowed:
             # Rejected, not "corrected". An earlier version tried the octave on
             # the other side and adopted whichever landed inside the allowed
@@ -304,6 +339,7 @@ def estimate_window(
                 None, 0.0, estimates,
                 f"rejected {bpm:.1f} bpm: moved more than "
                 f"{allowed:.0f} bpm from {previous_bpm:.1f}",
+                rejected_by="continuity",
             )
 
     return HeartEstimate(bpm, confidence, estimates, reason)
@@ -334,17 +370,27 @@ class HeartRateTracker:
         est = estimate_window(channels, fs, self.bpm, seconds_since_previous)
 
         if est.bpm is None:
-            if self.bpm is not None and "moved more than" in est.reason:
+            # Only a continuity rejection is evidence against the anchor. A
+            # low-confidence or no-signal window says nothing about whether the
+            # anchor is still right -- the wearer may simply have moved for a
+            # moment -- so those leave the counter alone rather than resetting
+            # it or advancing it. Two disagreements still mean two, whether or
+            # not an unreadable window fell between them.
+            if self.bpm is not None and est.rejected_by == "continuity":
                 self._rejections += 1
                 if self._rejections >= self.reacquire_after:
-                    # Drop the anchor and take this window on its own merits.
                     self.bpm = None
                     self._rejections = 0
-                    est = estimate_window(channels, fs, None, 0.0)
-                    if est.bpm is not None:
-                        est.reason = "re-acquired after repeated rejections"
-                        self.bpm = est.bpm
-                    return est
+                    fresh = estimate_window(channels, fs, None, 0.0)
+                    if fresh.bpm is not None:
+                        fresh.reason = "re-acquired after repeated rejections"
+                        # Same bar as any other anchor. This is the path most
+                        # likely to be taken right after a bad lock, so letting
+                        # it adopt a merely-reportable window would put the
+                        # weakest test on the most exposed path.
+                        if fresh.confidence >= self.anchor_min_confidence:
+                            self.bpm = fresh.bpm
+                    return fresh
             return est
 
         self._rejections = 0

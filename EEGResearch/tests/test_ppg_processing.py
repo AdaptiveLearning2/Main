@@ -32,9 +32,17 @@ def _load(name: str) -> np.ndarray:
 
 
 def _pulse(bpm: float, seconds: float = 25.0, fs: float = FS,
-           harmonic: float = 0.0, noise: float = 0.0, drift: float = 0.0,
+           harmonic: float = 0.0, noise: float = 0.08, drift: float = 0.0,
            seed: int = 0) -> np.ndarray:
-    """A synthetic pulse with the nuisances the real signal carries."""
+    """A synthetic pulse with the nuisances the real signal carries.
+
+    Noise is on by default, and that is not incidental. A pure sine has equal
+    autocorrelation peaks at every multiple of its period, so no period is ever
+    decisive and the margin check -- which is what rejects octave errors on real
+    data -- scores it near zero. Real optical traces have decaying peaks. A
+    noiseless sine is not a simpler version of the signal, it is a different
+    one, and testing against it would have meant tuning the estimator to
+    something it will never see."""
     rng = np.random.default_rng(seed)
     t = np.arange(int(seconds * fs)) / fs
     f = bpm / 60.0
@@ -95,16 +103,37 @@ def test_one_bad_channel_does_not_move_the_answer():
 
 
 def test_continuity_rejects_an_impossible_jump():
-    out = estimate_window(np.column_stack([_pulse(150.0)] * 4), FS,
-                          previous_bpm=70.0, seconds_since_previous=10.0)
+    """Exercised against a real window, not a synthetic one.
+
+    A sustained synthetic sinusoid cannot reach the confidence threshold, and
+    that is correct rather than a gap: its autocorrelation has near-equal peaks
+    at every multiple of the period, so no period is ever decisive. Real traces
+    decorrelate at longer lags because consecutive beats differ in length, which
+    is what gives a genuine pulse its margin. Adding noise does not reproduce
+    that -- beat-to-beat variability does, and only partly.
+
+    So continuity is tested by feeding a real, clean window an anchor it cannot
+    plausibly have come from."""
+    window = _clean_rest_window()
+    out = estimate_window(window, FS, previous_bpm=150.0, seconds_since_previous=10.0)
     assert out.bpm is None
-    assert "moved more than" in out.reason
+    assert out.rejected_by == "continuity"
 
 
 def test_continuity_allows_a_plausible_change():
-    out = estimate_window(np.column_stack([_pulse(85.0)] * 4), FS,
-                          previous_bpm=70.0, seconds_since_previous=10.0)
-    assert out.bpm == pytest.approx(85.0, abs=2.0)
+    window = _clean_rest_window()
+    out = estimate_window(window, FS, previous_bpm=75.0, seconds_since_previous=10.0)
+    assert out.bpm == pytest.approx(69.0, abs=3.0)
+
+
+def test_continuity_does_not_widen_without_bound():
+    """A long gap must expire the anchor, not make it infinitely permissive.
+
+    Uncapped, a 60s dropout would allow 180 bpm of movement -- every octave
+    error passes while the stale anchor is still treated as authoritative."""
+    window = _clean_rest_window()
+    out = estimate_window(window, FS, previous_bpm=150.0, seconds_since_previous=60.0)
+    assert out.bpm is None, "a 60s gap should not licence an 80 bpm jump"
 
 
 def test_the_known_interferer_is_recognised_but_not_banned():
@@ -117,6 +146,12 @@ def test_the_known_interferer_is_recognised_but_not_banned():
 
 
 # ── real recordings: the physiology ──────────────────────────────────────────
+
+def _clean_rest_window() -> np.ndarray:
+    """A 25s window from the resting fixture, past its noisy opening."""
+    data = _load("optics_rest_60s.jsonl.gz")
+    return data[int(20 * FS):int(45 * FS)]
+
 
 def _track(data: np.ndarray, window_s: float = 25.0, step_s: float = 10.0):
     tracker = HeartRateTracker()
@@ -152,36 +187,28 @@ def test_recovery_decays_toward_the_resting_rate():
     assert reported[-1] == pytest.approx(68.0, abs=5.0)
 
 
-def test_the_window_right_after_motion_is_wrong_and_known_to_be():
-    """Pins a limitation, not a success.
+def test_windows_contaminated_by_motion_are_rejected():
+    """The hardest case in the fixtures.
 
-    The 25s after exercise yields ~127 bpm against a true rate near 90 --
-    unanimous across channels, with a decisive enough peak to look real. The
-    estimator does not catch it, and two candidate discriminators were tried and
-    rejected (see the module docstring).
-
-    Asserted so the limitation is visible and so that an implementation which
-    *does* fix it fails here loudly rather than passing quietly."""
+    In the ~30s after exercise the signal genuinely looks periodic at about
+    twice the true rate, and all four channels agree on it -- so agreement
+    cannot catch it. The peak margin can: near 1.0 there against 2.0-2.2 on
+    clean windows."""
     data = _load("optics_recovery_150s.jsonl.gz")
-    first = estimate_window(data[:int(25 * FS)], FS)
-    assert first.bpm is not None and first.bpm > 110, (
-        f"expected the known octave error, got {first.bpm} -- if this now reads "
-        f"~90 the estimator improved and this test should be inverted"
-    )
+    w = int(25 * FS)
+    for start_s in (0, 10, 20):
+        out = estimate_window(data[int(start_s * FS):int(start_s * FS) + w], FS)
+        assert out.bpm is None, (
+            f"t={start_s}s should be rejected, got {out.bpm:.1f} bpm"
+        )
+        assert out.rejected_by == "confidence"
 
 
-def test_a_wrong_post_motion_window_does_not_become_the_anchor():
-    """What actually limits the damage.
-
-    The estimator cannot reject that window, so the tracker must not build on
-    it: an anchor is only adopted from a window clearing a higher bar than mere
-    reportability."""
+def test_a_rejected_window_does_not_become_the_anchor():
     data = _load("optics_recovery_150s.jsonl.gz")
     tracker = HeartRateTracker()
-    w = int(25 * FS)
-    first = tracker.update(data[:w], FS, 0.0)
-    assert first.bpm is not None and first.bpm > 110
-    assert tracker.bpm is None, "a low-confidence window must not become the anchor"
+    tracker.update(data[:int(25 * FS)], FS, 0.0)
+    assert tracker.bpm is None
 
 
 def test_a_bad_first_window_does_not_poison_the_rest():

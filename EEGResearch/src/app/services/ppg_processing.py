@@ -13,33 +13,31 @@ microamps. Two wavelengths (730nm and 850nm) on left and right. On other Muse
 models the same shape arrives via the PPG packet instead; this code does not
 care which, only that it is a set of optical channels at a known rate.
 
-Motion, and why the peak margin carries the weight
---------------------------------------------------
-The hardest case in the fixtures is the ~30s after vigorous exercise, where the
-signal genuinely looks periodic at roughly twice the true rate. Measured there:
-all four channels agree on ~127 bpm against a true rate near 90. Cross-channel
-agreement therefore cannot catch it -- every channel makes the same error --
-and out-of-band power does not either, because it measures pulse strength
-rather than motion (the resting recording scores *higher* than the contaminated
-one).
+Motion, and the one window nothing here catches
+-----------------------------------------------
+The hardest case in the fixtures is the ~30s after vigorous exercise. The
+window starting the moment the wearer sat down reads **127 bpm against a true
+rate near 90, on all four channels**, and no in-window test found so far
+separates it from a real 127:
 
-What does catch it is the margin between the chosen autocorrelation peak and
-the tallest *unrelated* rival, with "unrelated" measured in a fixed number of
-lag samples. On those windows the margin sits near 1.0, meaning two genuinely
-different periods were nearly tied; on clean windows it is 2.0-2.2. All three
-contaminated windows are rejected, and the decay that follows is tracked from
-92 bpm down to the resting rate.
+- cross-channel agreement cannot -- every channel makes the same error;
+- out-of-band power cannot -- it measures pulse strength, not motion, and the
+  resting recording scores *higher* than the contaminated one;
+- the peak margin cannot -- it is 3.3 there, as decisive as a clean window.
 
-The tolerance being fixed rather than proportional is what makes this work. A
-relative tolerance widens with the multiple -- at the fourth harmonic a 12%
-band spans nearly half of best_lag -- which masks most of the search range out
-of the runner-up and inflates every margin, including the ones that should be
-low.
+The peak margin does reject the two windows after it, which read 58 and 55 bpm
+against the same true ~90. What handles the first window is the tracker rather
+than the estimator: it takes 127 as an anchor, rejects the next two windows as
+discontinuous, and re-acquires, so the error clears within about 30s and the
+decay that follows is tracked from 83 bpm down to the resting rate.
 
-The cost is that a mathematically perfect signal now scores poorly: a pure sine
-has equal autocorrelation peaks at every multiple, so nothing is ever decisive.
-Real optical traces have decaying peaks and do not hit this, but a synthetic
-test signal must carry some noise to be representative.
+A previous revision claimed the margin caught this window. It did not. That
+rejection came from an exclusion band narrower than the ACF peak it was
+excluding, which pushed the margin toward 1.0 on *every* short lag -- rejecting
+the motion window and every rate above about 100 bpm alike. Removing the
+too-narrow band restored the high rates and took the false discriminator with
+it. Anything claiming to catch this window should be checked against
+120-180 bpm before it is believed.
 """
 
 from __future__ import annotations
@@ -133,16 +131,25 @@ class HeartEstimate:
 
     @property
     def agreement(self) -> float:
-        """Fraction of channels within 5 bpm of the reported rate.
+        """Fraction of channels within 5 bpm of the reported rate."""
+        return channel_agreement(self.bpm, self.channels)
 
-        A quality signal, NOT a correctness one. In the first 25s after motion
-        every channel agreed on ~127 bpm and every channel was wrong by an
-        octave -- they all make the same error, so unanimity proves only that
-        the channels saw the same thing."""
-        usable = [c for c in self.channels if c.bpm is not None]
-        if not usable or self.bpm is None:
-            return 0.0
-        return sum(1 for c in usable if abs(c.bpm - self.bpm) <= 5.0) / len(usable)
+
+def channel_agreement(bpm: float | None, channels: list[ChannelEstimate]) -> float:
+    """Fraction of channels within 5 bpm of `bpm`.
+
+    A quality signal, NOT a correctness one. In the first 25s after motion every
+    channel agreed on ~127 bpm and every channel was wrong by an octave -- they
+    all make the same error, so unanimity proves only that the channels saw the
+    same thing.
+
+    Module-level so scoring a candidate rate and reporting the final one share
+    one definition; the scorer runs before a HeartEstimate exists.
+    """
+    usable = [c for c in channels if c.bpm is not None]
+    if not usable or bpm is None:
+        return 0.0
+    return sum(1 for c in usable if abs(c.bpm - bpm) <= 5.0) / len(usable)
 
 
 def bandpass(x: np.ndarray, fs: float) -> np.ndarray:
@@ -152,6 +159,33 @@ def bandpass(x: np.ndarray, fs: float) -> np.ndarray:
                   [BANDPASS_LOW_HZ / nyq, min(BANDPASS_HIGH_HZ, nyq * 0.99) / nyq],
                   btype="band")
     return filtfilt(b, a, x)
+
+
+def _peak_half_width(y: np.ndarray, i: int) -> float:
+    """How wide the peak at index `i` actually is, in lag samples.
+
+    The exclusion band around each harmonic has to be at least as wide as the
+    peak it is meant to exclude, or the peak's own shoulder leaks out and
+    becomes the "unrelated" runner-up -- which drives the margin toward 1.0 for
+    a perfectly good estimate.
+
+    Neither a fixed width nor one proportional to best_lag does this. An ACF
+    peak's width is set by the *bandwidth* of the filtered signal, which is the
+    same regardless of the rate, so at short lags a proportional band is
+    narrower than the peak. That is why 130-170 bpm went silent: the estimate
+    was right, the confidence was not.
+
+    Measured here instead: walk out from the peak until the ACF has fallen to
+    half its height or starts climbing again (the next peak).
+    """
+    half = y[i] * 0.5
+    left = i
+    while left > 0 and y[left - 1] < y[left] and y[left] > half:
+        left -= 1
+    right = i
+    while right < len(y) - 1 and y[right + 1] < y[right] and y[right] > half:
+        right += 1
+    return max(2.0, float(max(i - left, right - i)))
 
 
 def _parabolic_peak(y: np.ndarray, i: int) -> float:
@@ -249,15 +283,17 @@ def estimate_channel(x: np.ndarray, fs: float, index: int = 0) -> ChannelEstimat
     # peaks at every multiple, giving margin 1.0 and confidence zero.
     best_lag = lag_min + best
     lags = np.arange(len(window)) + lag_min
-    # Fixed tolerance in lag samples, not a relative one. A relative tolerance
-    # widens with the multiple -- at ratio 4 a 0.12 band spans +/-0.48*best_lag
-    # of raw lag -- which masks a large part of the search range out of the
-    # runner-up and inflates the margin.
+    # The exclusion width is the peak's own measured half-width, the same
+    # absolute number of lag samples at every multiple. Not a fraction of
+    # best_lag: that widens with the multiple (at ratio 4 a 0.12 band spans
+    # +/-0.48*best_lag of raw lag, inflating the margin) and, at short lags,
+    # is narrower than the peak so the peak's shoulder becomes its own rival.
     ratio = lags / best_lag
-    lag_tol = max(2.0, 0.06 * best_lag)
-    near_multiple = np.abs(lags - np.round(ratio) * best_lag) < lag_tol
-    near_self = np.abs(lags - best_lag) <= max(2, int(0.15 * best_lag))
-    unrelated = ~(near_multiple | near_self)
+    # Capped at 0.4*best_lag so a very broad peak cannot mask the midpoint
+    # between two multiples, which is where a genuine competing period would sit.
+    lag_tol = min(_peak_half_width(window, best), 0.4 * best_lag)
+    near_multiple = np.abs(lags - np.round(ratio) * best_lag) <= lag_tol
+    unrelated = ~near_multiple
     runner_up = float(window[unrelated].max()) if unrelated.any() else 0.0
     margin = float(window[best] / runner_up) if runner_up > 0 else float("inf")
 
@@ -296,9 +332,7 @@ def estimate_window(
     # varies between sessions.
     bpm = float(np.median([e.bpm for e in usable]))
 
-    # Computed via the same property callers read, so the number shown and the
-    # number scored can never drift apart.
-    within = HeartEstimate(bpm, 0.0, estimates).agreement
+    within = channel_agreement(bpm, estimates)
     # Three terms, because each catches a failure the others miss.
     #
     #   within  -- channel agreement. Catches one badly seated emitter. Does NOT
@@ -306,10 +340,10 @@ def estimate_window(
     #              four channels agreed on a rate an octave high.
     #   snr     -- normalised ACF height, already 0..1. Catches a window with no
     #              pulse in it. A clear pulse sits around 0.3-0.6 here.
-    #   margin  -- how decisively the chosen period beat its nearest rival.
-    #              This is the one that catches octave ambiguity: in the 25s
-    #              after exercise the mean margin was 1.03, meaning the winner
-    #              barely beat a competitor, against 1.7-2.3 on clean windows.
+    #   margin  -- how decisively the chosen period beat its nearest unrelated
+    #              rival. Catches the 10-35s post-exercise windows, where two
+    #              genuinely different periods were nearly tied. It does NOT
+    #              catch the window at t=0; see the module docstring.
     mean_snr = float(np.mean([e.snr for e in usable]))
     mean_margin = float(np.mean([min(e.margin, 4.0) for e in usable]))
     margin_term = max(0.0, min(1.0, (mean_margin - 1.0) / 0.7))

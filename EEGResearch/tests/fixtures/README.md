@@ -61,7 +61,14 @@ error. Agreement is a quality signal, not a correctness one.
   peak — autocorrelation separates a fundamental from its second harmonic where
   an FFT argmax does not.
 - **Low confidence for ~25 s after motion**, regardless of method. That window
-  should not report a heart rate at all.
+  should not report a heart rate at all. **This is still unmet for the first
+  window.** The 10–35 s windows are rejected — their channels split 113/58, and
+  a peak-margin test catches that. The 0–25 s window is not: all four channels
+  agree on 127 with a healthy margin, and it is not distinguishable from a real
+  127 bpm by anything tried. `HeartRateTracker` contains it instead, rejecting
+  the two windows that follow and re-acquiring within ~30 s. Any proposed
+  in-window discriminator must be checked against 120–180 bpm — one that
+  "worked" turned out to reject every genuinely fast rate too.
 - The end-to-end test these fixtures enable: **derived BPM must be higher in the
   recovery capture than in the rest capture.** No synthetic signal can validate
   the whole chain against real physiology.

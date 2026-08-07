@@ -36,13 +36,12 @@ def _pulse(bpm: float, seconds: float = 25.0, fs: float = FS,
            seed: int = 0) -> np.ndarray:
     """A synthetic pulse with the nuisances the real signal carries.
 
-    Noise is on by default, and that is not incidental. A pure sine has equal
-    autocorrelation peaks at every multiple of its period, so no period is ever
-    decisive and the margin check -- which is what rejects octave errors on real
-    data -- scores it near zero. Real optical traces have decaying peaks. A
-    noiseless sine is not a simpler version of the signal, it is a different
-    one, and testing against it would have meant tuning the estimator to
-    something it will never see."""
+    Noise is on by default because a noiseless sine is not a simpler version of
+    this signal, it is a different one -- nothing the headband produces is
+    clean, and an estimator tuned on a perfect sine is tuned on something it
+    will never see. It is not required, though: test_a_clean_signal_is_
+    reportable keeps the noiseless case covered, since that is where the
+    high-rate defect showed up most sharply."""
     rng = np.random.default_rng(seed)
     t = np.arange(int(seconds * fs)) / fs
     f = bpm / 60.0
@@ -94,6 +93,38 @@ def test_noise_is_not_reported_as_a_rate():
     assert "confidence" in out.reason
 
 
+@pytest.mark.parametrize("bpm", [100.0, 115.0, 130.0, 150.0, 170.0])
+def test_high_rates_are_reportable(bpm):
+    """No fixture reaches these rates, and a regression here is silent.
+
+    The fixtures top out near 92 bpm. A defect above that returns bpm=None with
+    rejected_by="confidence", which downstream is indistinguishable from "no
+    pulse detected" -- so the band this platform exists to observe, a child
+    during and after exertion, would go quiet with nothing raising an error.
+
+    This happened: an exclusion band narrower than the ACF peak it excluded let
+    the peak's own shoulder count as an unrelated rival, collapsing confidence
+    for correct estimates from about 100 bpm upward. estimate_channel was right
+    throughout; only the fusion refused to report it. Hence a whole-pipeline
+    assertion rather than a per-channel one."""
+    channels = np.column_stack([_pulse(bpm, harmonic=0.4, seed=i) for i in range(4)])
+    out = estimate_window(channels, FS)
+    assert out.bpm is not None, (
+        f"{bpm} bpm rejected: {out.reason}"
+    )
+    assert out.bpm == pytest.approx(bpm, abs=2.0)
+
+
+@pytest.mark.parametrize("bpm", [72.0, 170.0])
+def test_a_clean_signal_is_reportable(bpm):
+    """Noise is on by default elsewhere, so without this the suite would never
+    exercise the noiseless case -- which is where the high-rate defect above was
+    sharpest."""
+    channels = np.column_stack([_pulse(bpm, harmonic=0.4, noise=0.0)] * 4)
+    out = estimate_window(channels, FS)
+    assert out.bpm == pytest.approx(bpm, abs=2.0)
+
+
 def test_one_bad_channel_does_not_move_the_answer():
     """Median across channels, so a single mis-seated emitter is outvoted."""
     good = [_pulse(72.0, seed=i) for i in range(3)]
@@ -103,17 +134,11 @@ def test_one_bad_channel_does_not_move_the_answer():
 
 
 def test_continuity_rejects_an_impossible_jump():
-    """Exercised against a real window, not a synthetic one.
+    """Exercised against a real window given an anchor it cannot have come from.
 
-    A sustained synthetic sinusoid cannot reach the confidence threshold, and
-    that is correct rather than a gap: its autocorrelation has near-equal peaks
-    at every multiple of the period, so no period is ever decisive. Real traces
-    decorrelate at longer lags because consecutive beats differ in length, which
-    is what gives a genuine pulse its margin. Adding noise does not reproduce
-    that -- beat-to-beat variability does, and only partly.
-
-    So continuity is tested by feeding a real, clean window an anchor it cannot
-    plausibly have come from."""
+    A synthetic pulse would work too, but continuity is the rule that has to
+    hold against the messy input, so it is tested against a recording rather
+    than against a signal built to be estimable."""
     window = _clean_rest_window()
     out = estimate_window(window, FS, previous_bpm=150.0, seconds_since_previous=10.0)
     assert out.bpm is None
@@ -187,16 +212,15 @@ def test_recovery_decays_toward_the_resting_rate():
     assert reported[-1] == pytest.approx(68.0, abs=5.0)
 
 
-def test_windows_contaminated_by_motion_are_rejected():
-    """The hardest case in the fixtures.
+def test_ambiguous_windows_after_motion_are_rejected():
+    """The two windows the peak margin does catch.
 
-    In the ~30s after exercise the signal genuinely looks periodic at about
-    twice the true rate, and all four channels agree on it -- so agreement
-    cannot catch it. The peak margin can: near 1.0 there against 2.0-2.2 on
-    clean windows."""
+    10-35s after exercise, the channels split 113/58/113/58 against a true rate
+    near 90 -- two genuinely different periods nearly tied, which is what a low
+    margin means."""
     data = _load("optics_recovery_150s.jsonl.gz")
     w = int(25 * FS)
-    for start_s in (0, 10, 20):
+    for start_s in (10, 20):
         out = estimate_window(data[int(start_s * FS):int(start_s * FS) + w], FS)
         assert out.bpm is None, (
             f"t={start_s}s should be rejected, got {out.bpm:.1f} bpm"
@@ -204,11 +228,34 @@ def test_windows_contaminated_by_motion_are_rejected():
         assert out.rejected_by == "confidence"
 
 
-def test_a_rejected_window_does_not_become_the_anchor():
+def test_the_first_window_after_motion_is_wrong_and_the_tracker_clears_it():
+    """A documented limitation, pinned so it cannot be lost silently.
+
+    The window starting the moment the wearer sat down reads ~127 bpm against a
+    true ~90, on all four channels and with a healthy margin. Nothing in
+    estimate_window separates it from a real 127 -- and a rule that did would
+    also have to leave a genuine 127 reportable, which is the trap a previous
+    revision fell into.
+
+    The tracker is what contains it: 127 becomes the anchor, the next two
+    windows are rejected as discontinuous, and it re-acquires."""
     data = _load("optics_recovery_150s.jsonl.gz")
+    w, step = int(25 * FS), int(10 * FS)
+
+    first = estimate_window(data[:w], FS)
+    assert first.bpm == pytest.approx(127.0, abs=4.0), (
+        "if this window now reads correctly, the limitation is fixed and this "
+        "test should be replaced -- but check 120-180 bpm still reports first"
+    )
+
     tracker = HeartRateTracker()
-    tracker.update(data[:int(25 * FS)], FS, 0.0)
-    assert tracker.bpm is None
+    seen = [tracker.update(data[s:s + w], FS, 10.0).bpm
+            for s in range(0, 5 * step, step)]
+    assert seen[0] == pytest.approx(127.0, abs=4.0)
+    assert seen[1] is None and seen[2] is None, "should reject, not follow"
+    assert seen[-1] == pytest.approx(83.0, abs=6.0), (
+        f"should have re-acquired a plausible rate, got {seen}"
+    )
 
 
 def test_a_bad_first_window_does_not_poison_the_rest():

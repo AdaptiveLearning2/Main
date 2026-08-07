@@ -35,11 +35,22 @@ error is unreadable without them:
     tolerance taken from the first number must not be applied to values minutes
     apart.
 
+**The second of those two numbers is an underestimate.** A later capture with
+six references across 4.5 minutes (test_hrv_against_dense_ecg.py) measured a
+29.2-48.9 ms range. Do not read the 2.0 ms figure as evidence that a derived
+value varying over minutes must be wrong -- that inference was made here, and
+the denser capture overturned it.
+
 Read against those, the two good windows are off by 2.2 and 1.9 ms -- *inside
-the reference's own short-term noise*, so there is nothing further to measure
-without a better reference. The third is off by 16.6 ms, more than the entire
-19-minute physiological range. The failure is bimodal: right, or badly wrong.
-It is not a bias to calibrate out.
+the reference's own short-term noise*. The third is off by 16.6 ms.
+
+**The 50% outlier did not recur.** The denser capture reports five of five
+windows within 15%, so this was one window in one recording rather than a
+characteristic failure. Several candidate discriminators were tested against
+these three references before that was known; every one of them fixed this
+window and broke a different one, which is what fitting to three points looks
+like. The outlier is still pinned below, as a known case rather than a
+described behaviour.
 """
 
 from __future__ import annotations

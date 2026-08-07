@@ -60,8 +60,10 @@ python -m pytest tests/ -q
 npm test
 ```
 
-Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set to anything non-empty; they
-never reach a real database. EEGResearch tests need `EEG_SOURCE=sim`, `API_TOKEN`, `ADMIN_TOKEN`.
+Backend tests need `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; they never reach a real
+database, but the client validates the URL at import, so `SUPABASE_URL` must be URL-shaped
+(`http://localhost:54321`) — a placeholder like `x` fails collection with "Invalid URL".
+`SUPABASE_SERVICE_ROLE_KEY` can be anything non-empty. EEGResearch tests need `EEG_SOURCE=sim`, `API_TOKEN`, `ADMIN_TOKEN`.
 The native bridge is compile-checked on `windows-latest` with `ENABLE_LIBMUSE=OFF`, which covers
 syntax and signatures but *not* the packet handling inside the guards — that still needs a manual
 Windows build with the SDK before release. The SDK is vendored (and gitignored) at

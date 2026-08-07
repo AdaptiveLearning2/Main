@@ -60,22 +60,21 @@ def test_rmssd_is_successive_differences_not_spread():
     assert rmssd_from_beats(alternating)[0] > 5 * rmssd_from_beats(drifting)[0]
 
 
-def test_a_missed_beat_inflates_rmssd():
-    """The reason this module exists. Dropping one beat merges two intervals,
-    and RMSSD squares the difference, so a single miss dominates a window.
+def test_a_missed_beat_is_removed_rather_than_averaged_in():
+    """A missed beat merges two intervals, and RMSSD squares the difference, so
+    one miss in a window dominates it. Unfiltered, this case measured 136ms
+    against a true zero.
 
-    At 120 bpm, because that is where the merged interval stays physiologically
-    possible. Below about 84 bpm a single miss produces an interval longer than
-    MAX_IBI_MS and gets dropped as an artefact instead -- which is lucky rather
-    than designed, and is exactly why coverage is gated separately: the range
-    filter is not a substitute for detecting the beats in the first place."""
+    The relative filter removes the merged interval outright, which is the only
+    safe treatment: it cannot be repaired, because the beat time that would
+    split it was never observed. The window loses an interval instead of
+    reporting a fabricated one, and coverage is what notices the loss."""
     beats = [i * 0.5 for i in range(30)]
     clean, _ = rmssd_from_beats(beats)
-    missing, _ = rmssd_from_beats(beats[:15] + beats[16:])
+    missing, n = rmssd_from_beats(beats[:15] + beats[16:])
     assert clean == pytest.approx(0.0, abs=1e-9)
-    # sqrt of the mean over all 28 differences, so the single +500/-500 pair is
-    # diluted rather than dominant -- still an order of magnitude above zero.
-    assert missing > 100.0
+    assert missing == pytest.approx(0.0, abs=1e-9)
+    assert n < 28, "the merged interval should have been dropped"
 
 
 def test_impossible_intervals_are_dropped_not_clamped():
@@ -133,8 +132,7 @@ def test_consensus_and_averaging_beat_a_single_channel():
     window, fs = _window("optics_rest_60s.jsonl.gz", 20, 50)
     single, _ = rmssd_from_beats(list(detect_beats(window[:, 0], fs)))
     combined, _ = rmssd_from_beats(consensus_beats(window, fs))
-    assert single > 100.0, "single-channel RMSSD was not the known-bad case"
-    assert combined < single / 2
+    assert combined < single, f"consensus {combined:.1f} did not beat {single:.1f}"
     assert PHYSIOLOGICAL_MS[0] < combined < PHYSIOLOGICAL_MS[1]
 
 
@@ -192,4 +190,36 @@ def test_the_motion_window_produces_a_healthy_looking_wrong_answer():
     assert out.rejected_by is None, "no gate here catches motion -- by design"
     assert PHYSIOLOGICAL_MS[0] < out.rmssd_ms < PHYSIOLOGICAL_MS[1], (
         "the wrong answer looks entirely healthy, which is the point"
+    )
+
+
+def test_rmssd_is_stable_across_a_still_recording():
+    """The test that would have caught the artefact filter being too loose.
+
+    Every earlier claim about RMSSD here rested on the resting fixture, which is
+    long enough for exactly ONE reportable window -- so a single lucky draw read
+    as a validated result. The paired recording gives 42 windows over a still
+    subject at a flat 69-72 bpm, where the true value cannot be swinging.
+
+    Unfiltered, those 42 windows ranged 29-240ms. A spread that wide is not a
+    physiological signal, and no gate in this module noticed: coverage sat at
+    0.96-1.08 and rate confidence at 1.00 throughout.
+
+    Asserted as a spread rather than a value, because the value is what needs an
+    ECG to check and the spread is what makes any value meaningful."""
+    data, fs = _load("optics_ecg_paired.jsonl.gz")
+    window_s, values = 30, []
+    for start in range(0, int(len(data) / fs) - window_s, 5):
+        window = data[int(start * fs):int((start + window_s) * fs)]
+        out = estimate_hrv(window, fs, *_rate(window, fs))
+        if out.rmssd_ms is not None:
+            values.append(out.rmssd_ms)
+
+    assert len(values) > 30, f"expected many reportable windows, got {len(values)}"
+    assert max(values) / min(values) < 3.0, (
+        f"RMSSD swung {min(values):.0f}-{max(values):.0f}ms on a still subject; "
+        "the true value is not moving, so this is the estimator"
+    )
+    assert all(v < 100.0 for v in values), (
+        "a resting adult does not have an RMSSD near 100ms"
     )

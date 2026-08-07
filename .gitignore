@@ -72,3 +72,15 @@ session_report.html
 # depth rather than only where someone remembered to add a rule.
 __pycache__/
 *.pyc
+
+# Claude Code's per-developer settings. The file is machine-specific by design
+# -- it accumulates approved tool invocations, and those bake in absolute paths
+# including this machine's home directory and per-session temp directories, so
+# committing it would be both noise and a small leak of local layout.
+#
+# Deliberately this one file rather than the whole .claude/ directory:
+# settings.json (shared project settings) and launch.json (the dev-server
+# config the browser preview reads) are both things a project may legitimately
+# want to check in, and a directory-wide rule would silently make that
+# impossible.
+.claude/settings.local.json

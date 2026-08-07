@@ -163,6 +163,20 @@ hold for minutes with good contact and ~63 packets/s. `MUSE_OPTICS_PRESET` picks
 default sits at the bottom deliberately: the 16-channel failure took EEG down with it, and that is
 not a cliff to park next to. An unrecognised value warns once and falls back.
 
+**Derived BPM is unusable under motion, and it fails at high confidence.** Measured on a recording
+through exercise: `ppg_processing` reported 162–167 bpm at **confidence 1.00** for six consecutive
+windows against a watch-verified 104 — it had locked onto the wearer's step cadence. 166/104 = 1.60,
+no harmonic relation, so no periodicity test can see it, and four have been tried. A confidence
+threshold in front of this buys nothing: motion produces *high* confidence, not low, which is the
+opposite of the intuitive contract.
+
+So **do not wire it into recording until motion is detectable.** That needs the headband's
+accelerometer, which the bridge does not capture yet (`ACCELEROMETER` and `GYRO` are in the SDK enum;
+`native_bridge/src` references neither) — it is the only available signal independent of the
+periodicity being confused. A stored 166 bpm for a fidgeting child is worse than a blank tile, and it
+reaches past the reports: the planned fusion rule lets the heart channel lower question difficulty on
+its own. Evidence and the failed discriminators are in `EEGResearch/tests/fixtures/README.md`.
+
 Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
 These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
 one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`

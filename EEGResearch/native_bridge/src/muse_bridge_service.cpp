@@ -1,5 +1,7 @@
 #include "muse_bridge_service.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -274,9 +276,13 @@ OpticsPresetChoice optics_preset_choice() {
     // silently running the default would present as "my setting had no effect"
     // with nothing to go on. Says so once rather than every reconnect.
     if (raw && *raw && value != "1035") {
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
+        // atomic exchange rather than a plain bool: this runs from the
+        // connection listener thread, so concurrent reconnects can race it.
+        // The cost of losing is only a duplicate stderr line, but the rest of
+        // this file is careful about which thread touches what, and a lone
+        // unsynchronised static invites the next one to be less careful.
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
             std::cerr << "Unrecognised MUSE_OPTICS_PRESET='" << value
                       << "' (expected 1031-1036); using PRESET_1035\n";
         }

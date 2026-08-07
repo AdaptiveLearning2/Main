@@ -2,8 +2,14 @@
 
 Synthetic signals pin the arithmetic against a rate that is known exactly. The
 fixtures pin behaviour against physiology, which no synthetic signal can — most
-importantly the octave errors after motion, which are the failure this whole
-design is arranged around.
+importantly what motion does, which is the failure this whole design is arranged
+around and is not one failure but two: octave errors in the seconds after
+movement, and a lock onto step cadence during it that bears no harmonic relation
+to the heart at all.
+
+Two tests here deliberately assert **wrong** values, because those are known
+defects that must not drift into a product unnoticed. Both carry a message
+saying what to check before concluding they have been fixed.
 """
 
 from __future__ import annotations
@@ -22,13 +28,33 @@ from src.app.services.ppg_processing import (
     near_known_interferer,
 )
 
+# Synthetic-signal rate only. Fixture rates come from _load(), per recording.
 FS = 64.3
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _load(name: str) -> np.ndarray:
+def _load(name: str) -> tuple[np.ndarray, float]:
+    """Samples and the recording's own measured rate.
+
+    The rate is derived from the fixture rather than assumed, because the
+    derivation reconstructs its time base from sample index and a wrong rate
+    scales every bpm by the same factor -- which looks like a plausible heart
+    rate, not like an error. An early analysis of these recordings was 30% high
+    for exactly that reason.
+
+    frames / span, not the median inter-frame gap: ~9% of frames share a
+    timestamp with their predecessor, which is precisely what breaks a median.
+    """
+    ch, ts = [], []
     with gzip.open(FIXTURES / name, "rt", encoding="utf-8") as fh:
-        return np.array([json.loads(line)["ch"] for line in fh if line.strip()], dtype=float)
+        for line in fh:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            ch.append(row["ch"])
+            ts.append(row["mono_ts_ms"])
+    span_s = (ts[-1] - ts[0]) / 1000.0
+    return np.array(ch, dtype=float), (len(ch) - 1) / span_s
 
 
 def _pulse(bpm: float, seconds: float = 25.0, fs: float = FS,
@@ -139,15 +165,15 @@ def test_continuity_rejects_an_impossible_jump():
     A synthetic pulse would work too, but continuity is the rule that has to
     hold against the messy input, so it is tested against a recording rather
     than against a signal built to be estimable."""
-    window = _clean_rest_window()
-    out = estimate_window(window, FS, previous_bpm=150.0, seconds_since_previous=10.0)
+    window, fs = _clean_rest_window()
+    out = estimate_window(window, fs, previous_bpm=150.0, seconds_since_previous=10.0)
     assert out.bpm is None
     assert out.rejected_by == "continuity"
 
 
 def test_continuity_allows_a_plausible_change():
-    window = _clean_rest_window()
-    out = estimate_window(window, FS, previous_bpm=75.0, seconds_since_previous=10.0)
+    window, fs = _clean_rest_window()
+    out = estimate_window(window, fs, previous_bpm=75.0, seconds_since_previous=10.0)
     assert out.bpm == pytest.approx(69.0, abs=3.0)
 
 
@@ -156,8 +182,8 @@ def test_continuity_does_not_widen_without_bound():
 
     Uncapped, a 60s dropout would allow 180 bpm of movement -- every octave
     error passes while the stale anchor is still treated as authoritative."""
-    window = _clean_rest_window()
-    out = estimate_window(window, FS, previous_bpm=150.0, seconds_since_previous=60.0)
+    window, fs = _clean_rest_window()
+    out = estimate_window(window, fs, previous_bpm=150.0, seconds_since_previous=60.0)
     assert out.bpm is None, "a 60s gap should not licence an 80 bpm jump"
 
 
@@ -172,16 +198,17 @@ def test_the_known_interferer_is_recognised_but_not_banned():
 
 # ── real recordings: the physiology ──────────────────────────────────────────
 
-def _clean_rest_window() -> np.ndarray:
+def _clean_rest_window() -> tuple[np.ndarray, float]:
     """A 25s window from the resting fixture, past its noisy opening."""
-    data = _load("optics_rest_60s.jsonl.gz")
-    return data[int(20 * FS):int(45 * FS)]
+    data, fs = _load("optics_rest_60s.jsonl.gz")
+    return data[int(20 * fs):int(45 * fs)], fs
 
 
-def _track(data: np.ndarray, window_s: float = 25.0, step_s: float = 10.0):
+def _track(loaded, window_s: float = 25.0, step_s: float = 10.0):
+    data, fs = loaded
     tracker = HeartRateTracker()
-    w, step = int(window_s * FS), int(step_s * FS)
-    return [tracker.update(data[s:s + w], FS, step_s).bpm
+    w, step = int(window_s * fs), int(step_s * fs)
+    return [tracker.update(data[s:s + w], fs, step_s).bpm
             for s in range(0, len(data) - w, step)]
 
 
@@ -218,10 +245,10 @@ def test_ambiguous_windows_after_motion_are_rejected():
     10-35s after exercise, the channels split 113/58/113/58 against a true rate
     near 90 -- two genuinely different periods nearly tied, which is what a low
     margin means."""
-    data = _load("optics_recovery_150s.jsonl.gz")
-    w = int(25 * FS)
+    data, fs = _load("optics_recovery_150s.jsonl.gz")
+    w = int(25 * fs)
     for start_s in (10, 20):
-        out = estimate_window(data[int(start_s * FS):int(start_s * FS) + w], FS)
+        out = estimate_window(data[int(start_s * fs):int(start_s * fs) + w], fs)
         assert out.bpm is None, (
             f"t={start_s}s should be rejected, got {out.bpm:.1f} bpm"
         )
@@ -239,17 +266,17 @@ def test_the_first_window_after_motion_is_wrong_and_the_tracker_clears_it():
 
     The tracker is what contains it: 127 becomes the anchor, the next two
     windows are rejected as discontinuous, and it re-acquires."""
-    data = _load("optics_recovery_150s.jsonl.gz")
-    w, step = int(25 * FS), int(10 * FS)
+    data, fs = _load("optics_recovery_150s.jsonl.gz")
+    w, step = int(25 * fs), int(10 * fs)
 
-    first = estimate_window(data[:w], FS)
+    first = estimate_window(data[:w], fs)
     assert first.bpm == pytest.approx(127.0, abs=4.0), (
         "if this window now reads correctly, the limitation is fixed and this "
         "test should be replaced -- but check 120-180 bpm still reports first"
     )
 
     tracker = HeartRateTracker()
-    seen = [tracker.update(data[s:s + w], FS, 10.0).bpm
+    seen = [tracker.update(data[s:s + w], fs, 10.0).bpm
             for s in range(0, 5 * step, step)]
     assert seen[0] == pytest.approx(127.0, abs=4.0)
     assert seen[1] is None and seen[2] is None, "should reject, not follow"
@@ -264,8 +291,8 @@ def test_settled_recovery_matches_the_watch():
     Watch said 75 bpm at the end. This pins the accurate case in the same
     fixture whose motion windows are wildly wrong, so a change that "fixes"
     motion by desensitising the estimator fails here."""
-    data = _load("optics_through_exercise.jsonl.gz")
-    out = estimate_window(data[int(270 * FS):int(295 * FS)], FS)
+    data, fs = _load("optics_through_exercise.jsonl.gz")
+    out = estimate_window(data[int(270 * fs):int(295 * fs)], fs)
     assert out.bpm == pytest.approx(75.0, abs=5.0)
 
 
@@ -282,8 +309,8 @@ def test_motion_is_reported_confidently_and_wrongly():
     replaced by one asserting correctness. If it fails because bpm is None,
     check 100-170 bpm still reports before believing motion was fixed -- that
     exact false positive has happened here twice."""
-    data = _load("optics_through_exercise.jsonl.gz")
-    out = estimate_window(data[int(90 * FS):int(115 * FS)], FS)
+    data, fs = _load("optics_through_exercise.jsonl.gz")
+    out = estimate_window(data[int(90 * fs):int(115 * fs)], fs)
     assert out.bpm == pytest.approx(167.0, abs=6.0)
     assert out.confidence > 0.9, (
         "motion does not degrade into low confidence -- any consumer relying on "

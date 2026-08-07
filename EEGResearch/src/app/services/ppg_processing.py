@@ -197,6 +197,13 @@ def _peak_half_width(y: np.ndarray, i: int) -> float:
     Measured here instead: walk out from the peak until the ACF has fallen to
     half its height or starts climbing again (the next peak).
     """
+    # The 2.0 floor also serves as the self-exclusion width, since ratio 1 is
+    # just another multiple. It is adequate only because BANDPASS_HIGH_HZ caps
+    # the signal at 5Hz, which is what keeps an ACF peak from being narrower
+    # than a couple of lag samples. **If that ceiling ever rises, raise this
+    # floor with it** -- otherwise a peak narrower than 2 samples stops
+    # excluding its own shoulder and every margin collapses, silently and only
+    # at short lags. That coupling is invisible from either end.
     half = y[i] * 0.5
     left = i
     while left > 0 and y[left - 1] < y[left] and y[left] > half:
@@ -308,8 +315,20 @@ def estimate_channel(x: np.ndarray, fs: float, index: int = 0) -> ChannelEstimat
     # +/-0.48*best_lag of raw lag, inflating the margin) and, at short lags,
     # is narrower than the peak so the peak's shoulder becomes its own rival.
     ratio = lags / best_lag
-    # Capped at 0.4*best_lag so a very broad peak cannot mask the midpoint
-    # between two multiples, which is where a genuine competing period would sit.
+    # Asymmetric, and knowingly so. The width is measured on the *chosen* peak
+    # and applied at every multiple, but harmonic peaks in a real ACF are
+    # usually broader than the fundamental's -- beat-interval jitter accumulates
+    # with lag, so the k-th multiple smears roughly with k. The band may
+    # therefore still be slightly narrow at ratio 3-4, which errs toward letting
+    # a harmonic shoulder count as a rival: it lowers the margin, so it costs a
+    # reportable window rather than producing a wrong rate. Not observed on any
+    # fixture. Measuring each multiple's own width would fix it and would also
+    # let a noise peak sitting near a multiple widen its own exclusion, which is
+    # the failure that produces a confident wrong answer instead of a missing one.
+    #
+    # The cap bounds the other direction: a very broad peak must not mask the
+    # midpoint between two multiples, which is where a genuine competing period
+    # would sit.
     lag_tol = min(_peak_half_width(window, best), 0.4 * best_lag)
     near_multiple = np.abs(lags - np.round(ratio) * best_lag) <= lag_tol
     unrelated = ~near_multiple

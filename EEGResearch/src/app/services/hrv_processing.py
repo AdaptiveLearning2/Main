@@ -74,6 +74,18 @@ from .ppg_processing import MAX_BPM, bandpass
 MIN_IBI_MS = 60_000.0 / MAX_BPM
 MAX_IBI_MS = 1429.0
 
+# How far one interval may sit from the window's median before it is treated as
+# a detector artefact rather than a beat. This is the filter that matters; see
+# rmssd_from_beats for the measurement.
+#
+# 0.20 rather than tighter because the tightening stops paying: 0.30 gives a
+# 29-68ms spread across the paired recording, 0.20 gives 29-63, and 0.15 gives
+# 26-52 while starting to cut into genuine variability -- which is the quantity
+# being measured, so an aggressive filter here manufactures a low answer rather
+# than a correct one. 0.20 is also the conventional value, which matters for a
+# number a clinician might one day compare against a published range.
+IBI_DEVIATION_FRACTION = 0.20
+
 # How close two channels' marks must be to count as the same beat. The pulse
 # reaches the four emitters at slightly different times and each is marked with
 # its own error, so this is a real tolerance rather than a rounding allowance.
@@ -211,7 +223,30 @@ def rmssd_from_beats(beat_times_s: list[float]) -> tuple[float | None, int]:
     if len(beat_times_s) < 3:
         return None, 0
     ibi = np.diff(np.asarray(beat_times_s)) * 1000.0
-    valid = (ibi >= MIN_IBI_MS) & (ibi <= MAX_IBI_MS)
+
+    # Two filters, and the absolute one alone is nearly useless here.
+    #
+    # 333-1429ms spans 42-180 bpm, so at a resting interval near 860ms it
+    # admits anything from a badly early beat to one that merged with its
+    # neighbour. Measured with only that filter, RMSSD over a still subject at a
+    # flat 70 bpm ranged 29-240ms across 34 windows -- against an ECG-measured
+    # 29.9ms. The correct answer appeared occasionally and the rest was
+    # contamination that passed the gate at coverage ~1.0.
+    #
+    # The relative filter is the standard HRV artefact criterion and it is what
+    # makes the metric usable: the same 34 windows come back 29-63ms with it.
+    #
+    # A longer window does NOT substitute for this, which is worth knowing
+    # because it is the intuitive fix. Measured at 30/45/60/90/120s, the spread
+    # got *worse* and converged on ~170ms: the error is a small number of badly
+    # timed beats rather than random jitter, so a longer window does not average
+    # it down, it merely guarantees catching some.
+    median_ibi = float(np.median(ibi))
+    valid = (
+        (ibi >= MIN_IBI_MS)
+        & (ibi <= MAX_IBI_MS)
+        & (np.abs(ibi - median_ibi) <= IBI_DEVIATION_FRACTION * median_ibi)
+    )
 
     # Successive differences are taken WITHIN runs of adjacent valid intervals,
     # never across a dropped one. Filtering the array and then diffing it looks

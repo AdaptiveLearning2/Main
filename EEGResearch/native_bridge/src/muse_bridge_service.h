@@ -49,6 +49,44 @@ struct ContactQuality {
 };
 
 /**
+ * Evidence that the optical sensor is producing data, and what it looks like.
+ *
+ * Deliberately counters and a most-recent sample rather than a stream. The
+ * question this answers is "does a PRESET_1031 Athena actually emit OPTICS, at
+ * what rate, and with how many channels" -- and until that has been seen, any
+ * streaming format for it would be designed against an assumption. The stream
+ * comes next, once the shape is known rather than inferred.
+ *
+ * OPTICS and PPG are counted separately because they are different packets on
+ * different hardware: the 2025 Athena carries PPG inside OPTICS and emits no
+ * PPG packet at all, while 2018-2024 models do the opposite. A build that saw
+ * only a total would not be able to tell which one it was talking to.
+ */
+struct OpticalSignals {
+    long long optics_packets{0};
+    long long ppg_packets{0};
+    /** values_size() of the most recent packet of each kind. 0 before any. */
+    int optics_values{0};
+    int ppg_values{0};
+    /** Most recent sample, truncated to what arrived. Units are microamps for
+     *  OPTICS and arbitrary for PPG, per bridge_optics.h / bridge_ppg.h. */
+    std::array<double, 16> last_optics{};
+    std::array<double, 3> last_ppg{};
+    /** libMuse's own quality verdicts, so this bridge does not have to invent
+     *  one. Absent until the corresponding packet type arrives, which is why
+     *  each carries a has_ flag rather than defaulting to false -- "the sensor
+     *  says the signal is bad" and "the sensor has not said anything" are
+     *  different, and only one of them justifies a fallback. */
+    bool ppg_good{false};
+    bool heart_good{false};
+    bool has_ppg_good{false};
+    bool has_heart_good{false};
+    /** steady_clock ms of the most recent optical packet of either kind; 0 if
+     *  none. Lets a consumer distinguish "flowing" from "flowed once". */
+    long long last_ms{0};
+};
+
+/**
  * The headband's own account of its current settings.
  *
  * `known` is separate rather than being encoded as preset=="" or channels==0,
@@ -120,6 +158,8 @@ public:
      * someone is watching.
      */
     DeviceConfig device_config() const;
+    /** Optical packet counters, latest sample and libMuse's quality verdicts. */
+    OpticalSignals optical_signals() const;
     /**
      * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
      *
@@ -186,6 +226,7 @@ private:
     long long frame_counter_;
     BandPowers latest_bands_{};
     ContactQuality latest_contact_{};
+    OpticalSignals latest_optical_{};
     int band_channels_used_{0};
     std::string muse_model_;
     std::string requested_preset_;
@@ -223,6 +264,13 @@ private:
     void update_band_power(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     /** Records HSI_PRECISION / IS_GOOD packets into latest_contact_. */
     void update_contact_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
+    /** Unregisters every data packet type this service registers, from both
+     *  teardown paths. One list so the two cannot drift apart. */
+    void unregister_data_listeners(const std::shared_ptr<interaxon::bridge::Muse>& muse);
+    /** Records OPTICS / PPG packets into latest_optical_. */
+    void update_optical(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
+    /** Records IS_PPG_GOOD / IS_HEART_GOOD into latest_optical_. */
+    void update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     void update_connection_state(interaxon::bridge::ConnectionState state);
     void rebuild_muse_name_list();
     /** Re-queries the OS Bluetooth radio state; called on start() and refresh_scan(). */

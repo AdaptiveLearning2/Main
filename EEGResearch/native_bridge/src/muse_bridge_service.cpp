@@ -70,6 +70,18 @@ public:
         case interaxon::bridge::MuseDataPacketType::IS_GOOD:
             service_.update_contact_quality(packet);
             break;
+        case interaxon::bridge::MuseDataPacketType::OPTICS:
+        case interaxon::bridge::MuseDataPacketType::PPG:
+            // Both, because which one arrives is a property of the headband
+            // rather than of this build: muse2025 carries PPG inside OPTICS and
+            // emits no PPG packet, everything from 2018 to 2024 does the
+            // reverse. Registering for one would work on half the hardware.
+            service_.update_optical(packet);
+            break;
+        case interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD:
+        case interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD:
+            service_.update_optical_quality(packet);
+            break;
         default:
             break;
         }
@@ -144,15 +156,7 @@ void MuseBridgeService::stop() {
         if (muse) {
             muse->disconnect();
             wait_for_disconnect(muse);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
-            muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
+            unregister_data_listeners(muse);
             muse->unregister_connection_listener(connection_listener_);
         }
     }
@@ -308,6 +312,10 @@ void MuseBridgeService::reset_device_fields_locked() {
     optical_supported_ = false;
     latest_bands_ = BandPowers{};
     latest_contact_ = ContactQuality{};
+    // Counters included. Carrying them across a reconnect would make "this
+    // headband is producing optics" indistinguishable from "some headband did,
+    // once, earlier in this process".
+    latest_optical_ = OpticalSignals{};
 }
 #endif
 
@@ -348,6 +356,14 @@ bool MuseBridgeService::connect_named(const std::string& name) {
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
+    // Optical. Registered unconditionally rather than behind MUSE_ENABLE_OPTICS
+    // or a model check: a headband that emits neither simply never fires these,
+    // which is itself the observation worth having, and gating them would mean
+    // "no optics" and "we did not ask for optics" looked identical.
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::OPTICS);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::PPG);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD);
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -377,15 +393,7 @@ void MuseBridgeService::disconnect_muse() {
     if (muse) {
         muse->disconnect();
         wait_for_disconnect(muse);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
-        muse->unregister_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
+        unregister_data_listeners(muse);
         muse->unregister_connection_listener(connection_listener_);
     }
 #endif
@@ -425,6 +433,18 @@ std::string MuseBridgeService::muse_model() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
     return muse_model_;
+#else
+    return {};
+#endif
+}
+
+// Outside the ENABLE_LIBMUSE region, like the accessors below it: main.cpp
+// calls this unconditionally, so a definition nested inside the guard links in
+// the ON build and leaves an unresolved external in the OFF build CI compiles.
+OpticalSignals MuseBridgeService::optical_signals() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return latest_optical_;
 #else
     return {};
 #endif
@@ -587,6 +607,82 @@ void MuseBridgeService::enqueue_frame(const std::shared_ptr<interaxon::bridge::M
         }
     }
     queue_cv_.notify_all();
+}
+
+void MuseBridgeService::unregister_data_listeners(
+    const std::shared_ptr<interaxon::bridge::Muse>& muse) {
+    // One list, called from both teardown paths. They previously carried
+    // byte-identical copies kept in sync by hand, which is the shape of thing
+    // that silently leaks a listener across reconnects the first time someone
+    // adds a packet type to one and not the other -- and this change adds four.
+    static constexpr interaxon::bridge::MuseDataPacketType kTypes[] = {
+        interaxon::bridge::MuseDataPacketType::EEG,
+        interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE,
+        interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE,
+        interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE,
+        interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE,
+        interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE,
+        interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG,
+        interaxon::bridge::MuseDataPacketType::HSI_PRECISION,
+        interaxon::bridge::MuseDataPacketType::IS_GOOD,
+        interaxon::bridge::MuseDataPacketType::OPTICS,
+        interaxon::bridge::MuseDataPacketType::PPG,
+        interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD,
+        interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD,
+    };
+    for (const auto type : kTypes) {
+        muse->unregister_data_listener(data_listener_, type);
+    }
+}
+
+void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
+    // values() rather than enumerating the Optics/Ppg accessors: it reports how
+    // many channels actually arrived, which is the thing worth observing.
+    // PRESET_1031 claims 16-channel optics, and asking for OPTICS9..OPTICS16 by
+    // name on a device running a 4- or 8-channel mode would read whatever those
+    // accessors return for channels that are not present.
+    const std::vector<double> values = packet->values();
+    const bool is_optics = packet->packet_type() == interaxon::bridge::MuseDataPacketType::OPTICS;
+    const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (is_optics) {
+        latest_optical_.optics_packets += 1;
+        latest_optical_.optics_values = static_cast<int>(values.size());
+        latest_optical_.last_optics.fill(0.0);
+        for (size_t i = 0; i < values.size() && i < latest_optical_.last_optics.size(); ++i) {
+            latest_optical_.last_optics[i] = values[i];
+        }
+    } else {
+        latest_optical_.ppg_packets += 1;
+        latest_optical_.ppg_values = static_cast<int>(values.size());
+        latest_optical_.last_ppg.fill(0.0);
+        for (size_t i = 0; i < values.size() && i < latest_optical_.last_ppg.size(); ++i) {
+            latest_optical_.last_ppg[i] = values[i];
+        }
+    }
+    latest_optical_.last_ms = now_ms;
+}
+
+void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
+    const std::vector<double> values = packet->values();
+    if (values.empty()) {
+        return;
+    }
+    // libMuse's own verdict rather than a threshold invented here. Non-zero is
+    // good, matching the IS_GOOD convention already used for the electrodes.
+    const bool good = values[0] != 0.0;
+    const bool is_ppg = packet->packet_type() == interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD;
+
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (is_ppg) {
+        latest_optical_.ppg_good = good;
+        latest_optical_.has_ppg_good = true;
+    } else {
+        latest_optical_.heart_good = good;
+        latest_optical_.has_heart_good = true;
+    }
 }
 
 void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {

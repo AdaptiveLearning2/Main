@@ -80,6 +80,58 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
     o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
+
+    // Optical evidence: counts, the latest sample, and libMuse's own quality
+    // verdicts. Counters rather than a stream, because the question this answers
+    // is whether a PRESET_1031 Athena emits OPTICS at all and with how many
+    // channels -- and a streaming format designed before seeing that would be
+    // designed against a guess.
+    const OpticalSignals optical = svc.optical_signals();
+    o << ",\"optics_packets\":" << optical.optics_packets
+      << ",\"ppg_packets\":" << optical.ppg_packets
+      << ",\"optics_values\":" << optical.optics_values
+      << ",\"ppg_values\":" << optical.ppg_values;
+    o << ",\"last_optics\":";
+    if (optical.optics_values > 0) {
+        o << '[';
+        for (int i = 0; i < optical.optics_values && i < 16; ++i) {
+            if (i > 0) {
+                o << ',';
+            }
+            o << optical.last_optics[static_cast<size_t>(i)];
+        }
+        o << ']';
+    } else {
+        o << "null";
+    }
+    o << ",\"last_ppg\":";
+    if (optical.ppg_values > 0) {
+        o << '[';
+        for (int i = 0; i < optical.ppg_values && i < 3; ++i) {
+            if (i > 0) {
+                o << ',';
+            }
+            o << optical.last_ppg[static_cast<size_t>(i)];
+        }
+        o << ']';
+    } else {
+        o << "null";
+    }
+    // null until the headband has said anything. "The sensor reports bad
+    // signal" and "the sensor has not reported" are different, and only one of
+    // them is grounds for falling back to another source.
+    o << ",\"is_ppg_good\":";
+    if (optical.has_ppg_good) {
+        o << (optical.ppg_good ? "true" : "false");
+    } else {
+        o << "null";
+    }
+    o << ",\"is_heart_good\":";
+    if (optical.has_heart_good) {
+        o << (optical.heart_good ? "true" : "false");
+    } else {
+        o << "null";
+    }
     const BandPowers bands = svc.band_powers();
     o << ",\"delta\":" << bands.delta
       << ",\"theta\":" << bands.theta

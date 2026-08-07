@@ -91,6 +91,17 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
       << ",\"ppg_packets\":" << optical.ppg_packets
       << ",\"optics_values\":" << optical.optics_values
       << ",\"ppg_values\":" << optical.ppg_values;
+    // Age rather than the raw steady_clock stamp, which is process-local and
+    // means nothing to a reader. A count alone cannot tell a live stream from
+    // one that delivered a burst and stopped; this can. null before the first
+    // packet, so "never arrived" stays distinct from "arrived just now".
+    const long long optical_age = svc.optical_age_ms();
+    o << ",\"optics_age_ms\":";
+    if (optical_age < 0) {
+        o << "null";
+    } else {
+        o << optical_age;
+    }
     o << ",\"last_optics\":";
     if (optical.optics_values > 0) {
         o << '[';

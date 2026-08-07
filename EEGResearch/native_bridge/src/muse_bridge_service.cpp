@@ -231,11 +231,6 @@ std::string preset_name(interaxon::bridge::MusePreset preset) {
     }
 }
 
-// Verified against bridge_muse_model.h:14-32. The enumerator names and the
-// markings on the hardware do not line up: MU_04 and MU_05 are the 2019 and
-// 2021 Muse S, printed MS-01 and MS-02, while MS_03 is the 2025 Muse S. Reading
-// the enumerator name straight out would report an Athena's predecessor as
-// "MU-04", which is printed on no headband at all.
 // Which optics preset to ask an Athena for.
 //
 // Configurable because the choice is a bandwidth trade that has to be measured
@@ -275,12 +270,28 @@ OpticsPresetChoice optics_preset_choice() {
     if (value == "1036") {
         return {interaxon::bridge::MusePreset::PRESET_1036, "PRESET_1036"};  // 4 CH, high power
     }
+    // A value that was set but not recognised is a typo, not a preference, and
+    // silently running the default would present as "my setting had no effect"
+    // with nothing to go on. Says so once rather than every reconnect.
+    if (raw && *raw && value != "1035") {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::cerr << "Unrecognised MUSE_OPTICS_PRESET='" << value
+                      << "' (expected 1031-1036); using PRESET_1035\n";
+        }
+    }
     // Default: fewest optical channels, lowest power. The least bandwidth that
     // still carries a pulse, which is the end of the ladder most likely to
     // coexist with EEG rather than the end that carries the most data.
     return {interaxon::bridge::MusePreset::PRESET_1035, "PRESET_1035"};
 }
 
+// Verified against bridge_muse_model.h:14-32. The enumerator names and the
+// markings on the hardware do not line up: MU_04 and MU_05 are the 2019 and
+// 2021 Muse S, printed MS-01 and MS-02, while MS_03 is the 2025 Muse S. Reading
+// the enumerator name straight out would report an Athena's predecessor as
+// "MU-04", which is printed on no headband at all.
 const char* model_name(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01: return "MU-01";
@@ -501,6 +512,24 @@ OpticalSignals MuseBridgeService::optical_signals() const {
 #endif
 }
 
+long long MuseBridgeService::optical_age_ms() const {
+#if defined(ENABLE_LIBMUSE)
+    long long last = 0;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        last = latest_optical_.last_ms;
+    }
+    if (last == 0) {
+        return -1;
+    }
+    const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now_ms - last;
+#else
+    return -1;
+#endif
+}
+
 std::string MuseBridgeService::requested_preset() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -698,20 +727,27 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
+    // Clamped to what is actually stored, so the count and the array can never
+    // disagree. This field exists to report a channel count nobody knows in
+    // advance, which is exactly the situation where a preset delivering more
+    // than the buffer holds would otherwise publish "20 channels" beside
+    // sixteen numbers.
     if (is_optics) {
         latest_optical_.optics_packets += 1;
-        latest_optical_.optics_values = static_cast<int>(values.size());
         latest_optical_.last_optics.fill(0.0);
-        for (size_t i = 0; i < values.size() && i < latest_optical_.last_optics.size(); ++i) {
+        const size_t n = std::min(values.size(), latest_optical_.last_optics.size());
+        for (size_t i = 0; i < n; ++i) {
             latest_optical_.last_optics[i] = values[i];
         }
+        latest_optical_.optics_values = static_cast<int>(n);
     } else {
         latest_optical_.ppg_packets += 1;
-        latest_optical_.ppg_values = static_cast<int>(values.size());
         latest_optical_.last_ppg.fill(0.0);
-        for (size_t i = 0; i < values.size() && i < latest_optical_.last_ppg.size(); ++i) {
+        const size_t n = std::min(values.size(), latest_optical_.last_ppg.size());
+        for (size_t i = 0; i < n; ++i) {
             latest_optical_.last_ppg[i] = values[i];
         }
+        latest_optical_.ppg_values = static_cast<int>(n);
     }
     latest_optical_.last_ms = now_ms;
 }

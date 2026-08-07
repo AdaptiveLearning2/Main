@@ -82,7 +82,9 @@ struct OpticalSignals {
     bool has_ppg_good{false};
     bool has_heart_good{false};
     /** steady_clock ms of the most recent optical packet of either kind; 0 if
-     *  none. Lets a consumer distinguish "flowing" from "flowed once". */
+     *  none. Not emitted raw -- steady_clock's epoch is arbitrary and
+     *  process-local, so the number means nothing outside this process.
+     *  optical_age_ms() turns it into the thing a consumer actually wants. */
     long long last_ms{0};
 };
 
@@ -160,6 +162,15 @@ public:
     DeviceConfig device_config() const;
     /** Optical packet counters, latest sample and libMuse's quality verdicts. */
     OpticalSignals optical_signals() const;
+    /**
+     * Milliseconds since the most recent optical packet, or -1 if none yet.
+     *
+     * The counters alone cannot distinguish a stream that is flowing from one
+     * that delivered a burst and stopped -- both leave a non-zero count. This
+     * is what makes "is optics live right now" answerable, which is the whole
+     * point of reporting a rate.
+     */
+    long long optical_age_ms() const;
     /**
      * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
      *

@@ -109,6 +109,7 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "last_ppg",
         "is_ppg_good",
         "is_heart_good",
+        "optics_age_ms",
     ):
         if key not in payload:
             continue
@@ -133,6 +134,17 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         elif key in {"optics_packets", "ppg_packets", "optics_values", "ppg_values"}:
             try:
                 target[key] = int(payload[key])
+            except (TypeError, ValueError):
+                continue
+        elif key == "optics_age_ms":
+            # null before the first optical packet, so "never arrived" stays
+            # distinct from "arrived this instant" -- which 0 would not.
+            v = payload[key]
+            if v is None:
+                target[key] = None
+                continue
+            try:
+                target[key] = int(v)
             except (TypeError, ValueError):
                 continue
         elif key in {"is_ppg_good", "is_heart_good"}:

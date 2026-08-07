@@ -225,3 +225,112 @@ def test_fixture_lost_no_samples(frames):
     seqs = [f["seq"] for f in frames]
     assert all(s is not None for s in seqs), "re-capture with a bridge that emits seq"
     assert seqs == list(range(seqs[0], seqs[0] + len(seqs))), "sample(s) lost in capture"
+
+
+# ── the exertion pair ────────────────────────────────────────────────────────
+# Two captures minutes apart on the same headband: 60s at rest, then ~1 minute
+# of exercise, then 150s sitting still. What makes them worth 390KB is that
+# together they answer a question neither answers alone -- which spectral
+# component is the heart -- by experiment rather than by inference.
+
+REST_FIXTURE = Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz"
+RECOVERY_FIXTURE = Path(__file__).parent / "fixtures" / "optics_recovery_150s.jsonl.gz"
+
+REST_BPM = 67.9
+RECOVERY_BPM = 76.4
+NON_CARDIAC_BPM = 44.5   # present in both, moves in neither
+
+
+def _load(path) -> list[dict]:
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
+
+
+def _channel_peaks(numpy, frames, lo_hz=0.7, hi_hz=3.0):
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    return [_peak_bpm(numpy, _butter_highpass(numpy, a[:, c], EXPECTED_RATE_HZ),
+                      EXPECTED_RATE_HZ, lo_hz, hi_hz)
+            for c in range(a.shape[1])]
+
+
+def test_exertion_pair_lost_no_samples():
+    for path in (REST_FIXTURE, RECOVERY_FIXTURE):
+        seqs = [f["seq"] for f in _load(path)]
+        assert seqs == list(range(seqs[0], seqs[0] + len(seqs))), f"{path.name}: sample lost"
+
+
+def test_the_pulse_rises_after_exertion():
+    """The end-to-end check no synthetic signal can provide.
+
+    A component that responds to exercise is cardiac. Every channel agrees in
+    both conditions and every channel is higher after exertion, which is what
+    identifies ~68/76 bpm as the heart rather than merely as the largest peak.
+
+    The wearer's watch recorded a peak of 97 bpm during the exercise itself."""
+    numpy = pytest.importorskip("numpy")
+    rest = _channel_peaks(numpy, _load(REST_FIXTURE))
+    recovery = _channel_peaks(numpy, _load(RECOVERY_FIXTURE))
+
+    assert all(abs(p - REST_BPM) < 3 for p in rest), f"rest peaks {rest}"
+    assert all(abs(p - RECOVERY_BPM) < 3 for p in recovery), f"recovery peaks {recovery}"
+    assert min(recovery) > max(rest), (
+        f"every channel should read higher after exertion: {rest} vs {recovery}"
+    )
+
+
+def test_the_44_bpm_component_is_not_cardiac():
+    """It is present in both captures and moves in neither.
+
+    That is what rules it out as a heart rate and makes it a known interferer.
+    Left unidentified -- respiration or perfusion are both plausible at 0.74 Hz
+    -- because one wearer on one afternoon cannot settle which."""
+    numpy = pytest.importorskip("numpy")
+
+    def ratio_to_peak(frames):
+        a = numpy.array([f["ch"] for f in frames], dtype=float)
+        out = []
+        for c in range(a.shape[1]):
+            x = _butter_highpass(numpy, a[:, c], EXPECTED_RATE_HZ)
+            x = x - x.mean()
+            spec = numpy.abs(numpy.fft.rfft(x * numpy.hanning(len(x))))
+            freqs = numpy.fft.rfftfreq(len(x), d=1.0 / EXPECTED_RATE_HZ)
+            band = (freqs >= 0.7) & (freqs <= 3.0)
+            peak_amp = spec[band].max()
+            at_44 = spec[int(numpy.argmin(numpy.abs(freqs - NON_CARDIAC_BPM / 60)))]
+            out.append(at_44 / peak_amp)
+        return out
+
+    for frames in (_load(REST_FIXTURE), _load(RECOVERY_FIXTURE)):
+        assert all(r < 0.8 for r in ratio_to_peak(frames)), (
+            "44.5 bpm should stay a minor component in both conditions"
+        )
+
+
+def test_motion_settling_produces_octave_errors_that_agreement_cannot_catch():
+    """The failure mode that matters most, and the reason agreement is not enough.
+
+    In the first 25s after exercise every channel reports ~127 bpm -- roughly
+    twice the true rate -- and they all agree. Later windows split 113/58, which
+    is the same signal read an octave apart in both directions.
+
+    So a derivation cannot treat cross-channel agreement as correctness: every
+    channel makes the same octave error. It needs a continuity constraint and
+    harmonic disambiguation, and it should report low confidence for ~25s after
+    motion rather than reporting a rate."""
+    numpy = pytest.importorskip("numpy")
+    frames = _load(RECOVERY_FIXTURE)
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    fs = EXPECTED_RATE_HZ
+    window = int(25 * fs)
+
+    early = [_peak_bpm(numpy, _butter_highpass(numpy, a[:window, c], fs), fs, 0.9, 2.2)
+             for c in range(a.shape[1])]
+    settled_start = int(60 * fs)
+    settled = [_peak_bpm(numpy, _butter_highpass(numpy, a[settled_start:, c], fs), fs, 0.9, 2.2)
+               for c in range(a.shape[1])]
+
+    # Unanimous and wrong: an octave above where the settled signal lands.
+    assert max(early) - min(early) < 5, f"expected the early window to agree: {early}"
+    assert min(early) > 1.5 * max(settled), (
+        f"expected an octave error early ({early}) against settled ({settled})"
+    )

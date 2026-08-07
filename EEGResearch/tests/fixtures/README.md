@@ -1,5 +1,71 @@
 # Test fixtures
 
+## The exertion pair — `optics_rest_60s.jsonl.gz` and `optics_recovery_150s.jsonl.gz`
+
+Captured 2026-08-07 on the same headband, minutes apart: 60 s sitting still, then
+~1 minute of exercise (not recorded), then 150 s sitting still from the moment
+the wearer sat down. `seq` contiguous in both, no samples lost.
+
+**These two exist to answer a question one recording cannot: which spectral
+component is the heart.** A component that responds to exertion is cardiac;
+one that ignores it is not. That is a controlled experiment rather than an
+inference, and it settled a question that had been open through four wrong
+analyses of the at-rest recording below.
+
+### Result: the pulse tracks exertion, and 44.5 bpm does not
+
+| | 730L | 730R | 850L | 850R |
+| --- | --- | --- | --- | --- |
+| Rest | 67.9 | 67.9 | 67.9 | 67.9 |
+| Recovery (150 s mean) | **76.4** | **76.4** | **76.4** | **76.4** |
+
+All four channels, both conditions, unanimous. The ~0.74 Hz (44.5 bpm)
+component is present in both at 0.09–0.63 of peak amplitude and **does not
+move**, so it is not cardiac. It is left unidentified — respiration-linked or
+perfusion are both plausible at that frequency — but it is a known interferer
+rather than a candidate rate.
+
+Ground truth: the wearer's watch recorded a peak of **97 bpm** during exercise.
+
+### The decay curve, and the failure mode it exposes
+
+25-second windows stepped every 10 s through the recovery capture:
+
+| Window | Median bpm | Channels |
+| --- | --- | --- |
+| 0–25 s | 127.2 | all four agree — **wrong** |
+| 10–35 s | 85.2 | 113 / 58 / 113 / 58 |
+| 30–55 s | 88.8 | all agree |
+| 40–65 s | 79.2 | all agree |
+| 50–75 s | 74.4 | all agree |
+| 60–85 s | 69.6 | all agree |
+| 100–125 s | 67.2 | all agree |
+
+From 30 s onward it is a clean decay — 89 → 79 → 74 → 70 — settling on the
+resting 67.9. The watch's 97 bpm peak during exercise is consistent with 89 at
+the first clean window 30 s later.
+
+**The first 25 s is the important part.** 127 is roughly 2× the true rate; the
+113/58 splits are 2× and ½×. These are **harmonic and subharmonic errors** —
+the classic PPG failure — triggered by motion settling after exercise.
+
+**Cross-channel agreement does not catch them.** At t=0 all four channels agreed
+on 127 bpm and all four were wrong, because every channel makes the same octave
+error. Agreement is a quality signal, not a correctness one.
+
+### What the derivation therefore needs
+
+- **A continuity constraint.** A heart rate cannot go 89 → 127 → 58 in seconds.
+  Limiting rate-of-change between windows removes most octave errors on its own.
+- **Harmonic disambiguation**, e.g. autocorrelation rather than a raw spectral
+  peak — autocorrelation separates a fundamental from its second harmonic where
+  an FFT argmax does not.
+- **Low confidence for ~25 s after motion**, regardless of method. That window
+  should not report a heart rate at all.
+- The end-to-end test these fixtures enable: **derived BPM must be higher in the
+  recovery capture than in the rest capture.** No synthetic signal can validate
+  the whole chain against real physiology.
+
 ## `optics_rest_64hz.jsonl.gz`
 
 Two minutes of real `OPTICS` data from a Muse S Athena (MS-03) on `PRESET_1035`,

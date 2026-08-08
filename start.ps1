@@ -175,11 +175,21 @@ if ($Camera) {
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
     Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
 } else {
-    # Explicitly cleared rather than left. A stale EEG_DEVICES from a previous
-    # -Camera run would keep opening the webcam on every subsequent start, which
-    # is exactly the surprise the consent design exists to prevent.
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
-    Set-EnvKey $eegEnv "EEG_DEVICES" ""
+
+    # Remove only the camera entry this script writes, leaving any other devices
+    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
+    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
+    # file the docs tell people to edit. A stale camera entry still has to go, or
+    # a later plain run keeps opening the webcam.
+    if (Test-Path $eegEnv) {
+        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' }
+        if ($line) {
+            $current = ($line -split '=', 2)[1]
+            $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
+            Set-EnvKey $eegEnv "EEG_DEVICES" ($kept -join ',')
+        }
+    }
 }
 
 # 3. EEGResearch backend

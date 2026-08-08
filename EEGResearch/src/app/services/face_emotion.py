@@ -128,7 +128,11 @@ def to_gray64(frame: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray |
         # bins and a silent nan.
         return None
 
-    gray = frame[y0:y1, x0:x1].mean(axis=2)
+    # Luma-weighted, matching what FER+ was trained on. A flat RGB mean is a
+    # different image, brighter in red, which is most of a face.
+    gray = frame[y0:y1, x0:x1].astype(np.float32) @ np.array(
+        [0.299, 0.587, 0.114], dtype=np.float32
+    )
     rows = np.linspace(0, gray.shape[0], FACE_INPUT + 1).astype(int)
     cols = np.linspace(0, gray.shape[1], FACE_INPUT + 1).astype(int)
     # Guard against a zero-width bin when the crop is barely larger than 64 px.

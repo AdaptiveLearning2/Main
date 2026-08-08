@@ -42,7 +42,7 @@ def _samples(n: int, quality: float = 0.9) -> list[FaceSample]:
 # ── heart ────────────────────────────────────────────────────────────────────
 
 def test_a_clean_window_reports_a_rate():
-    record = build_heart_record(_rgb_window(72.0), FPS, samples=_samples(750))
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750))
     assert record["bpm"] == pytest.approx(72.0, abs=3.0)
     assert record["rejected_by"] is None
     assert record["source"] == "rppg"
@@ -56,7 +56,7 @@ def test_the_source_is_on_every_payload_including_failures():
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=5.0), FPS),
-        build_heart_record(_rgb_window(72.0), FPS, samples=_samples(750)),
+        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750)),
     ):
         assert record["source"] == "rppg"
 
@@ -82,7 +82,8 @@ def test_poor_face_quality_stops_the_estimate_before_it_is_made():
     """Cheaper than deriving a rate and discarding it, and it names the actual
     problem: the light, not the heart."""
     record = build_heart_record(
-        _rgb_window(72.0), FPS, samples=_samples(750, quality=MIN_MEAN_USABLE_FRACTION / 2)
+        _rgb_window(72.0), FPS, measured_fps=FPS,
+        samples=_samples(750, quality=MIN_MEAN_USABLE_FRACTION / 2)
     )
     assert record["bpm"] is None
     assert record["rejected_by"] == "poor_face_quality"
@@ -92,7 +93,7 @@ def test_face_quality_is_reported_separately_from_confidence():
     """Two different quantities. One is how much usable skin the camera saw; the
     other is how decisive the autocorrelation was. Collapsing them is the defect
     the original had under `quality.confidence`."""
-    record = build_heart_record(_rgb_window(72.0), FPS, samples=_samples(750, 0.77))
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750, 0.77))
     assert record["face_quality"] == pytest.approx(0.77, abs=0.01)
     assert record["confidence"] != record["face_quality"]
 
@@ -100,7 +101,7 @@ def test_face_quality_is_reported_separately_from_confidence():
 def test_noise_is_rejected_rather_than_reported():
     rng = np.random.default_rng(0)
     noise = 150 + 10 * rng.standard_normal((int(RATE_WINDOW_SECONDS * FPS), 3))
-    record = build_heart_record(noise, FPS, samples=_samples(750))
+    record = build_heart_record(noise, FPS, measured_fps=FPS, samples=_samples(750))
     assert record["bpm"] is None
     assert record["rejected_by"] is not None
 
@@ -111,7 +112,7 @@ def test_a_rejected_estimate_never_reports_zero():
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=2.0), FPS),
-        build_heart_record(_rgb_window(72.0), FPS, samples=_samples(750, 0.05)),
+        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750, 0.05)),
     ):
         assert record["bpm"] is None
 
@@ -168,7 +169,7 @@ def test_no_emotion_at_all_is_reported_as_no_face():
 
 def test_both_blocks_are_present_when_both_are_enabled():
     payload = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
         emotion=EmotionResult("happy", 0.9, True),
     )
     assert set(payload) == {"heart", "face"}
@@ -180,7 +181,7 @@ def test_a_disabled_channel_is_absent_rather_than_null():
     camera that could not get a reading, and a viewer could not tell a respected
     refusal from a broken sensor."""
     heart_only = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
         emotion_enabled=False,
     )
     assert "heart" in heart_only
@@ -217,9 +218,56 @@ def test_one_channel_failing_does_not_suppress_the_other():
     """They fail independently because they are independent measurements. A
     broken emotion model must not take the heart rate down with it."""
     payload = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
         emotion=EmotionResult(None, None, False, "inference_failed", "boom"),
         emotion_meta={"emotion_degraded": True},
     )
     assert payload["heart"]["bpm"] == pytest.approx(72.0, abs=3.0)
     assert payload["face"]["degraded"]
+
+
+# ── the frame-rate gate ──────────────────────────────────────────────────────
+
+def test_a_camera_delivering_fewer_frames_than_configured_is_rejected():
+    """The gate that matters most on this path.
+
+    The time base is reconstructed from sample index, so a camera configured for
+    30 fps that actually delivers 22 does not produce a *noisy* rate -- it
+    produces one scaled by 30/22, a confident +36% with nothing to indicate it.
+    Webcams drop frames routinely under load or poor light, so this is the
+    common case rather than a fault."""
+    record = build_heart_record(
+        _rgb_window(72.0), FPS, measured_fps=22.0, samples=_samples(750)
+    )
+    assert record["bpm"] is None
+    assert record["rejected_by"] == "unstable_frame_rate"
+    assert record["measured_fps"] == 22.0
+
+
+def test_an_unmeasurable_rate_does_not_fall_back_to_nominal():
+    """Falling back to the configured rate is exactly the assumption the
+    measurement exists to remove."""
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=None,
+                                samples=_samples(750))
+    assert record["bpm"] is None
+    assert record["rejected_by"] == "unmeasured_frame_rate"
+
+
+def test_the_measured_rate_is_what_the_estimate_uses():
+    """Not the configured one. A camera running slightly slow should report a
+    correct bpm, not one scaled by the ratio."""
+    slow = 27.0
+    rgb = _rgb_window(72.0, fps=slow)
+    record = build_heart_record(rgb, FPS, measured_fps=slow,
+                                samples=_samples(len(rgb)))
+    assert record["rejected_by"] is None
+    assert record["bpm"] == pytest.approx(72.0, abs=3.0)
+
+
+def test_a_small_frame_rate_wobble_is_tolerated():
+    """Every webcam jitters slightly. Rejecting on any deviation would reject
+    everything."""
+    record = build_heart_record(
+        _rgb_window(72.0, fps=29.0), FPS, measured_fps=29.0, samples=_samples(725)
+    )
+    assert record["rejected_by"] is None

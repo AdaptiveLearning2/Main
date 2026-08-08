@@ -55,11 +55,24 @@ MIN_WINDOW_COVERAGE = 0.80
 # apart from the rate's confidence, which is a different quantity entirely.
 MIN_MEAN_USABLE_FRACTION = 0.40
 
+# How far the measured frame rate may sit from the configured one before the
+# window is rejected.
+#
+# This is the gate that matters most on this path. The time base is
+# reconstructed from sample index, so a camera configured for 30 fps that
+# actually delivers 22 does not produce a noisy rate -- it produces one scaled
+# by 30/22, a confident +36% with nothing to indicate it. Webcams drop frames
+# routinely under load or poor light, so this is the common case rather than a
+# fault, and it is exactly the class of failure the motion rule in CLAUDE.md
+# exists to prevent: a wrong number that looks like a right one.
+MAX_FPS_DEVIATION = 0.15
+
 
 def build_heart_record(
     rgb_window: np.ndarray,
     fps: float,
     *,
+    measured_fps: float | None = None,
     samples: list[FaceSample] | None = None,
 ) -> dict[str, Any]:
     """The `heart` block from a window of colour.
@@ -78,6 +91,7 @@ def build_heart_record(
         "confidence": 0.0,
         "window_coverage": round(coverage, 3),
         "face_quality": None,
+        "measured_fps": round(measured_fps, 2) if measured_fps else None,
         "rejected_by": None,
     }
 
@@ -98,7 +112,18 @@ def build_heart_record(
         record["rejected_by"] = "poor_face_quality"
         return record
 
-    estimate = estimate_window(pos_pulse(rgb_window, fps), fps)
+    if measured_fps is None:
+        # No measurement means no time base. Falling back to nominal is exactly
+        # the assumption this parameter exists to remove.
+        record["rejected_by"] = "unmeasured_frame_rate"
+        return record
+
+    if abs(measured_fps - fps) / fps > MAX_FPS_DEVIATION:
+        record["rejected_by"] = "unstable_frame_rate"
+        return record
+
+    # Everything downstream uses the measured rate, not the configured one.
+    estimate = estimate_window(pos_pulse(rgb_window, measured_fps), measured_fps)
     record["confidence"] = round(float(estimate.confidence), 3)
     if estimate.bpm is None:
         record["rejected_by"] = estimate.rejected_by or "confidence"
@@ -143,6 +168,7 @@ def build_camera_payload(
     *,
     rgb_window: np.ndarray | None,
     fps: float,
+    measured_fps: float | None = None,
     samples: list[FaceSample] | None = None,
     emotion: EmotionResult | None = None,
     heart_enabled: bool = True,
@@ -161,6 +187,7 @@ def build_camera_payload(
         payload["heart"] = build_heart_record(
             rgb_window if rgb_window is not None else np.empty((0, 3)),
             fps,
+            measured_fps=measured_fps,
             samples=samples,
         )
     if emotion_enabled:

@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     # window zero-length and the sample interval infinite; 1 fps is already
     # useless but at least arithmetically defined.
     face_fps: float = Field(default=30.0, gt=1.0, le=240.0, alias="FACE_FPS")
+    # The two camera channels, switchable independently. Consent is enforced by
+    # the website backend; these are the runtime switches it drives, and the
+    # reason emotion defaults on while heart defaults off is that heart is the
+    # failover path -- it should not run while a headband is healthy.
+    face_emotion_enabled: bool = Field(default=True, alias="FACE_EMOTION_ENABLED")
+    face_heart_enabled: bool = Field(default=False, alias="FACE_HEART_ENABLED")
+    face_emotion_model_path: str = Field(
+        default="models/emotion-ferplus-8.onnx", alias="FACE_EMOTION_MODEL_PATH"
+    )
 
 
 @lru_cache

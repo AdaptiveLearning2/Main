@@ -548,6 +548,9 @@ def build_ingestion_adapter(
             camera_index=(camera_index if camera_index is not None
                           else settings.face_camera_index),
             fps=settings.face_fps,
+            heart_enabled=settings.face_heart_enabled,
+            emotion_enabled=settings.face_emotion_enabled,
+            emotion_model_path=settings.face_emotion_model_path,
         )
     raise ValueError(
         "Unsupported EEG_SOURCE. Use 'sim' for local runs, 'muse' for live bridge "

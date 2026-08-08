@@ -31,6 +31,10 @@ set_env_key() {
     # first-time checkout has no FACE_* lines at all, and sed against a missing
     # key silently does nothing -- the flag would appear to work and change no
     # behaviour.
+    # `sed -i ''` is BSD syntax. This script is macOS-only by design (libMuse
+    # is Windows-only, so mac runs in sim), but under GNU sed the empty string
+    # is read as the script argument and the failure is confusing rather than
+    # obvious -- hence the note.
     local path="$1" key="$2" value="$3"
     [ -f "$path" ] || return 0
     if grep -q "^${key}=" "$path"; then
@@ -178,11 +182,25 @@ ensure_model(Path('$EMOTION_MODEL'))
     set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
     echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
 else
-    # Explicitly cleared rather than left. A stale EEG_DEVICES from a previous
-    # --camera run would keep opening the webcam on every subsequent start,
-    # which is exactly the surprise the consent design exists to prevent.
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
-    set_env_key "$EEG_ENV" "EEG_DEVICES" ""
+
+    # Remove only the camera entry this script writes, leaving any other devices
+    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
+    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
+    # file the docs tell people to edit. A stale camera entry still has to go, or
+    # a later plain run keeps opening the webcam.
+    if [ -f "$EEG_ENV" ] && grep -q '^EEG_DEVICES=' "$EEG_ENV"; then
+        current="$(grep '^EEG_DEVICES=' "$EEG_ENV" | head -1 | cut -d= -f2-)"
+        kept=""
+        IFS=',' read -ra entries <<< "$current"
+        for entry in "${entries[@]}"; do
+            case "$entry" in
+                ""|*:face|*:face@*) ;;
+                *) kept="${kept:+$kept,}$entry" ;;
+            esac
+        done
+        set_env_key "$EEG_ENV" "EEG_DEVICES" "$kept"
+    fi
 fi
 
 # 2. Ollama

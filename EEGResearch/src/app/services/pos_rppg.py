@@ -75,6 +75,14 @@ def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
 
     The output is a *relative* signal with no physical unit. Only its timing
     carries information, which is all the rate derivation uses.
+
+    There is no streaming variant. An earlier revision had one that returned a
+    single window's contribution and claimed to produce "the same signal for
+    constant work per frame" -- it did not. This overlap-adds up to `window`
+    estimates per frame, so the two differ in both amplitude and noise, and a
+    live reading would have disagreed with any offline re-analysis of the same
+    recording. Constant-work streaming is worth having, but it has to be an
+    incremental form of *this* sum, not a different signal wearing its name.
     """
     rgb = np.asarray(rgb, dtype=float)
     if rgb.ndim != 2 or rgb.shape[1] != 3:
@@ -121,31 +129,3 @@ def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
         pulse[start:end] += combined - combined.mean()
 
     return pulse
-
-
-def pos_pulse_last_window(rgb: np.ndarray, fps: float) -> float:
-    """The single most recent pulse sample, for streaming use.
-
-    The full `pos_pulse` is O(n * window) because it re-projects every
-    overlapping window. That is fine for a 30 s analysis block and wrong for a
-    per-frame callback at 30 fps, where it would redo the same work 30 times a
-    second and grow without bound as the session ran.
-
-    This computes only the newest window's contribution. A caller keeping a
-    rolling buffer gets the same signal for constant work per frame.
-    """
-    rgb = np.asarray(rgb, dtype=float)
-    window = int(WINDOW_SECONDS * fps)
-    if len(rgb) < window or window < 2:
-        return 0.0
-
-    block = rgb[-window:]
-    mean = block.mean(axis=0)
-    if np.any(mean == 0):
-        return 0.0
-    projected = PROJECTION @ (block / mean).T
-    s1, s2 = projected[0], projected[1]
-    sd2 = s2.std()
-    alpha = (s1.std() / sd2) if sd2 > 0 else 0.0
-    combined = s1 + alpha * s2
-    return float(combined[-1] - combined.mean())

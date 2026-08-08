@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from src.app.services.ppg_processing import estimate_window
-from src.app.services.pos_rppg import WINDOW_SECONDS, pos_pulse, pos_pulse_last_window
+from src.app.services.pos_rppg import WINDOW_SECONDS, pos_pulse
 
 FPS = 30.0
 
@@ -152,28 +152,3 @@ def test_the_green_channel_alone_fails_where_pos_succeeds():
 def test_survives_sensor_noise():
     rgb = _face_rgb(68.0, pulse_amplitude=0.005, noise=0.3, seed=3)
     assert _bpm(pos_pulse(rgb, FPS)) == pytest.approx(68.0, abs=4.0)
-
-
-# ── the streaming form ───────────────────────────────────────────────────────
-
-def test_streaming_form_matches_the_batch_form_on_the_newest_sample():
-    """`pos_pulse_last_window` exists so a 30 fps callback does constant work.
-    It must produce the same window contribution the batch form would, or the
-    live signal and any offline re-analysis would quietly disagree."""
-    rgb = _face_rgb(75.0, seconds=10.0)
-    window = int(WINDOW_SECONDS * FPS)
-
-    streamed = pos_pulse_last_window(rgb, FPS)
-
-    block = rgb[-window:]
-    from src.app.services.pos_rppg import PROJECTION
-    projected = PROJECTION @ (block / block.mean(axis=0)).T
-    s1, s2 = projected[0], projected[1]
-    combined = s1 + (s1.std() / s2.std()) * s2
-    expected = combined[-1] - combined.mean()
-
-    assert streamed == pytest.approx(expected, rel=1e-9)
-
-
-def test_streaming_form_is_silent_before_a_full_window():
-    assert pos_pulse_last_window(_face_rgb(70.0, seconds=1.0), FPS) == 0.0

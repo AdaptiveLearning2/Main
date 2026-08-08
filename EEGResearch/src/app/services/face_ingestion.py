@@ -33,6 +33,7 @@ import queue
 import threading
 import time
 from collections import deque
+from itertools import islice
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -57,6 +58,11 @@ BUFFER_SECONDS = 40.0
 # One missed frame is a blink or a turn of the head; a second of them is the
 # student having left or the lighting having failed.
 MISSING_FACE_TOLERANCE = 30
+
+# ITU-R BT.601 luma. The eye is far more sensitive to green than to blue, and
+# both Haar and FER+ were trained on images converted this way; a flat RGB mean
+# is a measurably different picture.
+LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
 # How often the emotion classifier runs, in seconds. Far below the frame rate on
 # purpose: expression changes on a timescale of seconds, so classifying every
@@ -95,6 +101,12 @@ class _Counters:
     samples_emitted: int = 0
     dropped_full_queue: int = 0
     consecutive_missing: int = 0
+    # Why the last frame produced nothing: "camera" (no frame at all),
+    # "no_face" (nothing detected) or "quality" (face found, too little usable
+    # skin). Three different problems -- a disconnected webcam, a student who
+    # left, and bad lighting -- and collapsing them into one string is the same
+    # conflation this module argues against elsewhere.
+    missing_reason: str | None = None
     last_error: str | None = None
     # Counters rather than lists. A list of per-frame records would be the same
     # unbounded-growth mistake the docstring above exists to prevent.
@@ -113,7 +125,7 @@ class FaceCaptureAdapter:
         queue_max: int = QUEUE_MAX,
         heart_enabled: bool = True,
         emotion_enabled: bool = False,
-        emotion_classifier: Any = None,
+        emotion_classifier_factory: Callable[[], Any] | None = None,
         emotion_interval_s: float = EMOTION_INTERVAL_S,
     ) -> None:
         # buffer_seconds and queue_max are injectable so the bounded-growth and
@@ -141,15 +153,21 @@ class FaceCaptureAdapter:
             raise ValueError(
                 "refusing to open a camera with both heart and emotion disabled"
             )
-        if emotion_enabled and emotion_classifier is None:
-            raise ValueError("emotion_enabled requires an emotion_classifier")
+        if emotion_enabled and emotion_classifier_factory is None:
+            raise ValueError("emotion_enabled requires an emotion_classifier_factory")
 
         self._make_source = frame_source_factory
         self._make_locator = locator_factory
         self.fps = fps
         self.heart_enabled = heart_enabled
         self.emotion_enabled = emotion_enabled
-        self._emotion = emotion_classifier
+        # A factory, like the frame source and locator, and for the same reason:
+        # constructing the classifier loads and verifies a 35 MB model, so doing
+        # it here would mean a device registry could not *name* a camera on a
+        # machine that has not provisioned one. Built at connect(), where the
+        # error names the real problem.
+        self._make_emotion = emotion_classifier_factory
+        self._emotion: Any = None
         self._emotion_interval = emotion_interval_s
         self._last_emotion_at = 0.0
         self._latest_emotion: Any = None
@@ -160,7 +178,12 @@ class FaceCaptureAdapter:
         self._stop = threading.Event()
 
         self._queue: queue.Queue[FaceSample] = queue.Queue(maxsize=queue_max)
-        self._buffer: deque[tuple[float, float, float]] = deque(
+        # (monotonic_ts, r, g, b). The timestamp is kept because the configured
+        # fps is a request, not a measurement: a webcam asked for 30 routinely
+        # delivers 22 under load or poor light. Deriving the time base from the
+        # nominal rate would scale every bpm by nominal/actual -- 30/22 is +36%,
+        # a confidently wrong heart rate with nothing to indicate it.
+        self._buffer: deque[tuple[float, float, float, float]] = deque(
             maxlen=max(1, int(buffer_seconds * fps))
         )
         self._lock = threading.Lock()
@@ -180,6 +203,8 @@ class FaceCaptureAdapter:
             return
         self._source = self._make_source()
         self._locator = self._make_locator()
+        if self.emotion_enabled and self._emotion is None:
+            self._emotion = self._make_emotion()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="face-capture", daemon=True
@@ -243,16 +268,21 @@ class FaceCaptureAdapter:
         if frame is None:
             with self._lock:
                 self._counters.consecutive_missing += 1
+                self._counters.missing_reason = "camera"
             return
 
         with self._lock:
             self._counters.frames_read += 1
 
-        gray = frame.mean(axis=2).astype(np.uint8)
+        # Luma-weighted, not a flat mean. Haar cascades are trained on
+        # ITU-R BT.601 luma, and a flat RGB average is a different image --
+        # notably brighter in the red channel, which is most of a face.
+        gray = frame.astype(np.float32) @ LUMA_WEIGHTS
         box = self._locator.locate(gray)
         if box is None:
             with self._lock:
                 self._counters.consecutive_missing += 1
+                self._counters.missing_reason = "no_face"
             return
 
         now = time.monotonic()
@@ -261,10 +291,21 @@ class FaceCaptureAdapter:
             self._last_emotion_at = now
             from src.app.services.face_emotion import to_gray64  # noqa: PLC0415
 
-            crop = to_gray64(frame, box)
-            result = self._emotion.classify(crop)
-            with self._lock:
-                self._latest_emotion = result
+            try:
+                crop = to_gray64(frame, box)
+                result = self._emotion.classify(crop)
+            except Exception as exc:                      # noqa: BLE001
+                # Guarded separately from classify(), which has its own handler.
+                # to_gray64 did not, so a geometry it could not handle aborted
+                # the whole iteration and took the colour sample with it -- one
+                # channel's failure silently stopping the other, when the two
+                # are meant to be independent.
+                logger.exception("emotion crop failed")
+                with self._lock:
+                    self._counters.last_error = f"{type(exc).__name__}: {exc}"
+            else:
+                with self._lock:
+                    self._latest_emotion = result
 
         if not self.heart_enabled:
             # Emotion-only. The face was found and classified; there is no
@@ -282,9 +323,11 @@ class FaceCaptureAdapter:
             self._counters.faces_found += 1
             if not sample.ok:
                 self._counters.consecutive_missing += 1
+                self._counters.missing_reason = "quality"
                 return
             self._counters.consecutive_missing = 0
-            self._buffer.append(sample.rgb)
+            self._counters.missing_reason = None
+            self._buffer.append((now, *sample.rgb))
 
         item = FaceSample(time.monotonic(), sample.rgb, sample.usable_fraction)
         try:
@@ -321,25 +364,45 @@ class FaceCaptureAdapter:
 
     def rgb_buffer(self) -> np.ndarray:
         """Everything currently buffered, as (n, 3)."""
-        with self._lock:
-            data = list(self._buffer)
-        return np.array(data, dtype=float) if data else np.empty((0, 3))
+        return self.rgb_window(float("inf"))[0]
 
-    def rgb_window(self, seconds: float) -> np.ndarray:
-        """The most recent `seconds` of colour, as (n, 3), for POS.
+    def rgb_window(self, seconds: float) -> tuple[np.ndarray, float | None]:
+        """The most recent `seconds` of colour, and the rate it was *actually*
+        sampled at.
 
-        Returns a copy: the buffer is mutated by the capture thread, and handing
-        out a view would let a consumer read a half-written window.
+        Returns (rgb, measured_fps). `measured_fps` is None when there are too
+        few samples to measure one; a caller must treat that as no window rather
+        than falling back to the nominal rate, which is the assumption this
+        return value exists to remove.
+
+        Copies rather than views: the buffer is mutated by the capture thread.
+        `islice` over the tail rather than `list(...)[-n:]`, which materialised
+        the whole deque under the capture thread's lock on every tick to keep
+        the last 60% of it.
         """
-        want = int(seconds * self.fps)
         with self._lock:
-            data = list(self._buffer)[-want:]
-        return np.array(data, dtype=float) if data else np.empty((0, 3))
+            n = len(self._buffer)
+            want = n if seconds == float("inf") else min(n, int(seconds * self.fps))
+            data = list(islice(self._buffer, n - want, n)) if want else []
+
+        if not data:
+            return np.empty((0, 3)), None
+
+        rgb = np.array([row[1:] for row in data], dtype=float)
+        if len(data) < 2:
+            return rgb, None
+        span = data[-1][0] - data[0][0]
+        measured = ((len(data) - 1) / span) if span > 0 else None
+        return rgb, measured
 
     def has_full_window(self) -> bool:
         """Whether enough colour history exists for POS to produce anything."""
         with self._lock:
             return len(self._buffer) >= int(WINDOW_SECONDS * self.fps)
+
+    def measured_fps(self) -> float | None:
+        """The rate the buffer was actually filled at, or None if unmeasurable."""
+        return self.rgb_window(float("inf"))[1]
 
     # ── reporting ────────────────────────────────────────────────────────────
 
@@ -371,7 +434,14 @@ class FaceCaptureAdapter:
                 "samples_dropped": c.dropped_full_queue,
                 "buffered_seconds": len(self._buffer) / self.fps if self.fps else 0.0,
                 "face_degraded": degraded,
-                "face_degraded_reason": "no usable face" if degraded else None,
+                "face_degraded_reason": (
+                    {
+                        "camera": "no frames from the camera",
+                        "no_face": "no face detected",
+                        "quality": "too little usable skin (lighting)",
+                    }.get(c.missing_reason, "no usable face")
+                    if degraded else None
+                ),
                 "last_error": c.last_error,
                 "heart_enabled": self.heart_enabled,
                 "emotion_enabled": self.emotion_enabled,
@@ -439,20 +509,24 @@ def build_face_adapter(
     emotion_enabled: bool = False,
     emotion_model_path: Any = None,
 ) -> FaceCaptureAdapter:
-    """A camera-backed adapter. Nothing is opened until connect() is called."""
-    from src.app.services.face_roi import FaceLocator   # noqa: PLC0415 -- needs cv2
+    """A camera-backed adapter. Nothing is opened, loaded or verified until
+    connect() is called -- so a registry can name a camera on a machine that has
+    neither the extra nor the model."""
+    def make_locator():
+        from src.app.services.face_roi import FaceLocator   # noqa: PLC0415
 
-    classifier = None
-    if emotion_enabled:
+        return FaceLocator()
+
+    def make_classifier():
         from src.app.services.face_emotion import EmotionClassifier  # noqa: PLC0415
 
-        classifier = EmotionClassifier(emotion_model_path)
+        return EmotionClassifier(emotion_model_path)
 
     return FaceCaptureAdapter(
         lambda: OpenCvFrameSource(camera_index=camera_index, fps=fps),
-        FaceLocator,
+        make_locator,
         fps=fps,
         heart_enabled=heart_enabled,
         emotion_enabled=emotion_enabled,
-        emotion_classifier=classifier,
+        emotion_classifier_factory=make_classifier if emotion_enabled else None,
     )

@@ -143,7 +143,7 @@ def test_disconnect_clears_buffered_state():
     assert _wait_for(adapter.has_full_window, timeout=6.0)
     adapter.disconnect()
 
-    assert adapter.rgb_window(10.0).shape == (0, 3)
+    assert adapter.rgb_window(10.0)[0].shape == (0, 3)
     assert adapter.drain_samples(100) == []
 
 
@@ -239,7 +239,7 @@ def test_no_face_is_reported_as_degraded_not_as_a_reading():
         assert _wait_for(lambda: adapter.get_ingestion_meta()["face_degraded"])
         meta = adapter.get_ingestion_meta()
         assert meta["faces_found"] == 0
-        assert meta["face_degraded_reason"] == "no usable face"
+        assert meta["face_degraded_reason"] == "no face detected"
         assert adapter.drain_samples(10) == [], "emitted a sample with no face"
     finally:
         adapter.disconnect()
@@ -254,7 +254,7 @@ def test_an_unusable_frame_yields_no_sample_rather_than_a_zero():
     try:
         assert _wait_for(lambda: adapter.get_ingestion_meta()["frames_read"] > 5)
         assert adapter.drain_samples(10) == []
-        assert adapter.rgb_window(5.0).shape == (0, 3)
+        assert adapter.rgb_window(5.0)[0].shape == (0, 3)
     finally:
         adapter.disconnect()
 
@@ -370,7 +370,7 @@ def test_opening_a_camera_with_both_channels_off_is_refused():
 
 
 def test_emotion_enabled_without_a_classifier_is_refused():
-    with pytest.raises(ValueError, match="requires an emotion_classifier"):
+    with pytest.raises(ValueError, match="requires an emotion_classifier_factory"):
         FaceCaptureAdapter(FakeSource, FakeLocator, emotion_enabled=True)
 
 
@@ -381,10 +381,11 @@ def test_emotion_runs_far_less_often_than_frames_are_captured():
     clf = FakeClassifier()
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
-        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier_factory=lambda: clf,
         emotion_interval_s=0.2,
     )
     adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    adapter._emotion = clf if adapter.emotion_enabled else None
     for _ in range(60):
         adapter._capture_once()
 
@@ -400,9 +401,10 @@ def test_emotion_only_captures_no_colour():
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
         buffer_seconds=2.0, heart_enabled=False,
-        emotion_enabled=True, emotion_classifier=clf, emotion_interval_s=0.0,
+        emotion_enabled=True, emotion_classifier_factory=lambda: clf, emotion_interval_s=0.0,
     )
     adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    adapter._emotion = clf if adapter.emotion_enabled else None
     for _ in range(10):
         adapter._capture_once()
 
@@ -418,6 +420,7 @@ def test_heart_only_never_classifies():
         buffer_seconds=2.0, emotion_enabled=False,
     )
     adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    adapter._emotion = clf if adapter.emotion_enabled else None
     for _ in range(10):
         adapter._capture_once()
 
@@ -427,15 +430,25 @@ def test_heart_only_never_classifies():
 
 
 def test_meta_reports_which_channels_are_on():
+    """Before connect() the classifier does not exist yet -- it is built there,
+    so a registry can name a camera on a machine with no model provisioned --
+    so its own meta is absent rather than fabricated."""
     clf = FakeClassifier()
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(),
-        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier_factory=lambda: clf,
     )
-    meta = adapter.get_ingestion_meta()
-    assert meta["heart_enabled"] is True
-    assert meta["emotion_enabled"] is True
-    assert "emotion_classified" in meta, "classifier meta was not merged in"
+    assert adapter.get_ingestion_meta()["emotion_enabled"] is True
+    assert "emotion_classified" not in adapter.get_ingestion_meta()
+
+    adapter.connect()
+    try:
+        meta = adapter.get_ingestion_meta()
+        assert meta["heart_enabled"] is True
+        assert meta["emotion_enabled"] is True
+        assert "emotion_classified" in meta, "classifier meta was not merged in"
+    finally:
+        adapter.disconnect()
 
 
 def test_disconnect_forgets_the_last_emotion():
@@ -444,7 +457,7 @@ def test_disconnect_forgets_the_last_emotion():
     clf = FakeClassifier()
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
-        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier_factory=lambda: clf,
         emotion_interval_s=0.0,
     )
     adapter.connect()
@@ -453,3 +466,25 @@ def test_disconnect_forgets_the_last_emotion():
     finally:
         adapter.disconnect()
     assert adapter.latest_emotion() is None
+
+
+def test_degraded_names_which_of_three_causes_it_was():
+    """A disconnected webcam, a student who left, and bad lighting are three
+    different problems. One string for all of them is the conflation this module
+    argues against elsewhere."""
+    cases = {
+        "no frames from the camera": (FakeSource(fail_after=0), FakeLocator()),
+        "no face detected": (FakeSource(), type("N", (), {"locate": lambda s, g: None})()),
+        "too little usable skin (lighting)": (
+            FakeSource(frame=np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)),
+            FakeLocator(),
+        ),
+    }
+    for expected, (source, locator) in cases.items():
+        adapter, _, _ = _adapter(source=source, locator=locator, fps=2000.0)
+        adapter.connect()
+        try:
+            assert _wait_for(lambda: adapter.get_ingestion_meta()["face_degraded"])
+            assert adapter.get_ingestion_meta()["face_degraded_reason"] == expected
+        finally:
+            adapter.disconnect()

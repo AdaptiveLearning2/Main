@@ -9,6 +9,7 @@ from typing import Any
 from src.app.config import DEFAULT_DEVICE_ID, DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
+from src.app.services.face_processing import RATE_WINDOW_SECONDS
 from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,41 @@ class DeviceSession:
         self.errors_seen = 0
         self._task: asyncio.Task[None] | None = None
         self.running = False
+
+    def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
+        """The camera equivalent of the EEG payload.
+
+        Deliberately carries the same envelope fields -- contract_version,
+        device_id, timestamp -- so a consumer does not need to know which kind
+        of device produced a record. `channels`, `features`, `state` and
+        `question_policy` are absent rather than faked: a camera has no
+        electrode channels and no cognitive state, and inventing empty ones
+        would let a caller average them into an EEG session's numbers.
+        """
+        from src.app.services.face_processing import build_camera_payload
+
+        rgb, measured = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
+        payload: dict[str, Any] = {
+            "contract_version": self.CONTRACT_VERSION,
+            "device_id": self.device_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion": enrich_ingestion_dict(
+                self.settings, raw_meta, source=self.device_config.kind
+            ),
+        }
+        payload.update(
+            build_camera_payload(
+                rgb_window=rgb,
+                fps=self.adapter.fps,
+                measured_fps=measured,
+                samples=samples,
+                emotion=self.adapter.latest_emotion(),
+                heart_enabled=self.adapter.heart_enabled,
+                emotion_enabled=self.adapter.emotion_enabled,
+                emotion_meta=raw_meta,
+            )
+        )
+        return payload
 
     async def start(self) -> None:
         if self.running:
@@ -115,6 +151,25 @@ class DeviceSession:
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
                 self.latest_payload = self._no_signal_payload()
+                await asyncio.sleep(period)
+                continue
+
+            if self.device_config.kind == "face":
+                # A camera produces colour, not EEG channels, so it cannot go
+                # through SignalProcessor at all. Before this branch existed the
+                # loop reached for sample.channel_tp9 on a FaceSample and raised
+                # every tick -- swallowed by the handler below into errors_seen
+                # and a warning, so the session looked alive and produced
+                # nothing.
+                try:
+                    self.latest_payload = self._face_payload(samples, raw_meta)
+                    self.samples_processed += len(samples)
+                except Exception as exc:
+                    self.errors_seen += 1
+                    logger.warning(
+                        "camera payload failed for device %s: %s: %s",
+                        self.device_id, type(exc).__name__, exc,
+                    )
                 await asyncio.sleep(period)
                 continue
 

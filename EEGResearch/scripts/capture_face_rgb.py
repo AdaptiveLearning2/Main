@@ -16,7 +16,11 @@ Usage, with a camera attached:
 
 One JSON object per line:
 
+    {"wall_start": "2026-08-07T15:04:11.882+01:00", "nominal_fps": 30.0}
     {"t": 12.34, "rgb": [181.2, 120.7, 110.4], "q": 0.93}
+
+The first line is a header carrying the absolute start; every line after it is a
+sample.
 
 `t` is seconds since capture start, from the same monotonic clock the adapter
 uses, and it is the whole point of the format. A webcam asked for 30 fps does
@@ -32,6 +36,7 @@ import gzip
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -58,11 +63,24 @@ def main() -> int:
 
     frames = faces = written = 0
     started = time.monotonic()
+
+    # Wall clock as well as the monotonic base, written as the first line.
+    #
+    # This is what makes the ECG alignment self-contained. The watch's export
+    # carries an absolute `Created time`, so with an absolute start here the
+    # offset between the two recordings is arithmetic -- nobody has to mark the
+    # moment a reading began, and the alignment stops depending on how quickly
+    # someone typed. The monotonic clock stamps the samples because it cannot
+    # step backwards; the wall clock appears once, only to anchor it.
+    wall_start = datetime.now().astimezone()
     last_report = started
 
     # Written incrementally rather than buffered to the end, so a capture
     # interrupted at minute four still leaves four usable minutes on disk.
     with opener(out, "wt", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps({"wall_start": wall_start.isoformat(),
+                             "nominal_fps": args.fps}) + "\n")
+        print(f"capture started at {wall_start.isoformat()}", flush=True)
         try:
             while time.monotonic() - started < args.seconds:
                 tick = time.monotonic()

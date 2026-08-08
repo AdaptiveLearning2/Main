@@ -62,6 +62,13 @@ class InterpretedEegData(BaseModel):
     question_policy: QuestionPolicyData
     bands: BandData | None = None
     ingestion: dict[str, Any] | None = None
+    # Camera-derived blocks. Absent -- not null -- when the channel is switched
+    # off or the device has no camera, because a channel that was disabled is
+    # not a channel that failed. `heart` always carries `source`, since a rate
+    # from a headband and one from a webcam are not the same measurement and a
+    # consumer that cannot tell them apart cannot weight them.
+    heart: dict[str, Any] | None = None
+    face: dict[str, Any] | None = None
 
 
 class Envelope(BaseModel):

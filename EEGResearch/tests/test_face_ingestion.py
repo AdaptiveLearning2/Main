@@ -497,7 +497,7 @@ def test_the_buffer_carries_quality_alongside_colour():
     adapter.connect()
     try:
         assert _wait_for(lambda: len(adapter.rgb_buffer()) > 5)
-        rgb, measured, quality = adapter.rgb_window(1.0)
+        rgb, measured, quality, _ = adapter.rgb_window(1.0)
         assert len(rgb) > 5
         assert measured is not None and measured > 0
         assert quality == pytest.approx(1.0, abs=0.01)
@@ -512,7 +512,7 @@ def test_the_measured_rate_reflects_reality_not_the_setting():
     adapter.connect()
     try:
         assert _wait_for(lambda: len(adapter.rgb_buffer()) > 20)
-        _, measured, _ = adapter.rgb_window(5.0)
+        _, measured, _, _ = adapter.rgb_window(5.0)
     finally:
         adapter.disconnect()
 

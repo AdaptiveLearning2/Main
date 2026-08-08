@@ -42,7 +42,7 @@ def _samples(n: int, quality: float = 0.9) -> list[FaceSample]:
 # ── heart ────────────────────────────────────────────────────────────────────
 
 def test_a_clean_window_reports_a_rate():
-    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750))
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750))
     assert record["bpm"] == pytest.approx(72.0, abs=3.0)
     assert record["rejected_by"] is None
     assert record["source"] == "rppg"
@@ -56,7 +56,7 @@ def test_the_source_is_on_every_payload_including_failures():
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=5.0), FPS),
-        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750)),
+        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750)),
     ):
         assert record["source"] == "rppg"
 
@@ -82,7 +82,7 @@ def test_poor_face_quality_stops_the_estimate_before_it_is_made():
     """Cheaper than deriving a rate and discarding it, and it names the actual
     problem: the light, not the heart."""
     record = build_heart_record(
-        _rgb_window(72.0), FPS, measured_fps=FPS,
+        _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         samples=_samples(750, quality=MIN_MEAN_USABLE_FRACTION / 2)
     )
     assert record["bpm"] is None
@@ -93,7 +93,7 @@ def test_face_quality_is_reported_separately_from_confidence():
     """Two different quantities. One is how much usable skin the camera saw; the
     other is how decisive the autocorrelation was. Collapsing them is the defect
     the original had under `quality.confidence`."""
-    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750, 0.77))
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750, 0.77))
     assert record["face_quality"] == pytest.approx(0.77, abs=0.01)
     assert record["confidence"] != record["face_quality"]
 
@@ -101,7 +101,7 @@ def test_face_quality_is_reported_separately_from_confidence():
 def test_noise_is_rejected_rather_than_reported():
     rng = np.random.default_rng(0)
     noise = 150 + 10 * rng.standard_normal((int(RATE_WINDOW_SECONDS * FPS), 3))
-    record = build_heart_record(noise, FPS, measured_fps=FPS, samples=_samples(750))
+    record = build_heart_record(noise, FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750))
     assert record["bpm"] is None
     assert record["rejected_by"] is not None
 
@@ -112,7 +112,7 @@ def test_a_rejected_estimate_never_reports_zero():
     for record in (
         build_heart_record(np.empty((0, 3)), FPS),
         build_heart_record(_rgb_window(seconds=2.0), FPS),
-        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, samples=_samples(750, 0.05)),
+        build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750, 0.05)),
     ):
         assert record["bpm"] is None
 
@@ -169,7 +169,7 @@ def test_no_emotion_at_all_is_reported_as_no_face():
 
 def test_both_blocks_are_present_when_both_are_enabled():
     payload = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750),
         emotion=EmotionResult("happy", 0.9, True),
     )
     assert set(payload) == {"heart", "face"}
@@ -181,7 +181,7 @@ def test_a_disabled_channel_is_absent_rather_than_null():
     camera that could not get a reading, and a viewer could not tell a respected
     refusal from a broken sensor."""
     heart_only = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750),
         emotion_enabled=False,
     )
     assert "heart" in heart_only
@@ -218,7 +218,7 @@ def test_one_channel_failing_does_not_suppress_the_other():
     """They fail independently because they are independent measurements. A
     broken emotion model must not take the heart rate down with it."""
     payload = build_camera_payload(
-        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, samples=_samples(750),
+        rgb_window=_rgb_window(72.0), fps=FPS, measured_fps=FPS, timestamps=_stamps(FPS), samples=_samples(750),
         emotion=EmotionResult(None, None, False, "inference_failed", "boom"),
         emotion_meta={"emotion_degraded": True},
     )
@@ -228,20 +228,93 @@ def test_one_channel_failing_does_not_suppress_the_other():
 
 # ── the frame-rate gate ──────────────────────────────────────────────────────
 
-def test_a_camera_delivering_fewer_frames_than_configured_is_rejected():
-    """The gate that matters most on this path.
+def _stamps(fps: float, n: int | None = None) -> np.ndarray:
+    """An even clock at `fps`, matching the default window length."""
+    if n is None:
+        n = int(RATE_WINDOW_SECONDS * fps)
+    return np.arange(n) / fps
 
-    The time base is reconstructed from sample index, so a camera configured for
-    30 fps that actually delivers 22 does not produce a *noisy* rate -- it
-    produces one scaled by 30/22, a confident +36% with nothing to indicate it.
-    Webcams drop frames routinely under load or poor light, so this is the
-    common case rather than a fault."""
+
+def test_a_camera_delivering_fewer_frames_than_configured_still_reads_true():
+    """This test asserted the opposite until the samples carried a clock.
+
+    The time base used to come from sample index, so a camera configured for 30
+    and delivering 22 produced a bpm scaled by 30/22 -- a confident +36% with
+    nothing to indicate it -- and the only safe response was to refuse the
+    window. Webcams drop frames routinely, so that refused the common case.
+
+    Placing the samples by their own timestamps removes the arithmetic error
+    rather than declining to report when it fires. 22 fps is not a fault; it is
+    the rate, and 72 bpm at 22 fps is still 72 bpm."""
+    rgb = _rgb_window(72.0, fps=22.0)
     record = build_heart_record(
-        _rgb_window(72.0), FPS, measured_fps=22.0, samples=_samples(750)
+        rgb, FPS, measured_fps=22.0, timestamps=_stamps(22.0, len(rgb)),
+        samples=_samples(len(rgb)),
     )
-    assert record["bpm"] is None
-    assert record["rejected_by"] == "unstable_frame_rate"
+    assert record["bpm"] == pytest.approx(72.0, abs=3.0)
     assert record["measured_fps"] == 22.0
+    assert record["rejected_by"] is None
+
+
+def test_unevenly_spaced_samples_are_placed_by_their_timestamps():
+    """The measured failure, reproduced.
+
+    A real webcam asked for 30 fps delivered bimodal intervals -- 78% at 31 ms
+    and 21% at 47 ms. Read as evenly spaced, those 47 ms samples are each
+    stretched by half an interval and the derived rate is wrong by roughly the
+    fraction of them present. Read by their own clock, they are simply where
+    they say they are."""
+    rng = np.random.default_rng(11)
+    n = int(RATE_WINDOW_SECONDS * 32.0)
+    intervals = np.where(rng.random(n) < 0.21, 0.047, 0.031)
+    stamps = np.cumsum(intervals) - intervals[0]
+
+    # The colour is generated against the *real* clock, so 72 bpm is the truth
+    # regardless of how the samples happen to be spaced.
+    wave = 0.005 * np.sin(2 * np.pi * 72.0 / 60.0 * stamps)
+    rgb = np.array([180.0, 120.0, 110.0]) * (
+        1.0 + np.outer(wave, np.array([0.10, 0.60, 0.30]))
+    )
+
+    record = build_heart_record(
+        rgb, FPS, measured_fps=1.0 / float(np.median(intervals)),
+        timestamps=stamps, samples=_samples(n),
+    )
+    assert record["rejected_by"] is None
+    assert record["bpm"] == pytest.approx(72.0, abs=3.0)
+
+
+def test_a_long_gap_is_refused_rather_than_interpolated_across():
+    """Interpolation fills a dropped frame honestly and a four-second absence
+    dishonestly -- there the straight line is invention, and it lands in the
+    pulse band as a slow ramp."""
+    rgb = _rgb_window(72.0)
+    stamps = _stamps(FPS, len(rgb))
+    stamps[len(stamps) // 2:] += 4.0          # the student looked away
+
+    record = build_heart_record(rgb, FPS, measured_fps=FPS, timestamps=stamps,
+                                samples=_samples(len(rgb)))
+    assert record["bpm"] is None
+    assert record["rejected_by"] == "sampling_gap"
+    assert record["largest_gap_s"] == pytest.approx(4.03, abs=0.05)
+
+
+def test_a_rate_below_nyquist_is_refused():
+    """Resampling places samples; it cannot manufacture ones never taken."""
+    rgb = _rgb_window(72.0, fps=6.0)
+    record = build_heart_record(rgb, FPS, measured_fps=6.0,
+                                timestamps=_stamps(6.0, len(rgb)),
+                                samples=_samples(len(rgb)))
+    assert record["bpm"] is None
+    assert record["rejected_by"] == "frame_rate_too_low"
+
+
+def test_a_clock_that_does_not_match_the_colour_is_refused():
+    """Rather than silently scoring against sample index again."""
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=FPS,
+                                timestamps=np.arange(5) / FPS,
+                                samples=_samples(750))
+    assert record["rejected_by"] == "unmeasured_frame_rate"
 
 
 def test_an_unmeasurable_rate_does_not_fall_back_to_nominal():
@@ -259,6 +332,7 @@ def test_the_measured_rate_is_what_the_estimate_uses():
     slow = 27.0
     rgb = _rgb_window(72.0, fps=slow)
     record = build_heart_record(rgb, FPS, measured_fps=slow,
+                                timestamps=_stamps(slow, len(rgb)),
                                 samples=_samples(len(rgb)))
     assert record["rejected_by"] is None
     assert record["bpm"] == pytest.approx(72.0, abs=3.0)
@@ -267,8 +341,10 @@ def test_the_measured_rate_is_what_the_estimate_uses():
 def test_a_small_frame_rate_wobble_is_tolerated():
     """Every webcam jitters slightly. Rejecting on any deviation would reject
     everything."""
+    rgb = _rgb_window(72.0, fps=29.0)
     record = build_heart_record(
-        _rgb_window(72.0, fps=29.0), FPS, measured_fps=29.0, samples=_samples(725)
+        rgb, FPS, measured_fps=29.0, timestamps=_stamps(29.0, len(rgb)),
+        samples=_samples(len(rgb)),
     )
     assert record["rejected_by"] is None
 
@@ -282,7 +358,7 @@ def test_quality_gating_uses_the_window_not_the_tick():
     frame rate hit that routinely, making the gate intermittent rather than
     applied per window."""
     record = build_heart_record(
-        _rgb_window(72.0), FPS, measured_fps=FPS,
+        _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         window_quality=MIN_MEAN_USABLE_FRACTION / 2,
         samples=[],                      # nothing drained this tick
     )
@@ -294,7 +370,7 @@ def test_the_window_quality_wins_over_the_tick_samples():
     """They can disagree -- the window spans 25 s, the tick spans one frame
     interval -- and the window is what was scored."""
     record = build_heart_record(
-        _rgb_window(72.0), FPS, measured_fps=FPS,
+        _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         window_quality=0.91, samples=_samples(750, quality=0.10),
     )
     assert record["face_quality"] == pytest.approx(0.91, abs=0.01)
@@ -307,4 +383,4 @@ def test_a_zero_frame_rate_is_reported_rather_than_hidden():
     record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=0.0,
                                 window_quality=0.9)
     assert record["measured_fps"] == 0.0
-    assert record["rejected_by"] == "unstable_frame_rate"
+    assert record["rejected_by"] == "frame_rate_too_low"

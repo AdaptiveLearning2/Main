@@ -71,7 +71,7 @@ class DeviceSession:
             build_camera_payload,
         )
 
-        rgb, measured, quality = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
+        rgb, measured, quality, stamps = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
         payload: dict[str, Any] = {
             # Names the shape, so the API union and any consumer can branch on
             # it rather than probing for which fields happen to be present.
@@ -88,6 +88,7 @@ class DeviceSession:
                 rgb_window=rgb,
                 fps=self.adapter.fps,
                 measured_fps=measured,
+                timestamps=stamps,
                 window_quality=quality,
                 samples=samples,
                 emotion=self.adapter.latest_emotion(),

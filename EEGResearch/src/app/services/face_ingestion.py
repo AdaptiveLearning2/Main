@@ -378,16 +378,33 @@ class FaceCaptureAdapter:
 
     def rgb_window(
         self, seconds: float
-    ) -> tuple[np.ndarray, float | None, float | None]:
+    ) -> tuple[np.ndarray, float | None, float | None, np.ndarray]:
         """The most recent `seconds` of colour, the rate it was *actually*
-        sampled at, and its mean quality.
+        sampled at, its mean quality, and the timestamp of every sample.
 
-        Returns (rgb, measured_fps, mean_usable_fraction). `measured_fps` is
-        None when there are too few samples to measure one; a caller must treat
-        that as no window rather than falling back to the nominal rate, which is
-        the assumption this return value exists to remove. Quality comes from
-        the same window as the colour, so the gate applies to what is being
-        scored rather than to whatever happened to arrive this tick.
+        Returns (rgb, measured_fps, mean_usable_fraction, timestamps).
+        `measured_fps` is None when there are too few samples to measure one; a
+        caller must treat that as no window rather than falling back to the
+        nominal rate, which is the assumption this return value exists to
+        remove. Quality comes from the same window as the colour, so the gate
+        applies to what is being scored rather than to whatever happened to
+        arrive this tick.
+
+        `measured_fps` is the **median** interval's rate, not samples-over-span.
+
+        Both were computed on a real webcam and they disagree. Asked for 30 fps
+        it delivered intervals that were bimodal -- 78% at 31 ms, 21% at 47 ms,
+        with occasional stalls past 100 ms. Span-based said 28.6 Hz; the median
+        said 32.3 Hz, which is the rate the camera was genuinely running at.
+        A mean is dragged by the tail of stalls and reports a rate no interval
+        in the recording actually had.
+
+        (This is the opposite of the call made for the headband's optical
+        packets, where the median was wrong because ~9% of timestamps were
+        exact duplicates from the SDK's batching. Here every stamp is a distinct
+        `time.monotonic()` read at the moment of capture, so the median is the
+        robust statistic it is normally assumed to be. The difference is in the
+        clock, not the preference.)
 
         Copies rather than views: the buffer is mutated by the capture thread.
         `islice` over the tail rather than `list(...)[-n:]`, which materialised
@@ -400,15 +417,16 @@ class FaceCaptureAdapter:
             data = list(islice(self._buffer, n - want, n)) if want else []
 
         if not data:
-            return np.empty((0, 3)), None, None
+            return np.empty((0, 3)), None, None, np.empty(0)
 
         rgb = np.array([row[1:4] for row in data], dtype=float)
+        timestamps = np.array([row[0] for row in data], dtype=float)
         quality = float(np.mean([row[4] for row in data]))
         if len(data) < 2:
-            return rgb, None, quality
-        span = data[-1][0] - data[0][0]
-        measured = ((len(data) - 1) / span) if span > 0 else None
-        return rgb, measured, quality
+            return rgb, None, quality, timestamps
+        median_interval = float(np.median(np.diff(timestamps)))
+        measured = (1.0 / median_interval) if median_interval > 0 else None
+        return rgb, measured, quality, timestamps
 
     def has_full_window(self) -> bool:
         """Whether enough colour history exists for POS to produce anything."""

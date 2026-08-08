@@ -66,6 +66,62 @@ PROJECTION = np.array([[0.0, 1.0, -1.0],
                        [-2.0, 1.0, 1.0]])
 
 
+def resample_uniform(
+    timestamps: np.ndarray, rgb: np.ndarray, target_fps: float
+) -> tuple[np.ndarray, float]:
+    """Put an unevenly-sampled colour series onto a uniform time grid.
+
+    Measured on a real webcam, this is not optional. Asked for 30 fps, the
+    camera delivered intervals that were **bimodal** -- 78% at 31 ms and 21% at
+    47 ms -- with the occasional stall past 100 ms. That is not jitter around a
+    mean; it is a mixture of two spacings, and no single number describes it.
+    The mean-based rate said 28 Hz, the mode said 32 Hz, and treating either as
+    a uniform grid distorts every interval by up to 50%.
+
+    Both POS and the autocorrelation downstream assume even sampling. A gate on
+    "is the rate stable" cannot repair that -- it can only refuse everything a
+    real camera produces. Interpolating onto an even grid uses the timestamps we
+    already carry and makes the assumption true instead of merely asserted.
+
+    Linear interpolation, not something cleverer: the pulse is heavily
+    oversampled at 30 Hz against a 1-2 Hz signal, so the error from a straight
+    line between adjacent samples is far below the noise floor. Returns the
+    resampled series and the grid rate actually used.
+    """
+    timestamps = np.asarray(timestamps, dtype=float)
+    rgb = np.asarray(rgb, dtype=float)
+    if len(timestamps) != len(rgb):
+        raise ValueError("timestamps and rgb must be the same length")
+    if len(timestamps) < 2:
+        return rgb, target_fps
+
+    span = timestamps[-1] - timestamps[0]
+    if span <= 0:
+        return rgb, target_fps
+
+    grid = np.arange(timestamps[0], timestamps[-1], 1.0 / target_fps)
+    if len(grid) < 2:
+        return rgb, target_fps
+
+    out = np.column_stack([
+        np.interp(grid, timestamps, rgb[:, c]) for c in range(rgb.shape[1])
+    ])
+    return out, target_fps
+
+
+def largest_gap(timestamps: np.ndarray) -> float:
+    """The biggest interval in a series, in seconds.
+
+    Interpolation fills a gap with a straight line, which is right for a missed
+    frame or two and wrong for a long stall -- there the line is invention, not
+    measurement, and it lands in the pulse band as a slow ramp. Callers gate on
+    this; resampling deliberately does not, because the two questions are
+    separate: how to place the samples, and whether there are enough of them.
+    """
+    timestamps = np.asarray(timestamps, dtype=float)
+    return float(np.diff(timestamps).max()) if len(timestamps) > 1 else 0.0
+
+
 def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
     """Pulse waveform from a sequence of mean-RGB samples.
 

@@ -241,10 +241,30 @@ def test_loading_an_unverified_model_is_refused(tmp_path):
 
 
 def test_no_camera_dependency_is_imported():
-    import sys
+    """Importing this module must not drag in onnxruntime or cv2.
 
-    assert "onnxruntime" not in sys.modules
-    assert "cv2" not in sys.modules
+    Checked in a subprocess. `sys.modules` is process-global, so once any other
+    test in the run has imported either one, an in-process assertion measures
+    the test ordering instead of this module -- and while the optional `face`
+    extra was uninstalled it could not fail at all, which made it look like a
+    passing test of laziness when it was a passing test of absence.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import sys
+            sys.path.insert(0, ".")
+            import src.app.services.face_emotion  # noqa: F401
+            leaked = [m for m in ("onnxruntime", "cv2") if m in sys.modules]
+            assert not leaked, f"importing face_emotion pulled in {leaked}"
+            print("clean")
+        """)],
+        capture_output=True, text=True, cwd=".",
+    )
+    assert "clean" in result.stdout, result.stderr
 
 
 # ── cropping ─────────────────────────────────────────────────────────────────

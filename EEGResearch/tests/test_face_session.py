@@ -42,7 +42,9 @@ class FakeFaceAdapter:
         self.emotion_enabled = emotion_enabled
         self._emotion = emotion
         self._measured = measured
-        t = np.arange(int(seconds * FPS)) / FPS
+        # Against the rate the adapter *reports*, so the fake is self-consistent:
+        # one claiming 22 fps must carry colour actually sampled at 22 fps.
+        t = np.arange(int(seconds * measured)) / measured
         base = np.array([180.0, 120.0, 110.0])
         wave = 0.005 * np.sin(2 * np.pi * bpm / 60.0 * t)
         self._rgb = base * (1.0 + np.outer(wave, np.array([0.10, 0.60, 0.30])))
@@ -60,7 +62,8 @@ class FakeFaceAdapter:
         return [FaceSample(float(i), (180.0, 120.0, 110.0), 0.9) for i in range(5)]
 
     def rgb_window(self, seconds):
-        return self._rgb, self._measured, 0.9
+        stamps = np.arange(len(self._rgb)) / self._measured
+        return self._rgb, self._measured, 0.9, stamps
 
     def latest_emotion(self):
         return self._emotion
@@ -120,14 +123,31 @@ def test_the_heart_block_carries_a_rate_from_the_camera():
     assert payload["heart"]["bpm"] == pytest.approx(72.0, abs=3.0)
 
 
-def test_a_camera_running_slow_reports_no_rate():
-    """End to end, not just in the record builder. A camera configured for 30
-    and delivering 22 would otherwise report a bpm scaled by 30/22."""
+def test_a_camera_running_slow_still_reports_the_right_rate():
+    """A camera configured for 30 and delivering 22 must report 72, not 98.
+
+    This test used to assert the opposite -- that the window was *rejected* --
+    because the time base came from sample index, so 30/22 scaled the bpm by
+    +36%. Refusing to answer was the safe response to an arithmetic error.
+
+    With the samples placed by their own timestamps the error is gone, and
+    refusing would now be discarding a good measurement. The camera's actual
+    rate is not a fault to be gated on; it is an input.
+    """
     session = _session(FakeFaceAdapter(bpm=72.0, measured=22.0))
     payload = _tick(session)
 
+    assert payload["heart"]["bpm"] == pytest.approx(72.0, abs=3.0)
+    assert payload["heart"]["measured_fps"] == 22.0
+
+
+def test_a_frame_rate_below_nyquist_is_refused():
+    """Resampling cannot manufacture a signal that was never sampled."""
+    session = _session(FakeFaceAdapter(bpm=72.0, measured=6.0))
+    payload = _tick(session)
+
     assert payload["heart"]["bpm"] is None
-    assert payload["heart"]["rejected_by"] == "unstable_frame_rate"
+    assert payload["heart"]["rejected_by"] == "frame_rate_too_low"
 
 
 def test_the_emotion_block_reaches_the_payload():

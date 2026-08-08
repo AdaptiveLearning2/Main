@@ -37,7 +37,7 @@ import numpy as np
 
 from src.app.services.face_emotion import EmotionResult
 from src.app.services.face_ingestion import FaceSample
-from src.app.services.pos_rppg import pos_pulse
+from src.app.services.pos_rppg import largest_gap, pos_pulse, resample_uniform
 from src.app.services.ppg_processing import estimate_window
 
 # How much colour history the rate estimate is computed over. The rate
@@ -55,17 +55,37 @@ MIN_WINDOW_COVERAGE = 0.80
 # apart from the rate's confidence, which is a different quantity entirely.
 MIN_MEAN_USABLE_FRACTION = 0.40
 
-# How far the measured frame rate may sit from the configured one before the
-# window is rejected.
+# The two gates on the time base.
 #
-# This is the gate that matters most on this path. The time base is
-# reconstructed from sample index, so a camera configured for 30 fps that
-# actually delivers 22 does not produce a noisy rate -- it produces one scaled
-# by 30/22, a confident +36% with nothing to indicate it. Webcams drop frames
-# routinely under load or poor light, so this is the common case rather than a
-# fault, and it is exactly the class of failure the motion rule in CLAUDE.md
-# exists to prevent: a wrong number that looks like a right one.
-MAX_FPS_DEVIATION = 0.15
+# An earlier revision had one gate here -- measured fps against configured fps,
+# reject beyond 15% -- on the reasoning that the time base came from sample
+# index, so a camera asked for 30 and delivering 22 would report a rate scaled
+# by 30/22: a confident +36% with nothing to indicate it. The failure was real.
+# The gate was the wrong repair, and measuring a real webcam showed why.
+#
+# That camera's frame intervals were **bimodal**: 78% at 31 ms, 21% at 47 ms.
+# Not jitter around a mean -- a mixture of two spacings, which no single rate
+# describes. A deviation gate has nothing correct to do with that. Set tight it
+# rejects a camera that is working; set loose it admits the distortion it exists
+# to catch. Either way it is asking whether the samples are evenly spaced, when
+# they simply are not and will not be.
+#
+# So the samples are placed by their own timestamps instead (`resample_uniform`)
+# and the assumption of even spacing is *made true* rather than checked. The
+# configured rate stops being part of the arithmetic entirely, which removes the
+# 30/22 bug at its source instead of declining to report when it fires.
+#
+# What is left to gate is what interpolation cannot honestly fill:
+#
+#  - a long gap, where the straight line between two samples is invention rather
+#    than measurement, and lands in the pulse band as a slow ramp
+#  - a rate too low to carry the signal at all
+MAX_GAP_SECONDS = 1.0
+
+# Nyquist for MAX_BPM (220 bpm = 3.67 Hz) is 7.3 Hz. 10 Hz leaves margin for the
+# waveform's shape rather than only its fundamental. Below this the recording is
+# not a slow camera, it is a different measurement.
+MIN_SAMPLE_RATE = 10.0
 
 
 def build_heart_record(
@@ -75,6 +95,7 @@ def build_heart_record(
     measured_fps: float | None = None,
     window_quality: float | None = None,
     samples: list[FaceSample] | None = None,
+    timestamps: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """The `heart` block from a window of colour.
 
@@ -82,9 +103,18 @@ def build_heart_record(
     trustworthy, with `rejected_by` naming which gate stopped it. Never returns
     a zero or a stale value: both would be read downstream as a real rate.
     """
-    wanted = int(RATE_WINDOW_SECONDS * fps)
+    # Coverage in *seconds of clock*, not in count of samples against the
+    # configured rate. Counting samples asks "did we get as many frames as a
+    # 30 fps camera would have", which a correctly-working 22 fps camera fails
+    # while holding a full 25 seconds of history -- the same nominal-fps
+    # assumption the time base itself had to shed. What the estimate needs is
+    # enough elapsed time to contain enough beats, and that is what this counts.
     have = len(rgb_window)
-    coverage = (have / wanted) if wanted else 0.0
+    if timestamps is not None and len(timestamps) == have and have >= 2:
+        span = float(timestamps[-1] - timestamps[0])
+    else:
+        span = (have / fps) if fps else 0.0
+    coverage = span / RATE_WINDOW_SECONDS
 
     record: dict[str, Any] = {
         "source": "rppg",
@@ -95,6 +125,7 @@ def build_heart_record(
         # `is not None`, not truthiness: 0.0 is a measurement, and reporting it
         # as None would say "unmeasurable" about a camera that had stopped.
         "measured_fps": round(measured_fps, 2) if measured_fps is not None else None,
+        "largest_gap_s": None,
         "rejected_by": None,
     }
 
@@ -126,12 +157,27 @@ def build_heart_record(
         record["rejected_by"] = "unmeasured_frame_rate"
         return record
 
-    if abs(measured_fps - fps) / fps > MAX_FPS_DEVIATION:
-        record["rejected_by"] = "unstable_frame_rate"
+    if measured_fps < MIN_SAMPLE_RATE:
+        record["rejected_by"] = "frame_rate_too_low"
         return record
 
-    # Everything downstream uses the measured rate, not the configured one.
-    estimate = estimate_window(pos_pulse(rgb_window, measured_fps), measured_fps)
+    if timestamps is None or len(timestamps) != len(rgb_window):
+        # No per-sample clock means the only available time base is sample
+        # index, which is the assumption that produced the 30/22 error above.
+        record["rejected_by"] = "unmeasured_frame_rate"
+        return record
+
+    gap = largest_gap(timestamps)
+    record["largest_gap_s"] = round(gap, 3)
+    if gap > MAX_GAP_SECONDS:
+        record["rejected_by"] = "sampling_gap"
+        return record
+
+    # Placed on an even grid by their own timestamps. Everything downstream is
+    # then reading a signal whose sample spacing it can safely assume, which
+    # neither POS nor the autocorrelation could before.
+    grid, grid_fps = resample_uniform(timestamps, rgb_window, measured_fps)
+    estimate = estimate_window(pos_pulse(grid, grid_fps), grid_fps)
     record["confidence"] = round(float(estimate.confidence), 3)
     if estimate.bpm is None:
         record["rejected_by"] = estimate.rejected_by or "confidence"
@@ -179,6 +225,7 @@ def build_camera_payload(
     measured_fps: float | None = None,
     window_quality: float | None = None,
     samples: list[FaceSample] | None = None,
+    timestamps: np.ndarray | None = None,
     emotion: EmotionResult | None = None,
     heart_enabled: bool = True,
     emotion_enabled: bool = True,
@@ -199,6 +246,7 @@ def build_camera_payload(
             measured_fps=measured_fps,
             window_quality=window_quality,
             samples=samples,
+            timestamps=timestamps,
         )
     if emotion_enabled:
         payload["face"] = build_face_record(emotion, emotion_meta)

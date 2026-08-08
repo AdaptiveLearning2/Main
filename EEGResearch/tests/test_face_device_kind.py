@@ -1,13 +1,23 @@
 """The `face` device kind: parsing, addressing, and staying importable.
 
-The last of these matters most. Every test here runs on a machine with no cv2,
-no mediapipe and no onnxruntime installed — which is CI's state and the state of
-any deployment that never turns the camera on. If a top-level import of OpenCV
-ever creeps into the import chain, these fail rather than the sidecar failing to
-boot in front of a class.
+The last of these matters most: the sidecar must import on a machine with no
+cv2, no mediapipe and no onnxruntime — CI's state, and the state of any
+deployment that never turns the camera on. If a top-level import of OpenCV ever
+creeps into the import chain, these fail rather than the sidecar failing to boot
+in front of a class.
+
+The import checks run in a **subprocess**. Asserting on `sys.modules` in-process
+only works while those packages are uninstalled, which makes the assertion a
+test of the environment rather than of the code — it cannot fail on the machine
+where a developer has the `face` extra installed, which is precisely the machine
+where a stray top-level import would be written.
 """
 
 from __future__ import annotations
+
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
@@ -103,29 +113,31 @@ def test_the_sidecar_imports_without_any_camera_dependency():
     development -- where the extra is installed -- and would take the sidecar
     down at startup on every machine that never enables the camera.
     """
-    import importlib
-    import sys
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import importlib, sys
+            sys.path.insert(0, ".")
+            for module in (
+                "src.app.config",
+                "src.app.services.eeg_ingestion",
+                "src.app.services.stream_manager",
+                "src.app.services.face_ingestion",
+                "src.app.services.face_roi",
+                "src.app.services.pos_rppg",
+            ):
+                importlib.import_module(module)
 
-    for absent in ("cv2", "mediapipe", "onnxruntime"):
-        assert absent not in sys.modules, f"{absent} was imported by another test"
-
-    for module in (
-        "src.app.config",
-        "src.app.services.eeg_ingestion",
-        "src.app.services.stream_manager",
-        "src.app.services.face_ingestion",
-        "src.app.services.face_roi",
-        "src.app.services.pos_rppg",
-    ):
-        importlib.import_module(module)
-
-    for absent in ("cv2", "mediapipe", "onnxruntime"):
-        assert absent not in sys.modules, (
-            f"importing the sidecar pulled in {absent}; the lazy import has been lost"
-        )
+            leaked = [m for m in ("cv2", "mediapipe", "onnxruntime")
+                      if m in sys.modules]
+            assert not leaked, f"importing the sidecar pulled in {leaked}"
+            print("clean")
+        """)],
+        capture_output=True, text=True, cwd=".",
+    )
+    assert "clean" in result.stdout, result.stderr
 
 
-def test_a_face_adapter_can_be_built_without_a_camera_and_fails_only_on_connect():
+def test_a_face_adapter_is_built_without_touching_a_camera_dependency():
     """The laziness runs one level deeper than expected, and that is the right
     boundary.
 
@@ -134,17 +146,34 @@ def test_a_face_adapter_can_be_built_without_a_camera_and_fails_only_on_connect(
     classroom image shipped to every laptop, say, where only some have webcams
     enabled. cv2 is required at connect(), when something actually tries to
     open the device, and that is where the failure belongs: it names the real
-    problem instead of a missing import at startup."""
-    import sys
+    problem instead of a missing import at startup.
 
-    from src.app.services.eeg_ingestion import build_ingestion_adapter
+    Checked in a subprocess, because `sys.modules` is process-global: once any other
+    test in the run has imported cv2, an in-process assertion that it is absent
+    passes or fails on test *ordering* rather than on this code. It passed
+    vacuously for a while for the weaker reason -- opencv simply was not
+    installed, so nothing could have imported it, and the assertion proved only
+    that the optional extra was optional.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import sys
+            sys.path.insert(0, ".")
+            from src.app.config import Settings
+            from src.app.services.eeg_ingestion import build_ingestion_adapter
 
-    adapter = build_ingestion_adapter(_settings(), kind="face", camera_index=0)
-    assert "cv2" not in sys.modules, "building the adapter pulled in OpenCV"
-    assert hasattr(adapter, "connect") and hasattr(adapter, "drain_samples")
-
-    with pytest.raises((ImportError, ModuleNotFoundError)):
-        adapter.connect()
+            settings = Settings(API_TOKEN="x", ADMIN_TOKEN="y",
+                                EEG_DEVICES="camera:face@0")
+            adapter = build_ingestion_adapter(settings, kind="face", camera_index=0)
+            assert hasattr(adapter, "connect") and hasattr(adapter, "drain_samples")
+            leaked = [m for m in ("cv2", "mediapipe", "onnxruntime")
+                      if m in sys.modules]
+            assert not leaked, f"building the adapter pulled in {leaked}"
+            print("clean")
+        """)],
+        capture_output=True, text=True, cwd=".",
+    )
+    assert "clean" in result.stdout, result.stderr
 
 
 def test_an_unknown_source_names_the_three_valid_ones():

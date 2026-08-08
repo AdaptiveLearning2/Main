@@ -27,8 +27,11 @@ from src.app.services.pos_rppg import WINDOW_SECONDS
 
 # Small frames on purpose: mean_rgb is O(pixels), and a test that fed 640x480
 # could not fill a buffer inside a sane timeout. The box is scaled to match.
-FRAME_H, FRAME_W = 60, 80
-FACE_BOX = (12, 6, 50, 46)
+# Big enough to carry a face crop of at least 64x64, which is the model's own
+# input size -- anything smaller would have to be upsampled, and to_gray64
+# refuses that rather than invent detail.
+FRAME_H, FRAME_W = 120, 160
+FACE_BOX = (20, 10, 100, 100)
 
 
 class FakeSource:
@@ -336,3 +339,117 @@ def test_a_pulse_survives_the_full_capture_chain():
 
     assert len(rgb) >= int(24 * fps)
     assert estimate_window(pos_pulse(rgb, fps), fps).bpm == pytest.approx(bpm, abs=3.0)
+
+
+# ── the two channels, independently switchable ───────────────────────────────
+
+class FakeClassifier:
+    """Counts calls so the emotion cadence can be measured."""
+
+    def __init__(self, result="happy"):
+        from src.app.services.face_emotion import EmotionResult
+
+        self.result = EmotionResult(result, 0.9, True)
+        self.calls = 0
+
+    def classify(self, crop):
+        self.calls += 1
+        return self.result
+
+    def get_meta(self):
+        return {"emotion_classified": self.calls, "emotion_degraded": False}
+
+
+def test_opening_a_camera_with_both_channels_off_is_refused():
+    """Opening a camera to compute nothing is never what was meant, and the
+    failure would be silent: frames read, nothing produced, indistinguishable
+    from a student out of shot."""
+    with pytest.raises(ValueError, match="both heart and emotion disabled"):
+        FaceCaptureAdapter(FakeSource, FakeLocator,
+                           heart_enabled=False, emotion_enabled=False)
+
+
+def test_emotion_enabled_without_a_classifier_is_refused():
+    with pytest.raises(ValueError, match="requires an emotion_classifier"):
+        FaceCaptureAdapter(FakeSource, FakeLocator, emotion_enabled=True)
+
+
+def test_emotion_runs_far_less_often_than_frames_are_captured():
+    """Expression changes on a timescale of seconds. Classifying every frame
+    would spend roughly thirty times the CPU for the same answer, on a device
+    also running a browser, a maths lesson and the EEG stack."""
+    clf = FakeClassifier()
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+        emotion_interval_s=0.2,
+    )
+    adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    for _ in range(60):
+        adapter._capture_once()
+
+    assert clf.calls > 0
+    assert clf.calls < 20, f"classified {clf.calls} times in 60 frames"
+
+
+def test_emotion_only_captures_no_colour():
+    """Warm standby with a healthy headband: the camera is open and FER+ runs,
+    while POS is idle. The colour buffer must stay empty so nothing downstream
+    mistakes an idle heart channel for a stalled one."""
+    clf = FakeClassifier()
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
+        buffer_seconds=2.0, heart_enabled=False,
+        emotion_enabled=True, emotion_classifier=clf, emotion_interval_s=0.0,
+    )
+    adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    for _ in range(10):
+        adapter._capture_once()
+
+    assert clf.calls == 10
+    assert adapter.rgb_buffer().shape == (0, 3)
+    assert adapter.latest_emotion().label == "happy"
+
+
+def test_heart_only_never_classifies():
+    clf = FakeClassifier()
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
+        buffer_seconds=2.0, emotion_enabled=False,
+    )
+    adapter._source, adapter._locator = FakeSource(), FakeLocator()
+    for _ in range(10):
+        adapter._capture_once()
+
+    assert clf.calls == 0
+    assert len(adapter.rgb_buffer()) == 10
+    assert adapter.latest_emotion() is None
+
+
+def test_meta_reports_which_channels_are_on():
+    clf = FakeClassifier()
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(),
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+    )
+    meta = adapter.get_ingestion_meta()
+    assert meta["heart_enabled"] is True
+    assert meta["emotion_enabled"] is True
+    assert "emotion_classified" in meta, "classifier meta was not merged in"
+
+
+def test_disconnect_forgets_the_last_emotion():
+    """A second session must not open showing the previous student's
+    expression."""
+    clf = FakeClassifier()
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
+        buffer_seconds=2.0, emotion_enabled=True, emotion_classifier=clf,
+        emotion_interval_s=0.0,
+    )
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_emotion() is not None)
+    finally:
+        adapter.disconnect()
+    assert adapter.latest_emotion() is None

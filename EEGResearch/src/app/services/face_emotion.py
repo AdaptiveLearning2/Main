@@ -100,6 +100,51 @@ def softmax(values: np.ndarray) -> np.ndarray:
     return exp / total
 
 
+def to_gray64(frame: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray | None:
+    """Crop a face out of an RGB frame and box-resample it to 64x64 grayscale.
+
+    Numpy rather than `cv2.resize`, for two reasons: it keeps the crop path
+    testable on a machine with no OpenCV, and it avoids a second cv2 call per
+    classified frame on a student's laptop.
+
+    Box averaging rather than nearest-neighbour. A face crop is typically
+    150-250 px square, so nearest throws away most of the pixels and makes the
+    result depend on where the sample grid happens to land -- which changes with
+    every small movement of the head and adds noise to a classifier that is
+    already only sampled a few times a second.
+    """
+    x, y, w, h = box
+    height, width = frame.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(width, x + w), min(height, y + h)
+    if x1 - x0 < FACE_INPUT or y1 - y0 < FACE_INPUT:
+        # Smaller than the model's own input, so reaching 64x64 would mean
+        # *upsampling* -- inventing detail the sensor never captured, which the
+        # classifier would then label with full confidence. A distant or
+        # half-cropped face is a missing measurement, not a low-quality one.
+        #
+        # Found by a divide-by-zero warning: the earlier guard let a 46 px crop
+        # through, and forcing 64 non-empty bins out of 46 rows produced empty
+        # bins and a silent nan.
+        return None
+
+    gray = frame[y0:y1, x0:x1].mean(axis=2)
+    rows = np.linspace(0, gray.shape[0], FACE_INPUT + 1).astype(int)
+    cols = np.linspace(0, gray.shape[1], FACE_INPUT + 1).astype(int)
+    # Guard against a zero-width bin when the crop is barely larger than 64 px.
+    rows[1:] = np.maximum(rows[1:], rows[:-1] + 1)
+    cols[1:] = np.maximum(cols[1:], cols[:-1] + 1)
+
+    # reduceat rather than a nested loop over the 4096 output cells. The loop
+    # measured 22 ms per crop, which at even a few classifications a second is
+    # meaningful CPU on a student's laptop for what is arithmetically a couple
+    # of sums.
+    row_sums = np.add.reduceat(gray, rows[:-1], axis=0)
+    block_sums = np.add.reduceat(row_sums, cols[:-1], axis=1)
+    counts = np.outer(np.diff(rows), np.diff(cols))
+    return (block_sums / counts).astype(np.float32)
+
+
 def to_tensor(gray64: np.ndarray) -> np.ndarray:
     """A 64x64 grayscale crop to the model's 1x1x64x64 float input."""
     gray64 = np.asarray(gray64, dtype=np.float32)

@@ -245,3 +245,50 @@ def test_no_camera_dependency_is_imported():
 
     assert "onnxruntime" not in sys.modules
     assert "cv2" not in sys.modules
+
+
+# ── cropping ─────────────────────────────────────────────────────────────────
+
+def test_a_crop_is_box_averaged_not_sampled():
+    """A face crop is typically 150-250 px, so nearest-neighbour would discard
+    most pixels and make the result depend on where the sample grid lands --
+    which shifts with every small head movement, adding noise to a classifier
+    already sampled only a few times a second."""
+    from src.app.services.face_emotion import to_gray64
+
+    ramp = np.zeros((480, 640, 3), dtype=np.uint8)
+    ramp[:, :, 0] = np.linspace(0, 255, 640).astype(np.uint8)
+
+    out = to_gray64(ramp, (100, 50, 300, 300))
+    column_means = out.mean(axis=0)
+    assert np.all(np.diff(column_means) > 0), "the gradient was not preserved"
+
+
+def test_a_crop_smaller_than_the_model_input_is_refused():
+    """Reaching 64x64 from a smaller crop means upsampling -- inventing detail
+    the sensor never captured, which the classifier would label with full
+    confidence. A distant or half-cropped face is a missing measurement.
+
+    Found by a divide-by-zero warning: an earlier guard let a 46 px crop
+    through, and forcing 64 non-empty bins out of 46 rows produced empty bins
+    and a silent nan."""
+    from src.app.services.face_emotion import to_gray64
+
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    assert to_gray64(frame, (10, 10, FACE_INPUT - 1, 200)) is None
+    assert to_gray64(frame, (10, 10, 200, FACE_INPUT - 1)) is None
+    assert to_gray64(frame, (10, 10, FACE_INPUT, FACE_INPUT)) is not None
+
+
+def test_a_crop_never_produces_nan():
+    """Whatever the geometry, every output cell must average at least one real
+    pixel. A nan would reach softmax and come back as a uniform distribution --
+    a confident-looking 12.5% for every emotion."""
+    from src.app.services.face_emotion import to_gray64
+
+    frame = np.random.default_rng(0).integers(0, 255, (480, 640, 3), dtype=np.uint8)
+    for box in [(0, 0, 64, 64), (0, 0, 65, 67), (100, 100, 128, 129),
+                (600, 440, 200, 200), (-20, -20, 200, 200)]:
+        out = to_gray64(frame, box)
+        if out is not None:
+            assert np.isfinite(out).all(), f"nan from box {box}"

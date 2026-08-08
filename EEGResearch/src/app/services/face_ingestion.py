@@ -58,6 +58,12 @@ BUFFER_SECONDS = 40.0
 # student having left or the lighting having failed.
 MISSING_FACE_TOLERANCE = 30
 
+# How often the emotion classifier runs, in seconds. Far below the frame rate on
+# purpose: expression changes on a timescale of seconds, so classifying every
+# frame would spend roughly thirty times the CPU to produce the same answer --
+# on a device that is also running a browser, a maths lesson and the EEG stack.
+EMOTION_INTERVAL_S = 0.25
+
 
 class FrameSource(Protocol):
     """Anything that yields frames. A webcam in production, a list in tests.
@@ -105,6 +111,10 @@ class FaceCaptureAdapter:
         fps: float = 30.0,
         buffer_seconds: float = BUFFER_SECONDS,
         queue_max: int = QUEUE_MAX,
+        heart_enabled: bool = True,
+        emotion_enabled: bool = False,
+        emotion_classifier: Any = None,
+        emotion_interval_s: float = EMOTION_INTERVAL_S,
     ) -> None:
         # buffer_seconds and queue_max are injectable so the bounded-growth and
         # queue-full behaviours can be tested at a scale that runs in
@@ -121,9 +131,28 @@ class FaceCaptureAdapter:
                 f"buffer_seconds={buffer_seconds} is shorter than one POS window "
                 f"({WINDOW_SECONDS}s); no pulse could ever be produced"
             )
+        if not heart_enabled and not emotion_enabled:
+            # Opening a camera to compute nothing is never what was meant, and
+            # the failure would be silent: frames read, nothing produced,
+            # indistinguishable from a student out of shot. The plan's rule is
+            # that emotion off with a healthy headband means the camera is not
+            # open at all -- this makes that unrepresentable rather than
+            # merely intended.
+            raise ValueError(
+                "refusing to open a camera with both heart and emotion disabled"
+            )
+        if emotion_enabled and emotion_classifier is None:
+            raise ValueError("emotion_enabled requires an emotion_classifier")
+
         self._make_source = frame_source_factory
         self._make_locator = locator_factory
         self.fps = fps
+        self.heart_enabled = heart_enabled
+        self.emotion_enabled = emotion_enabled
+        self._emotion = emotion_classifier
+        self._emotion_interval = emotion_interval_s
+        self._last_emotion_at = 0.0
+        self._latest_emotion: Any = None
 
         self._source: FrameSource | None = None
         self._locator: Any = None
@@ -175,6 +204,8 @@ class FaceCaptureAdapter:
             self._source.release()
             self._source = None
         self._locator = None
+        self._latest_emotion = None
+        self._last_emotion_at = 0.0
         while True:
             try:
                 self._queue.get_nowait()
@@ -222,6 +253,26 @@ class FaceCaptureAdapter:
         if box is None:
             with self._lock:
                 self._counters.consecutive_missing += 1
+            return
+
+        now = time.monotonic()
+        if (self.emotion_enabled
+                and now - self._last_emotion_at >= self._emotion_interval):
+            self._last_emotion_at = now
+            from src.app.services.face_emotion import to_gray64  # noqa: PLC0415
+
+            crop = to_gray64(frame, box)
+            result = self._emotion.classify(crop)
+            with self._lock:
+                self._latest_emotion = result
+
+        if not self.heart_enabled:
+            # Emotion-only. The face was found and classified; there is no
+            # colour sample to make, and the buffer stays empty so nothing
+            # downstream mistakes an idle heart channel for a stalled one.
+            with self._lock:
+                self._counters.faces_found += 1
+                self._counters.consecutive_missing = 0
             return
 
         sample = mean_rgb(frame, box)
@@ -292,6 +343,12 @@ class FaceCaptureAdapter:
 
     # ── reporting ────────────────────────────────────────────────────────────
 
+    def latest_emotion(self) -> Any:
+        """The most recent classification, or None if emotion is off or nothing
+        has been classified yet."""
+        with self._lock:
+            return self._latest_emotion
+
     def get_ingestion_meta(self) -> dict[str, Any]:
         """Camera state for the API.
 
@@ -316,6 +373,9 @@ class FaceCaptureAdapter:
                 "face_degraded": degraded,
                 "face_degraded_reason": "no usable face" if degraded else None,
                 "last_error": c.last_error,
+                "heart_enabled": self.heart_enabled,
+                "emotion_enabled": self.emotion_enabled,
+                **(self._emotion.get_meta() if self._emotion is not None else {}),
             }
 
 
@@ -371,12 +431,28 @@ class OpenCvFrameSource:
         self._cap.release()
 
 
-def build_face_adapter(camera_index: int, fps: float) -> FaceCaptureAdapter:
+def build_face_adapter(
+    camera_index: int,
+    fps: float,
+    *,
+    heart_enabled: bool = True,
+    emotion_enabled: bool = False,
+    emotion_model_path: Any = None,
+) -> FaceCaptureAdapter:
     """A camera-backed adapter. Nothing is opened until connect() is called."""
     from src.app.services.face_roi import FaceLocator   # noqa: PLC0415 -- needs cv2
+
+    classifier = None
+    if emotion_enabled:
+        from src.app.services.face_emotion import EmotionClassifier  # noqa: PLC0415
+
+        classifier = EmotionClassifier(emotion_model_path)
 
     return FaceCaptureAdapter(
         lambda: OpenCvFrameSource(camera_index=camera_index, fps=fps),
         FaceLocator,
         fps=fps,
+        heart_enabled=heart_enabled,
+        emotion_enabled=emotion_enabled,
+        emotion_classifier=classifier,
     )

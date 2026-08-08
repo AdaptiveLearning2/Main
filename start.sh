@@ -2,12 +2,21 @@
 # AdaptiveLearning -- full stack launcher (macOS)
 # Run from: /path/to/AdaptiveLearning
 # Usage:
-#   ./start.sh          (simulator mode -- no headband needed)
-#   ./start.sh --muse   (real Muse S headband -- note: libMuse is Windows-only)
+#   ./start.sh                     (simulator mode -- no headband needed)
+#   ./start.sh --muse              (real Muse S headband -- libMuse is Windows-only)
+#   ./start.sh --camera            (facial capture on camera index 0)
+#   ./start.sh --camera --index 1  (a specific camera)
 
 MUSE=false
-for arg in "$@"; do
-    [[ "$arg" == "--muse" ]] && MUSE=true
+CAMERA=false
+CAMERA_INDEX=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --muse)   MUSE=true; shift ;;
+        --camera) CAMERA=true; shift ;;
+        --index)  CAMERA_INDEX="$2"; shift 2 ;;
+        *)        echo "unknown option: $1"; exit 1 ;;
+    esac
 done
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -17,10 +26,25 @@ FRONTEND_DIR="$ROOT/Website/AdaptiveLearning/frontend"
 TMP_DIR="/tmp/adaptivelearning"
 mkdir -p "$TMP_DIR"
 
+set_env_key() {
+    # Rewrite a key in a .env, or append it if absent. Appending matters: a
+    # first-time checkout has no FACE_* lines at all, and sed against a missing
+    # key silently does nothing -- the flag would appear to work and change no
+    # behaviour.
+    local path="$1" key="$2" value="$3"
+    [ -f "$path" ] || return 0
+    if grep -q "^${key}=" "$path"; then
+        sed -i '' "s|^${key}=.*|${key}=${value}|" "$path"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$path"
+    fi
+}
+
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 GRAY='\033[0;90m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 # Prefer python3, fall back to python
@@ -111,6 +135,54 @@ if [ -f "$EEG_ENV" ]; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
         echo -e "  ${YELLOW}Set EEG_SOURCE=sim in EEGResearch/.env${NC}"
     fi
+fi
+
+# 1b. Camera
+EMOTION_MODEL="$EEG_DIR/models/emotion-ferplus-8.onnx"
+if [ "$CAMERA" = true ]; then
+    echo -e "${CYAN}[1/5] Camera (index $CAMERA_INDEX)${NC}"
+
+    if [ ! -x "$EEG_DIR/.venv/bin/python" ]; then
+        echo -e "  ${RED}ERROR: EEGResearch/.venv not found -- create it first.${NC}"
+        exit 1
+    fi
+
+    # The `face` extra is optional, so a machine that has never installed it is
+    # the normal case rather than a broken one. Checked here, at setup, because
+    # the alternative is the sidecar starting cleanly and the camera failing
+    # only when a lesson begins.
+    if ! "$EEG_DIR/.venv/bin/python" -c "import cv2, onnxruntime" 2>/dev/null; then
+        echo -e "  ${RED}ERROR: the 'face' extra is not installed in EEGResearch/.venv${NC}"
+        echo -e "  ${YELLOW}Install it with:${NC}"
+        echo -e "  ${YELLOW}  cd EEGResearch && source .venv/bin/activate && pip install -e '.[face]'${NC}"
+        exit 1
+    fi
+
+    # Fetch and verify the FER+ model now, not on the first frame. A 35 MB
+    # download in front of a student's first session would look like the
+    # feature being broken, and a checksum failure is an install problem that
+    # should be seen here.
+    echo -e "  ${GRAY}Checking emotion model...${NC}"
+    if ! (cd "$EEG_DIR" && ./.venv/bin/python -c "
+from pathlib import Path
+from src.app.services.face_emotion import ensure_model
+ensure_model(Path('$EMOTION_MODEL'))
+"); then
+        echo -e "  ${RED}ERROR: emotion model could not be fetched or failed verification${NC}"
+        exit 1
+    fi
+
+    # macOS has no libMuse, so the headband half is always sim here.
+    set_env_key "$EEG_ENV" "EEG_DEVICES" "default:sim,camera:face@$CAMERA_INDEX"
+    set_env_key "$EEG_ENV" "FACE_ENABLED" "true"
+    set_env_key "$EEG_ENV" "FACE_CAMERA_INDEX" "$CAMERA_INDEX"
+    echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
+else
+    # Explicitly cleared rather than left. A stale EEG_DEVICES from a previous
+    # --camera run would keep opening the webcam on every subsequent start,
+    # which is exactly the surprise the consent design exists to prevent.
+    set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
+    set_env_key "$EEG_ENV" "EEG_DEVICES" ""
 fi
 
 # 2. Ollama

@@ -49,6 +49,32 @@ logger = logging.getLogger(__name__)
 # 30 fps is far more than any consumer should be behind.
 QUEUE_MAX = 3600
 
+# How long the capture thread waits after a read that produced nothing.
+#
+# The loop is otherwise paced by `read()` blocking on the sensor. When there is
+# no sensor -- unplugged mid-session, or a permission revoked -- the read
+# returns immediately and there is nothing left to limit the rate, so without
+# this the thread spins a core writing the same log line. Short enough that a
+# camera coming back is picked up within a frame or two of a normal cadence.
+ERROR_BACKOFF_SECONDS = 0.1
+
+# The clock the samples are stamped with.
+#
+# `perf_counter`, not `monotonic`, and on Windows that is the whole ballgame:
+# `time.monotonic()` there has a resolution of **15.625 ms**, so at any frame
+# rate worth having it does not measure the interval, it quantises it.
+#
+# This was found by misreading its output. A webcam capture showed intervals
+# clustered at 31 ms and 47 ms and the pattern was diagnosed as the capture loop
+# beating against the camera's native cadence. 31 and 47 are 2 and 3 ticks of a
+# 15.625 ms clock. There was no beat; there was a clock that could not express
+# anything in between, and every frame interval was rounded to a multiple of it.
+#
+# `perf_counter` resolves 100 ns, is monotonic by contract, and costs the same.
+# It is only unsuitable for wall-clock questions, which nothing here asks --
+# the capture's absolute start is recorded separately for exactly that reason.
+now_seconds = time.perf_counter
+
 # How much colour history to keep for POS. It needs one window (1.6 s); the rate
 # derivation downstream wants 25-30 s. 40 s at 30 fps gives that with headroom
 # and is a fixed cost.
@@ -127,6 +153,7 @@ class FaceCaptureAdapter:
         emotion_enabled: bool = False,
         emotion_classifier_factory: Callable[[], Any] | None = None,
         emotion_interval_s: float = EMOTION_INTERVAL_S,
+        error_backoff: float = ERROR_BACKOFF_SECONDS,
     ) -> None:
         # buffer_seconds and queue_max are injectable so the bounded-growth and
         # queue-full behaviours can be tested at a scale that runs in
@@ -169,6 +196,7 @@ class FaceCaptureAdapter:
         self._make_emotion = emotion_classifier_factory
         self._emotion: Any = None
         self._emotion_interval = emotion_interval_s
+        self._error_backoff = error_backoff
         self._last_emotion_at = 0.0
         self._latest_emotion: Any = None
 
@@ -248,11 +276,28 @@ class FaceCaptureAdapter:
     # ── capture ──────────────────────────────────────────────────────────────
 
     def _capture_loop(self) -> None:
-        interval = 1.0 / self.fps if self.fps > 0 else 0.0
+        """Read frames as fast as the camera hands them over, and no faster.
+
+        There is deliberately no pacing here. Sleeping the remainder of a
+        nominal frame interval is the obvious shape for a capture loop and it
+        actively harms this one: `read()` already blocks until the sensor has a
+        frame, so the camera is the clock, and adding a second clock on top only
+        creates a beat between them.
+
+        Measured. Paced to 30 fps against a camera running natively at ~32, the
+        intervals came out bimodal -- 78% at 31 ms and 21% at 47 ms -- because
+        each time the sleep overshot the next exposure a whole frame was missed.
+        That is a fifth of the signal discarded to enforce a rate the camera was
+        already exceeding.
+
+        Resampling downstream makes the uneven result survivable, which is why
+        this was not a correctness bug. It was still 21% fewer samples than the
+        hardware offered, and a stop event checked once per frame is prompt
+        enough for disconnect() without a timed wait to make it so.
+        """
         while not self._stop.is_set():
-            started = time.monotonic()
             try:
-                self._capture_once()
+                got_frame = self._capture_once()
             except Exception as exc:                      # noqa: BLE001
                 # Caught at the thread boundary rather than by installing a
                 # process-wide threading.excepthook, which is what the original
@@ -262,20 +307,32 @@ class FaceCaptureAdapter:
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
                 logger.exception("face capture iteration failed")
+                # The one case that does need a wait. A source failing
+                # immediately -- an unplugged camera returning None with no
+                # blocking read behind it -- would otherwise spin this thread at
+                # full speed logging the same error. Waiting on the stop event
+                # rather than sleeping keeps disconnect() prompt.
+                self._stop.wait(self._error_backoff)
+                continue
 
-            # Wait on the stop event rather than sleeping, so disconnect() takes
-            # effect immediately instead of up to one frame interval later.
-            remaining = interval - (time.monotonic() - started)
-            if remaining > 0:
-                self._stop.wait(remaining)
+            if not got_frame:
+                # A source that yields nothing is not blocking on hardware, so
+                # nothing else in the loop limits the rate. Same backoff, same
+                # reason -- an unplugged camera must not spin a core.
+                self._stop.wait(self._error_backoff)
 
-    def _capture_once(self) -> None:
+    def _capture_once(self) -> bool:
+        """One frame. Returns whether the camera handed one over at all.
+
+        The return value is about the *source*, not about the face: a frame with
+        no face in it still means the camera is alive and pacing the loop.
+        """
         frame = self._source.read() if self._source else None
         if frame is None:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "camera"
-            return
+            return False
 
         with self._lock:
             self._counters.frames_read += 1
@@ -289,9 +346,9 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.consecutive_missing += 1
                 self._counters.missing_reason = "no_face"
-            return
+            return True
 
-        now = time.monotonic()
+        now = now_seconds()
         if (self.emotion_enabled
                 and now - self._last_emotion_at >= self._emotion_interval):
             self._last_emotion_at = now
@@ -320,7 +377,7 @@ class FaceCaptureAdapter:
             with self._lock:
                 self._counters.faces_found += 1
                 self._counters.consecutive_missing = 0
-            return
+            return True
 
         sample = mean_rgb(frame, box)
         # `frame` goes out of scope here and is never referenced again. Every
@@ -335,7 +392,7 @@ class FaceCaptureAdapter:
             self._counters.missing_reason = None
             self._buffer.append((now, *sample.rgb, sample.usable_fraction))
 
-        item = FaceSample(time.monotonic(), sample.rgb, sample.usable_fraction)
+        item = FaceSample(now_seconds(), sample.rgb, sample.usable_fraction)
         try:
             self._queue.put_nowait(item)
         except queue.Full:
@@ -345,9 +402,10 @@ class FaceCaptureAdapter:
             # frame.
             with self._lock:
                 self._counters.dropped_full_queue += 1
-            return
+            return True
         with self._lock:
             self._counters.samples_emitted += 1
+        return True
 
     # ── consumption ──────────────────────────────────────────────────────────
 
@@ -402,19 +460,36 @@ class FaceCaptureAdapter:
         (This is the opposite of the call made for the headband's optical
         packets, where the median was wrong because ~9% of timestamps were
         exact duplicates from the SDK's batching. Here every stamp is a distinct
-        `time.monotonic()` read at the moment of capture, so the median is the
+        `now_seconds()` read at the moment of capture, so the median is the
         robust statistic it is normally assumed to be. The difference is in the
-        clock, not the preference.)
+        clock, not the preference -- which is also why that clock is
+        `perf_counter` and not `monotonic`; see the note on it above.)
 
         Copies rather than views: the buffer is mutated by the capture thread.
         `islice` over the tail rather than `list(...)[-n:]`, which materialised
         the whole deque under the capture thread's lock on every tick to keep
         the last 60% of it.
         """
+        # Sliced by the clock, not by a count against the nominal rate.
+        #
+        # `int(seconds * self.fps)` was the last place the configured rate
+        # entered the arithmetic, and it was wrong in the same direction as
+        # everything else that used it: at a measured 32.26 Hz, 750 samples is
+        # 23.25 s rather than the 25 s asked for, so a camera holding a full
+        # buffer reported 93% coverage. Walking back from the newest sample
+        # until the cutoff costs exactly the window's length and asks the
+        # question the caller actually asked.
         with self._lock:
-            n = len(self._buffer)
-            want = n if seconds == float("inf") else min(n, int(seconds * self.fps))
-            data = list(islice(self._buffer, n - want, n)) if want else []
+            if seconds == float("inf") or not self._buffer:
+                data = list(self._buffer)
+            else:
+                cutoff = self._buffer[-1][0] - seconds
+                data = []
+                for row in reversed(self._buffer):
+                    if row[0] < cutoff:
+                        break
+                    data.append(row)
+                data.reverse()
 
         if not data:
             return np.empty((0, 3)), None, None, np.empty(0)
@@ -512,6 +587,25 @@ class OpenCvFrameSource:
         # to measure. Not all drivers honour these; failure to set them is
         # reported rather than silently accepted.
         self.locked = {
+            # One frame of buffer, so read() returns the frame being exposed
+            # now rather than the oldest one queued.
+            #
+            # This is a time-base fix, not a latency one. With a deeper queue,
+            # read() drains several frames back to back and each is stamped at
+            # the moment it was *read*, not the moment it was exposed --
+            # measured here as intervals alternating between ~6 ms and ~41 ms
+            # for a camera running evenly at ~24 Hz. Those stamps are not a
+            # description of when the light arrived, and rPPG has nothing but
+            # the timing of the light.
+            #
+            # Requested, not guaranteed. `set()` reports success on this Windows
+            # backend and the pairing survives it -- 28% of intervals are still
+            # under 15 ms against a 40 ms median. It removed the worst outlier
+            # and costs nothing, so it stays, but the honest position is that
+            # frame stamps here are read-times and the driver decides how close
+            # to exposure that is. Resampling absorbs the result; if the ECG
+            # comparison comes back poor, this is the first thing to suspect.
+            "buffer_size": bool(self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)),
             "auto_exposure": bool(self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)),
             "auto_wb": bool(self._cap.set(cv2.CAP_PROP_AUTO_WB, 0)),
             "fps": bool(self._cap.set(cv2.CAP_PROP_FPS, fps)),

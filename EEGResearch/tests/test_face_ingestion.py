@@ -35,7 +35,18 @@ FACE_BOX = (20, 10, 100, 100)
 
 
 class FakeSource:
-    """Yields a fixed frame, optionally failing or ending."""
+    """Yields a fixed frame, optionally failing or ending.
+
+    `read()` sleeps for a beat, because a real one blocks until the sensor has a
+    frame -- and since the capture loop is now paced by that block rather than
+    by a sleep of its own, a source returning instantly is not a fast camera but
+    an impossible one. Returning with no delay put many samples on the same
+    `time.monotonic()` value, which made the median frame interval zero and the
+    measured rate unmeasurable: a real duplicate-timestamp failure, reachable
+    only through a fake.
+    """
+
+    READ_SECONDS = 0.002
 
     def __init__(self, frame=None, fail_after=None, raise_after=None):
         self.frame = frame if frame is not None else _flat_frame()
@@ -46,6 +57,7 @@ class FakeSource:
 
     def read(self):
         self.reads += 1
+        time.sleep(self.READ_SECONDS)
         if self.raise_after is not None and self.reads > self.raise_after:
             raise RuntimeError("camera exploded")
         if self.fail_after is not None and self.reads > self.fail_after:
@@ -71,14 +83,20 @@ def _flat_frame(colour=(180, 120, 110)):
 
 
 def _adapter(source=None, locator=None, fps=500.0, buffer_seconds=2.0,
-             queue_max=QUEUE_MAX):
+             queue_max=QUEUE_MAX, error_backoff=0.0):
     """fps is deliberately high and the buffer deliberately small so tests run
-    in milliseconds; nothing under test depends on the wall-clock rate."""
+    in milliseconds; nothing under test depends on the wall-clock rate.
+
+    `error_backoff` is zero here and 0.1 s in production. The backoff exists so
+    a camera that is gone cannot spin a core; in a test the only effect is to
+    multiply the tolerance for consecutive failures by a tenth of a second
+    apiece, which turns a millisecond assertion into a three-second one."""
     src = source or FakeSource()
     loc = locator or FakeLocator()
     adapter = FaceCaptureAdapter(lambda: src, lambda: loc, fps=fps,
                                  buffer_seconds=buffer_seconds,
-                                 queue_max=queue_max)
+                                 queue_max=queue_max,
+                                 error_backoff=error_backoff)
     return adapter, src, loc
 
 

@@ -22,11 +22,14 @@ One JSON object per line:
 The first line is a header carrying the absolute start; every line after it is a
 sample.
 
-`t` is seconds since capture start, from the same monotonic clock the adapter
-uses, and it is the whole point of the format. A webcam asked for 30 fps does
-not deliver 30 evenly spaced frames — measured here, intervals were bimodal at
-31 ms and 47 ms — so the samples are placed by these stamps rather than by their
-index, both in analysis and in the shipped path.
+`t` is seconds since capture start, from the same `perf_counter` clock the
+adapter stamps samples with, and it is the whole point of the format: samples
+are placed by these stamps rather than by their index, in analysis and in the
+shipped path alike.
+
+`perf_counter` specifically. `time.monotonic()` on Windows resolves only
+15.625 ms, which is coarse enough to quantise a 30 fps interval into 2- and
+3-tick steps and to make an evenly-running camera look like it was stuttering.
 """
 
 from __future__ import annotations
@@ -41,7 +44,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.app.services.face_ingestion import OpenCvFrameSource  # noqa: E402
+import numpy as np  # noqa: E402
+
+from src.app.services.face_ingestion import (  # noqa: E402
+    LUMA_WEIGHTS,
+    OpenCvFrameSource,
+)
 from src.app.services.face_roi import FaceLocator, mean_rgb  # noqa: E402
 
 
@@ -62,16 +70,16 @@ def main() -> int:
     print(f"camera {args.camera} open; locked: {source.locked}", flush=True)
 
     frames = faces = written = 0
-    started = time.monotonic()
+    started = time.perf_counter()
 
-    # Wall clock as well as the monotonic base, written as the first line.
+    # Wall clock as well as the perf_counter base, written as the first line.
     #
     # This is what makes the ECG alignment self-contained. The watch's export
     # carries an absolute `Created time`, so with an absolute start here the
     # offset between the two recordings is arithmetic -- nobody has to mark the
     # moment a reading began, and the alignment stops depending on how quickly
-    # someone typed. The monotonic clock stamps the samples because it cannot
-    # step backwards; the wall clock appears once, only to anchor it.
+    # someone typed. `perf_counter` stamps the samples because it is monotonic
+    # and fine-grained; the wall clock appears once, only to anchor it.
     wall_start = datetime.now().astimezone()
     last_report = started
 
@@ -82,14 +90,19 @@ def main() -> int:
                              "nominal_fps": args.fps}) + "\n")
         print(f"capture started at {wall_start.isoformat()}", flush=True)
         try:
-            while time.monotonic() - started < args.seconds:
-                tick = time.monotonic()
+            while time.perf_counter() - started < args.seconds:
+                tick = time.perf_counter()
                 frame = source.read()
                 if frame is None:
                     continue
                 frames += 1
 
-                gray = frame.mean(axis=2).astype("uint8")
+                # Luma, matching the adapter exactly. A flat channel mean is a
+                # different image -- brighter in red, which is most of a face --
+                # and detection is precisely where the two would diverge. The
+                # value of this script is that it runs the shipped path; a
+                # different grayscale quietly makes that untrue.
+                gray = frame.astype(np.float32) @ LUMA_WEIGHTS
                 box = locator.locate(gray)
                 if box is None:
                     continue
@@ -108,7 +121,7 @@ def main() -> int:
                 }) + "\n")
                 written += 1
 
-                now = time.monotonic()
+                now = time.perf_counter()
                 if now - last_report >= 10.0:
                     elapsed = now - started
                     print(f"{elapsed:6.0f}s  {written} samples  "
@@ -116,19 +129,21 @@ def main() -> int:
                           f"face {faces}/{frames}", flush=True)
                     last_report = now
 
-                # Deliberately no sleep. Pacing the loop to a nominal 33.3 ms
-                # made things worse, not better: against this camera's native
-                # ~31 ms cadence it produced a beat pattern -- 78% of intervals
-                # at 31 ms and 21% at 47 ms, one skipped frame each time the
-                # sleep overshot the next exposure. `read()` already blocks
-                # until a frame is ready, so the camera paces the loop, and the
-                # frames we would have skipped are free signal.
+                # Deliberately no sleep: `read()` already blocks until the
+                # sensor has a frame, so the camera is the clock and a second
+                # one on top only discards frames it overshoots.
+                #
+                # (An earlier revision blamed the sleep for a bimodal 31/47 ms
+                # interval pattern. It was not the cause -- those are 2 and 3
+                # ticks of `monotonic`'s 15.625 ms resolution, and the pattern
+                # went away with `perf_counter`, not with the sleep. The reason
+                # above is the real one and it stands on its own.)
         except KeyboardInterrupt:
             print("interrupted", flush=True)
         finally:
             source.release()
 
-    elapsed = time.monotonic() - started
+    elapsed = time.perf_counter() - started
     print(f"wrote {written} samples to {out} "
           f"({elapsed:.1f}s span, {written / elapsed:.2f} Hz measured, "
           f"face found on {faces}/{frames} frames)", flush=True)

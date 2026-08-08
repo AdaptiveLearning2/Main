@@ -157,10 +157,21 @@ class FaceLocator:
     def locate(self, gray: np.ndarray) -> tuple[int, int, int, int] | None:
         """Face box for this frame, reusing the previous one between detections.
 
-        `gray` is a single-channel image. Returns None only when no face has
-        been found yet or the last detection has aged out without a replacement
-        -- a caller should treat that as "no measurement", never as a zero.
+        `gray` is a single-channel image, in any numeric dtype. Returns None
+        only when no face has been found yet or the last detection has aged out
+        without a replacement -- a caller should treat that as "no measurement",
+        never as a zero.
+
+        The cast to uint8 is load-bearing, not defensive. Both callers compute
+        luma as a weighted sum of the three channels, which is float, and
+        OpenCV's cascade asserts `_image.depth() == CV_8U` and raises rather
+        than converting. Every test in front of this used a fake locator, so the
+        assertion only ever fired on a real camera -- where it took the capture
+        thread down on the first frame.
         """
+        if gray.dtype != np.uint8:
+            gray = np.clip(gray, 0, 255).astype(np.uint8)
+
         if self._last is not None and self._since < self.redetect_every:
             self._since += 1
             return self._last

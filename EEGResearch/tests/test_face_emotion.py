@@ -256,13 +256,17 @@ def test_no_camera_dependency_is_imported():
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent("""
             import sys
-            sys.path.insert(0, ".")
+            sys.path.insert(0, sys.argv[1])
             import src.app.services.face_emotion  # noqa: F401
             leaked = [m for m in ("onnxruntime", "cv2") if m in sys.modules]
             assert not leaked, f"importing face_emotion pulled in {leaked}"
             print("clean")
-        """)],
-        capture_output=True, text=True, cwd=".",
+        """),
+        # The repo root is passed as an argument rather than assumed from the
+        # working directory: with `cwd="."` this passed only when pytest
+        # happened to be invoked from EEGResearch/.
+        str(Path(__file__).resolve().parents[1])],
+        capture_output=True, text=True,
     )
     assert "clean" in result.stdout, result.stderr
 

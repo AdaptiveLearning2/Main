@@ -18,6 +18,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -116,7 +117,7 @@ def test_the_sidecar_imports_without_any_camera_dependency():
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent("""
             import importlib, sys
-            sys.path.insert(0, ".")
+            sys.path.insert(0, sys.argv[1])
             for module in (
                 "src.app.config",
                 "src.app.services.eeg_ingestion",
@@ -131,8 +132,12 @@ def test_the_sidecar_imports_without_any_camera_dependency():
                       if m in sys.modules]
             assert not leaked, f"importing the sidecar pulled in {leaked}"
             print("clean")
-        """)],
-        capture_output=True, text=True, cwd=".",
+        """),
+        # The repo root is passed as an argument rather than assumed from the
+        # working directory: with `cwd="."` this passed only when pytest
+        # happened to be invoked from EEGResearch/.
+        str(Path(__file__).resolve().parents[1])],
+        capture_output=True, text=True,
     )
     assert "clean" in result.stdout, result.stderr
 
@@ -158,7 +163,7 @@ def test_a_face_adapter_is_built_without_touching_a_camera_dependency():
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent("""
             import sys
-            sys.path.insert(0, ".")
+            sys.path.insert(0, sys.argv[1])
             from src.app.config import Settings
             from src.app.services.eeg_ingestion import build_ingestion_adapter
 
@@ -170,8 +175,12 @@ def test_a_face_adapter_is_built_without_touching_a_camera_dependency():
                       if m in sys.modules]
             assert not leaked, f"building the adapter pulled in {leaked}"
             print("clean")
-        """)],
-        capture_output=True, text=True, cwd=".",
+        """),
+        # The repo root is passed as an argument rather than assumed from the
+        # working directory: with `cwd="."` this passed only when pytest
+        # happened to be invoked from EEGResearch/.
+        str(Path(__file__).resolve().parents[1])],
+        capture_output=True, text=True,
     )
     assert "clean" in result.stdout, result.stderr
 

@@ -114,12 +114,20 @@ def build_heart_record(
         span = float(timestamps[-1] - timestamps[0])
     else:
         span = (have / fps) if fps else 0.0
+    # Not clamped, and reported as-is above 1.0. The window is sliced by
+    # timestamp so it will sit near 1.0 in normal running, but a camera whose
+    # samples outlive the slice boundary can carry slightly more than asked for,
+    # and rounding that down to 1.0 would hide it. It is a ratio of seconds held
+    # to seconds wanted, which is a more useful thing to read than a fraction
+    # that has been quietly capped.
     coverage = span / RATE_WINDOW_SECONDS
 
     record: dict[str, Any] = {
         "source": "rppg",
         "bpm": None,
         "confidence": 0.0,
+        # Seconds of history held over seconds wanted. May exceed 1.0; see the
+        # note where it is computed.
         "window_coverage": round(coverage, 3),
         "face_quality": None,
         # `is not None`, not truthiness: 0.0 is a measurement, and reporting it

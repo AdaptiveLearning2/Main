@@ -9,7 +9,6 @@ from typing import Any
 from src.app.config import DEFAULT_DEVICE_ID, DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
-from src.app.services.face_processing import RATE_WINDOW_SECONDS
 from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
@@ -60,10 +59,23 @@ class DeviceSession:
         electrode channels and no cognitive state, and inventing empty ones
         would let a caller average them into an EEG session's numbers.
         """
-        from src.app.services.face_processing import build_camera_payload
+        # Imported here rather than at module scope. It is cheap and pulls in no
+        # camera dependency -- face_processing -> face_ingestion -> face_roi ->
+        # pos_rppg are all plain numpy, and the no-dependency import test proves
+        # it. But that chain only stays safe by convention, and a module-scope
+        # import would put it on every sidecar start including headband-only
+        # ones. Keeping it local means the property is enforced by structure
+        # rather than by remembering.
+        from src.app.services.face_processing import (  # noqa: PLC0415
+            RATE_WINDOW_SECONDS,
+            build_camera_payload,
+        )
 
-        rgb, measured = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
+        rgb, measured, quality = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
         payload: dict[str, Any] = {
+            # Names the shape, so the API union and any consumer can branch on
+            # it rather than probing for which fields happen to be present.
+            "kind": "camera",
             "contract_version": self.CONTRACT_VERSION,
             "device_id": self.device_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -76,6 +88,7 @@ class DeviceSession:
                 rgb_window=rgb,
                 fps=self.adapter.fps,
                 measured_fps=measured,
+                window_quality=quality,
                 samples=samples,
                 emotion=self.adapter.latest_emotion(),
                 heart_enabled=self.adapter.heart_enabled,

@@ -488,3 +488,33 @@ def test_degraded_names_which_of_three_causes_it_was():
             assert adapter.get_ingestion_meta()["face_degraded_reason"] == expected
         finally:
             adapter.disconnect()
+
+
+def test_the_buffer_carries_quality_alongside_colour():
+    """So the gate downstream applies to the window being scored rather than to
+    whatever arrived on the current tick."""
+    adapter, _, _ = _adapter(fps=200.0)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 5)
+        rgb, measured, quality = adapter.rgb_window(1.0)
+        assert len(rgb) > 5
+        assert measured is not None and measured > 0
+        assert quality == pytest.approx(1.0, abs=0.01)
+    finally:
+        adapter.disconnect()
+
+
+def test_the_measured_rate_reflects_reality_not_the_setting():
+    """A nominal fps is a request. Event.wait resolution alone means a loop asked
+    for 500 fps runs nearer 65, and a real camera drops frames under load."""
+    adapter, _, _ = _adapter(fps=500.0)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 20)
+        _, measured, _ = adapter.rgb_window(5.0)
+    finally:
+        adapter.disconnect()
+
+    assert measured is not None
+    assert measured < 500.0, "the measured rate just echoed the configured one"

@@ -73,6 +73,7 @@ def build_heart_record(
     fps: float,
     *,
     measured_fps: float | None = None,
+    window_quality: float | None = None,
     samples: list[FaceSample] | None = None,
 ) -> dict[str, Any]:
     """The `heart` block from a window of colour.
@@ -91,11 +92,18 @@ def build_heart_record(
         "confidence": 0.0,
         "window_coverage": round(coverage, 3),
         "face_quality": None,
-        "measured_fps": round(measured_fps, 2) if measured_fps else None,
+        # `is not None`, not truthiness: 0.0 is a measurement, and reporting it
+        # as None would say "unmeasurable" about a camera that had stopped.
+        "measured_fps": round(measured_fps, 2) if measured_fps is not None else None,
         "rejected_by": None,
     }
 
-    if samples:
+    # Quality of the window being scored, not of whatever arrived this tick.
+    # Falling back to the drained samples left the gate unapplied on any tick
+    # that drained nothing -- routine when ticks outpace the frame rate.
+    if window_quality is not None:
+        record["face_quality"] = round(float(window_quality), 3)
+    elif samples:
         record["face_quality"] = round(
             float(np.mean([s.usable_fraction for s in samples])), 3
         )
@@ -169,6 +177,7 @@ def build_camera_payload(
     rgb_window: np.ndarray | None,
     fps: float,
     measured_fps: float | None = None,
+    window_quality: float | None = None,
     samples: list[FaceSample] | None = None,
     emotion: EmotionResult | None = None,
     heart_enabled: bool = True,
@@ -188,6 +197,7 @@ def build_camera_payload(
             rgb_window if rgb_window is not None else np.empty((0, 3)),
             fps,
             measured_fps=measured_fps,
+            window_quality=window_quality,
             samples=samples,
         )
     if emotion_enabled:

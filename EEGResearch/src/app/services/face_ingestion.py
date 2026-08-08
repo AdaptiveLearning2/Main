@@ -178,12 +178,18 @@ class FaceCaptureAdapter:
         self._stop = threading.Event()
 
         self._queue: queue.Queue[FaceSample] = queue.Queue(maxsize=queue_max)
-        # (monotonic_ts, r, g, b). The timestamp is kept because the configured
+        # (monotonic_ts, r, g, b, usable_fraction). The timestamp is kept because the configured
         # fps is a request, not a measurement: a webcam asked for 30 routinely
         # delivers 22 under load or poor light. Deriving the time base from the
         # nominal rate would scale every bpm by nominal/actual -- 30/22 is +36%,
         # a confidently wrong heart rate with nothing to indicate it.
-        self._buffer: deque[tuple[float, float, float, float]] = deque(
+        # usable_fraction rides along so quality gating is per *window* rather
+        # than per tick. Deriving it from the samples drained since the last tick
+        # made it intermittent: a tick that drained nothing left quality unknown
+        # while the 25 s colour buffer was still full and scored, so the gate
+        # silently did not run. Ticks faster than the frame rate hit that
+        # routinely.
+        self._buffer: deque[tuple[float, float, float, float, float]] = deque(
             maxlen=max(1, int(buffer_seconds * fps))
         )
         self._lock = threading.Lock()
@@ -327,7 +333,7 @@ class FaceCaptureAdapter:
                 return
             self._counters.consecutive_missing = 0
             self._counters.missing_reason = None
-            self._buffer.append((now, *sample.rgb))
+            self._buffer.append((now, *sample.rgb, sample.usable_fraction))
 
         item = FaceSample(time.monotonic(), sample.rgb, sample.usable_fraction)
         try:
@@ -366,14 +372,22 @@ class FaceCaptureAdapter:
         """Everything currently buffered, as (n, 3)."""
         return self.rgb_window(float("inf"))[0]
 
-    def rgb_window(self, seconds: float) -> tuple[np.ndarray, float | None]:
-        """The most recent `seconds` of colour, and the rate it was *actually*
-        sampled at.
+    def window_quality(self, seconds: float) -> float | None:
+        """Mean usable-pixel fraction over the same window as the colour."""
+        return self.rgb_window(seconds)[2]
 
-        Returns (rgb, measured_fps). `measured_fps` is None when there are too
-        few samples to measure one; a caller must treat that as no window rather
-        than falling back to the nominal rate, which is the assumption this
-        return value exists to remove.
+    def rgb_window(
+        self, seconds: float
+    ) -> tuple[np.ndarray, float | None, float | None]:
+        """The most recent `seconds` of colour, the rate it was *actually*
+        sampled at, and its mean quality.
+
+        Returns (rgb, measured_fps, mean_usable_fraction). `measured_fps` is
+        None when there are too few samples to measure one; a caller must treat
+        that as no window rather than falling back to the nominal rate, which is
+        the assumption this return value exists to remove. Quality comes from
+        the same window as the colour, so the gate applies to what is being
+        scored rather than to whatever happened to arrive this tick.
 
         Copies rather than views: the buffer is mutated by the capture thread.
         `islice` over the tail rather than `list(...)[-n:]`, which materialised
@@ -386,14 +400,15 @@ class FaceCaptureAdapter:
             data = list(islice(self._buffer, n - want, n)) if want else []
 
         if not data:
-            return np.empty((0, 3)), None
+            return np.empty((0, 3)), None, None
 
-        rgb = np.array([row[1:] for row in data], dtype=float)
+        rgb = np.array([row[1:4] for row in data], dtype=float)
+        quality = float(np.mean([row[4] for row in data]))
         if len(data) < 2:
-            return rgb, None
+            return rgb, None, quality
         span = data[-1][0] - data[0][0]
         measured = ((len(data) - 1) / span) if span > 0 else None
-        return rgb, measured
+        return rgb, measured, quality
 
     def has_full_window(self) -> bool:
         """Whether enough colour history exists for POS to produce anything."""

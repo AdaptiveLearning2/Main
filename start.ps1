@@ -183,7 +183,10 @@ if ($Camera) {
     # file the docs tell people to edit. A stale camera entry still has to go, or
     # a later plain run keeps opening the webcam.
     if (Test-Path $eegEnv) {
-        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' }
+        # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
+        # somehow appears twice, and -split on an array would misparse. The last
+        # occurrence is what a dotenv reader would take.
+        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
         if ($line) {
             $current = ($line -split '=', 2)[1]
             $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })

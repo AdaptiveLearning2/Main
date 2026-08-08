@@ -271,3 +271,40 @@ def test_a_small_frame_rate_wobble_is_tolerated():
         _rgb_window(72.0, fps=29.0), FPS, measured_fps=29.0, samples=_samples(725)
     )
     assert record["rejected_by"] is None
+
+
+def test_quality_gating_uses_the_window_not_the_tick():
+    """A tick that drained no samples must not skip the gate.
+
+    Quality was derived from the samples drained since the last tick, so a tick
+    that drained nothing left face_quality None while the 25 s colour buffer was
+    still full and scored -- the gate silently did not run. Ticks faster than the
+    frame rate hit that routinely, making the gate intermittent rather than
+    applied per window."""
+    record = build_heart_record(
+        _rgb_window(72.0), FPS, measured_fps=FPS,
+        window_quality=MIN_MEAN_USABLE_FRACTION / 2,
+        samples=[],                      # nothing drained this tick
+    )
+    assert record["bpm"] is None
+    assert record["rejected_by"] == "poor_face_quality"
+
+
+def test_the_window_quality_wins_over_the_tick_samples():
+    """They can disagree -- the window spans 25 s, the tick spans one frame
+    interval -- and the window is what was scored."""
+    record = build_heart_record(
+        _rgb_window(72.0), FPS, measured_fps=FPS,
+        window_quality=0.91, samples=_samples(750, quality=0.10),
+    )
+    assert record["face_quality"] == pytest.approx(0.91, abs=0.01)
+    assert record["rejected_by"] is None
+
+
+def test_a_zero_frame_rate_is_reported_rather_than_hidden():
+    """`if measured_fps` would report 0.0 as None -- saying "unmeasurable" about
+    a camera that had demonstrably stopped."""
+    record = build_heart_record(_rgb_window(72.0), FPS, measured_fps=0.0,
+                                window_quality=0.9)
+    assert record["measured_fps"] == 0.0
+    assert record["rejected_by"] == "unstable_frame_rate"

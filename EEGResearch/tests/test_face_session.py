@@ -60,7 +60,7 @@ class FakeFaceAdapter:
         return [FaceSample(float(i), (180.0, 120.0, 110.0), 0.9) for i in range(5)]
 
     def rgb_window(self, seconds):
-        return self._rgb, self._measured
+        return self._rgb, self._measured, 0.9
 
     def latest_emotion(self):
         return self._emotion
@@ -177,3 +177,85 @@ def test_the_factory_passes_the_emotion_settings_through():
         kind="face", camera_index=0,
     )
     assert heart_only.emotion_enabled is False
+
+
+# ── the API boundary ─────────────────────────────────────────────────────────
+
+def test_a_face_device_serves_state_over_the_api_without_a_500():
+    """The seam a review found after the last one, one layer up.
+
+    `_face_payload` deliberately omits channels/features/state/question_policy,
+    and a test asserted exactly that -- but `InterpretedEegData` still declared
+    all four as required, so `Envelope(data=snapshot)` raised a ValidationError
+    and every GET /api/v1/state for a camera returned 500.
+
+    Every unit test passed because they all asserted on `latest_payload`
+    directly and never went through the envelope. Same lesson twice: the seam
+    with no test is the one that breaks.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.app.config import get_settings
+    from src.app.main import app, stream_manager
+
+    settings = get_settings()
+    device = parse_eeg_devices(_settings())["camera"]
+    session = DeviceSession("camera", settings, device)
+    session.adapter = FakeFaceAdapter(emotion=EmotionResult("happy", 0.9, True))
+    session.latest_payload = _tick(session)
+
+    stream_manager._sessions["camera"] = session
+    try:
+        client = TestClient(app)
+        response = client.get(
+            "/api/v1/state?device_id=camera",
+            headers={"Authorization": f"Bearer {settings.api_token}"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["kind"] == "camera"
+        assert data["heart"]["source"] == "rppg"
+        assert data["face"]["emotion"] == "happy"
+        for absent in ("channels", "features", "state", "question_policy"):
+            assert absent not in data
+    finally:
+        stream_manager._sessions.pop("camera", None)
+
+
+def test_an_eeg_payload_still_serves_as_an_eeg_payload():
+    """The union must not resolve an EEG record to the camera model.
+
+    It did at first: CameraData had fewer required fields and pydantic ignores
+    extras, so an EEG payload validated as a camera and `channels`, `features`
+    and `state` were silently dropped from the response. The required `kind`
+    discriminator is what prevents it -- a default value would have made it
+    useless, because an EEG payload carrying no kind would simply take it.
+    """
+    from src.app.schemas import CameraData, Envelope, InterpretedEegData
+
+    camera = _tick(_session(FakeFaceAdapter()))
+    assert isinstance(Envelope(status="ok", data=camera, message="").data, CameraData)
+
+    eeg_settings = Settings(API_TOKEN="x", ADMIN_TOKEN="y", EEG_DEVICES="band:sim")
+    eeg_session = DeviceSession("band", eeg_settings,
+                                parse_eeg_devices(eeg_settings)["band"])
+
+    captured: dict = {}
+
+    async def run():
+        await eeg_session.start()
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if eeg_session.latest_payload.get("channels"):
+                captured.update(eeg_session.latest_payload)
+                break
+        await eeg_session.stop()
+
+    asyncio.run(run())
+    assert captured, "the sim device produced no payload"
+
+    envelope = Envelope(status="ok", data=captured, message="")
+    assert isinstance(envelope.data, InterpretedEegData)
+    dumped = envelope.model_dump()["data"]
+    assert dumped["channels"] is not None
+    assert dumped["state"] is not None

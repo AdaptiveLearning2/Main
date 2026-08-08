@@ -1,5 +1,7 @@
 param(
-    [switch]$Muse
+    [switch]$Muse,
+    [switch]$Camera,
+    [int]$CameraIndex = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +12,22 @@ $frontendDir = Join-Path $root "Website\AdaptiveLearning\frontend"
 $bridgeExe   = Join-Path $eegDir "native_bridge\build\Release\muse_native_bridge.exe"
 $sdkDir      = Join-Path $eegDir "libmuse_windows_8.0.5"
 $model       = "llama3.1:8b"
+$emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
+
+function Set-EnvKey {
+    # Rewrite a key in a .env, or append it if absent. Appending matters: a
+    # first-time checkout has no FACE_* lines at all, and a -replace against a
+    # missing key silently does nothing -- the flag would appear to work and
+    # change no behaviour.
+    param([string]$path, [string]$key, [string]$value)
+    if (!(Test-Path $path)) { return }
+    $lines = @(Get-Content $path)
+    if ($lines -match "^$key=") {
+        ($lines -replace "^$key=.*", "$key=$value") | Set-Content $path
+    } else {
+        Add-Content $path "$key=$value"
+    }
+}
 
 function Check-Venv {
     param([string]$dir)
@@ -119,6 +137,64 @@ if ($Muse) {
     }
 }
 
+# 2b. Camera
+if ($Camera) {
+    Write-Host "[2/5] Camera (index $CameraIndex)" -ForegroundColor Cyan
+    Check-Venv $eegDir
+
+    # The `face` extra is optional, so a machine that has never installed it is
+    # the normal case rather than a broken one. Checked here, at setup, because
+    # the alternative is the sidecar starting cleanly and the camera failing
+    # only when a lesson begins.
+    Push-Location $eegDir
+    & ".\.venv\Scripts\python.exe" -c "import cv2, onnxruntime" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Host "  ERROR: the 'face' extra is not installed in EEGResearch/.venv" -ForegroundColor Red
+        Write-Host "  Install it with:" -ForegroundColor Yellow
+        Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `".[face]`"" -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Fetch and verify the FER+ model now, not on the first frame. A 35 MB
+    # download in front of a student's first session would look like the
+    # feature being broken, and a checksum failure is an install problem that
+    # should be seen here.
+    Write-Host "  Checking emotion model..." -ForegroundColor Gray
+    & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
+        exit 1
+    }
+    Pop-Location
+
+    $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
+    Set-EnvKey $eegEnv "EEG_DEVICES" "$headband,camera:face@$CameraIndex"
+    Set-EnvKey $eegEnv "FACE_ENABLED" "true"
+    Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
+    Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
+} else {
+    Set-EnvKey $eegEnv "FACE_ENABLED" "false"
+
+    # Remove only the camera entry this script writes, leaving any other devices
+    # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written
+    # multi-headband registry -- "station1:muse@8765,station2:muse@8766" -- in a
+    # file the docs tell people to edit. A stale camera entry still has to go, or
+    # a later plain run keeps opening the webcam.
+    if (Test-Path $eegEnv) {
+        # Select-Object -Last 1: Where-Object yields an array if EEG_DEVICES
+        # somehow appears twice, and -split on an array would misparse. The last
+        # occurrence is what a dotenv reader would take.
+        $line = @(Get-Content $eegEnv) | Where-Object { $_ -match '^EEG_DEVICES=' } | Select-Object -Last 1
+        if ($line) {
+            $current = ($line -split '=', 2)[1]
+            $kept = @($current -split ',' | Where-Object { $_ -and ($_ -notmatch ':face(@|$)') })
+            Set-EnvKey $eegEnv "EEG_DEVICES" ($kept -join ',')
+        }
+    }
+}
+
 # 3. EEGResearch backend
 Write-Host "[3/5] EEGResearch backend (port 8001)" -ForegroundColor Cyan
 Check-Venv $eegDir
@@ -155,10 +231,16 @@ Write-Host "  EEG API:     http://localhost:8001"    -ForegroundColor White
 if ($Muse) {
     Write-Host "  Muse Bridge: port 8765"            -ForegroundColor White
 }
+if ($Camera) {
+    Write-Host "  Camera:      index $CameraIndex"   -ForegroundColor White
+}
 Write-Host ""
 if ($Muse) {
     Write-Host "  Turn on your Muse S and click Connect Headband in the app." -ForegroundColor Yellow
 } else {
     Write-Host "  Running in simulator mode. Use .\start.ps1 -Muse to enable the headband." -ForegroundColor Gray
+}
+if (!$Camera) {
+    Write-Host "  No camera. Use .\start.ps1 -Camera to enable facial capture." -ForegroundColor Gray
 }
 Write-Host ""

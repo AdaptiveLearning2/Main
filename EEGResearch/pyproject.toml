@@ -25,6 +25,26 @@ dev = [
   "httpx>=0.27.0",
   "pip-tools>=7.5.0"
 ]
+# Camera capture. Optional is what keeps CI, the test suite and every
+# headband-only deployment unchanged: the sidecar imports and boots with none of
+# these installed, and only `connect()` on a face device needs them.
+#
+# Two packages, not three. There is deliberately no rPPG library here -- the
+# pulse extraction is ours (`pos_rppg`, POS from Wang et al. 2017), because every
+# packaged deep-learning rPPG carries weights trained on a dataset behind a
+# per-requester agreement and the classical ones fail on licence or packaging.
+# See the plan's Phase 4 dependency section before adding one.
+# opencv is held below 5.0 deliberately. `face_roi.FaceLocator` depends on
+# `cv2.data.haarcascades` shipping inside the wheel and on the CAP_PROP_*
+# constants used to lock exposure, and neither has been exercised against a 5.x
+# release here -- there is no OpenCV in CI, so a break would surface in front of
+# a class rather than in a test run. Lift the cap deliberately, with the manual
+# camera check from the plan's verification step, not by letting a resolver do
+# it silently.
+face = [
+  "opencv-python>=4.9.0,<5",
+  "onnxruntime>=1.17.0"
+]
 
 [tool.setuptools]
 package-dir = {"" = "."}

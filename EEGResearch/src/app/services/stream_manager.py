@@ -35,7 +35,11 @@ class DeviceSession:
         self.settings = settings
         self.device_config = device_config
         self.adapter = build_ingestion_adapter(
-            settings, kind=device_config.kind, host=device_config.host, port=device_config.port
+            settings,
+            kind=device_config.kind,
+            host=device_config.host,
+            port=device_config.port,
+            camera_index=device_config.camera_index,
         )
         self.processor = SignalProcessor()
         self.adaptation = AdaptationEngine()
@@ -44,6 +48,56 @@ class DeviceSession:
         self.errors_seen = 0
         self._task: asyncio.Task[None] | None = None
         self.running = False
+
+    def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
+        """The camera equivalent of the EEG payload.
+
+        Deliberately carries the same envelope fields -- contract_version,
+        device_id, timestamp -- so a consumer does not need to know which kind
+        of device produced a record. `channels`, `features`, `state` and
+        `question_policy` are absent rather than faked: a camera has no
+        electrode channels and no cognitive state, and inventing empty ones
+        would let a caller average them into an EEG session's numbers.
+        """
+        # Imported here rather than at module scope. It is cheap and pulls in no
+        # camera dependency -- face_processing -> face_ingestion -> face_roi ->
+        # pos_rppg are all plain numpy, and the no-dependency import test proves
+        # it. But that chain only stays safe by convention, and a module-scope
+        # import would put it on every sidecar start including headband-only
+        # ones. Keeping it local means the property is enforced by structure
+        # rather than by remembering.
+        from src.app.services.face_processing import (  # noqa: PLC0415
+            RATE_WINDOW_SECONDS,
+            build_camera_payload,
+        )
+
+        rgb, measured, quality, stamps = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
+        payload: dict[str, Any] = {
+            # Names the shape, so the API union and any consumer can branch on
+            # it rather than probing for which fields happen to be present.
+            "kind": "camera",
+            "contract_version": self.CONTRACT_VERSION,
+            "device_id": self.device_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingestion": enrich_ingestion_dict(
+                self.settings, raw_meta, source=self.device_config.kind
+            ),
+        }
+        payload.update(
+            build_camera_payload(
+                rgb_window=rgb,
+                fps=self.adapter.fps,
+                measured_fps=measured,
+                timestamps=stamps,
+                window_quality=quality,
+                samples=samples,
+                emotion=self.adapter.latest_emotion(),
+                heart_enabled=self.adapter.heart_enabled,
+                emotion_enabled=self.adapter.emotion_enabled,
+                emotion_meta=raw_meta,
+            )
+        )
+        return payload
 
     async def start(self) -> None:
         if self.running:
@@ -111,6 +165,25 @@ class DeviceSession:
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
                 self.latest_payload = self._no_signal_payload()
+                await asyncio.sleep(period)
+                continue
+
+            if self.device_config.kind == "face":
+                # A camera produces colour, not EEG channels, so it cannot go
+                # through SignalProcessor at all. Before this branch existed the
+                # loop reached for sample.channel_tp9 on a FaceSample and raised
+                # every tick -- swallowed by the handler below into errors_seen
+                # and a warning, so the session looked alive and produced
+                # nothing.
+                try:
+                    self.latest_payload = self._face_payload(samples, raw_meta)
+                    self.samples_processed += len(samples)
+                except Exception as exc:
+                    self.errors_seen += 1
+                    logger.warning(
+                        "camera payload failed for device %s: %s: %s",
+                        self.device_id, type(exc).__name__, exc,
+                    )
                 await asyncio.sleep(period)
                 continue
 

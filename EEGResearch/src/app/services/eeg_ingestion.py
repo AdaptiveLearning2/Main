@@ -521,6 +521,7 @@ def build_ingestion_adapter(
     kind: str | None = None,
     host: str | None = None,
     port: int | None = None,
+    camera_index: int | None = None,
 ):
     """Build an ingestion adapter. `kind`/`host`/`port` override the global settings
     for a specific device in a multi-device registry; omitted, this falls back to the
@@ -535,4 +536,23 @@ def build_ingestion_adapter(
         )
     if source == "sim":
         return SimulatedMuseIngestionAdapter()
-    raise ValueError("Unsupported EEG_SOURCE. Use 'sim' for local runs or 'muse' for live bridge mode.")
+    if source == "face":
+        # Imported here, not at module scope, so the sidecar boots on a machine
+        # without the `face` extra installed. Everything above this line must
+        # keep working when cv2 is absent -- that is the property the whole
+        # optional-dependency arrangement exists to preserve, and a top-level
+        # import would silently destroy it.
+        from src.app.services.face_ingestion import build_face_adapter
+
+        return build_face_adapter(
+            camera_index=(camera_index if camera_index is not None
+                          else settings.face_camera_index),
+            fps=settings.face_fps,
+            heart_enabled=settings.face_heart_enabled,
+            emotion_enabled=settings.face_emotion_enabled,
+            emotion_model_path=settings.face_emotion_model_path,
+        )
+    raise ValueError(
+        "Unsupported EEG_SOURCE. Use 'sim' for local runs, 'muse' for live bridge "
+        "mode, or 'face' for camera capture."
+    )

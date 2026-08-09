@@ -332,6 +332,52 @@ FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public';
 ```
 
+## Two columns are called stress and only one measures it
+
+`cognitive_signals.stress` is `1.0 - calm`, written by `eeg_client.py:175`. There is no `calm`
+column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
+and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
+
+`heart_signals.stress_score` is a measurement: autonomic arousal on a 0–100 scale, derived against
+the session's own baseline, with its own quality gate and its own `calibrating` state.
+
+So: **never average them, never sum them, and never render both under one "Stress" label.** One is a
+cognitive score with a sign flip; the other is a physiological measurement with a baseline. A
+dashboard tile fed by whichever happens to be present would change meaning when a headband
+disconnects, which is the same class of failure as a reporting surface that cannot tell "no data"
+from "zero".
+
+`stress_score` is defined **on heart rate alone**. RMSSD is an enrichment term, added when available
+and absent without changing what the score means — a hard requirement, not a preference, because
+RMSSD is unavailable whenever the headband is off and one window in six is gated out even when it is
+on. A score whose definition shifts when an input drops out is unreadable across a session.
+
+## Fusion is asymmetric on purpose — easing off wins, pushing harder defers
+
+`Website/AdaptiveLearning/backend/signal_fusion.py` decides how hard the next question is, from
+whichever of EEG, heart and facial are consented and present. To **raise** difficulty every channel
+with an opinion must agree; to **lower** it, any one trusted channel suffices.
+
+Keep it that way. A wrong ease-off costs one easy question; a wrong push costs a struggling student
+a harder one, and the signals are least trustworthy exactly when a student is agitated. A
+brute-force test asserts the property directly: adding a channel can make sessions gentler and can
+never make them harder. If that test fails, the change is wrong, not the test.
+
+Facial is the weakest input by design — it can withhold an increase, and can neither cause one nor
+trigger an ease-off alone. FER+ is trained predominantly on adult faces and is least reliable on
+this product's users: children, and children with learning disabilities. Its labels deliberately use
+a different vocabulary (`negative`, never `stressed`) so no later edit can wire it into the ease-off
+branch by matching on a label name. `EMOTION_MIN_CONFIDENCE` is inherited from PR #49 and is a
+guess, not a measurement.
+
+**Consent gates the read, not the result.** A revoked channel is never queried, and the tests assert
+on which tables were reached — an empty result cannot distinguish "asked and got nothing" from
+"never asked". `_consent_flags` fails closed, like `_consent()` and unlike the reporting helpers.
+
+**Difficulty is chosen in the backend, not the sidecar.** `question_policy` was removed in 1.3.0:
+the sidecar computed it every tick, it was persisted and displayed, and nothing read it to pick a
+question. Don't add it back — the sidecar cannot see correctness, topic history or grade level.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses

@@ -199,6 +199,14 @@ jobs:
       - name: Apply migrations from scratch
         run: supabase db reset --no-seed
 
+      # RLS is enforced by Postgres, so the backend suite -- which drives main.py
+      # against a fake client -- cannot test it. This is the only job with a real
+      # stack, so it is the only place the assertions can run. Previously done by
+      # hand once and written up in a PR description, which caught the schema on
+      # one afternoon and could not catch a later migration re-widening a grant.
+      - name: Assert signal-table RLS and CHECK constraints
+        run: psql "$(supabase status -o env | grep '^DB_URL=' | cut -d= -f2- | tr -d '\"')" -v ON_ERROR_STOP=1 -f scripts/assert_signal_rls.sql
+
       - name: Stop local Supabase
         if: always()
         run: supabase stop --no-backup

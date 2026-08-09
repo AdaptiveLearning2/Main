@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
@@ -1080,6 +1080,30 @@ _strategy_llm_waiters = threading.BoundedSemaphore(_STRATEGY_LLM_MAX_WAITERS)
 # turn the limiter off: there is no such setting, and if one is ever wanted it
 # should be explicit rather than an out-of-range number.
 _STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
+
+# Ingestion is the trust boundary, so it is bounded on both axes.
+#
+# The local sidecar POSTs these with the student's own bearer token, which means
+# the client is not trusted: a compromised or merely buggy process on a
+# student's laptop must not be able to flood the table. `_verify_session_owner`
+# answers "whose session" and the consent check answers "may this be recorded";
+# neither bounds volume, and volume is its own denial-of-service.
+_INGEST_MAX_BATCH   = _env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
+_INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
+_INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
+
+_ingest_hits: dict[str, list[float]] = {}
+_ingest_hits_lock = threading.Lock()
+
+# Which heart sources each consent flag permits. One flag per *sensor*, so a
+# student who allowed the headband and declined the camera has consented to
+# muse_optics and muse_ppg and not to rppg. Rejecting per source rather than
+# per channel is the entire reason heart_signals carries `source` at all.
+_HEART_SOURCES_BY_CONSENT = {
+    "headband_optical_enabled": ("muse_optics", "muse_ppg"),
+    "camera_enabled":           ("rppg",),
+}
+
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _strategy_hits: dict[str, list[float]] = {}
 _strategy_hits_lock = threading.Lock()
@@ -2152,12 +2176,74 @@ class FaceSample(BaseModel):
     attention:           float | None = None
     gaze_x:              float | None = None
     gaze_y:              float | None = None
+    # Two confidences, named for what each answers. `identity_confidence` is how
+    # sure we are whose face this is; `emotion_confidence` is how sure we are of
+    # the expression. The fusion rule reads only the second, and read the first
+    # by mistake once -- see the migration comment that predicted it.
     identity_confidence: float | None = None
+    emotion_confidence:  float | None = None
+    emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None
 
 class FaceBatch(BaseModel):
     session_id: str
-    samples:    list[FaceSample]
+    samples:    list[FaceSample] = Field(max_length=_INGEST_MAX_BATCH)
+
+
+class HeartSample(BaseModel):
+    """One derived heart reading, from whichever sensor produced it.
+
+    `source` is required and constrained in the database to
+    muse_optics | muse_ppg | rppg, because consent is per *sensor* and a row
+    that cannot say which sensor produced it cannot be consent-checked. After
+    Phase 4 nothing writes `rppg` -- camera heart rate failed ECG validation --
+    but the column stays honest about what the schema permits.
+    """
+    ts:              str | None = None
+    source:          str
+    heart_rate_bpm:  float | None = None
+    rmssd_ms:        float | None = None
+    sqi:             float | None = None
+    stress_score:    float | None = None
+    stress_category: str   | None = None
+    trusted:         bool  | None = None
+    raw:             dict  | None = None
+
+
+class HeartBatch(BaseModel):
+    session_id: str
+    samples:    list[HeartSample] = Field(max_length=_INGEST_MAX_BATCH)
+
+def _rate_limit_ingest(user_id: str):
+    """Raise 429 once a caller has spent its allowance for the window.
+
+    Monotonic, like `_rate_limit_strategies`, so a clock adjustment cannot wipe
+    or extend the window. Kept separate from that limiter rather than shared:
+    the budgets are different by two orders of magnitude, and one dict would
+    make a student's steady 1 Hz ingest compete with their own occasional
+    strategy request.
+    """
+    now = time.monotonic()
+    with _ingest_hits_lock:
+        hits = [t for t in _ingest_hits.get(user_id, ())
+                if now - t < _INGEST_RATE_WINDOW]
+        if len(hits) >= _INGEST_RATE_LIMIT:
+            _ingest_hits[user_id] = hits
+            retry_after = max(1, int(_INGEST_RATE_WINDOW - (now - min(hits))) + 1)
+            raise HTTPException(429, "Too many ingest batches. Slow down.",
+                                headers={"Retry-After": str(retry_after)})
+        hits.append(now)
+        _ingest_hits[user_id] = hits
+
+
+def _permitted_heart_sources(consent: dict) -> set[str]:
+    """The sources this student's consent covers. Empty means record nothing."""
+    allowed: set[str] = set()
+    for flag, sources in _HEART_SOURCES_BY_CONSENT.items():
+        if consent.get(flag):
+            allowed.update(sources)
+    return allowed
+
 
 def _verify_session_owner(session_id: str, user_id: str):
     sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
@@ -2185,6 +2271,17 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
     _verify_session_owner(payload.session_id, user["id"])
+    _rate_limit_ingest(user["id"])
+
+    # Last line of defence. The sidecar already gates on consent, but a stale one
+    # that kept sending after a student withdrew would otherwise keep recording,
+    # and the withdrawal would look respected from every surface that reads.
+    # `_consent` fails closed, so an unreadable consent row records nothing.
+    consent = _consent(user["id"])
+    if not consent.get("camera_enabled"):
+        return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
+                "reason": "camera not consented"}
+
     rows = [{
         "session_id":          payload.session_id,
         "user_id":             user["id"],
@@ -2194,10 +2291,61 @@ def ingest_face(payload: FaceBatch, request: Request):
         "gaze_x":              s.gaze_x,
         "gaze_y":              s.gaze_y,
         "identity_confidence": s.identity_confidence,
+        "emotion_confidence":  s.emotion_confidence,
+        "emotion_trusted":     s.emotion_trusted,
         "raw":                 s.raw,
     } for s in payload.samples]
+    # Insert, not upsert: `face_signals` has no dedupe key yet. See
+    # 20260809120000 for why that is deferred rather than undecided, and the
+    # query to run before adding one.
     if rows: supabase.table("face_signals").insert(rows).execute()
     return {"ok": True, "inserted": len(rows)}
+
+
+@app.post("/api/signals/heart")
+def ingest_heart(payload: HeartBatch, request: Request):
+    """Derived heart readings, from whichever sensor produced them.
+
+    Consent is checked **per sample**, against the sensor named in `source`,
+    because one channel can arrive from two sensors under two separate
+    permissions. Samples from a declined sensor are dropped and counted rather
+    than failing the batch: a mixed batch is a legitimate thing for a client to
+    send, and rejecting the whole thing would take the consented samples with it.
+
+    The count comes back so a caller can tell "recorded nothing" from "sent
+    nothing" -- the same distinction the reporting rules exist to preserve, on
+    the write side.
+    """
+    user = get_user(request)
+    _verify_session_owner(payload.session_id, user["id"])
+    _rate_limit_ingest(user["id"])
+
+    allowed = _permitted_heart_sources(_consent(user["id"]))
+    kept = [s for s in payload.samples if s.source in allowed]
+    dropped = len(payload.samples) - len(kept)
+
+    rows = [{
+        "session_id":      payload.session_id,
+        "user_id":         user["id"],
+        "ts":              s.ts or datetime.utcnow().isoformat(),
+        "source":          s.source,
+        "heart_rate_bpm":  s.heart_rate_bpm,
+        "rmssd_ms":        s.rmssd_ms,
+        "sqi":             s.sqi,
+        "stress_score":    s.stress_score,
+        "stress_category": s.stress_category,
+        "trusted":         s.trusted,
+        "raw":             s.raw,
+    } for s in kept]
+
+    if rows:
+        # ON CONFLICT DO NOTHING against (session_id, source, ts). A retried
+        # batch is then idempotent instead of doubling every average it touches
+        # -- a failure with no symptom except a wrong number.
+        supabase.table("heart_signals").upsert(
+            rows, on_conflict="session_id,source,ts", ignore_duplicates=True
+        ).execute()
+    return {"ok": True, "inserted": len(rows), "dropped": dropped}
 
 @app.get("/api/signals/session/{session_id}")
 def session_signals(session_id: str, request: Request, since: str | None = None):

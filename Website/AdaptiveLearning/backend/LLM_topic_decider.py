@@ -8,6 +8,7 @@ from ollama import generate
 import json
 import random
 from statistics import fmean
+import signal_fusion
 from collections import deque
 import concurrent.futures
 
@@ -44,6 +45,10 @@ def get_user_performance(user_id):
 # per-topic accuracy above.
 SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
+# Heart and facial rows are written far less often than EEG's 4 Hz, so a window
+# of 5 would reach much further back in time. Only the newest row is acted on;
+# this bounds the read.
+SIGNAL_BIAS_WINDOW = 3
 # Mirrors EEGResearch's AdaptationEngine.infer_state() thresholds so the same
 # focus/calm/confidence values map to the same learner-state labels here.
 EEG_FOCUSED_FOCUS_MIN = 0.7
@@ -83,45 +88,120 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
         return None
 
 
-def get_session_eeg_state(session_id):
-    """This session's recent EEG history from cognitive_signals (written
-    continuously by eeg_poller) -- reads the database instead of calling the
-    EEGResearch sidecar directly, so it works even if that service is down
-    and reflects a short rolling window rather than one instantaneous
-    reading."""
-    if not session_id:
-        return None
+def _consent_flags(user_id):
+    """Which channels the student permits, so an absence can name its cause.
+
+    Read here rather than through main's `_consent()` because main imports this
+    module; the reverse import would be a cycle. Fails **closed** in the same
+    direction as that helper -- on a read error every channel reads as revoked,
+    so a database problem suppresses signals rather than acting on ones the
+    student may have refused.
+    """
+    if not user_id:
+        return {"eeg": False, "heart": False, "face": False}
     try:
         rows = (
-            supabase.table("cognitive_signals")
-            .select("focus, stress, engagement")
-            .eq("session_id", session_id)
-            .order("ts", desc=True)
-            .limit(EEG_BIAS_WINDOW)
+            supabase.table("signal_consent")
+            .select("eeg_enabled, headband_optical_enabled, camera_enabled")
+            .eq("user_id", user_id)
+            .limit(1)
             .execute()
         ).data or []
-        focus_vals      = [r["focus"]      for r in rows if r.get("focus")      is not None]
-        stress_vals     = [r["stress"]     for r in rows if r.get("stress")     is not None]
-        engagement_vals = [r["engagement"] for r in rows if r.get("engagement") is not None]
-        if not focus_vals or not stress_vals or not engagement_vals:
-            return None
-
-        focus      = fmean(focus_vals)
-        calm       = 1.0 - fmean(stress_vals)
-        confidence = fmean(engagement_vals)
-
-        if confidence < EEG_MIN_CONFIDENCE:
-            label = "insufficient_signal"
-        elif focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
-            label = "focused"
-        elif calm < EEG_STRESSED_CALM_MAX:
-            label = "stressed"
-        else:
-            label = "neutral"
-        return {"label": label, "focus": round(focus, 3), "calm": round(calm, 3), "confidence": round(confidence, 3)}
+        if not rows:
+            # No row means the same as a row of falses. Nothing is recorded for
+            # a student nobody has configured.
+            return {"eeg": False, "heart": False, "face": False}
+        r = rows[0]
+        return {
+            "eeg":   bool(r.get("eeg_enabled")),
+            # One flag per *sensor*, and the heart channel can arrive from
+            # either. Consent to the headband is not consent to the webcam, so
+            # a heart reading is permitted if the sensor that produced it is.
+            "heart": bool(r.get("headband_optical_enabled")) or bool(r.get("camera_enabled")),
+            "face":  bool(r.get("camera_enabled")),
+        }
     except Exception as e:
-        print(f"[session_eeg] {e}")
+        print(f"[signal_consent] {e}")
+        return {"eeg": False, "heart": False, "face": False}
+
+
+def _latest(table, columns, session_id, limit):
+    """This session's most recent rows from a signals table, newest first."""
+    try:
+        return (
+            supabase.table(table)
+            .select(columns)
+            .eq("session_id", session_id)
+            .order("ts", desc=True)
+            .limit(limit)
+            .execute()
+        ).data or []
+    except Exception as e:
+        print(f"[{table}] {e}")
+        return []
+
+
+def get_session_signal_state(session_id, user_id=None):
+    """This session's fused EEG + heart + facial state.
+
+    Reads the database rather than calling the EEGResearch sidecar, so it works
+    when that service is down and reflects a short rolling window instead of one
+    instantaneous reading. The window is also the damping: averaging the last
+    few rows, once per question, is what stops a 4 Hz label from flapping, which
+    is why there is no cooldown here.
+
+    Returns a `FusedState`, or None when there is no session to read. The
+    asymmetric rule that combines the channels lives in `signal_fusion` as pure
+    functions, so it can be tested without a database or a model.
+    """
+    if not session_id:
         return None
+
+    consent = _consent_flags(user_id)
+
+    eeg_rows = _latest("cognitive_signals", "focus, stress, engagement",
+                       session_id, EEG_BIAS_WINDOW) if consent["eeg"] else []
+    focus_vals      = [r["focus"]      for r in eeg_rows if r.get("focus")      is not None]
+    stress_vals     = [r["stress"]     for r in eeg_rows if r.get("stress")     is not None]
+    engagement_vals = [r["engagement"] for r in eeg_rows if r.get("engagement") is not None]
+
+    focus      = fmean(focus_vals)      if focus_vals      else None
+    # `stress` in cognitive_signals is `1.0 - calm`, written by eeg_client. It
+    # is the calm score inverted and renamed, not a second measurement -- unlike
+    # heart_signals.stress_score, which is derived against the session's own
+    # baseline. Two columns, two meanings, and only one of them measures stress.
+    calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
+    confidence = fmean(engagement_vals) if engagement_vals else None
+
+    eeg = signal_fusion.eeg_channel(focus, calm, confidence,
+                                    revoked=not consent["eeg"])
+
+    heart_rows = _latest("heart_signals", "stress_category, trusted, source",
+                         session_id, SIGNAL_BIAS_WINDOW) if consent["heart"] else []
+    newest_heart = heart_rows[0] if heart_rows else {}
+    heart = signal_fusion.heart_channel(
+        newest_heart.get("stress_category"),
+        newest_heart.get("trusted"),
+        newest_heart.get("source"),
+        revoked=not consent["heart"],
+    )
+
+    face_rows = _latest("face_signals", "emotion, identity_confidence",
+                        session_id, SIGNAL_BIAS_WINDOW) if consent["face"] else []
+    newest_face = face_rows[0] if face_rows else {}
+    face = signal_fusion.face_channel(
+        newest_face.get("emotion"),
+        newest_face.get("identity_confidence"),
+        revoked=not consent["face"],
+    )
+
+    return signal_fusion.fuse(
+        eeg, heart, face,
+        focus=round(focus, 3) if focus is not None else None,
+        calm=round(calm, 3) if calm is not None else None,
+        confidence=round(confidence, 3) if confidence is not None else None,
+    )
+
 
 #Store 40 questions globally, 10 per topic 
 user_histories = {}
@@ -520,12 +600,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     # Session-scoped signals: how the student is doing and feeling RIGHT NOW
     # in their current session, as opposed to their all-time accuracy above.
-    # Both read straight from the database (cognitive_signals / session_answers,
-    # written continuously by eeg_poller / the answer endpoint) rather than a
-    # live sidecar call, so this works even if the EEG service is unreachable.
+    # Both read straight from the database (cognitive_signals / heart_signals /
+    # face_signals / session_answers) rather than a live sidecar call, so this
+    # works even if the EEG service is unreachable.
     session_perf = get_session_performance(session_id)
-    eeg_state    = get_session_eeg_state(session_id)
-    eeg_label    = eeg_state["label"] if eeg_state else "no_eeg"
+    signal_state = get_session_signal_state(session_id, user_id)
+    eeg_label    = signal_state.label if signal_state else "no_eeg"
 
     prompt = f"""
         You are a function that returns ONLY valid JSON.
@@ -537,7 +617,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         Recent Question History = {recent_global}
         Student Grade Level = {grade}
         This Session's Recent Accuracy = {session_perf if session_perf else "no answers yet this session"}
-        Student's Current Cognitive State (from EEG) = {eeg_label}
+        Student's Current Cognitive State (from sensors) = {eeg_label}
 
         TASK:
         Select a math topic and difficulty level.
@@ -626,6 +706,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # whatever the LLM picked -- same rules as the old live-sidecar bias:
     # stressed always eases off, focused only pushes harder when the student
     # left the control on Auto, and this never costs a second LLM call.
+    #
+    # `eeg_label` is now the *fused* label across every consented channel, not
+    # EEG alone -- see signal_fusion for the asymmetric rule behind it. The
+    # asymmetry below is the one that was already here and it is preserved
+    # exactly: easing off overrides a manual setting, pushing harder defers to
+    # it. Fusion widens what can trigger the ease-off; it does not loosen this.
     effective_bias = manual_bias
     if eeg_label == "stressed":
         effective_bias = -1
@@ -643,7 +729,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # Metadata for the frontend's "EEG eased/raised difficulty" badge -- reuses
     # the same session-scoped EEG read above rather than a second lookup.
     question["eeg_label"]    = eeg_label
-    question["eeg_adjusted"] = eeg_label in ("focused", "stressed")
+    question["eeg_adjusted"] = bool(signal_state and signal_state.adjusted)
+    # Which channel decided, and why. Names the source on an override
+    # ("heart elevated (muse_optics) overriding eeg-neutral") so a reading that
+    # contradicts the headband can be explained rather than just observed.
+    question["signal_reason"]   = signal_state.reason if signal_state else "no session"
+    question["signal_channels"] = signal_state.channels if signal_state else {}
     question["difficulty"]   = difficulty
 
     return question

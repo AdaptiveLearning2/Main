@@ -164,7 +164,9 @@ error. Agreement is a quality signal, not a correctness one.
   2026-08-09: through 25 s windows, the current consensus rule gives rest 69.2 →
   recovery 68.7, i.e. no rise at all, while the raw spectrum plainly has one.
   The physiological check that exists to protect the derivation is passing
-  without touching it. Extend it through `estimate_window` whichever rule ships.
+  without touching it. Extend it through `estimate_window` whichever rule ships
+  — tracked as issue #71, so the fix does not depend on someone reading this
+  file.
 
 ## `optics_rest_64hz.jsonl.gz`
 

@@ -22,23 +22,25 @@ export default function ClassDetail() {
     setLoading(true)
     setError(null)
     try {
+      // The 404 -> "not found" translation is scoped to the class request
+      // itself, not to the pair. A 404 from anywhere else -- the roster, or a
+      // proxy answering for a reason of its own -- means something failed, not
+      // that the class is missing, and reporting it as missing is the exact
+      // confusion the catch below exists to prevent.
       const [classInfo, studentList] = await Promise.all([
-        apiFetch(`/api/classes/${id}`),
+        apiFetch(`/api/classes/${id}`).catch(err => {
+          if (err.status === 404) return null
+          throw err
+        }),
         apiFetch(`/api/classes/${id}/students`)
       ])
-      setCls(classInfo || null)
+      setCls(classInfo)
       setStudents(Array.isArray(studentList) ? studentList : [])
     } catch (err) {
       // Tracked separately from "class not found" -- a failed request (offline,
       // 403, server error) is a different situation from a class that doesn't
       // exist, and telling a teacher "Class not found" when their request just
-      // failed sends them looking for the wrong problem. A 404 is the one case
-      // that genuinely is "no such class", so it falls through to that state
-      // rather than the error one.
-      if (err.status === 404) {
-        setCls(null)
-        return
-      }
+      // failed sends them looking for the wrong problem.
       setError(err.message || 'Could not load class')
       toast.error(err.message || 'Could not load class')
     } finally {

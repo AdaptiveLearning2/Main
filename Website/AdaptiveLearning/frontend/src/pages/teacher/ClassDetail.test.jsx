@@ -70,12 +70,32 @@ it('distinguishes a failed request from a missing class', async () => {
   expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })
 
+const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
+
 it('still reports a genuinely missing class as not found', async () => {
   // The detail endpoint 404s on an id that isn't there; that is the one status
   // that means "no such class" rather than "the request failed".
   apiFetch.mockReset()
-  const missing = Object.assign(new Error('Class not found'), { status: 404 })
-  apiFetch.mockRejectedValue(missing)
+  apiFetch.mockImplementation((url) =>
+    String(url).includes('/students')
+      ? Promise.resolve([])
+      : Promise.reject(notFound('Class not found')),
+  )
   renderAt()
   expect(await screen.findByText('Class not found.')).toBeInTheDocument()
+})
+
+it('does not blame the class for a 404 from the roster', async () => {
+  // The 404 -> "not found" translation belongs to the class request alone.
+  // Applied to the pair, a roster route that 404s for a reason of its own --
+  // a proxy, a rename -- reports an existing class as missing.
+  apiFetch.mockReset()
+  apiFetch.mockImplementation((url) =>
+    String(url).includes('/students')
+      ? Promise.reject(notFound('Not Found'))
+      : Promise.resolve({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }),
+  )
+  renderAt()
+  expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
+  expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })

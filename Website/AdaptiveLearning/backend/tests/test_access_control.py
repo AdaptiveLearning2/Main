@@ -46,10 +46,24 @@ class _Query:
         self._order = None
         self._desc = False
         self._count = None
+        self._cols = None
 
-    def select(self, *_a, **kw):
+    def select(self, *cols, **kw):
         self._count = kw.get("count")
+        # PostgREST returns only the named columns, so the fake does too --
+        # otherwise a handler asking for three columns and a test reading a
+        # fourth both pass, and "*" looks identical to a narrow select.
+        # Embedded resources (`a(b)`) aren't modelled; any select using one
+        # falls back to whole rows rather than projecting wrongly.
+        spec = ",".join(cols)
+        if spec and "*" not in spec and "(" not in spec:
+            self._cols = [c.strip() for c in spec.split(",") if c.strip()]
         return self
+
+    def _project(self, row):
+        if self._cols is None:
+            return row
+        return {c: row[c] for c in self._cols if c in row}
 
     def order(self, col, desc=False, **_k):
         self._order, self._desc = col, desc
@@ -98,7 +112,8 @@ class _Query:
         ceilings = [n for n in (self._limit, self._max_rows) if n is not None]
         if ceilings:
             rows = rows[:min(ceilings)]
-        return _Result(rows, count=total if self._count == "exact" else None)
+        return _Result([self._project(r) for r in rows],
+                       count=total if self._count == "exact" else None)
 
     def single(self):
         rows = self.execute().data
@@ -263,6 +278,44 @@ def test_student_is_rejected_from_class_roster():
     with pytest.raises(main.HTTPException) as exc:
         main._verify_class_owner("class-1", "student-1")
     assert exc.value.status_code == 403
+
+
+# ── GET /api/classes/{id} ────────────────────────────────────────────────
+#
+# The helper above has its own coverage; these assert this route is actually
+# wired to it. A handler that skipped the check would pass every test above.
+
+def test_class_detail_returns_the_class_to_its_owner(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    assert main.get_class("class-1", None)["id"] == "class-1"
+
+
+def test_class_detail_rejects_a_non_owning_teacher(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: OTHER_TEACHER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.get_class("class-1", None)
+    assert exc.value.status_code == 403
+
+
+def test_class_detail_404s_an_unknown_class(monkeypatch):
+    # The frontend translates this status, and only this status, into
+    # "Class not found" -- anything else is reported as a failed request.
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.get_class("class-does-not-exist", None)
+    assert exc.value.status_code == 404
+
+
+def test_class_detail_does_not_return_unnamed_columns(monkeypatch):
+    # Named columns rather than "*", so a column added to classes later does
+    # not start reaching the browser on its own.
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "classes": [{"id": "class-1", "teacher_id": "teacher-1",
+                     "name": "Algebra", "join_code": "ABC123",
+                     "grade_level": "7", "secret_note": "not for the client"}],
+    }))
+    assert "secret_note" not in main.get_class("class-1", None)
 
 
 def test_weekly_report_averages_only_non_null_values():

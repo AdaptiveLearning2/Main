@@ -1719,7 +1719,14 @@ def get_class(class_id: str, request: Request):
     """
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
-    res = supabase.table("classes").select("*").eq("id", class_id).single().execute()
+    # Named columns, not "*": a column added to classes later should not start
+    # reaching the browser because this line never mentioned it. Costs a second
+    # read of the row the helper already fetched -- the helper is the shared
+    # rule for who may see a class, and re-deriving it inline to save a
+    # round-trip is how the class_live guard drifted.
+    res = supabase.table("classes") \
+        .select("id, name, join_code, grade_level") \
+        .eq("id", class_id).single().execute()
     return res.data
 
 @app.put("/api/classes/{class_id}")

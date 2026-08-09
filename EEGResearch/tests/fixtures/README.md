@@ -38,8 +38,37 @@ tracker rejects one window on confidence, re-acquires onto 166, and loses the 68
 recovery starts.
 
 The fix is the accelerometer, which the bridge does not yet capture. It is the only signal here
-independent of the periodicity being confused. Logged as a future addition; the plan carries the
-detail.
+independent of the periodicity being confused.
+
+**Scoped to gait, though — see the seated result below.** This recording is of *exercise*, and
+generalising it to "motion" was too broad. Measured 2026-08-09 against a simultaneous watch ECG,
+seated derivation is accurate to 2.1 bpm and deliberate desk fidgeting degrades into refusal
+rather than into confident error. Running supplies a sustained clean rival oscillator for the
+autocorrelation to lock onto; fidgeting only destroys the pulse, which leaves no peak and so no
+confidence. The accelerometer remains what a walking-around deployment would need. It is not a
+prerequisite for a student at a desk.
+
+## The seated/fidget pair, 2026-08-09
+
+Two 3-minute optical captures on `MuseS-0FFC` (MS-03, PRESET_1035, 4 channels at 64.3 Hz, no
+samples lost in either), with simultaneous Galaxy Watch ECG.
+
+| | ECG | windows accepted | derived median | max error |
+| --- | --- | --- | --- | --- |
+| Sitting normally | 70, 72 | **14/16 (88%)** | 71.7 | **2.1 bpm** |
+| Deliberate fidgeting | 68, 73, *failed* | 4/16 (25%) | 70.8 | 7.5 bpm |
+
+Fidgeting was shifting in the seat, bouncing a leg, turning the head, leaning and typing. The
+rejected windows scored confidence 0.00-0.50 — refused, not answered wrongly.
+
+**The watch's own ECG failed one of its three fidget attempts** (`Poor recording`, 0 bpm). A
+medical-grade contact sensor could not cope with movement that the headband survived while
+correctly reporting the windows it could not read. That is the strongest single piece of evidence
+that the fidgeting was genuine rather than token.
+
+Limits: one adult over three minutes, not a child over a lesson. And 7.5 bpm at high confidence is
+harmless for the fusion rule, which can only ease difficulty, while being a real if modest error on
+a chart a parent reads.
 
 ### Two assumptions this recording overturned
 

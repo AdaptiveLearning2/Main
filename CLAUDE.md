@@ -163,19 +163,36 @@ hold for minutes with good contact and ~63 packets/s. `MUSE_OPTICS_PRESET` picks
 default sits at the bottom deliberately: the 16-channel failure took EEG down with it, and that is
 not a cliff to park next to. An unrecognised value warns once and falls back.
 
-**Derived BPM is unusable under motion, and it fails at high confidence.** Measured on a recording
-through exercise: `ppg_processing` reported 162–167 bpm at **confidence 1.00** for six consecutive
-windows against a watch-verified 104 — it had locked onto the wearer's step cadence. 166/104 = 1.60,
-no harmonic relation, so no periodicity test can see it, and four have been tried. A confidence
-threshold in front of this buys nothing: motion produces *high* confidence, not low, which is the
-opposite of the intuitive contract.
+**Headband BPM is accurate seated and fails only under gait. The two are different regimes and
+the rule is scoped to the right one.**
 
-So **do not wire it into recording until motion is detectable.** That needs the headband's
-accelerometer, which the bridge does not capture yet (`ACCELEROMETER` and `GYRO` are in the SDK enum;
-`native_bridge/src` references neither) — it is the only available signal independent of the
-periodicity being confused. A stored 166 bpm for a fidgeting child is worse than a blank tile, and it
-reaches past the reports: the planned fusion rule lets the heart channel lower question difficulty on
-its own. Evidence and the failed discriminators are in `EEGResearch/tests/fixtures/README.md`.
+Seated, validated against a simultaneous watch ECG 2026-08-09: **14 of 16 windows accepted, max
+error 2.1 bpm** against a true 70–72. That is the operating condition for a student at a desk, and
+it is good enough to record and to act on.
+
+Deliberate desk fidgeting — shifting, leg-bouncing, head turns, typing — degrades into **refusal,
+not into confident error**: 12 of 16 windows rejected at confidence 0.00–0.50, and the 4 accepted
+were within 7.5 bpm. Corroborating how vigorous that was, the *watch's own ECG* failed one of its
+three attempts with `Poor recording`. A medical-grade contact sensor could not cope with movement
+the headband survived while correctly reporting when it could not.
+
+**Gait is the failure, and it is a different mechanism.** Through exercise, `ppg_processing`
+reported 162–167 bpm at **confidence 1.00** for six consecutive windows against a watch-verified
+104 — the wearer's step cadence. 166/104 = 1.60, no harmonic relation, so no periodicity test sees
+it and four have been tried. Running supplies a *sustained clean rival oscillator* for the
+autocorrelation to lock onto; fidgeting merely destroys the pulse, leaving no peak and therefore no
+confidence. That is why confidence discriminates in one case and not the other.
+
+So: **seated use is cleared.** An earlier version of this rule said not to record derived BPM until
+the accelerometer landed. That was over-scoped — it generalised an exercise result to a product
+whose users sit at a screen. The accelerometer is still the only signal independent of the
+periodicity being confused, and it is still what a walking-around deployment would need; it is not
+a prerequisite for a maths lesson at a desk.
+
+Two limits worth keeping in view: the seated validation is one adult over three minutes, not a
+child over a lesson; and 7.5 bpm at high confidence is harmless for fusion (which can only ease
+difficulty) while being a real if modest error on a parent-facing chart. Evidence and the failed
+discriminators are in `EEGResearch/tests/fixtures/README.md`.
 
 **Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
 against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**

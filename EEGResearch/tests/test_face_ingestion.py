@@ -552,3 +552,31 @@ def test_the_measured_rate_reflects_reality_not_the_setting():
 
     assert measured is not None
     assert measured < 500.0, "the measured rate just echoed the configured one"
+
+
+def test_buffered_seconds_reports_measured_time_not_a_frame_count():
+    """The field someone reads while diagnosing a stalled heart channel.
+
+    It was `len(buffer) / nominal_fps`, the same computation removed from the
+    deque bound, `has_full_window` and the window slice -- a 22 fps camera
+    holding a full 40 s reported 29.3 s. Wrong anywhere, but worst here: it sits
+    beside `buffer_capped`, which exists so that stall can be diagnosed at all.
+    """
+    held = 2.0          # the floor: buffer_seconds must cover one POS window
+    adapter, _, _ = _adapter(fps=20.0, buffer_seconds=held)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 20, timeout=5.0)
+        time.sleep(held + 0.3)
+
+        reported = adapter.get_ingestion_meta()["buffered_seconds"]
+        _, _, _, stamps = adapter.rgb_window(float("inf"))
+        assert reported == pytest.approx(stamps[-1] - stamps[0], abs=0.05)
+        assert reported == pytest.approx(held, abs=0.3)
+    finally:
+        adapter.disconnect()
+
+
+def test_buffered_seconds_is_zero_before_anything_is_captured():
+    adapter, _, _ = _adapter()
+    assert adapter.get_ingestion_meta()["buffered_seconds"] == 0.0

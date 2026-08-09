@@ -58,6 +58,8 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--fps", type=float, default=30.0)
+    ap.add_argument("--warmup", type=float, default=8.0,
+                    help="seconds of frames to discard before recording")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -68,6 +70,20 @@ def main() -> int:
     source = OpenCvFrameSource(camera_index=args.camera, fps=args.fps)
     locator = FaceLocator()
     print(f"camera {args.camera} open; locked: {source.locked}", flush=True)
+
+    # Discard the camera's auto-exposure convergence before recording anything.
+    #
+    # Measured: over the first ~5 s after opening, mean green climbed from 88 to
+    # 103 -- a 17% ramp, against a pulse that is under 1%. It swamps POS
+    # completely; the same recording scored confidence 0.05 including the ramp
+    # and 0.81 on a clean stretch after it. The control cannot be locked on this
+    # backend (CAP_PROP_AUTO_EXPOSURE reads back -1.0 whatever it is set to), so
+    # the only option is to let it settle and start the clock afterwards.
+    if args.warmup > 0:
+        warm_until = time.perf_counter() + args.warmup
+        while time.perf_counter() < warm_until:
+            source.read()
+        print(f"discarded {args.warmup:.0f}s of exposure warm-up", flush=True)
 
     frames = faces = written = 0
     started = time.perf_counter()

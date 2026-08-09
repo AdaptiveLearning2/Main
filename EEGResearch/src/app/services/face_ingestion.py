@@ -592,7 +592,16 @@ class FaceCaptureAdapter:
                 # for. Surfaced because the symptom otherwise is a heart channel
                 # that never leaves warming_up, with no cause visible.
                 "buffer_capped": c.buffer_capped,
-                "buffered_seconds": len(self._buffer) / self.fps if self.fps else 0.0,
+                # Measured span, not count over nominal fps. The old form
+                # reported 29.3 s for a 22 fps camera holding a full 40 s, and
+                # this is the field someone reads while working out why the
+                # heart channel is stalled -- it would have misled them at
+                # exactly that moment, sitting next to a `buffer_capped` added
+                # to make that same diagnosis possible.
+                "buffered_seconds": (
+                    self._buffer[-1][0] - self._buffer[0][0]
+                    if len(self._buffer) > 1 else 0.0
+                ),
                 "face_degraded": degraded,
                 "face_degraded_reason": (
                     {

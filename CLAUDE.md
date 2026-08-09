@@ -145,8 +145,10 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 ## Configuration
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
-`EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*`
-group below. Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`,
+`EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
+`INGEST_RATE_WINDOW` (the signal-ingest bounds — the sidecar posts with the *student's* token, so
+that endpoint is a trust boundary and neither the session check nor the consent check bounds
+volume), and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below. Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`,
 `VITE_EEG_DEBUG`. EEGResearch reads `.env` through `src/app/config.py` — `API_TOKEN` and
 `ADMIN_TOKEN` are required, `EEG_SOURCE` picks sim vs muse, and `EEG_DEVICES`
 (`station1:muse@8765,...`) drives the multi-headband registry.

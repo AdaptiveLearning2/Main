@@ -51,6 +51,10 @@ class _Query:
         return self
 
     def single(self):
+        # Records nothing on purpose: nothing on these paths uses it, and a
+        # half-implemented single() that returned a bare row would diverge from
+        # the builder's real behaviour in a way the next person extending this
+        # fake would trip over. Implement it properly when a path needs it.
         return self
 
     def insert(self, rows, **_k):
@@ -66,9 +70,8 @@ class _Query:
     def execute(self):
         rows = self._store.setdefault(self._table, [])
         if self._mode == "select":
-            hit = [r for r in rows
-                   if all(r.get(c) == v for c, v in self._filters.items())]
-            return _Result(hit[0] if "single" in self._filters else hit)
+            return _Result([r for r in rows
+                            if all(r.get(c) == v for c, v in self._filters.items())])
         if self._mode == "insert":
             rows.extend(dict(r) for r in self._pending)
             return _Result(self._pending)
@@ -225,7 +228,10 @@ def test_replaying_a_batch_inserts_nothing_the_second_time(store):
 
     assert first["inserted"] == 2
     assert len(store["heart_signals"]) == 2, "the replay doubled the rows"
-    assert second["ok"]
+    # Counted from what the database wrote, not from what was sent. Reporting
+    # the batch size here would tell a retrying client its retry worked.
+    assert second["inserted"] == 0
+    assert second["duplicates"] == 2
 
 
 def test_two_sources_may_report_the_same_instant(store):

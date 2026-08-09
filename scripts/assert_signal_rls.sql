@@ -111,6 +111,27 @@ BEGIN
     VALUES (sess, usr, 'muse_ppg', when_ts);
 END $$;
 
+-- ── the SELECT grant exists, asserted separately ────────────────────────────
+--
+-- Without this, the zero-rows assertion below is ambiguous. It passes when RLS
+-- correctly filters every row, and it would also fail -- loudly but with a
+-- confusing message about privileges -- if the grant were missing entirely.
+-- Those are opposite problems: one is the policy working, the other is the
+-- table being unreachable. Checking the grant first means the assertion below
+-- can only be about RLS.
+
+DO $$
+BEGIN
+    IF NOT has_table_privilege('authenticated', 'public.heart_signals', 'SELECT') THEN
+        RAISE EXCEPTION
+            'authenticated lacks SELECT on heart_signals -- the RLS assertion '
+            'below would pass for the wrong reason';
+    END IF;
+    IF NOT has_table_privilege('authenticated', 'public.signal_consent', 'SELECT') THEN
+        RAISE EXCEPTION 'authenticated lacks SELECT on signal_consent';
+    END IF;
+END $$;
+
 -- ── RLS: an unrelated authenticated user sees nothing ───────────────────────
 --
 -- The service-role client in main.py bypasses RLS, so this is not what protects

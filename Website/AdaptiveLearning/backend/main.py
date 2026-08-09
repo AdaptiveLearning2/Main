@@ -2338,14 +2338,23 @@ def ingest_heart(payload: HeartBatch, request: Request):
         "raw":             s.raw,
     } for s in kept]
 
+    written = 0
     if rows:
         # ON CONFLICT DO NOTHING against (session_id, source, ts). A retried
         # batch is then idempotent instead of doubling every average it touches
         # -- a failure with no symptom except a wrong number.
-        supabase.table("heart_signals").upsert(
+        #
+        # `inserted` counts what the database actually wrote, not what was sent.
+        # Taking it from `len(rows)` reported a replay as having inserted its
+        # whole batch while inserting nothing, which is a worse lie than the
+        # double-count this key exists to prevent: it tells a retrying client
+        # its retry worked.
+        resp = supabase.table("heart_signals").upsert(
             rows, on_conflict="session_id,source,ts", ignore_duplicates=True
         ).execute()
-    return {"ok": True, "inserted": len(rows), "dropped": dropped}
+        written = len(resp.data or [])
+    return {"ok": True, "inserted": written, "dropped": dropped,
+            "duplicates": len(rows) - written}
 
 @app.get("/api/signals/session/{session_id}")
 def session_signals(session_id: str, request: Request, since: str | None = None):

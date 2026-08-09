@@ -67,6 +67,24 @@ ERROR_BACKOFF_SECONDS = 0.1
 # deliberately not tied to the configured frame rate.
 MAX_BURST_FPS = 240.0
 
+# Seconds of frames discarded after the camera opens, before anything is
+# buffered.
+#
+# A camera's auto-exposure converges over the first few seconds and it does so
+# enormously relative to the signal: measured here, mean green climbed 17% over
+# ~5 s, against a pulse that is under 1%. The same recording scored confidence
+# 0.05 with that ramp inside the window and 0.81 on a clean stretch after it --
+# the difference between the feature working and not.
+#
+# The ramp cannot be prevented. `CAP_PROP_AUTO_EXPOSURE` reads back -1.0 on this
+# Windows backend no matter what it is set to, so the exposure request is a
+# request and nothing more. Discarding the frames is the only control available.
+#
+# 8 s rather than 5 for margin, and it delays the first reading by that much on
+# top of the window fill -- which is why `warmup_remaining_s` is in the meta. A
+# session in warm-up must be distinguishable from a camera that cannot see.
+WARMUP_SECONDS = 8.0
+
 # The clock the samples are stamped with.
 #
 # `perf_counter`, not `monotonic`, and on Windows that is the whole ballgame:
@@ -136,6 +154,8 @@ class _Counters:
     samples_emitted: int = 0
     dropped_full_queue: int = 0
     buffer_capped: int = 0
+    warmup_frames_discarded: int = 0
+    warmup_done: bool = False
     consecutive_missing: int = 0
     # Why the last frame produced nothing: "camera" (no frame at all),
     # "no_face" (nothing detected) or "quality" (face found, too little usable
@@ -164,6 +184,7 @@ class FaceCaptureAdapter:
         emotion_classifier_factory: Callable[[], Any] | None = None,
         emotion_interval_s: float = EMOTION_INTERVAL_S,
         error_backoff: float = ERROR_BACKOFF_SECONDS,
+        warmup_seconds: float = WARMUP_SECONDS,
     ) -> None:
         # buffer_seconds and queue_max are injectable so the bounded-growth and
         # queue-full behaviours can be tested at a scale that runs in
@@ -207,6 +228,8 @@ class FaceCaptureAdapter:
         self._emotion: Any = None
         self._emotion_interval = emotion_interval_s
         self._error_backoff = error_backoff
+        self._warmup_seconds = warmup_seconds
+        self._warmup_started_at: float | None = None
         self._last_emotion_at = 0.0
         self._latest_emotion: Any = None
 
@@ -319,6 +342,26 @@ class FaceCaptureAdapter:
         hardware offered, and a stop event checked once per frame is prompt
         enough for disconnect() without a timed wait to make it so.
         """
+        # Discard the exposure ramp before anything reaches the buffer. In the
+        # loop rather than in connect() so the caller is not blocked for 8 s,
+        # and before `_capture_once` so no discarded frame is counted, stamped
+        # or classified.
+        warmup_until = now_seconds() + self._warmup_seconds
+        with self._lock:
+            self._warmup_started_at = now_seconds()
+        while not self._stop.is_set() and now_seconds() < warmup_until:
+            try:
+                if self._source is not None:
+                    self._source.read()
+            except Exception:                             # noqa: BLE001
+                # A source failing during warm-up is the normal loop's problem,
+                # not the warm-up's. Leave it to report the error properly.
+                break
+            with self._lock:
+                self._counters.warmup_frames_discarded += 1
+        with self._lock:
+            self._counters.warmup_done = True
+
         while not self._stop.is_set():
             try:
                 got_frame = self._capture_once()
@@ -602,6 +645,15 @@ class FaceCaptureAdapter:
                     self._buffer[-1][0] - self._buffer[0][0]
                     if len(self._buffer) > 1 else 0.0
                 ),
+                # Warm-up is not a fault and must not read as one. Without
+                # this, the first 8 s of every session look identical to a
+                # camera that cannot see a face.
+                "warmup_remaining_s": round(max(0.0, (
+                    (self._warmup_started_at + self._warmup_seconds) - now_seconds()
+                    if self._warmup_started_at is not None and not c.warmup_done
+                    else 0.0
+                )), 2),
+                "warmup_frames_discarded": c.warmup_frames_discarded,
                 "face_degraded": degraded,
                 "face_degraded_reason": (
                     {
@@ -645,8 +697,18 @@ class OpenCvFrameSource:
         # single worst thing for rPPG: it reacts to the scene on roughly the
         # timescale of a heartbeat, so the camera's own gain control writes a
         # signal into the pulse band that looks exactly like what we are trying
-        # to measure. Not all drivers honour these; failure to set them is
-        # reported rather than silently accepted.
+        # to measure.
+        #
+        # `set()`'s return value does not mean the property took. Measured on
+        # this Windows backend, `CAP_PROP_AUTO_EXPOSURE` returns True for every
+        # value it is handed and then reads back -1.0 regardless -- so the
+        # previous version of this dict logged a successful exposure lock that
+        # had not happened, which is worse than logging a failure. Each entry
+        # below reports what the driver *reads back*, so a lock that silently
+        # did nothing shows up as one.
+        #
+        # This is why WARMUP_SECONDS exists. The exposure ramp cannot be
+        # prevented on this hardware, only waited out.
         self.locked = {
             # One frame of buffer, so read() returns the frame being exposed
             # now rather than the oldest one queued.
@@ -666,9 +728,9 @@ class OpenCvFrameSource:
             # frame stamps here are read-times and the driver decides how close
             # to exposure that is. Resampling absorbs the result; if the ECG
             # comparison comes back poor, this is the first thing to suspect.
-            "buffer_size": bool(self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)),
-            "auto_exposure": bool(self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)),
-            "auto_wb": bool(self._cap.set(cv2.CAP_PROP_AUTO_WB, 0)),
+            "buffer_size": self._applied(cv2.CAP_PROP_BUFFERSIZE, 1),
+            "auto_exposure": self._applied(cv2.CAP_PROP_AUTO_EXPOSURE, 1),
+            "auto_wb": self._applied(cv2.CAP_PROP_AUTO_WB, 0),
             "fps": bool(self._cap.set(cv2.CAP_PROP_FPS, fps)),
             "width": bool(self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)),
             "height": bool(self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)),
@@ -678,6 +740,22 @@ class OpenCvFrameSource:
                 logger.warning(
                     "camera driver did not accept %s; rPPG accuracy may suffer", name
                 )
+
+    def _applied(self, prop: int, wanted: float) -> bool:
+        """Whether the driver actually took a property, by reading it back.
+
+        `set()` returning True means the call was accepted, not that anything
+        changed. Measured on this Windows backend, `CAP_PROP_AUTO_EXPOSURE`
+        returns True for every value it is handed and then reads back -1.0
+        regardless -- so trusting the return value logged a successful exposure
+        lock that had never happened, which is worse than logging a failure.
+
+        A driver that does not implement a property typically reports -1; one
+        that does reports the value back. Compared with a tolerance because
+        these are floats round-tripped through a driver.
+        """
+        self._cap.set(prop, wanted)
+        return abs(self._cap.get(prop) - wanted) < 0.01
 
     def read(self) -> np.ndarray | None:
         ok, frame = self._cap.read()

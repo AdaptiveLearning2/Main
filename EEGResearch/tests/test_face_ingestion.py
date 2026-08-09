@@ -87,20 +87,25 @@ def _flat_frame(colour=(180, 120, 110)):
 
 
 def _adapter(source=None, locator=None, fps=500.0, buffer_seconds=2.0,
-             queue_max=QUEUE_MAX, error_backoff=0.0):
+             queue_max=QUEUE_MAX, error_backoff=0.0, warmup_seconds=0.0):
     """fps is deliberately high and the buffer deliberately small so tests run
     in milliseconds; nothing under test depends on the wall-clock rate.
 
     `error_backoff` is zero here and 0.1 s in production. The backoff exists so
     a camera that is gone cannot spin a core; in a test the only effect is to
     multiply the tolerance for consecutive failures by a tenth of a second
-    apiece, which turns a millisecond assertion into a three-second one."""
+    apiece, which turns a millisecond assertion into a three-second one.
+
+    `warmup_seconds` is zero for the same reason -- production discards 8 s of
+    auto-exposure ramp before buffering anything, and no test wants to wait for
+    it. The warm-up has its own tests below."""
     src = source or FakeSource()
     loc = locator or FakeLocator()
     adapter = FaceCaptureAdapter(lambda: src, lambda: loc, fps=fps,
                                  buffer_seconds=buffer_seconds,
                                  queue_max=queue_max,
-                                 error_backoff=error_backoff)
+                                 error_backoff=error_backoff,
+                                 warmup_seconds=warmup_seconds)
     return adapter, src, loc
 
 
@@ -492,7 +497,7 @@ def test_disconnect_forgets_the_last_emotion():
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(), fps=30.0,
         buffer_seconds=2.0, emotion_enabled=True, emotion_classifier_factory=lambda: clf,
-        emotion_interval_s=0.0,
+        emotion_interval_s=0.0, warmup_seconds=0.0,
     )
     adapter.connect()
     try:
@@ -580,3 +585,77 @@ def test_buffered_seconds_reports_measured_time_not_a_frame_count():
 def test_buffered_seconds_is_zero_before_anything_is_captured():
     adapter, _, _ = _adapter()
     assert adapter.get_ingestion_meta()["buffered_seconds"] == 0.0
+
+
+# ── the exposure warm-up ─────────────────────────────────────────────────────
+
+def test_the_exposure_ramp_is_discarded_before_anything_is_buffered():
+    """The measurement behind this is the difference between the camera heart
+    channel working and not.
+
+    A webcam's auto-exposure climbs mean green 17% over the first ~5 s after
+    opening, against a pulse under 1%. The same recording scored confidence 0.05
+    with that ramp inside the window and 0.81 on a clean stretch after it. It
+    cannot be prevented -- CAP_PROP_AUTO_EXPOSURE reads back -1.0 whatever it is
+    set to -- so the frames are thrown away instead.
+
+    This test exists because the discard was written into the offline capture
+    script first and not into the adapter, which would have left the first ~40 s
+    of every real lesson reporting a confidence near 0.05 -- read downstream as
+    a camera that cannot get a reading.
+    """
+    source = FakeSource()
+    adapter, _, _ = _adapter(source=source, warmup_seconds=0.4)
+    adapter.connect()
+    try:
+        time.sleep(0.2)
+        assert len(adapter.rgb_buffer()) == 0, "a warm-up frame reached the buffer"
+        assert source.reads > 0, "warm-up did not read from the camera"
+        assert adapter.get_ingestion_meta()["warmup_remaining_s"] > 0
+
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 3)
+        meta = adapter.get_ingestion_meta()
+        assert meta["warmup_remaining_s"] == 0.0
+        assert meta["warmup_frames_discarded"] > 0
+    finally:
+        adapter.disconnect()
+
+
+def test_discarded_frames_are_not_counted_as_captured():
+    """They must not inflate frames_read or faces_found -- those drive the
+    degraded ratio, and a warm-up counted as capture would skew it."""
+    adapter, _, _ = _adapter(warmup_seconds=0.3)
+    adapter.connect()
+    try:
+        time.sleep(0.15)
+        meta = adapter.get_ingestion_meta()
+        assert meta["frames_read"] == 0
+        assert meta["faces_found"] == 0
+        assert meta["warmup_frames_discarded"] > 0
+    finally:
+        adapter.disconnect()
+
+
+def test_warming_up_is_distinguishable_from_a_camera_that_cannot_see():
+    """Both produce an empty buffer. Only one is a fault, and a session that
+    looks broken for its first 8 s is a support call."""
+    warming, _, _ = _adapter(warmup_seconds=5.0)
+    blind, _, _ = _adapter(source=FakeSource(fail_after=0))
+    warming.connect()
+    blind.connect()
+    try:
+        time.sleep(0.3)
+        assert warming.get_ingestion_meta()["warmup_remaining_s"] > 0
+        assert blind.get_ingestion_meta()["warmup_remaining_s"] == 0.0
+    finally:
+        warming.disconnect()
+        blind.disconnect()
+
+
+def test_disconnecting_during_warm_up_is_prompt():
+    """The warm-up loop must watch the stop event, not just the clock."""
+    adapter, _, _ = _adapter(warmup_seconds=30.0)
+    adapter.connect()
+    started = time.perf_counter()
+    adapter.disconnect()
+    assert time.perf_counter() - started < 2.0, "disconnect waited for the warm-up"

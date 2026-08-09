@@ -48,6 +48,7 @@ import numpy as np  # noqa: E402
 
 from src.app.services.face_ingestion import (  # noqa: E402
     LUMA_WEIGHTS,
+    WARMUP_SECONDS,
     OpenCvFrameSource,
 )
 from src.app.services.face_roi import FaceLocator, mean_rgb  # noqa: E402
@@ -58,7 +59,12 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=300.0)
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--fps", type=float, default=30.0)
-    ap.add_argument("--warmup", type=float, default=8.0,
+    # Defaulted from the adapter's constant rather than repeating the number.
+    # The warm-up, the unpaced loop and the luma weights all landed in this
+    # script before the shipped path, and each divergence costs the script the
+    # one property that makes it worth running: that a result here describes
+    # production. Sharing the constant means this one cannot drift.
+    ap.add_argument("--warmup", type=float, default=WARMUP_SECONDS,
                     help="seconds of frames to discard before recording")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -71,14 +77,9 @@ def main() -> int:
     locator = FaceLocator()
     print(f"camera {args.camera} open; locked: {source.locked}", flush=True)
 
-    # Discard the camera's auto-exposure convergence before recording anything.
-    #
-    # Measured: over the first ~5 s after opening, mean green climbed from 88 to
-    # 103 -- a 17% ramp, against a pulse that is under 1%. It swamps POS
-    # completely; the same recording scored confidence 0.05 including the ramp
-    # and 0.81 on a clean stretch after it. The control cannot be locked on this
-    # backend (CAP_PROP_AUTO_EXPOSURE reads back -1.0 whatever it is set to), so
-    # the only option is to let it settle and start the clock afterwards.
+    # Discard the camera's auto-exposure convergence, exactly as
+    # FaceCaptureAdapter._capture_loop does. See WARMUP_SECONDS for the
+    # measurement and why the exposure cannot simply be locked instead.
     if args.warmup > 0:
         warm_until = time.perf_counter() + args.warmup
         while time.perf_counter() < warm_until:

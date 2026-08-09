@@ -26,7 +26,11 @@ export async function apiFetch(path, { method = 'GET', body = null } = {}) {
     const txt = await res.text()
     let detail = txt
     try { detail = JSON.parse(txt) } catch {}
-    throw new Error(detail?.detail || detail || res.statusText)
+    const err = new Error(detail?.detail || detail || res.statusText)
+    // Callers that must tell "this doesn't exist" apart from "the request
+    // failed" need the code, and the message alone doesn't carry it.
+    err.status = res.status
+    throw err
   }
   return res.json()
 }

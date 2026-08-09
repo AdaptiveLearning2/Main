@@ -26,16 +26,16 @@ function renderAt(id = CLASS_ID) {
 // Resolves by URL rather than by call order. mockResolvedValueOnce chains bind
 // to the sequence the two calls happen to be made in, so reordering them inside
 // loadData would silently swap the fixtures instead of failing.
-function mockLoad(classes, students) {
+function mockLoad(cls, students) {
   apiFetch.mockReset()
   apiFetch.mockImplementation((url) =>
-    Promise.resolve(String(url).includes('/students') ? students : classes),
+    Promise.resolve(String(url).includes('/students') ? students : cls),
   )
 }
 
 it('renders a class with students', async () => {
   mockLoad(
-    [{ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123', grade_level: '7' }],
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123', grade_level: '7' },
     [{ user_id: 's1', name: 'Ada' }],
   )
   renderAt()
@@ -46,7 +46,7 @@ it('renders a class with students', async () => {
 it('survives the students endpoint returning a non-array', async () => {
   // students was initialised to null and the render path calls .length on it
   // unguarded, so anything non-array took the whole page down.
-  mockLoad([{ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }], null)
+  mockLoad({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }, null)
   renderAt()
   expect(await screen.findByText('Algebra')).toBeInTheDocument()
   expect(screen.getByText('Students (0)')).toBeInTheDocument()
@@ -54,7 +54,7 @@ it('survives the students endpoint returning a non-array', async () => {
 
 it('survives a class with an empty name', async () => {
   // cls.name[0].toUpperCase() threw on "" because ""[0] is undefined.
-  mockLoad([{ id: CLASS_ID, name: '', join_code: 'ABC123' }], [])
+  mockLoad({ id: CLASS_ID, name: '', join_code: 'ABC123' }, [])
   renderAt()
   expect(await screen.findByText('Untitled class')).toBeInTheDocument()
 })
@@ -70,9 +70,32 @@ it('distinguishes a failed request from a missing class', async () => {
   expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })
 
+const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
+
 it('still reports a genuinely missing class as not found', async () => {
-  // The id is absent from the list, and nothing failed.
-  mockLoad([{ id: 'some-other-class', name: 'Geometry' }], [])
+  // BOTH routes 404, which is what a missing class actually produces -- the
+  // roster runs the same owner check. An earlier version of this fixture had
+  // /students resolve [] here, a state the backend cannot reach, and it hid a
+  // live regression: the roster's rejection reached Promise.all first and the
+  // page reported a failed request instead of a missing class.
+  apiFetch.mockReset()
+  apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()
   expect(await screen.findByText('Class not found.')).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't load this class/i)).not.toBeInTheDocument()
+})
+
+it('does not blame the class for a 404 from the roster', async () => {
+  // The 404 -> "not found" translation belongs to the class request alone.
+  // Applied to the pair, a roster route that 404s for a reason of its own --
+  // a proxy, a rename -- reports an existing class as missing.
+  apiFetch.mockReset()
+  apiFetch.mockImplementation((url) =>
+    String(url).includes('/students')
+      ? Promise.reject(notFound('Not Found'))
+      : Promise.resolve({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }),
+  )
+  renderAt()
+  expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
+  expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })

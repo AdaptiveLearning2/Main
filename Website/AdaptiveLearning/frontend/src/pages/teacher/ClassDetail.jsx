@@ -22,13 +22,29 @@ export default function ClassDetail() {
     setLoading(true)
     setError(null)
     try {
-      const [allClasses, studentList] = await Promise.all([
-        apiFetch(`/api/classes/`),
+      // allSettled, not all: a missing class 404s *both* routes, because
+      // /students runs the same owner check. Under Promise.all the roster's
+      // rejection could land first and turn a genuinely missing class into
+      // "something went wrong" -- the exact confusion this page exists to
+      // avoid. Both outcomes have to be in hand before deciding.
+      const [classRes, studentsRes] = await Promise.allSettled([
+        apiFetch(`/api/classes/${id}`),
         apiFetch(`/api/classes/${id}/students`)
       ])
-      const classInfo = allClasses.find(c => c.id === id)
-      setCls(classInfo || null)
-      setStudents(Array.isArray(studentList) ? studentList : [])
+
+      // The class request alone decides "missing", and only on a 404. Any
+      // other failure of it, and any failure of the roster while the class
+      // itself resolved, is a failed request: the class exists and we could
+      // not show it, which is a different thing to tell a teacher.
+      if (classRes.status === 'rejected') {
+        if (classRes.reason?.status !== 404) throw classRes.reason
+        setCls(null)
+        return
+      }
+      if (studentsRes.status === 'rejected') throw studentsRes.reason
+
+      setCls(classRes.value)
+      setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
     } catch (err) {
       // Tracked separately from "class not found" -- a failed request (offline,
       // 403, server error) is a different situation from a class that doesn't

@@ -157,6 +157,15 @@ error. Agreement is a quality signal, not a correctness one.
   recovery capture than in the rest capture.** No synthetic signal can validate
   the whole chain against real physiology.
 
+  **That test does not currently exercise the derivation.**
+  `test_the_pulse_rises_after_exertion` uses `_channel_peaks` — a spectral peak
+  over the whole recording — and never calls `estimate_window`. So it proves the
+  *recording* contains the exertion rise, not that the code tracks it. Measured
+  2026-08-09: through 25 s windows, the current consensus rule gives rest 69.2 →
+  recovery 68.7, i.e. no rise at all, while the raw spectrum plainly has one.
+  The physiological check that exists to protect the derivation is passing
+  without touching it. Extend it through `estimate_window` whichever rule ships.
+
 ## `optics_rest_64hz.jsonl.gz`
 
 Two minutes of real `OPTICS` data from a Muse S Athena (MS-03) on `PRESET_1035`,

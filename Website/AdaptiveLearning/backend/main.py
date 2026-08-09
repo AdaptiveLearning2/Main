@@ -2270,8 +2270,11 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
-    _verify_session_owner(payload.session_id, user["id"])
+    # Before the session lookup, not after: the limiter needs only the caller's
+    # id, and running it second meant a flooding client still cost one `sessions`
+    # query per request -- the exact cost the limit exists to avoid.
     _rate_limit_ingest(user["id"])
+    _verify_session_owner(payload.session_id, user["id"])
 
     # Last line of defence. The sidecar already gates on consent, but a stale one
     # that kept sending after a student withdrew would otherwise keep recording,
@@ -2280,12 +2283,13 @@ def ingest_face(payload: FaceBatch, request: Request):
     consent = _consent(user["id"])
     if not consent.get("camera_enabled"):
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
-                "reason": "camera not consented"}
+                "reason": ("consent unavailable" if not consent.get("retrieved")
+                           else "camera not consented")}
 
     rows = [{
         "session_id":          payload.session_id,
         "user_id":             user["id"],
-        "ts":                  s.ts or datetime.utcnow().isoformat(),
+        "ts":                  s.ts or _utc_now().isoformat(),
         "emotion":             s.emotion,
         "attention":           s.attention,
         "gaze_x":              s.gaze_x,
@@ -2317,17 +2321,31 @@ def ingest_heart(payload: HeartBatch, request: Request):
     the write side.
     """
     user = get_user(request)
-    _verify_session_owner(payload.session_id, user["id"])
+    # Before the session lookup, not after: the limiter needs only the caller's
+    # id, and running it second meant a flooding client still cost one `sessions`
+    # query per request -- the exact cost the limit exists to avoid.
     _rate_limit_ingest(user["id"])
+    _verify_session_owner(payload.session_id, user["id"])
 
-    allowed = _permitted_heart_sources(_consent(user["id"]))
+    consent = _consent(user["id"])
+    allowed = _permitted_heart_sources(consent)
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
+
+    # Three outcomes, not two. "every sensor was declined" and "we could not
+    # find out" both record nothing, and only one of them is a fault worth
+    # chasing -- the same distinction `_consent` carries `retrieved` for, and
+    # the same one the reporting rules insist on. Without it a consent table
+    # that is down looks exactly like a student who said no.
+    reason = None
+    if not allowed:
+        reason = ("consent unavailable" if not consent.get("retrieved")
+                  else "no consented heart sensor")
 
     rows = [{
         "session_id":      payload.session_id,
         "user_id":         user["id"],
-        "ts":              s.ts or datetime.utcnow().isoformat(),
+        "ts":              s.ts or _utc_now().isoformat(),
         "source":          s.source,
         "heart_rate_bpm":  s.heart_rate_bpm,
         "rmssd_ms":        s.rmssd_ms,
@@ -2352,9 +2370,15 @@ def ingest_heart(payload: HeartBatch, request: Request):
         resp = supabase.table("heart_signals").upsert(
             rows, on_conflict="session_id,source,ts", ignore_duplicates=True
         ).execute()
+        # Depends on PostgREST returning a representation, which postgrest-py
+        # requests by default. Under `return=minimal` this would report
+        # inserted: 0, duplicates: N on every *successful* write -- the same
+        # silent miscount the count exists to fix, inverted. The fake client in
+        # the tests cannot catch that, so it is written down here: if the
+        # default is ever changed, this arithmetic has to change with it.
         written = len(resp.data or [])
     return {"ok": True, "inserted": written, "dropped": dropped,
-            "duplicates": len(rows) - written}
+            "duplicates": len(rows) - written, "reason": reason}
 
 @app.get("/api/signals/session/{session_id}")
 def session_signals(session_id: str, request: Request, since: str | None = None):

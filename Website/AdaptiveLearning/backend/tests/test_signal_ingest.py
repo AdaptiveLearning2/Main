@@ -102,7 +102,11 @@ def store(monkeypatch):
     st = {"signal_consent": [], "heart_signals": [], "face_signals": []}
     monkeypatch.setattr(main, "supabase", _FakeSupabase(st))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    # Recorded rather than merely stubbed, so a test can assert it was *not*
+    # reached -- which is the point of putting the rate limit in front of it.
+    st["_owner_checks"] = []
+    monkeypatch.setattr(main, "_verify_session_owner",
+                        lambda *a: st["_owner_checks"].append(a))
     # Each test gets its own rate-limit budget; the limiter has its own tests.
     monkeypatch.setattr(main, "_ingest_hits", {})
     return st
@@ -287,3 +291,56 @@ def test_the_limit_is_per_caller(store, monkeypatch):
                                     "headband_optical_enabled": True,
                                     "camera_enabled": False, "eeg_enabled": False})
     assert _post_heart([_heart()])["ok"]
+
+
+def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
+    """A flooding client should cost nothing but the limiter.
+
+    With the checks the other way round, every refused request still paid for a
+    `sessions` query first -- the exact cost the limit exists to avoid, and one
+    a caller can force by ignoring the 429 it just received.
+    """
+    from fastapi import HTTPException
+
+    _consent(store, headband_optical_enabled=True)
+    monkeypatch.setattr(main, "_INGEST_RATE_LIMIT", 1)
+
+    _post_heart([_heart()])
+    assert len(store["_owner_checks"]) == 1
+
+    with pytest.raises(HTTPException) as exc:
+        _post_heart([_heart(ts="2026-08-09T10:00:09Z")])
+    assert exc.value.status_code == 429
+    assert len(store["_owner_checks"]) == 1, "the refused request still hit the database"
+
+
+def test_an_unreadable_consent_row_is_not_reported_as_a_refusal(store, monkeypatch):
+    """"Every sensor declined" and "we could not find out" both record nothing,
+    and only one of them is a fault worth chasing."""
+    monkeypatch.setattr(main, "_consent",
+                        lambda _uid: {**main._CONSENT_DENIED, "retrieved": False})
+    assert _post_heart([_heart()])["reason"] == "consent unavailable"
+
+    out = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[{"emotion": "happy"}]),
+        request=None,
+    )
+    assert out["reason"] == "consent unavailable"
+
+
+def test_a_genuine_refusal_says_so(store):
+    """Otherwise the test above passes for the wrong reason."""
+    _consent(store, eeg_enabled=True)          # both sensors declined, readably
+
+    assert _post_heart([_heart()])["reason"] == "no consented heart sensor"
+
+    out = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[{"emotion": "happy"}]),
+        request=None,
+    )
+    assert out["reason"] == "camera not consented"
+
+
+def test_a_fully_consented_batch_reports_no_reason(store):
+    _consent(store, headband_optical_enabled=True)
+    assert _post_heart([_heart()])["reason"] is None

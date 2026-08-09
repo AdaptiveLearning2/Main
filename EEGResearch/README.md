@@ -93,7 +93,6 @@ pip install -e .[dev]
 - `channels`: raw EEG `tp9`, `af7`, `af8`, `tp10`
 - `features`: `focus_score`, `calm_score`, `confidence` (0–100), `signal_quality`
 - `state`: `label`, `reason`, `confidence`, `focus_score`, `calm_score`
-- `question_policy`: `difficulty` (1–5), `action` (increase/decrease/maintain)
 - `ingestion`: connection state, device name, bridge mode
 - `bands`: `delta`, `theta`, `alpha`, `beta`, `gamma` (non-zero when bridge provides them)
 

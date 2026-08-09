@@ -13,7 +13,11 @@ from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
 
-CONTRACT_VERSION = "1.2.0"
+# 1.3.0 removed `question_policy`. It is a breaking removal from the EEG
+# payload, so the version says so, even though nothing gates on this string --
+# a consumer diffing two recordings should not have to guess why a field
+# vanished.
+CONTRACT_VERSION = "1.3.0"
 
 
 class UnknownDeviceError(KeyError):
@@ -205,7 +209,6 @@ class DeviceSession:
                 features = self.processor.update(sample, raw_meta)
                 features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
-                policy = self.adaptation.next_question_policy(state)
                 self.latest_payload = {
                     "contract_version": self.CONTRACT_VERSION,
                     "device_id": self.device_id,
@@ -224,7 +227,6 @@ class DeviceSession:
                         "focus_score": state.focus_score,
                         "calm_score": state.calm_score,
                     },
-                    "question_policy": policy,
                 }
                 self.samples_processed += len(samples)
             except Exception as exc:
@@ -260,10 +262,6 @@ class DeviceSession:
                 "confidence": 0.0,
                 "focus_score": 0.0,
                 "calm_score": 0.0,
-            },
-            "question_policy": {
-                "action": "fallback_default",
-                "difficulty": self.adaptation.current_difficulty,
             },
         }
 

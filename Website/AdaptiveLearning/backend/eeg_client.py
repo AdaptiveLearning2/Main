@@ -190,7 +190,6 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
             "device_id":       eeg.get("device_id"),
             "channels":        eeg.get("channels"),
             "state":           eeg.get("state"),
-            "question_policy": eeg.get("question_policy"),
             "signal_quality":  f.get("signal_quality"),
             # Stored alongside signal_quality because it's what distinguishes a
             # row whose measurements were nulled for bad electrode contact from

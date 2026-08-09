@@ -37,11 +37,6 @@ class StateData(BaseModel):
     calm_score: float
 
 
-class QuestionPolicyData(BaseModel):
-    action: str
-    difficulty: int
-
-
 class BandData(BaseModel):
     delta: float
     theta: float
@@ -59,7 +54,6 @@ class InterpretedEegData(BaseModel):
     channels: ChannelData
     features: FeatureData
     state: StateData
-    question_policy: QuestionPolicyData
     bands: BandData | None = None
     ingestion: dict[str, Any] | None = None
 
@@ -68,9 +62,9 @@ class CameraData(BaseModel):
     """Interpreted camera snapshot.
 
     A separate model rather than making the EEG fields optional, which was the
-    other option and the wrong one: `channels`, `features`, `state` and
-    `question_policy` are genuinely required of an EEG payload, and relaxing them
-    to satisfy a camera would let a malformed *EEG* record validate silently.
+    other option and the wrong one: `channels`, `features` and `state` are
+    genuinely required of an EEG payload, and relaxing them to satisfy a camera
+    would let a malformed *EEG* record validate silently.
     Two device kinds produce two shapes; the union says so.
 
     `heart` and `face` are each absent -- not null -- when that channel is

@@ -6,11 +6,22 @@ from src.app.models import LearnerState
 
 
 class AdaptationEngine:
-    MIN_DIFFICULTY = 1
-    MAX_DIFFICULTY = 5
+    """Turns features into a learner-state label. It does **not** choose
+    difficulty.
+
+    It used to. `next_question_policy` walked a difficulty 1-5 up and down from
+    this label, and the result was emitted on the wire as `question_policy`,
+    stored in `cognitive_signals.raw` and rendered in a debug panel -- while
+    nothing anywhere read it to pick a question. Difficulty is chosen in the
+    website backend's `LLM_topic_decider`, from correctness, topic history,
+    grade and manual bias, none of which the sidecar can see.
+
+    Two implementations where one is inert is worse than one, and this was the
+    dangerous kind of inert: computed every tick and persisted, so a reader
+    reasonably concluded it drove adaptation. Deleted rather than merged.
+    """
 
     def __init__(self) -> None:
-        self.current_difficulty = 2
         self.last_label = "neutral"
         # Ensure the first real state transition is never blocked by cooldown.
         self.last_change_ts = float("-inf")
@@ -47,16 +58,3 @@ class AdaptationEngine:
             self.last_label = target.label
             self.last_change_ts = now
         return target
-
-    def next_question_policy(self, state: LearnerState) -> dict[str, str | int]:
-        if state.label == "insufficient_signal":
-            action = "fallback_default"
-        elif state.label == "focused":
-            self.current_difficulty = min(self.MAX_DIFFICULTY, self.current_difficulty + 1)
-            action = "increase_difficulty"
-        elif state.label == "stressed":
-            self.current_difficulty = max(self.MIN_DIFFICULTY, self.current_difficulty - 1)
-            action = "decrease_difficulty"
-        else:
-            action = "reinforce_topic"
-        return {"action": action, "difficulty": self.current_difficulty}

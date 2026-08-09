@@ -45,16 +45,9 @@ def get_user_performance(user_id):
 # per-topic accuracy above.
 SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
-# Heart and facial rows are written far less often than EEG's 4 Hz, so a window
-# of 5 would reach much further back in time. Only the newest row is acted on;
-# this bounds the read.
-SIGNAL_BIAS_WINDOW = 3
-# Mirrors EEGResearch's AdaptationEngine.infer_state() thresholds so the same
-# focus/calm/confidence values map to the same learner-state labels here.
-EEG_FOCUSED_FOCUS_MIN = 0.7
-EEG_FOCUSED_CALM_MIN  = 0.5
-EEG_STRESSED_CALM_MAX = 0.35
-EEG_MIN_CONFIDENCE    = 0.45
+# The focus/calm/confidence thresholds live in `signal_fusion`, which is the
+# only thing that reads them. A second copy here was inert -- the same
+# two-implementations-one-dead shape this change deleted from the sidecar.
 
 DIFFS = ["easy", "medium", "hard"]
 
@@ -98,7 +91,7 @@ def _consent_flags(user_id):
     student may have refused.
     """
     if not user_id:
-        return {"eeg": False, "heart": False, "face": False}
+        return {"eeg": False, "heart": [], "face": False}
     try:
         rows = (
             supabase.table("signal_consent")
@@ -110,32 +103,46 @@ def _consent_flags(user_id):
         if not rows:
             # No row means the same as a row of falses. Nothing is recorded for
             # a student nobody has configured.
-            return {"eeg": False, "heart": False, "face": False}
+            return {"eeg": False, "heart": [], "face": False}
         r = rows[0]
+        # One flag per *sensor*, and the heart channel can arrive from either --
+        # so this returns the permitted **sources**, not a boolean. ORing the two
+        # flags and then never looking at `source` again would let a student who
+        # allowed the headband and declined the camera have rppg-sourced rows
+        # acted on. Latent today (nothing writes rppg) and therefore exactly the
+        # kind of thing that gets missed later.
+        heart_sources = []
+        if r.get("headband_optical_enabled"):
+            heart_sources += ["muse_optics", "muse_ppg"]
+        if r.get("camera_enabled"):
+            heart_sources += ["rppg"]
         return {
             "eeg":   bool(r.get("eeg_enabled")),
-            # One flag per *sensor*, and the heart channel can arrive from
-            # either. Consent to the headband is not consent to the webcam, so
-            # a heart reading is permitted if the sensor that produced it is.
-            "heart": bool(r.get("headband_optical_enabled")) or bool(r.get("camera_enabled")),
+            "heart": heart_sources,
             "face":  bool(r.get("camera_enabled")),
         }
     except Exception as e:
         print(f"[signal_consent] {e}")
-        return {"eeg": False, "heart": False, "face": False}
+        return {"eeg": False, "heart": [], "face": False}
 
 
-def _latest(table, columns, session_id, limit):
-    """This session's most recent rows from a signals table, newest first."""
+def _latest(table, columns, session_id, limit=1, sources=None):
+    """This session's most recent row(s) from a signals table, newest first.
+
+    `limit` defaults to 1 because only the newest row is ever read for the heart
+    and facial channels. `sources` restricts to the sensors the student
+    permitted, applied in the query rather than after it -- an unfetched row
+    cannot be acted on by a later change.
+    """
     try:
-        return (
+        q = (
             supabase.table(table)
             .select(columns)
             .eq("session_id", session_id)
-            .order("ts", desc=True)
-            .limit(limit)
-            .execute()
-        ).data or []
+        )
+        if sources is not None:
+            q = q.in_("source", sources)
+        return (q.order("ts", desc=True).limit(limit).execute()).data or []
     except Exception as e:
         print(f"[{table}] {e}")
         return []
@@ -176,8 +183,10 @@ def get_session_signal_state(session_id, user_id=None):
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
                                     revoked=not consent["eeg"])
 
+    # Scoped to the sources the student actually permitted, in the query. A row
+    # from a declined sensor is never fetched, so no later edit can act on one.
     heart_rows = _latest("heart_signals", "stress_category, trusted, source",
-                         session_id, SIGNAL_BIAS_WINDOW) if consent["heart"] else []
+                         session_id, sources=consent["heart"]) if consent["heart"] else []
     newest_heart = heart_rows[0] if heart_rows else {}
     heart = signal_fusion.heart_channel(
         newest_heart.get("stress_category"),
@@ -186,12 +195,16 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
     )
 
-    face_rows = _latest("face_signals", "emotion, identity_confidence",
-                        session_id, SIGNAL_BIAS_WINDOW) if consent["face"] else []
+    # `emotion_confidence`, not `identity_confidence`. The table carries both and
+    # they answer different questions -- whose face this is, versus how sure we
+    # are of the expression. Only the second gates an emotion reading.
+    face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
+                        session_id) if consent["face"] else []
     newest_face = face_rows[0] if face_rows else {}
     face = signal_fusion.face_channel(
         newest_face.get("emotion"),
-        newest_face.get("identity_confidence"),
+        newest_face.get("emotion_confidence"),
+        newest_face.get("emotion_trusted"),
         revoked=not consent["face"],
     )
 
@@ -733,6 +746,13 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # Which channel decided, and why. Names the source on an override
     # ("heart elevated (muse_optics) overriding eeg-neutral") so a reading that
     # contradicts the headband can be explained rather than just observed.
+    #
+    # **Diagnostic, and not for the student.** These carry raw internals
+    # ("eeg confidence 0.31 below 0.45") and this payload goes to the student's
+    # browser. Nothing renders them today -- checked: `Adaptive.jsx:556` uses
+    # only `eeg_label` and `eeg_adjusted` for the eased/raised badge. Keep it
+    # that way; a teacher-facing surface is where these belong, and a child
+    # reading their own confidence scores is neither useful nor kind.
     question["signal_reason"]   = signal_state.reason if signal_state else "no session"
     question["signal_channels"] = signal_state.channels if signal_state else {}
     question["difficulty"]   = difficulty

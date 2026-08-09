@@ -137,3 +137,76 @@ def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
 
     state = decider.get_session_signal_state(SESSION, USER)
     assert state.label == "focused", "a broken heart read suppressed the EEG"
+
+
+def test_a_heart_row_from_a_declined_sensor_is_never_read(monkeypatch):
+    """The mirror of the test above, and the one that was missing.
+
+    Consent is per *sensor*. A student who allowed the headband and declined the
+    camera must not have an rppg-sourced row acted on. The first version ORed the
+    two flags into a single boolean and then never looked at `source` again, so
+    it did. Latent, because nothing writes rppg today -- which is precisely how
+    it would have survived to the point where something does.
+    """
+    _install(monkeypatch,
+             {"eeg_enabled": False, "headband_optical_enabled": True,
+              "camera_enabled": False, "user_id": USER},
+             heart=[{"session_id": SESSION, "stress_category": "high",
+                     "trusted": True, "source": "rppg"}])
+
+    state = decider.get_session_signal_state(SESSION, USER)
+    assert state.label != "stressed", "acted on a row from a declined sensor"
+    assert state.channels["heart"] == "no heart samples"
+
+
+def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
+    """The filter must narrow, not block. Same consent as above, headband row."""
+    _install(monkeypatch,
+             {"eeg_enabled": False, "headband_optical_enabled": True,
+              "camera_enabled": False, "user_id": USER},
+             heart=[{"session_id": SESSION, "stress_category": "high",
+                     "trusted": True, "source": "muse_optics"}])
+
+    assert decider.get_session_signal_state(SESSION, USER).label == "stressed"
+
+
+def test_the_emotion_gate_reads_emotion_confidence_not_identity_confidence(monkeypatch):
+    """`face_signals` carries two confidences answering different questions.
+
+    Reading `identity_confidence` -- how sure we are whose face this is -- let a
+    clearly-identified face with a garbage FER+ label withhold a difficulty
+    increase, and threw away a well-classified expression on a poorly-identified
+    face. Both silent. The migration that added the column predicted the mix-up.
+    """
+    fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
+                    face=[{"session_id": SESSION, "emotion": "sad",
+                           "emotion_confidence": 0.05, "emotion_trusted": True,
+                           "identity_confidence": 0.99}])
+
+    state = decider.get_session_signal_state(SESSION, USER)
+    assert state.label == "focused", (
+        "a low-confidence emotion withheld the increase -- identity_confidence "
+        "is being read instead of emotion_confidence"
+    )
+    assert "face_signals" in fake.table_calls
+
+
+def test_an_untrusted_emotion_is_rejected_outright(monkeypatch):
+    """Matching how the heart channel treats `trusted`. A classifier saying it
+    does not stand behind a label is not answered by a confidence figure."""
+    _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
+             face=[{"session_id": SESSION, "emotion": "sad",
+                    "emotion_confidence": 0.99, "emotion_trusted": False}])
+
+    assert decider.get_session_signal_state(SESSION, USER).label == "focused"
+
+
+def test_a_trusted_confident_negative_emotion_does_withhold(monkeypatch):
+    """Otherwise the two tests above pass for the wrong reason."""
+    _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
+             face=[{"session_id": SESSION, "emotion": "sad",
+                    "emotion_confidence": 0.9, "emotion_trusted": True}])
+
+    state = decider.get_session_signal_state(SESSION, USER)
+    assert state.label == "neutral"
+    assert "withholding" in state.reason

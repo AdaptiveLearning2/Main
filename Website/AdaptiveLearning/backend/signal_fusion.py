@@ -85,10 +85,17 @@ class ChannelState:
     `label` is None whenever the channel says nothing. `reason` always says
     something, because "no label" has several causes and they are not
     interchangeable.
+
+    `cause` carries that distinction *structurally*. `fuse` used to derive it by
+    sniffing for `"confidence" in reason`, which was correct against every
+    string here and would have silently reclassified an outcome the first time
+    someone reworded a message. The reason stays for humans; control flow reads
+    `cause`.
     """
     label: str | None = None
     reason: str = "absent"
     source: str | None = None
+    cause: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,13 +127,13 @@ def eeg_channel(
 ) -> ChannelState:
     """The EEG channel's label, by the thresholds already in production."""
     if revoked:
-        return ChannelState(None, "eeg revoked")
+        return ChannelState(None, "eeg revoked", cause="revoked")
     if focus is None or calm is None or confidence is None:
-        return ChannelState(None, "no eeg samples")
+        return ChannelState(None, "no eeg samples", cause="no_samples")
     if confidence < EEG_MIN_CONFIDENCE:
         # Poor electrode contact, not a calm student.
         return ChannelState(None, f"eeg confidence {confidence:.2f} below "
-                                  f"{EEG_MIN_CONFIDENCE}")
+                                  f"{EEG_MIN_CONFIDENCE}", cause="low_confidence")
     if focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
         return ChannelState("focused", "eeg focused and calm")
     if calm < EEG_STRESSED_CALM_MAX:
@@ -153,37 +160,62 @@ def heart_channel(
     reporting it as "no reading" would make a recovering sensor look broken.
     """
     if revoked:
-        return ChannelState(None, "heart revoked", source)
+        return ChannelState(None, "heart revoked", source, cause="revoked")
     if stress_category is None:
-        return ChannelState(None, "no heart samples", source)
+        return ChannelState(None, "no heart samples", source, cause="no_samples")
     if stress_category == "calibrating":
-        return ChannelState(None, f"heart calibrating ({source})", source)
+        return ChannelState(None, f"heart calibrating ({source})", source,
+                            cause="calibrating")
     if not trusted:
         # Present and readable, just not worth acting on. Distinct from absent.
-        return ChannelState(None, f"heart untrusted ({source})", source)
+        return ChannelState(None, f"heart untrusted ({source})", source,
+                            cause="untrusted")
     if stress_category in ELEVATED_STRESS:
         return ChannelState("stressed", f"heart elevated ({source})", source)
+    # "calm" is reserved, not consumed: `fuse` never reads it, because a calm
+    # heart is not on its own a reason to raise difficulty -- rule 2 requires
+    # EEG to agree. Kept so the diagnostic `channels` map distinguishes "read it,
+    # it was fine" from "could not read it", which is the same distinction the
+    # None branches above exist for.
     return ChannelState("calm", f"heart {stress_category} ({source})", source)
 
 
 def face_channel(
     emotion: str | None,
-    confidence: float | None,
+    emotion_confidence: float | None,
+    emotion_trusted: bool | None = None,
     *,
     revoked: bool = False,
 ) -> ChannelState:
     """The facial channel, which is only ever allowed to withhold.
+
+    Named `emotion_confidence`, not `confidence`, because `face_signals` carries
+    **two** confidences and they answer different questions:
+    `identity_confidence` is how sure we are whose face this is, and
+    `emotion_confidence` is how sure we are of the expression. Only the second
+    one belongs here, and an earlier revision passed the first -- so a clearly
+    identified face with a garbage FER+ label withheld a difficulty increase,
+    while a well-classified expression on a poorly identified face was thrown
+    away. Both silent. The migration that added the column predicted exactly
+    this ("an unqualified name leaves a reader a 50/50 guess about which one it
+    gates"), so the parameter is named for the column rather than the concept.
 
     Returns "negative" or "neutral", never "stressed" -- the vocabulary is
     deliberately different from the other two so that no later edit can wire it
     into the ease-off branch by pattern-matching on a label name.
     """
     if revoked:
-        return ChannelState(None, "face revoked")
+        return ChannelState(None, "face revoked", cause="revoked")
     if not emotion:
-        return ChannelState(None, "no face samples")
-    if confidence is None or confidence < EMOTION_MIN_CONFIDENCE:
-        return ChannelState(None, "face confidence below threshold")
+        return ChannelState(None, "no face samples", cause="no_samples")
+    if emotion_trusted is False:
+        # Hard reject, matching how heart_channel treats `trusted`. The
+        # classifier said it does not stand behind this label; a confidence
+        # figure alongside that is not a second opinion.
+        return ChannelState(None, "face untrusted", cause="untrusted")
+    if emotion_confidence is None or emotion_confidence < EMOTION_MIN_CONFIDENCE:
+        return ChannelState(None, "face emotion confidence below threshold",
+                            cause="low_confidence")
     if emotion.lower() in NEGATIVE_EMOTIONS:
         return ChannelState("negative", f"face {emotion.lower()}")
     return ChannelState("neutral", f"face {emotion.lower()}")
@@ -230,6 +262,7 @@ def fuse(
     #    rather than as neutral: "we could not read" and "we read, it was fine"
     #    are different, and only one of them is a reason to check the headband.
     if eeg.label is None:
-        label = "insufficient_signal" if "confidence" in eeg.reason else "no_eeg"
+        label = ("insufficient_signal" if eeg.cause == "low_confidence"
+                 else "no_eeg")
         return FusedState(label, eeg.reason, **common)
     return FusedState("neutral", eeg.reason, **common)

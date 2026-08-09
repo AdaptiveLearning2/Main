@@ -179,3 +179,42 @@ def test_every_outcome_explains_which_channel_decided_it():
     ):
         assert state.reason and state.reason != "absent"
         assert set(state.channels) == {"eeg", "heart", "face"}
+
+
+# ── the cause field, which control flow now reads instead of the reason text ──
+
+def test_insufficient_signal_is_classified_structurally_not_by_wording():
+    """`fuse` used to decide this by sniffing for "confidence" in the reason
+    string. Correct against every message then, and one reword away from
+    silently reclassifying an outcome."""
+    from signal_fusion import ChannelState
+
+    low_conf = eeg_channel(0.8, 0.7, 0.1)
+    assert low_conf.cause == "low_confidence"
+    assert fuse(low_conf).label == "insufficient_signal"
+
+    # Same cause, completely different wording: the classification must hold.
+    reworded = ChannelState(None, "electrode contact too poor to score",
+                            cause="low_confidence")
+    assert fuse(reworded).label == "insufficient_signal"
+
+    # And an absence that is *not* low confidence must not be mislabelled.
+    assert fuse(eeg_channel(None, None, None)).label == "no_eeg"
+    assert fuse(eeg_channel(0.8, 0.7, 0.9, revoked=True)).label == "no_eeg"
+
+
+def test_every_absence_carries_a_machine_readable_cause():
+    """Three absences that are not the same thing, distinguishable without
+    parsing prose."""
+    assert eeg_channel(0.8, 0.7, 0.9, revoked=True).cause == "revoked"
+    assert heart_channel("calibrating", True, "muse_ppg").cause == "calibrating"
+    assert heart_channel("high", False, "muse_ppg").cause == "untrusted"
+    assert face_channel("sad", 0.9, False).cause == "untrusted"
+    assert face_channel("sad", 0.1, True).cause == "low_confidence"
+
+
+def test_an_untrusted_expression_is_rejected_before_its_confidence_is_read():
+    """A classifier that does not stand behind a label is not answered by a
+    confidence figure. Matches how heart_channel treats `trusted`."""
+    assert face_channel("sad", 0.99, False).label is None
+    assert fuse(FOCUSED, ABSENT, face_channel("sad", 0.99, False)).label == "focused"

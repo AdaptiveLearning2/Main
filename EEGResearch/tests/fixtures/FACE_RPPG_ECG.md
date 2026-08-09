@@ -10,8 +10,12 @@ Five minutes of mean face colour through the shipped path — the same
 `scripts/capture_face_rgb.py`. No video: three numbers, a quality figure and a
 timestamp per frame, which is why the fixture is committable.
 
-8988 samples, 300.4 s, 29.92 Hz measured, **face found on 8988/8988 frames**,
-mean usable-pixel fraction 1.00. This is as clean a recording as this hardware
+8988 samples, 300.4 s, 29.92 Hz measured, mean usable-pixel fraction 1.00, and
+**no frame was dropped for want of a face**: 8988 of 8988 produced a colour
+sample. That is not 8988 detections — `FaceLocator` re-detects every 15th frame
+and reuses the box between, so it is roughly 600 detections and 8400 cache hits.
+What it establishes is that the face never left frame and the box never went
+stale, not that a detector ran per frame. This is as clean a recording as this hardware
 produces: seated, front-lit, still, exposure warm-up discarded.
 
 Simultaneously, five Galaxy Watch7 single-lead ECG readings at 500 Hz, all
@@ -115,6 +119,14 @@ Three were measured while getting to this point, and none is fixable in software
   suppress it. Roughly a third of samples carry a stamp that is not when the
   light arrived. Dropping those pairs raised confidence measurably (0.05 → 0.33
   on one probe) without ever recovering the true rate.
+- **Not compression.** The obvious remaining suspect was MJPEG — lossy chroma and
+  temporal denoising are the standard rPPG killers, and would have made "this
+  camera in this mode" the right conclusion instead of "this hardware". It was
+  checked and ruled out. Through DSHOW the camera reports **YUY2** natively and
+  refuses `MJPG` outright; through the default backend the capture path uses, the
+  frames carry no 8x8 DCT blocking — mean gradient across block boundaries
+  against interior is 0.95 vertically and 0.98 horizontally, where JPEG artefacts
+  would put it above 1.15. The stream feeding the failed capture was uncompressed.
 - **Residual illumination variation is ~3% and largely achromatic** — POS's
   intended target — against a pulse under 1%.
 

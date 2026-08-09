@@ -177,6 +177,24 @@ periodicity being confused. A stored 166 bpm for a fidgeting child is worse than
 reaches past the reports: the planned fusion rule lets the heart channel lower question difficulty on
 its own. Evidence and the failed discriminators are in `EEGResearch/tests/fixtures/README.md`.
 
+**Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
+against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**
+against a true 88, on five minutes with the face found in 8988 of 8988 frames. Not a
+derivation bug -- the pulse is absent from the video, and the raw R/G/B channels show the
+same, so POS is not at fault. The autocorrelation peak was 0.02 where a real pulse gives
+0.3-0.7.
+
+The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
+to a single-channel source.** Its three terms were built for the headband's four contact
+channels -- `agreement` is 1.00 by construction against one waveform, `margin` is highest
+exactly when there is no rival structure to beat, and noise scored an snr of 0.314, inside
+the range the code documents as a clear pulse. So the gate in front of camera heart rate is
+not weak, it is inapplicable, and better hardware alone would not fix that.
+
+The camera ships **emotion-only**. POS is kept because it is correct and is the front half
+of any future attempt, but do not read its passing tests as evidence it measures a heart
+rate. Evidence and the full spectral analysis: `EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
+
 Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
 These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
 one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`

@@ -201,6 +201,36 @@ class FaceCaptureAdapter:
                 f"buffer_seconds={buffer_seconds} is shorter than one POS window "
                 f"({WINDOW_SECONDS}s); no pulse could ever be produced"
             )
+        if heart_enabled:
+            # Not refused -- a future experiment on better hardware needs to be
+            # able to switch this on -- but never switched on quietly.
+            #
+            # Validated against a simultaneous ECG on 2026-08-08 and failed:
+            # 47.7 bpm reported at confidence 0.74 against a watch-measured 88,
+            # on five minutes with the face found in 8988 of 8988 frames. The
+            # pulse was absent from the recording rather than mis-derived -- the
+            # autocorrelation peak was 0.02 where a real pulse gives 0.3-0.7 --
+            # and the raw R, G and B channels showed the same, so POS was not at
+            # fault.
+            #
+            # Worse, the confidence gate cannot catch it. Its three terms were
+            # built for the headband's four contact channels: `agreement` is
+            # 1.00 by construction against POS's single waveform, `margin` is
+            # highest exactly when there is no rival structure to beat, and the
+            # measured snr of 0.314 sits inside the range the code documents as
+            # "a clear pulse". Enabling this does not ship a noisy number, it
+            # ships a confident wrong one -- which is the failure the derived-BPM
+            # rule in CLAUDE.md exists to prevent.
+            #
+            # tests/fixtures/FACE_RPPG_ECG.md has the full evidence.
+            logger.warning(
+                "FACE_HEART_ENABLED is on: camera heart rate failed ECG "
+                "validation (47.7 bpm reported at confidence 0.74 against 88) "
+                "and its confidence gate does not apply to a single-channel "
+                "waveform. See tests/fixtures/FACE_RPPG_ECG.md. Readings from "
+                "this channel must not be recorded or shown to a user."
+            )
+
         if not heart_enabled and not emotion_enabled:
             # Opening a camera to compute nothing is never what was meant, and
             # the failure would be silent: frames read, nothing produced,

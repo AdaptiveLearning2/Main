@@ -659,3 +659,36 @@ def test_disconnecting_during_warm_up_is_prompt():
     started = time.perf_counter()
     adapter.disconnect()
     assert time.perf_counter() - started < 2.0, "disconnect waited for the warm-up"
+
+
+# ── the heart channel is dormant ─────────────────────────────────────────────
+
+def test_the_heart_channel_is_off_by_default():
+    """It failed ECG validation and must not come back on by drift.
+
+    Measured 2026-08-08: 47.7 bpm at confidence 0.74 against a watch ECG's 88,
+    on five minutes with the face found in 8988 of 8988 frames. The pulse was
+    absent from the video, not mis-derived. tests/fixtures/FACE_RPPG_ECG.md.
+    """
+    from src.app.config import Settings
+
+    settings = Settings(API_TOKEN="x", ADMIN_TOKEN="y", EEG_DEVICES="camera:face@0")
+    assert settings.face_heart_enabled is False
+    assert settings.face_emotion_enabled is True, "the camera ships emotion-only"
+
+
+def test_enabling_the_heart_channel_is_never_quiet(caplog):
+    """Not refused -- better hardware deserves a retry -- but not silent either.
+
+    A confident wrong heart rate reaching a report is the failure the derived-BPM
+    rule in CLAUDE.md exists to prevent, and the confidence gate cannot catch
+    this one: its terms assume the headband's four contact channels.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _adapter(fps=30.0)
+
+    assert any("FACE_RPPG_ECG.md" in r.message for r in caplog.records), (
+        "enabling camera heart rate produced no warning"
+    )

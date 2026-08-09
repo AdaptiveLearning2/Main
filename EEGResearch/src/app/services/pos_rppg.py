@@ -1,5 +1,18 @@
 """Pulse waveform from face-video colour, by POS (plane-orthogonal-to-skin).
 
+**Dormant.** This is a correct implementation of a published method and it is
+not wired into anything that ships: `FACE_HEART_ENABLED` defaults to false and
+should stay there. Validated against a simultaneous ECG on 2026-08-08, the
+camera path reported 47.7 bpm at confidence 0.74 against a true 88 -- not a
+derivation error but an absent signal, confirmed in the raw R, G and B channels
+before POS ever touched them. `tests/fixtures/FACE_RPPG_ECG.md` is the evidence.
+
+Kept, rather than deleted, because the failure was the sensor and not the
+algorithm: on a camera whose exposure genuinely locks and whose frames are
+stamped at exposure, this is still the right front half. Do not read the tests
+below as evidence that it measures a heart rate -- they show it computes POS
+correctly on synthetic input, which is a different claim.
+
 This is the front half of camera heart rate. It turns a stream of mean RGB
 values from a face region into a 1-D pulse waveform — the same shape the
 headband's optical sensor produces directly — and hands it to

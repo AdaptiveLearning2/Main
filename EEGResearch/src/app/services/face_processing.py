@@ -1,5 +1,15 @@
 """Camera samples to the sidecar's record shape.
 
+**The heart block is unvalidated and switched off.** Read
+`tests/fixtures/FACE_RPPG_ECG.md` before enabling it. Measured against a
+simultaneous ECG it reported 47.7 bpm at confidence 0.74 against a true 88, on
+the cleanest recording this hardware produces, because the pulse was not present
+in the video at all. The confidence figure below cannot catch that: every term
+in it assumes the headband's four contact channels, and POS produces one
+waveform. The code stays because it is correct and is the front half of any
+future attempt on hardware whose exposure locks; the claim that it measures a
+heart rate does not.
+
 Mirrors `SignalProcessor.update`'s contract for the EEG path: take what the
 adapter produced since the last tick, return a plain dict describing *now*.
 Holds a rolling window and nothing longer; the aggregates a session needs are

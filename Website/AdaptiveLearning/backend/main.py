@@ -1088,12 +1088,28 @@ _STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
 # student's laptop must not be able to flood the table. `_verify_session_owner`
 # answers "whose session" and the consent check answers "may this be recorded";
 # neither bounds volume, and volume is its own denial-of-service.
+# The two bounds multiply, and the product is the number worth knowing: at the
+# defaults a student may post 120 batches of 500 a minute, so **60,000 samples
+# per minute**. Against a 1 Hz producer that is roughly a thousandfold of
+# headroom, which is deliberate -- the limit is sized to stop a runaway loop or
+# a hostile client, not to police a working sensor, and a legitimate backlog
+# flush after a dropped connection has to fit through it. Tighten the batch size
+# before the rate if that ever needs revisiting: a smaller batch costs a
+# well-behaved client nothing but round trips.
 _INGEST_MAX_BATCH   = _env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
 _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _ingest_hits: dict[str, list[float]] = {}
 _ingest_hits_lock = threading.Lock()
+# Same sweep as the strategy limiter, and needed more here: entries are
+# otherwise pruned only on that caller's *next* request, so every student who
+# posts once and stops leaves a list behind for the process lifetime. Ingest is
+# the higher-volume endpoint, so it accumulates callers fastest -- this was the
+# one place without eviction, which is the wrong way round.
+_ingest_sweep_at = time.monotonic()
+_INGEST_SWEEP_EVERY = 60.0
+_INGEST_SWEEP_ABOVE = 1024
 
 # Which heart sources each consent flag permits. One flag per *sensor*, so a
 # student who allowed the headband and declined the camera has consented to
@@ -2223,8 +2239,19 @@ def _rate_limit_ingest(user_id: str):
     make a student's steady 1 Hz ingest compete with their own occasional
     strategy request.
     """
+    global _ingest_sweep_at
     now = time.monotonic()
     with _ingest_hits_lock:
+        # Only once the dict is large, and only once per interval: a size-only
+        # trigger scans every known caller on every request and frees nothing
+        # when the dict is large because the callers are real.
+        if (len(_ingest_hits) > _INGEST_SWEEP_ABOVE
+                and now - _ingest_sweep_at >= _INGEST_SWEEP_EVERY):
+            _ingest_sweep_at = now
+            for uid in [u for u, ts in _ingest_hits.items()
+                        if all(now - t >= _INGEST_RATE_WINDOW for t in ts)]:
+                del _ingest_hits[uid]
+
         hits = [t for t in _ingest_hits.get(user_id, ())
                 if now - t < _INGEST_RATE_WINDOW]
         if len(hits) >= _INGEST_RATE_LIMIT:

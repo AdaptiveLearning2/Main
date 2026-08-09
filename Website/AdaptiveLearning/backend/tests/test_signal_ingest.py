@@ -13,6 +13,7 @@ it records a child's body against their refusal.
 """
 
 import os
+import time
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -344,3 +345,37 @@ def test_a_genuine_refusal_says_so(store):
 def test_a_fully_consented_batch_reports_no_reason(store):
     _consent(store, headband_optical_enabled=True)
     assert _post_heart([_heart()])["reason"] is None
+
+
+def test_stale_callers_are_evicted_rather_than_accumulating(store, monkeypatch):
+    """Otherwise every student who posts once and stops leaves a list behind for
+    the process lifetime. Entries are pruned on that caller's *next* request,
+    which for a caller who never returns is never."""
+    _consent(store, headband_optical_enabled=True)
+    monkeypatch.setattr(main, "_INGEST_SWEEP_ABOVE", 5)
+    monkeypatch.setattr(main, "_INGEST_SWEEP_EVERY", 0.0)
+
+    # Callers who posted a full window ago and never came back.
+    stale = time.monotonic() - (main._INGEST_RATE_WINDOW + 1)
+    main._ingest_hits.update({f"gone-{i}": [stale] for i in range(10)})
+    main._ingest_sweep_at = 0.0
+
+    _post_heart([_heart()])
+
+    assert not [k for k in main._ingest_hits if k.startswith("gone-")], (
+        "stale callers were not evicted"
+    )
+    assert STUDENT["id"] in main._ingest_hits, "the live caller was evicted too"
+
+
+def test_an_active_caller_is_never_swept(store, monkeypatch):
+    """The sweep must only drop entries whose every hit has aged out."""
+    _consent(store, headband_optical_enabled=True)
+    monkeypatch.setattr(main, "_INGEST_SWEEP_ABOVE", 0)
+    monkeypatch.setattr(main, "_INGEST_SWEEP_EVERY", 0.0)
+
+    main._ingest_hits["busy"] = [time.monotonic()]      # a hit just now
+    main._ingest_sweep_at = 0.0
+
+    _post_heart([_heart()])
+    assert "busy" in main._ingest_hits

@@ -149,8 +149,12 @@ BEGIN
     SELECT i.owner_id, i.other_id, i.sess_id
       INTO owner_id, other_id, sess FROM _ids i;
 
-    INSERT INTO public.heart_signals (session_id, user_id, source, heart_rate_bpm)
-    VALUES (sess, owner_id, 'muse_optics', 72);
+    -- An explicit, distinct ts. `now()` is the *transaction* timestamp and is
+    -- therefore identical to the one the dedupe block above used, so relying on
+    -- the column default collides with that row on the very key this script
+    -- asserts. Found by running it; the constraint was doing its job.
+    INSERT INTO public.heart_signals (session_id, user_id, source, ts, heart_rate_bpm)
+    VALUES (sess, owner_id, 'muse_optics', now() + interval '1 minute', 72);
 
     -- Impersonate an unrelated logged-in user.
     SET LOCAL ROLE authenticated;
@@ -163,11 +167,27 @@ BEGIN
         RAISE EXCEPTION 'an unrelated authenticated user saw % heart rows', visible;
     END IF;
 
+    -- And the owner *can* see it. This half is what makes the half above mean
+    -- anything: with RLS on and no policy at all, SELECT returns zero rows, so
+    -- "the stranger sees nothing" passes just as happily when the policy has
+    -- been dropped as when it is working. Verified by dropping both policies
+    -- and watching this script still pass -- it did, until this check existed.
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', owner_id, 'role', 'authenticated')::text,
+                       true);
+    SELECT count(*) INTO visible FROM public.heart_signals;
+    IF visible = 0 THEN
+        RAISE EXCEPTION
+            'the owner cannot see their own heart rows -- the RLS policy is '
+            'missing or too strict, and the stranger check above is therefore '
+            'passing for the wrong reason';
+    END IF;
+
     -- And cannot write one either: with no INSERT policy, the command is denied
     -- whatever the grant says.
     BEGIN
-        INSERT INTO public.heart_signals (session_id, user_id, source)
-        VALUES (sess, other_id, 'muse_optics');
+        INSERT INTO public.heart_signals (session_id, user_id, source, ts)
+        VALUES (sess, other_id, 'muse_optics', now() + interval '2 minutes');
         RAISE EXCEPTION 'an authenticated user inserted a heart row';
     EXCEPTION WHEN insufficient_privilege THEN NULL;
     END;

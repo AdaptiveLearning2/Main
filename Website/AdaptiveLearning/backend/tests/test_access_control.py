@@ -730,7 +730,7 @@ def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
 
     assert report["retrieved"] == {"cognitive": True, "face": True,
                                    "heart": True, "sessions": True}
-    assert report["summary"] == "No EEG or facial recognition or heart rate samples were recorded this week."
+    assert report["summary"] == "No EEG, facial recognition or heart rate samples were recorded this week."
     assert report["sessions_recorded"] == 0
 
 

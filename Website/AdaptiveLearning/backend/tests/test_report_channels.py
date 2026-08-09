@@ -46,7 +46,7 @@ def test_a_declined_channel_is_never_queried(monkeypatch):
     fake = _FakeSupabase(_tables(_consent_row(headband=False, camera=False)))
     monkeypatch.setattr(main, "supabase", fake)
 
-    heart, emotion = main._reportable_channels(STUDENT)
+    heart, emotion, _ = main._reportable_channels(STUDENT)
     assert (heart, emotion) == (False, False)
 
     main._weekly_signal_report(STUDENT, include_heart=heart, include_emotion=emotion)
@@ -60,15 +60,15 @@ def test_a_viewer_cannot_widen_past_consent(monkeypatch):
                         _FakeSupabase(_tables(_consent_row(camera=False))))
 
     # Asking for facial data on a student who declined the camera.
-    assert main._reportable_channels(STUDENT, want_emotion=True) == (True, False)
+    assert main._reportable_channels(STUDENT, want_emotion=True)[:2] == (True, False)
 
 
 def test_a_viewer_can_narrow_within_consent(monkeypatch):
     """The existing opt-out still works where consent permits the channel."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(_consent_row())))
 
-    assert main._reportable_channels(STUDENT, want_emotion=False) == (True, False)
-    assert main._reportable_channels(STUDENT, want_emotion=True) == (True, True)
+    assert main._reportable_channels(STUDENT, want_emotion=False)[:2] == (True, False)
+    assert main._reportable_channels(STUDENT, want_emotion=True)[:2] == (True, True)
 
 
 def test_heart_consent_follows_either_sensor(monkeypatch):
@@ -88,7 +88,7 @@ def test_unreadable_consent_reports_nothing(monkeypatch):
     not become a licence to read every channel."""
     monkeypatch.setattr(main, "supabase",
                         _FakeSupabase({}, table_raises={"signal_consent"}))
-    assert main._reportable_channels(STUDENT) == (False, False)
+    assert main._reportable_channels(STUDENT)[:2] == (False, False)
 
 
 # ── what the report now carries ──────────────────────────────────────────────
@@ -180,7 +180,7 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
 
     monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
     monkeypatch.setattr(main, "_reportable_channels",
-                        lambda cid, want=True: (True, cid == "kid-yes"))
+                        lambda cid, want=True: main.ReportChannels(True, cid == "kid-yes", True))
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
     monkeypatch.setattr(main, "_profile", lambda _c: {})
     monkeypatch.setattr(main, "supabase", _FakeSupabase({
@@ -197,4 +197,91 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
     assert groups[(True, True)] == ["kid-yes"]
     assert groups[(True, False)] == ["kid-no"], (
         "the sibling who declined the camera was read with it enabled"
+    )
+
+
+# ── the endpoint, not just the helper ────────────────────────────────────────
+
+def test_the_weekly_endpoint_does_not_read_a_declined_camera(monkeypatch):
+    """The regression this file was missing.
+
+    Every consent test above calls `_weekly_signal_report` directly with
+    keywords, so none of them went through the endpoint -- where the resolved
+    pair was unpacked with `*reversed(...)` and the two flags arrived swapped.
+    A student who allowed the headband and declined the camera therefore had
+    `face_signals` read for them, which is the exact violation this whole change
+    exists to prevent, and it was invisible whenever both flags agreed.
+    """
+    fake = _FakeSupabase(_tables(_consent_row(headband=True, camera=False)))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+
+    out = main.student_weekly_report(STUDENT, None)
+
+    assert "face_signals" not in fake.table_calls, "read a declined camera"
+    assert "heart_signals" in fake.table_calls, "skipped a consented headband"
+    assert out["emotion_included"] is False
+    assert out["heart_included"] is True
+
+
+def test_the_weekly_endpoint_reads_a_declined_headband_neither_way(monkeypatch):
+    """The mirror, so the test above cannot pass on a coin flip."""
+    fake = _FakeSupabase(_tables(_consent_row(headband=False, camera=True)))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+
+    out = main.student_weekly_report(STUDENT, None)
+
+    assert out["emotion_included"] is True
+    assert "face_signals" in fake.table_calls
+    # Camera consent still permits a heart reading -- from the camera.
+    assert out["heart_included"] is True
+
+
+def test_a_failed_consent_read_is_not_reported_as_a_refusal(monkeypatch):
+    """"We could not find out" and "the student declined" both suppress every
+    optional channel, and only one of them is a fault."""
+    fake = _FakeSupabase(_tables(_consent_row()), table_raises={"signal_consent"})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    monkeypatch.setattr(main, "_profile", lambda _s: {"display_name": "Kid"})
+
+    out = main.student_weekly_report(STUDENT, None)
+
+    assert out["consent_retrieved"] is False
+    assert out["heart_included"] is False and out["emotion_included"] is False
+
+
+def test_heart_truncation_sets_the_truncated_flag(monkeypatch):
+    """A capped heart read reported truncated: False -- the same failure the
+    comment beside that flag documents for the other tables."""
+    monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        heart=[{"user_id": STUDENT, "ts": _ts(i), "source": "muse_optics",
+                "heart_rate_bpm": 70.0, "trusted": True} for i in range(1, 6)],
+    ), max_rows={"heart_signals": 2}))
+
+    assert main._weekly_signal_report(STUDENT)["truncated"] is True
+
+
+def test_untrusted_only_weeks_report_a_count_beside_a_null_average(monkeypatch):
+    """Three states, not two: "measured, unusable" must not read as "the sensor
+    was off". The count is rows retrieved; the average is rows trusted."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 190.0, "trusted": False}],
+    )))
+    report = main._weekly_signal_report(STUDENT)
+
+    assert report["sample_counts"]["heart"] == 1
+    assert report["highlights"]["heart_rate_bpm"] is None
+    assert report["heart_sources"] == [], (
+        "a source whose every sample was rejected was listed as if it worked"
     )

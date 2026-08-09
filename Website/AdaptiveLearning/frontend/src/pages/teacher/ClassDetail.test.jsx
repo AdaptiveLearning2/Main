@@ -73,16 +73,16 @@ it('distinguishes a failed request from a missing class', async () => {
 const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
 
 it('still reports a genuinely missing class as not found', async () => {
-  // The detail endpoint 404s on an id that isn't there; that is the one status
-  // that means "no such class" rather than "the request failed".
+  // BOTH routes 404, which is what a missing class actually produces -- the
+  // roster runs the same owner check. An earlier version of this fixture had
+  // /students resolve [] here, a state the backend cannot reach, and it hid a
+  // live regression: the roster's rejection reached Promise.all first and the
+  // page reported a failed request instead of a missing class.
   apiFetch.mockReset()
-  apiFetch.mockImplementation((url) =>
-    String(url).includes('/students')
-      ? Promise.resolve([])
-      : Promise.reject(notFound('Class not found')),
-  )
+  apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()
   expect(await screen.findByText('Class not found.')).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't load this class/i)).not.toBeInTheDocument()
 })
 
 it('does not blame the class for a 404 from the roster', async () => {

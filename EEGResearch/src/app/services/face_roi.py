@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from typing import Any
+
 import numpy as np
 
 # Fraction of a detected face box used for each measurement region.
@@ -141,15 +143,31 @@ class FaceLocator:
     exactly the kind of in-band noise POS is there to remove.
     """
 
-    def __init__(self, redetect_every: int = 15) -> None:
-        import cv2                                   # noqa: PLC0415 -- lazy by design
+    def __init__(self, redetect_every: int = 15, cascade: Any | None = None) -> None:
+        """`cascade` is injectable, and that is not a convenience.
 
-        self._cv2 = cv2
-        self._cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        if self._cascade.empty():
-            raise RuntimeError("OpenCV Haar cascade failed to load")
+        Constructing this class used to import cv2 and load the Haar XML
+        unconditionally, so it could not exist in CI or in any test -- which
+        meant every test in front of it substituted a fake, and the real
+        `locate` was covered by nothing. Three defects in this pipeline traced
+        to that: a float-vs-CV_8U assertion that raised on the first real frame,
+        and twice over, logic here that no test could reach.
+
+        Anything with `detectMultiScale` will do. Passing one skips the cv2
+        import entirely, so the detection logic -- the dtype cast, the redetect
+        interval, forgetting a stale box -- is testable without OpenCV
+        installed.
+        """
+        if cascade is not None:
+            self._cascade = cascade
+        else:
+            import cv2                               # noqa: PLC0415 -- lazy by design
+
+            self._cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            )
+            if self._cascade.empty():
+                raise RuntimeError("OpenCV Haar cascade failed to load")
         self.redetect_every = redetect_every
         self._last: tuple[int, int, int, int] | None = None
         self._since = 0

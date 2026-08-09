@@ -58,6 +58,15 @@ QUEUE_MAX = 3600
 # camera coming back is picked up within a frame or two of a normal cadence.
 ERROR_BACKOFF_SECONDS = 0.1
 
+# Frames per second the buffer's hard size is provisioned for.
+#
+# Not a rate anything is expected to run at -- a ceiling. The buffer's real
+# bound is `buffer_seconds` of elapsed time; this only stops a pathological
+# source from growing it without limit, so it is set well above any plausible
+# burst (measured: ~6 ms between paired frames, so ~160 Hz instantaneous) and
+# deliberately not tied to the configured frame rate.
+MAX_BURST_FPS = 240.0
+
 # The clock the samples are stamped with.
 #
 # `perf_counter`, not `monotonic`, and on Windows that is the whole ballgame:
@@ -115,7 +124,7 @@ class FrameSource(Protocol):
 @dataclass
 class FaceSample:
     """One frame's contribution. Three numbers and a quality figure."""
-    monotonic_ts: float
+    capture_ts: float
     rgb: tuple[float, float, float]
     usable_fraction: float
 
@@ -126,6 +135,7 @@ class _Counters:
     faces_found: int = 0
     samples_emitted: int = 0
     dropped_full_queue: int = 0
+    buffer_capped: int = 0
     consecutive_missing: int = 0
     # Why the last frame produced nothing: "camera" (no frame at all),
     # "no_face" (nothing detected) or "quality" (face found, too little usable
@@ -206,7 +216,7 @@ class FaceCaptureAdapter:
         self._stop = threading.Event()
 
         self._queue: queue.Queue[FaceSample] = queue.Queue(maxsize=queue_max)
-        # (monotonic_ts, r, g, b, usable_fraction). The timestamp is kept because the configured
+        # (capture_ts, r, g, b, usable_fraction). The timestamp is kept because the configured
         # fps is a request, not a measurement: a webcam asked for 30 routinely
         # delivers 22 under load or poor light. Deriving the time base from the
         # nominal rate would scale every bpm by nominal/actual -- 30/22 is +36%,
@@ -217,8 +227,22 @@ class FaceCaptureAdapter:
         # while the 25 s colour buffer was still full and scored, so the gate
         # silently did not run. Ticks faster than the frame rate hit that
         # routinely.
+        # Bounded by *time*, in `_trim_buffer`, with the count cap below acting
+        # only as a memory backstop.
+        #
+        # `maxlen = buffer_seconds * fps` was the last place nominal fps entered
+        # the arithmetic, and unpacing the capture loop is what made it wrong.
+        # OpenCV hands over buffered frames back to back at ~6 ms apart, so a
+        # sustained burst above ~48 Hz fills 1200 slots with less than the 25 s
+        # the rate window asks for. Coverage would then never reach 0.80 and the
+        # heart channel would sit in `warming_up` forever -- a silent stall,
+        # which is the exact failure this pipeline keeps being designed against.
+        #
+        # The cap is generous rather than tight: it exists so a runaway source
+        # cannot grow the buffer without limit, not to decide the window length.
+        self._buffer_seconds = buffer_seconds
         self._buffer: deque[tuple[float, float, float, float, float]] = deque(
-            maxlen=max(1, int(buffer_seconds * fps))
+            maxlen=max(1, int(buffer_seconds * MAX_BURST_FPS))
         )
         self._lock = threading.Lock()
         self._counters = _Counters()
@@ -391,6 +415,7 @@ class FaceCaptureAdapter:
             self._counters.consecutive_missing = 0
             self._counters.missing_reason = None
             self._buffer.append((now, *sample.rgb, sample.usable_fraction))
+            self._trim_buffer()
 
         item = FaceSample(now_seconds(), sample.rgb, sample.usable_fraction)
         try:
@@ -425,6 +450,22 @@ class FaceCaptureAdapter:
             except queue.Empty:
                 break
         return out
+
+    def _trim_buffer(self) -> None:
+        """Drop samples older than `buffer_seconds`. Caller holds the lock.
+
+        If the count cap is doing the bounding instead, that is recorded. It
+        should never happen -- the cap is provisioned for 240 fps -- but if it
+        does, the buffer holds less time than it was asked for, coverage never
+        reaches its threshold and the heart channel stalls in `warming_up`
+        with nothing to say why. A counter is the difference between a stall
+        that can be diagnosed and one that cannot.
+        """
+        cutoff = self._buffer[-1][0] - self._buffer_seconds
+        while len(self._buffer) > 1 and self._buffer[0][0] < cutoff:
+            self._buffer.popleft()
+        if len(self._buffer) == self._buffer.maxlen:
+            self._counters.buffer_capped += 1
 
     def rgb_buffer(self) -> np.ndarray:
         """Everything currently buffered, as (n, 3)."""
@@ -504,9 +545,15 @@ class FaceCaptureAdapter:
         return rgb, measured, quality, timestamps
 
     def has_full_window(self) -> bool:
-        """Whether enough colour history exists for POS to produce anything."""
+        """Whether enough colour history exists for POS to produce anything.
+
+        In seconds held, not samples counted. POS needs a window of elapsed
+        time; how many frames landed inside it is the camera's business.
+        """
         with self._lock:
-            return len(self._buffer) >= int(WINDOW_SECONDS * self.fps)
+            if len(self._buffer) < 2:
+                return False
+            return (self._buffer[-1][0] - self._buffer[0][0]) >= WINDOW_SECONDS
 
     def measured_fps(self) -> float | None:
         """The rate the buffer was actually filled at, or None if unmeasurable."""
@@ -540,6 +587,11 @@ class FaceCaptureAdapter:
                 "face_found_ratio": (c.faces_found / c.frames_read) if c.frames_read else None,
                 "samples_emitted": c.samples_emitted,
                 "samples_dropped": c.dropped_full_queue,
+                # Non-zero means the colour buffer is being bounded by its size
+                # cap rather than by time, so it holds less history than asked
+                # for. Surfaced because the symptom otherwise is a heart channel
+                # that never leaves warming_up, with no cause visible.
+                "buffer_capped": c.buffer_capped,
                 "buffered_seconds": len(self._buffer) / self.fps if self.fps else 0.0,
                 "face_degraded": degraded,
                 "face_degraded_reason": (

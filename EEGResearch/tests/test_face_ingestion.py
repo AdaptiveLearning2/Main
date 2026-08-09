@@ -46,7 +46,11 @@ class FakeSource:
     only through a fake.
     """
 
-    READ_SECONDS = 0.002
+    # Slow enough that the loop runs at a rate a camera could plausibly hit.
+    # At 2 ms the fake reached ~365 Hz, which is not a fast camera -- it is a
+    # source no hardware can imitate, and it made the buffer's size cap bind
+    # before its time bound, which is the thing under test here.
+    READ_SECONDS = 0.008
 
     def __init__(self, frame=None, fail_after=None, raise_after=None):
         self.frame = frame if frame is not None else _flat_frame()
@@ -171,13 +175,25 @@ def test_the_buffer_is_bounded():
     """An eight-hour session must cost the same per frame as the first minute.
     The original re-scanned every snapshot on every tick, which is O(n^2) in
     session length."""
-    adapter, _, _ = _adapter(fps=20.0, buffer_seconds=2.5)
-    cap = 50
+    held = 2.5
+    adapter, _, _ = _adapter(fps=20.0, buffer_seconds=held)
     adapter.connect()
     try:
-        assert _wait_for(lambda: len(adapter.rgb_buffer()) >= cap, timeout=5.0)
-        time.sleep(0.2)
-        assert len(adapter.rgb_buffer()) == cap, "the buffer grew past its bound"
+        # Bounded by elapsed time, not by a sample count against nominal fps.
+        # The count bound was reachable-and-wrong once the capture loop stopped
+        # pacing: OpenCV hands buffered frames over ~6 ms apart, so a burst
+        # fills the slots with less history than the rate window needs and the
+        # heart channel stalls in warming_up permanently.
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 5, timeout=5.0)
+        time.sleep(held + 0.5)
+
+        _, _, _, stamps = adapter.rgb_window(float("inf"))
+        span = stamps[-1] - stamps[0]
+        assert span <= held + 0.2, f"the buffer holds {span:.2f}s, past its bound"
+        assert span >= held - 0.5, f"the buffer holds only {span:.2f}s of {held}s"
+        assert adapter.get_ingestion_meta()["buffer_capped"] == 0, (
+            "the size cap bound the buffer before time did"
+        )
     finally:
         adapter.disconnect()
     assert BUFFER_SECONDS == 40.0, "production default changed; check the comment"

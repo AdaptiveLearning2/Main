@@ -155,3 +155,117 @@ def test_a_pulse_survives_the_measurement_chain():
     assert estimate_window(pos_pulse(np.array(samples), fps), fps).bpm == pytest.approx(
         bpm, abs=3.0
     )
+
+
+# ── the locator, with the cascade injected ───────────────────────────────────
+#
+# None of these could be written before `FaceLocator` took a cascade. Its
+# constructor imported cv2 and loaded the Haar XML unconditionally, so it could
+# not be built in CI, so every test in front of it used a fake locator and the
+# real `locate` was covered by nothing at all. Three defects in this pipeline
+# came out of that gap. These are the tests that gap was hiding.
+
+class FakeCascade:
+    """Records what it was handed and returns a scripted detection."""
+
+    def __init__(self, boxes=((100, 100, 200, 200),)):
+        self.boxes = boxes
+        self.calls = 0
+        self.dtypes: list[str] = []
+
+    def detectMultiScale(self, gray, **kwargs):  # noqa: N802 -- OpenCV's name
+        self.calls += 1
+        self.dtypes.append(gray.dtype.name)
+        return list(self.boxes)
+
+
+def test_the_cascade_is_only_ever_handed_uint8():
+    """The defect this cast exists for.
+
+    Both callers compute luma as a weighted channel sum, which is float, and
+    OpenCV's cascade asserts `_image.depth() == CV_8U` and raises rather than
+    converting. On a real camera that took the capture thread down on the first
+    frame; every test in front of it used a fake locator and saw nothing.
+    """
+    from src.app.services.face_roi import FaceLocator
+
+    # redetect_every=0 so every call reaches the cascade rather than the cached
+    # box -- otherwise this asserts on one call and calls it two.
+    cascade = FakeCascade()
+    locator = FaceLocator(redetect_every=0, cascade=cascade)
+
+    locator.locate(np.full((480, 640), 128.0, dtype=np.float32))
+    locator.locate(np.full((480, 640), 128.0, dtype=np.float64))
+
+    assert cascade.dtypes == ["uint8", "uint8"]
+
+
+def test_out_of_range_luma_is_clipped_not_wrapped():
+    """A cast alone would wrap 300.0 to 44 and turn a blown-out highlight into
+    a mid-grey, inventing detail where the sensor saturated."""
+    from src.app.services.face_roi import FaceLocator
+
+    cascade = FakeCascade()
+    FaceLocator(redetect_every=0, cascade=cascade).locate(np.full((480, 640), 300.0))
+
+    assert cascade.dtypes == ["uint8"]
+
+
+def test_detection_is_not_run_on_every_frame():
+    """It is slow relative to the frame rate, and a box that is re-derived every
+    frame jitters -- which walks the measurement regions across different skin
+    and injects exactly the in-band noise POS exists to remove."""
+    from src.app.services.face_roi import FaceLocator
+
+    cascade = FakeCascade()
+    locator = FaceLocator(redetect_every=5, cascade=cascade)
+
+    boxes = [locator.locate(np.zeros((480, 640), dtype=np.uint8)) for _ in range(10)]
+
+    assert cascade.calls == 2, "the cascade ran more often than the interval"
+    assert all(b == (100, 100, 200, 200) for b in boxes)
+
+
+def test_a_stale_box_is_forgotten_rather_than_reused_forever():
+    """A student who has left must stop producing samples, not keep emitting the
+    colour of whatever now occupies that rectangle."""
+    from src.app.services.face_roi import FaceLocator
+
+    cascade = FakeCascade()
+    locator = FaceLocator(redetect_every=0, cascade=cascade)
+    assert locator.locate(np.zeros((480, 640), dtype=np.uint8)) is not None
+
+    cascade.boxes = ()
+    assert locator.locate(np.zeros((480, 640), dtype=np.uint8)) is None
+    assert locator.locate(np.zeros((480, 640), dtype=np.uint8)) is None
+
+
+def test_injecting_a_cascade_keeps_opencv_out_of_the_process():
+    """Which is the point: the detection logic is testable with no camera stack
+    installed, so CI covers it rather than skipping it."""
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import sys
+            sys.path.insert(0, sys.argv[1])
+            import numpy as np
+            from src.app.services.face_roi import FaceLocator
+
+            class Cascade:
+                def detectMultiScale(self, gray, **kw):
+                    assert gray.dtype == np.uint8
+                    return [(1, 2, 3, 4)]
+
+            assert FaceLocator(redetect_every=0, cascade=Cascade()).locate(
+                np.zeros((64, 64), dtype=np.float32)
+            ) == (1, 2, 3, 4)
+            assert "cv2" not in sys.modules, "constructing the locator imported cv2"
+            print("clean")
+        """), str(Path(__file__).resolve().parents[1])],
+        capture_output=True, text=True,
+    )
+    assert "clean" in result.stdout, result.stderr

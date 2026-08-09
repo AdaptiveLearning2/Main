@@ -22,18 +22,23 @@ export default function ClassDetail() {
     setLoading(true)
     setError(null)
     try {
-      const [allClasses, studentList] = await Promise.all([
-        apiFetch(`/api/classes/`),
+      const [classInfo, studentList] = await Promise.all([
+        apiFetch(`/api/classes/${id}`),
         apiFetch(`/api/classes/${id}/students`)
       ])
-      const classInfo = allClasses.find(c => c.id === id)
       setCls(classInfo || null)
       setStudents(Array.isArray(studentList) ? studentList : [])
     } catch (err) {
       // Tracked separately from "class not found" -- a failed request (offline,
       // 403, server error) is a different situation from a class that doesn't
       // exist, and telling a teacher "Class not found" when their request just
-      // failed sends them looking for the wrong problem.
+      // failed sends them looking for the wrong problem. A 404 is the one case
+      // that genuinely is "no such class", so it falls through to that state
+      // rather than the error one.
+      if (err.status === 404) {
+        setCls(null)
+        return
+      }
       setError(err.message || 'Could not load class')
       toast.error(err.message || 'Could not load class')
     } finally {

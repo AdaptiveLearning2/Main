@@ -1710,6 +1710,18 @@ def create_class(payload: CreateClassRequest, request: Request):
     }).execute()
     return res.data[0]
 
+@app.get("/api/classes/{class_id}")
+def get_class(class_id: str, request: Request):
+    """One class, for the pages that need its name and join code.
+
+    Owner-only, like the roster and live endpoints next to it -- this reads
+    through the service-role client, so _verify_class_owner is the whole check.
+    """
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    res = supabase.table("classes").select("*").eq("id", class_id).single().execute()
+    return res.data
+
 @app.put("/api/classes/{class_id}")
 def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
     user = get_user(request)

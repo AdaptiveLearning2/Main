@@ -694,7 +694,6 @@ export default function Adaptive() {
                 const state   = snap?.state      || {}
                 const feat    = snap?.features   || {}
                 const bands   = snap?.bands      || {}
-                const policy  = snap?.question_policy || {}
                 const ing     = muse?.ingestion  || snap?.ingestion || {}
                 const museSvcRunning = muse?.running
                 // Scores are only meaningful when the electrodes are actually
@@ -725,7 +724,6 @@ export default function Adaptive() {
                 }
 
                 const stateColor = { focused: 'text-green-400', stressed: 'text-red-400', neutral: 'text-yellow-400', insufficient_signal: 'text-gray-500' }
-                const actionColor = { increase_difficulty: 'text-green-400', decrease_difficulty: 'text-red-400', reinforce_topic: 'text-yellow-400', fallback_default: 'text-gray-500' }
 
                 return (
                   <>
@@ -772,10 +770,12 @@ export default function Adaptive() {
                         <p className="text-gray-500 mb-1">Learner State</p>
                         <p className={stateColor[state.label] || 'text-gray-400'}>{state.label || '—'}</p>
                       </div>
-                      <div>
-                        <p className="text-gray-500 mb-1">Next Question</p>
-                        <p className={actionColor[policy.action] || 'text-gray-400'}>{policy.action || '—'} {policy.difficulty != null ? `(lvl ${policy.difficulty})` : ''}</p>
-                      </div>
+                      {/* No "Next Question" tile. The sidecar used to emit a
+                          question_policy here and it drove nothing -- difficulty
+                          is chosen in the backend from correctness, topic history
+                          and grade. Showing a difficulty next to live EEG implied
+                          the headband was picking questions, which is the reason
+                          it was deleted rather than merged. */}
                     </div>
 
                     {/* Row 2 — scores */}

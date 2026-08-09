@@ -27,10 +27,8 @@ while ($true) {
         if ($resp.status -eq "ok" -and $resp.data) {
             $state = $resp.data.state.label
             $confidence = $resp.data.state.confidence
-            $difficulty = $resp.data.question_policy.difficulty
-            $action = $resp.data.question_policy.action
             $reason = $resp.data.state.reason
-            Write-Host "[$ts] state=$state confidence=$confidence difficulty=$difficulty action=$action reason='$reason'"
+            Write-Host "[$ts] state=$state confidence=$confidence reason='$reason'"
         } else {
             Write-Host "[$ts] status=$($resp.status) message='$($resp.message)'"
         }

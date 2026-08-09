@@ -84,7 +84,7 @@ class _Poller(threading.Thread):
                         # Every consumer of these columns must therefore handle
                         # null. Checked at the time of writing: the teacher live
                         # view gauges render "-" for null, and
-                        # LLM_topic_decider.get_session_eeg_state filters
+                        # LLM_topic_decider.get_session_signal_state filters
                         # `is not None` and bails when nothing usable remains.
                         #
                         # Side effect worth knowing: class_live derives session

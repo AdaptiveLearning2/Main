@@ -163,19 +163,36 @@ hold for minutes with good contact and ~63 packets/s. `MUSE_OPTICS_PRESET` picks
 default sits at the bottom deliberately: the 16-channel failure took EEG down with it, and that is
 not a cliff to park next to. An unrecognised value warns once and falls back.
 
-**Derived BPM is unusable under motion, and it fails at high confidence.** Measured on a recording
-through exercise: `ppg_processing` reported 162–167 bpm at **confidence 1.00** for six consecutive
-windows against a watch-verified 104 — it had locked onto the wearer's step cadence. 166/104 = 1.60,
-no harmonic relation, so no periodicity test can see it, and four have been tried. A confidence
-threshold in front of this buys nothing: motion produces *high* confidence, not low, which is the
-opposite of the intuitive contract.
+**Headband BPM is accurate seated and fails only under gait. The two are different regimes and
+the rule is scoped to the right one.**
 
-So **do not wire it into recording until motion is detectable.** That needs the headband's
-accelerometer, which the bridge does not capture yet (`ACCELEROMETER` and `GYRO` are in the SDK enum;
-`native_bridge/src` references neither) — it is the only available signal independent of the
-periodicity being confused. A stored 166 bpm for a fidgeting child is worse than a blank tile, and it
-reaches past the reports: the planned fusion rule lets the heart channel lower question difficulty on
-its own. Evidence and the failed discriminators are in `EEGResearch/tests/fixtures/README.md`.
+Seated, validated against a simultaneous watch ECG 2026-08-09: **14 of 16 windows accepted, max
+error 2.1 bpm** against a true 70–72. That is the operating condition for a student at a desk, and
+it is good enough to record and to act on.
+
+Deliberate desk fidgeting — shifting, leg-bouncing, head turns, typing — degrades into **refusal,
+not into confident error**: 12 of 16 windows rejected at confidence 0.00–0.50, and the 4 accepted
+were within 7.5 bpm. Corroborating how vigorous that was, the *watch's own ECG* failed one of its
+three attempts with `Poor recording`. A medical-grade contact sensor could not cope with movement
+the headband survived while correctly reporting when it could not.
+
+**Gait is the failure, and it is a different mechanism.** Through exercise, `ppg_processing`
+reported 162–167 bpm at **confidence 1.00** for six consecutive windows against a watch-verified
+104 — the wearer's step cadence. 166/104 = 1.60, no harmonic relation, so no periodicity test sees
+it and four have been tried. Running supplies a *sustained clean rival oscillator* for the
+autocorrelation to lock onto; fidgeting merely destroys the pulse, leaving no peak and therefore no
+confidence. That is why confidence discriminates in one case and not the other.
+
+So: **seated use is cleared.** An earlier version of this rule said not to record derived BPM until
+the accelerometer landed. That was over-scoped — it generalised an exercise result to a product
+whose users sit at a screen. The accelerometer is still the only signal independent of the
+periodicity being confused, and it is still what a walking-around deployment would need; it is not
+a prerequisite for a maths lesson at a desk.
+
+Two limits worth keeping in view: the seated validation is one adult over three minutes, not a
+child over a lesson; and 7.5 bpm at high confidence is harmless for fusion (which can only ease
+difficulty) while being a real if modest error on a parent-facing chart. Evidence and the failed
+discriminators are in `EEGResearch/tests/fixtures/README.md`.
 
 **Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
 against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**
@@ -331,6 +348,52 @@ SELECT p.proname, p.proacl
 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public';
 ```
+
+## Two columns are called stress and only one measures it
+
+`cognitive_signals.stress` is `1.0 - calm`, written by `eeg_client.py:175`. There is no `calm`
+column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
+and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
+
+`heart_signals.stress_score` is a measurement: autonomic arousal on a 0–100 scale, derived against
+the session's own baseline, with its own quality gate and its own `calibrating` state.
+
+So: **never average them, never sum them, and never render both under one "Stress" label.** One is a
+cognitive score with a sign flip; the other is a physiological measurement with a baseline. A
+dashboard tile fed by whichever happens to be present would change meaning when a headband
+disconnects, which is the same class of failure as a reporting surface that cannot tell "no data"
+from "zero".
+
+`stress_score` is defined **on heart rate alone**. RMSSD is an enrichment term, added when available
+and absent without changing what the score means — a hard requirement, not a preference, because
+RMSSD is unavailable whenever the headband is off and one window in six is gated out even when it is
+on. A score whose definition shifts when an input drops out is unreadable across a session.
+
+## Fusion is asymmetric on purpose — easing off wins, pushing harder defers
+
+`Website/AdaptiveLearning/backend/signal_fusion.py` decides how hard the next question is, from
+whichever of EEG, heart and facial are consented and present. To **raise** difficulty every channel
+with an opinion must agree; to **lower** it, any one trusted channel suffices.
+
+Keep it that way. A wrong ease-off costs one easy question; a wrong push costs a struggling student
+a harder one, and the signals are least trustworthy exactly when a student is agitated. A
+brute-force test asserts the property directly: adding a channel can make sessions gentler and can
+never make them harder. If that test fails, the change is wrong, not the test.
+
+Facial is the weakest input by design — it can withhold an increase, and can neither cause one nor
+trigger an ease-off alone. FER+ is trained predominantly on adult faces and is least reliable on
+this product's users: children, and children with learning disabilities. Its labels deliberately use
+a different vocabulary (`negative`, never `stressed`) so no later edit can wire it into the ease-off
+branch by matching on a label name. `EMOTION_MIN_CONFIDENCE` is inherited from PR #49 and is a
+guess, not a measurement.
+
+**Consent gates the read, not the result.** A revoked channel is never queried, and the tests assert
+on which tables were reached — an empty result cannot distinguish "asked and got nothing" from
+"never asked". `_consent_flags` fails closed, like `_consent()` and unlike the reporting helpers.
+
+**Difficulty is chosen in the backend, not the sidecar.** `question_policy` was removed in 1.3.0:
+the sidecar computed it every tick, it was persisted and displayed, and nothing read it to pick a
+question. Don't add it back — the sidecar cannot see correctness, topic history or grade level.
 
 ## Access control — check the relationship, not the role name
 

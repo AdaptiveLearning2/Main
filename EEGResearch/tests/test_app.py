@@ -130,9 +130,8 @@ def test_session_lifecycle_and_state():
                     break
                 time.sleep(0.05)
             assert data is not None
-            assert data["contract_version"] == "1.2.0"
+            assert data["contract_version"] == "1.3.0"
             assert "state" in data
-            assert "question_policy" in data
             assert "bands" in data
             assert "ingestion" in data
             assert data["ingestion"]["eeg_source"] == "muse"
@@ -958,7 +957,11 @@ def test_stream_manager_no_signal_payload_zeroes_scores():
     assert payload["features"]["confidence"] == 0.0
     assert payload["features"]["signal_quality"] == "no_signal"
     assert payload["state"]["label"] == "no_signal"
-    assert payload["question_policy"]["action"] == "fallback_default"
+    # No question_policy, here or anywhere. The sidecar emitted one for a while
+    # and nothing read it to pick a question -- difficulty is decided in the
+    # backend from correctness, topic history and grade, which the sidecar
+    # cannot see. A second implementation that looks live is worse than none.
+    assert "question_policy" not in payload
 
 
 def test_stream_manager_loop_zeroes_scores_and_resets_state_on_read_failure():

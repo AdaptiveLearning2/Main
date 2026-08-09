@@ -287,7 +287,16 @@ def test_student_is_rejected_from_class_roster():
 
 def test_class_detail_returns_the_class_to_its_owner(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
-    assert main.get_class("class-1", None)["id"] == "class-1"
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "classes": [{"id": "class-1", "teacher_id": "teacher-1", "name": "Algebra",
+                     "join_code": "ABC123", "grade_level": "7"}],
+    }))
+    # Every column the page consumes, not just the id: with a named select a
+    # typo drops a field silently, and the page renders a blank join code
+    # rather than failing.
+    assert main.get_class("class-1", None) == {
+        "id": "class-1", "name": "Algebra", "join_code": "ABC123", "grade_level": "7",
+    }
 
 
 def test_class_detail_rejects_a_non_owning_teacher(monkeypatch):

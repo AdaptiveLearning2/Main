@@ -263,3 +263,64 @@ def test_signal_tables_are_never_touched_by_a_consent_write(monkeypatch):
 
     for table in ("cognitive_signals", "heart_signals", "face_signals"):
         assert table not in touched, f"a consent write reached {table}"
+
+
+def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
+    """Disconnect then reconnect on the same session id.
+
+    The old thread is mid-`get_state` -- a real HTTP call, so this is the normal
+    case rather than a tight race -- when `start()` registers a replacement
+    under the same key. An unconditional pop in the old thread's teardown then
+    deregistered the *live* poller: it kept writing `cognitive_signals` while
+    `stop()` could no longer reach it, `can_use_device` handed its device to
+    another user, and the teardown's liveness scan stopped the sidecar stream
+    out from under it.
+
+    The pop is guarded by `is self`, which leaves the consent path unchanged --
+    there, `self` is the registered poller.
+    """
+    import threading
+    import time as _time
+
+    slow = threading.Event()
+
+    def _slow_get_state(*_a, **_k):
+        # Long enough that the old thread is still inside this call while the
+        # replacement registers, which is what makes the race the common case.
+        slow.wait(0.4)
+        return None
+
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(eeg_poller, "_consent_check", lambda _u: True)
+    monkeypatch.setattr(eeg_poller.eeg_client, "start_session", lambda *_a, **_k: {"ok": True})
+    monkeypatch.setattr(eeg_poller.eeg_client, "stop_session", lambda *_a, **_k: {"ok": True})
+    monkeypatch.setattr(eeg_poller.eeg_client, "get_state", _slow_get_state)
+
+    eeg_poller.start(None, "u1", "s1", "devA")
+    old = eeg_poller._active["s1"]
+
+    # Disconnect, then reconnect the same session before the old thread has
+    # finished the read it is inside.
+    eeg_poller.stop("s1")
+    eeg_poller.start(None, "u1", "s1", "devA")
+    new = eeg_poller._active["s1"]
+    assert new is not old
+
+    # Let the old thread reach its teardown.
+    deadline = _time.monotonic() + 5
+    while _time.monotonic() < deadline and old.is_alive():
+        _time.sleep(0.02)
+    assert not old.is_alive(), "the old poller never finished"
+
+    assert eeg_poller._active.get("s1") is new, "the replacement was deregistered"
+    assert eeg_poller.is_polling("s1"), "a live poller became invisible to the registry"
+    # The consequences the registry exists to prevent, asserted directly.
+    assert not eeg_poller.can_use_device("u2", "devA"), \
+        "another user could claim a device with a live poller on it"
+    assert eeg_poller.status("u1")["running"] is True
+
+    # And it is still stoppable, which is what the student ending the session
+    # depends on.
+    eeg_poller.stop("s1")
+    assert not eeg_poller.is_polling("s1")

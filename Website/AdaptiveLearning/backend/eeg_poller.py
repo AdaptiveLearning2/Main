@@ -188,8 +188,20 @@ class _Poller(threading.Thread):
                 # says every one of them. Inside the lock this block already
                 # takes, and before the liveness scan below, so a dead self
                 # cannot count as a reason to keep the sidecar stream open.
-                _active.pop(self.session_id, None)
-                _forget_warning(self.session_id)
+                #
+                # **`is self`, not just the key.** A disconnect/reconnect on the
+                # same session id leaves this thread finishing a `get_state`
+                # while `start()` has already registered a replacement under the
+                # same key -- the normal case, since that read is real HTTP. An
+                # unconditional pop then deregisters the *live* poller: it keeps
+                # writing, `stop()` can no longer reach it, `can_use_device`
+                # hands its device to another user, and the scan below stops the
+                # sidecar stream out from under it. That is the very race the
+                # lock three lines up exists to prevent, reintroduced by the fix
+                # for the self-termination path.
+                if _active.get(self.session_id) is self:
+                    _active.pop(self.session_id, None)
+                    _forget_warning(self.session_id)
                 stream_still_needed = any(
                     p.is_alive() for p in _active.values() if p.device_id == self.device_id
                 )

@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus } from '../../lib/sidecar'
+import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
@@ -15,6 +16,14 @@ const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 // not to hammer a loopback port, short enough that a lesson does not get far
 // before recording begins.
 const PUSH_RETRY_MS = 5000
+
+// Named for the sensor a student would recognise, not the table. "Cognitive"
+// and "face" are our words; a student has a headband and a camera.
+const CHANNEL_LABELS = [
+  ['cognitive', 'Headband'],
+  ['heart',     'Heart sensor'],
+  ['face',      'Camera'],
+]
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -72,6 +81,14 @@ export default function Adaptive() {
   // down" stay distinguishable -- the same three-state rule the backend's
   // liveness fields follow.
   const [push, setPush]               = useState(null)
+  // Which channels actually delivered a reading since the last status poll.
+  // Actual capture, not consent: a consented channel whose sensor dropped out
+  // must stop being listed, or the chip claims a recording that is not
+  // happening -- which is worse than showing nothing.
+  const [recording, setRecording]     = useState([])
+  // Last poll's cumulative counts, so a *delta* can be taken. The counts
+  // themselves only ever grow, so `> 0` would latch on and never clear.
+  const lastRecorded = useRef(null)
   // Serialises start against stop. Both are async and the effect can tear down
   // while a start is still in flight, so they are chained rather than raced.
   const pushHandoff = useRef(Promise.resolve())
@@ -296,14 +313,24 @@ export default function Adaptive() {
     }
   }, [sessionId, headband.pushMode])
 
-  // Delivery counts, for the panel. Slower than the 3 s status poll: this is a
-  // local request but it is only ever read by a human glancing at it.
+  // Delivery counts, for the panel and for the recording chip. Slower than the
+  // 3 s status poll: this is a local request but it is only ever read by a
+  // human glancing at it.
   useEffect(() => {
     if (!sessionId || !headband.pushMode) return
     let killed = false
     const tick = () => pushStatus()
       .then(d => {
         if (killed) return
+        const prev = lastRecorded.current
+        const now = d.recorded || {}
+        // First poll establishes the baseline and claims nothing. Without this
+        // a mid-session page reload would list every channel that had ever
+        // recorded, including ones that stopped an hour ago.
+        setRecording(prev ? CHANNEL_LABELS
+          .filter(([key]) => (now[key] || 0) > (prev[key] || 0))
+          .map(([, label]) => label) : [])
+        lastRecorded.current = now
         // A sidecar that went away after a successful handover: the initial
         // retry loop has long since stopped, so without this the session never
         // recovers -- and a restarted sidecar has no session and no token, so
@@ -642,7 +669,17 @@ export default function Adaptive() {
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {sessionCount > 0 && (
-            <div className="flex gap-3 flex-wrap">
+            <div className="flex gap-3 flex-wrap items-center">
+              {/* Renders nothing when nothing is recording, which is the
+                  default state for a student with no headband and no camera --
+                  it must stay visually silent rather than sitting there empty.
+                  Under pull ingestion the poller is the writer and the sidecar
+                  reports no counts, so the headband's own connected state is
+                  the honest source there. */}
+              <RecordingIndicator channels={
+                headband.pushMode ? recording
+                  : headband.connected ? ['Headband'] : []
+              } />
               <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 px-4 py-2 flex items-center gap-2 shadow-sm">
                 <span className="text-sm font-bold text-gray-700 dark:text-gray-300">📝 {sessionCount} answered</span>
               </div>

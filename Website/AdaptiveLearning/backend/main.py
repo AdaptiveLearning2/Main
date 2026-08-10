@@ -2756,6 +2756,28 @@ def class_live(class_id: str, request: Request):
 
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
 
+def _refuse_under_push(what: str) -> None:
+    """409 rather than the 503 the liveness probe would raise.
+
+    Under push ingestion this backend has no route to a sidecar, so "EEG service
+    not running on port 8001" is true and entirely misleading: it reads as a
+    fault when the deployment simply does not work that way. Same argument as
+    /api/eeg/start, and shared with it rather than restated -- the check got
+    applied one endpoint at a time across four review rounds precisely because
+    each site wrote it out by hand.
+
+    Called *before* `eeg_client.is_alive()` everywhere, or the misleading
+    message wins the race to the client.
+    """
+    if eeg_poller.INGEST_MODE == "push":
+        raise HTTPException(
+            409,
+            f"This deployment uses push ingestion: the headband is owned by the "
+            f"sidecar on the student's own device, so this backend cannot {what}. "
+            f"Nothing is wrong with the headband.",
+        )
+
+
 @app.post("/api/eeg/muse/refresh")
 def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
@@ -2769,6 +2791,7 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     # close.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("scan for headbands")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -2787,6 +2810,7 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     # See eeg_muse_refresh above.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("connect to a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -2804,6 +2828,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     # live session), so it's guarded the same way for consistency.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:

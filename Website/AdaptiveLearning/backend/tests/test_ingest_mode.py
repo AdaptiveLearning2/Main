@@ -301,14 +301,54 @@ def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
     assert "s1" not in eeg_poller._warned_double_write, "the record outlived the poller"
 
 
-# Every endpoint that answers with a liveness claim, and how to call it. The
-# signatures differ (`eeg_health` takes nothing) and so does the key carrying
-# the claim (`eeg_status` calls it `service`), which is why this is a table
-# rather than a list of names -- an earlier version listed only the two that
-# happened to share a signature while the docstring claimed all of them, so
-# someone adding a sixth would have read the list and written a standalone test.
-# `/api/eeg/start` is the one exception: it raises 409 rather than returning a
-# payload, and is covered by the first test in this file.
+# A down sidecar, so the pull half of each pair below sees a genuine outage and
+# the push half never reaches it. Only names that exist on the real module: an
+# earlier version declared `get_debug_snapshot`, which does not (the real call is
+# `get_state`) -- harmless, because `eeg_debug` returns before touching the
+# client under push, but a stub is a claim about an API and whoever copies it
+# next inherits the claim.
+class _StubClient:
+    DEFAULT_DEVICE_ID = "station1"
+    EEG_API_URL = "http://127.0.0.1:8001"
+
+    @staticmethod
+    def is_alive():
+        return False
+
+    @staticmethod
+    def get_state(*_a, **_k):
+        return None
+
+    @staticmethod
+    def get_muse_status(*_a, **_k):
+        return {}
+
+    @staticmethod
+    def list_devices():
+        return []
+
+    @staticmethod
+    def muse_refresh(*_a, **_k):
+        return {}
+
+    @staticmethod
+    def muse_connect(*_a, **_k):
+        return {}
+
+    @staticmethod
+    def muse_disconnect(*_a, **_k):
+        return {}
+
+
+# The family is eight, and it splits by how an endpoint answers rather than by
+# anything about the mode. Four return a payload carrying a liveness claim; four
+# raise. Both halves are tables because the signatures differ (`eeg_health`
+# takes nothing) and so does the key carrying the claim (`eeg_status` calls it
+# `service`) -- an earlier version listed the two that happened to share a
+# signature while the docstring claimed five, which is how three more went
+# unnoticed.
+#
+# Endpoints that return a payload:
 _MODE_AWARE = {
     "eeg_health":  (lambda: main.eeg_health(),       "available"),
     "eeg_debug":   (lambda: main.eeg_debug(None),    "available"),
@@ -327,19 +367,77 @@ def test_every_endpoint_in_the_family_knows_the_mode(endpoint, push_mode, monkey
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
-    # `eeg_status` still fetches the muse block under push; the frontend gates
-    # that on `pushMode` at the consumer. Stubbed so this test is about the
-    # liveness claim rather than about a transport that has no route anyway.
-    monkeypatch.setattr(main, "eeg_client",
-                        type("C", (), {"is_alive": staticmethod(lambda: False),
-                                       "get_muse_status": staticmethod(lambda *_a: {}),
-                                       "list_devices": staticmethod(lambda: []),
-                                       "get_debug_snapshot": staticmethod(lambda *_a: {}),
-                                       "DEFAULT_DEVICE_ID": "station1",
-                                       "EEG_API_URL": "http://127.0.0.1:8001"}))
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
 
     call, key = _MODE_AWARE[endpoint]
     out = call()
 
     assert out[key] is None, f"{endpoint} reports an outage under push"
     assert out["ingest_mode"] == "push"
+
+
+@pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE))
+def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monkeypatch):
+    """The half that stops the one above passing for the wrong reason.
+
+    An unconditional `{"available": None, "ingest_mode": "push"}` in any of these
+    satisfies the push assertions completely. Only the pull side can tell a mode
+    check apart from a hardcoded answer."""
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
+
+    call, key = _MODE_AWARE[endpoint]
+    out = call()
+
+    assert out[key] is False, f"{endpoint} hides a genuine outage under pull"
+    assert out["ingest_mode"] == "pull"
+
+
+# Endpoints that raise instead of returning a payload. Same reason, same check,
+# different shape of answer -- a 409 naming the configuration rather than the
+# 503 the liveness probe underneath would give. `/api/eeg/start` is the fourth
+# and is covered by the first test in this file, which predates the table.
+#
+# These three are reachable only from `connectHeadband`, behind a Connect button
+# that is disabled under push -- but that was equally true of /start, which got
+# the 409 anyway on the argument that a true-and-misleading message should not
+# exist in the codepath at all. Consistency here is the whole point.
+_MODE_AWARE_RAISING = {
+    "eeg_muse_refresh":    lambda: main.eeg_muse_refresh(None, body={}),
+    "eeg_muse_connect":    lambda: main.eeg_muse_connect(None, body={"name": "Muse-1234"}),
+    "eeg_muse_disconnect": lambda: main.eeg_muse_disconnect(None, body={}),
+}
+
+
+@pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE_RAISING))
+def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monkeypatch):
+    """Not "EEG service not running on port 8001", which is what all three said.
+
+    Under push the sidecar owns the headband and lives on the student's own
+    device, so there is no bridge here to scan, connect or disconnect with."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
+
+    with pytest.raises(main.HTTPException) as exc:
+        _MODE_AWARE_RAISING[endpoint]()
+
+    assert exc.value.status_code == 409, f"{endpoint} still answers 503"
+    assert "port 8001" not in str(exc.value.detail)
+    assert "push ingestion" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE_RAISING))
+def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, monkeypatch):
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+    monkeypatch.setattr(main, "eeg_client", _StubClient)
+
+    with pytest.raises(main.HTTPException) as exc:
+        _MODE_AWARE_RAISING[endpoint]()
+
+    assert exc.value.status_code == 503, f"{endpoint} refuses a legitimate call"

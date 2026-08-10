@@ -53,7 +53,7 @@ def _record(data, fs, offset_s, tracker=None):
     the production step, and the tracker the rate derivation needs for
     continuity."""
     samples = data[int(offset_s * fs):int((offset_s + RATE_WINDOW_SECONDS) * fs)]
-    window = OpticsWindow(samples, fs, RATE_WINDOW_SECONDS, 0.02, samples.shape[1])
+    window = OpticsWindow(samples, fs, fs, 1.0, RATE_WINDOW_SECONDS, 0.02, samples.shape[1])
     return build_heart_record(window, tracker or HeartRateTracker(),
                               EMIT_EVERY_SECONDS)
 
@@ -159,7 +159,7 @@ def test_a_refused_rate_is_not_enriched(dense):
     _, fs = dense
     flat = np.zeros((int(RATE_WINDOW_SECONDS * fs), 4))
     record = build_heart_record(
-        OpticsWindow(flat, fs, RATE_WINDOW_SECONDS, 0.02, 4),
+        OpticsWindow(flat, fs, fs, 1.0, RATE_WINDOW_SECONDS, 0.02, 4),
         HeartRateTracker(), EMIT_EVERY_SECONDS)
     assert record["bpm"] is None
     assert record["rejected_by"] is not None
@@ -197,7 +197,7 @@ def test_every_block_carries_the_rmssd_fields(dense):
     """One shape, so a consumer never reads an absent field as a third state --
     the same rule `trusted` and `rejected_by` already follow."""
     data, fs = dense
-    empty = OpticsWindow(np.empty((0, 4)), None, 0.0, None, 4)
+    empty = OpticsWindow(np.empty((0, 4)), None, None, None, 0.0, None, 4)
     for record in (_record(data, fs, 52),
                    build_heart_record(empty, HeartRateTracker(), EMIT_EVERY_SECONDS)):
         assert set(record) >= {"rmssd_ms", "beat_coverage", "rmssd_rejected_by"}

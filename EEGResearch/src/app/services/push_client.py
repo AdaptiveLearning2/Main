@@ -67,6 +67,11 @@ BACKOFF_MAX = 120.0
 # request cannot stack flushes on top of each other.
 REQUEST_TIMEOUT = 4.0
 
+# Wall-clock budget for everything `stop()` does. The attempt cap alone was not
+# a bound anyone would recognise from the docstring: 12 attempts x 3 channels x
+# a 4 s timeout is ~144 s, and this runs on a Ctrl-C and on a page teardown.
+SHUTDOWN_BUDGET = 10.0
+
 _CHANNELS = ("cognitive", "heart", "face")
 
 
@@ -93,6 +98,9 @@ class PushClient:
         self._unaccounted: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         self._wake = asyncio.Event()
+        # Set by `stop()` to ask the loop to finish at a tick boundary, so no
+        # request is aborted after the server has committed it.
+        self._stopping = asyncio.Event()
         self._backoff = 0.0
         # Monotonic deadline the backoff is actually enforced against. The
         # backoff alone is only a sleep length, and the wake event can skip the
@@ -129,6 +137,7 @@ class PushClient:
             await self.stop(flush=False)
         self._session_id = session_id
         self._token = token
+        self._stopping.clear()
         self._backoff = 0.0
         self._retry_at = 0.0
         self._last_error = None
@@ -143,11 +152,28 @@ class PushClient:
         same request timeout, so a dead backend delays shutdown by seconds
         rather than hanging it.
         """
+        deadline = time.monotonic() + SHUTDOWN_BUDGET
         task, self._task = self._task, None
         if task is not None:
-            task.cancel()
+            # Asked to finish, not cancelled outright. Cancelling mid-POST
+            # aborts a request the server may already have committed, and
+            # `_flush_once` then restores the batch for the shutdown flush to
+            # send again -- up to 50 duplicate rows per channel, into tables
+            # with no dedupe key. Letting the in-flight request land instead
+            # costs at most one request timeout, and it is accounted for.
+            self._stopping.set()
+            self._wake.set()
             try:
-                await task
+                await asyncio.wait_for(task, timeout=max(0.5, deadline - time.monotonic()))
+            except asyncio.TimeoutError:
+                # It did not come back inside the budget, so now it is cancelled
+                # and whatever it held is genuinely unknown -- `_flush_once`
+                # records that rather than guessing either way.
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             except asyncio.CancelledError:
                 pass
         if flush and self._token:
@@ -158,6 +184,10 @@ class PushClient:
             # exit -- each attempt is capped by the request timeout.
             for _ in range(MAX_SHUTDOWN_FLUSHES):
                 if not any(self._queues[c] for c in _CHANNELS):
+                    break
+                if time.monotonic() >= deadline:
+                    logger.warning("push: shutdown budget spent, %d sample(s) not sent",
+                                   sum(len(self._queues[c]) for c in _CHANNELS))
                     break
                 try:
                     await self._flush_once()
@@ -311,13 +341,18 @@ class PushClient:
     # ── flushing ─────────────────────────────────────────────────────────────
 
     async def _loop(self) -> None:
-        while True:
+        while not self._stopping.is_set():
             delay = self._backoff or FLUSH_SECONDS
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=delay)
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+            if self._stopping.is_set():
+                # Asked to finish between ticks. Returning here rather than
+                # starting another flush is what lets `stop()` await this task
+                # instead of cancelling it mid-request.
+                return
             # The wake event fires on a full batch, which during an outage is
             # every few samples -- so waking on it and flushing straight away
             # made the backoff decorative and retried a dead backend at the
@@ -361,7 +396,13 @@ class PushClient:
                 try:
                     await self._post(client, channel, session_id, token, samples)
                 except asyncio.CancelledError:
-                    self._restore(channel, samples)
+                    # Not restored. The request was in flight when it was
+                    # cancelled, so the server may well have committed it, and
+                    # re-posting into a table with no dedupe key duplicates
+                    # every row. Unknown is recorded as unknown.
+                    self._unaccounted[channel] += len(samples)
+                    logger.warning("push: %s batch cancelled in flight; %d sample(s) "
+                                   "unaccounted", channel, len(samples))
                     raise
                 except Exception as exc:  # noqa: BLE001 - re-raised below
                     self._restore(channel, samples)

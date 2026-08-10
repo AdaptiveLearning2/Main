@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
-import { startPush, stopPush, pushStatus } from '../../lib/sidecar'
+import { startPush, stopPush, stopPushOnUnload, pushStatus } from '../../lib/sidecar'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
@@ -150,7 +150,14 @@ export default function Adaptive() {
     pushHandoff.current = pushHandoff.current
       .catch(() => {})
       .then(() => startPush(sid))
-      .catch(() => {})
+      .then(() => setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null })))
+      .catch(err => {
+        // Same reasoning as the initial handover: a 409 is the sidecar
+        // deliberately declining, and re-offering cannot change its mind.
+        if (err?.status === 409) {
+          setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false }))
+        }
+      })
   }, [])
 
   const creating = useRef(null)
@@ -219,6 +226,17 @@ export default function Adaptive() {
         })
         .catch(err => {
           if (killed) return
+          if (err.status === 409) {
+            // Not a failure: the sidecar is up, answering, and declining --
+            // PUSH_ENABLED is off, so it refuses to be a second writer. Retrying
+            // that is a POST every 5 s for the whole lesson that can only ever
+            // get the same answer, and it made the panel alternate between two
+            // contradictory explanations. Reachable *and* not recording, which
+            // the badge and the copy both distinguish.
+            setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false,
+                            error: String(err.message || err) }))
+            return
+          }
           // A sidecar that is not up is the ordinary case on a machine with no
           // headband and no camera, not an error to shout about -- but it is
           // recorded, so the panel can say which rather than rendering a blank
@@ -252,9 +270,18 @@ export default function Adaptive() {
         .catch(() => {})
     })
 
+    // Effect cleanup does not run on a tab close or a hard refresh, which is
+    // how most lessons actually end. Without this the sidecar keeps the token
+    // and keeps recording for up to an hour after the student walked away.
+    // `pagehide` rather than `beforeunload`: it fires for the bfcache case too,
+    // and `beforeunload` is unreliable on mobile.
+    const onPageHide = () => { stopPushOnUnload() }
+    window.addEventListener('pagehide', onPageHide)
+
     return () => {
       killed = true
       clearTimeout(attempt)
+      window.removeEventListener('pagehide', onPageHide)
       sub?.subscription?.unsubscribe()
       // Sequenced behind whatever start is in flight, not fired alongside it.
       // Under StrictMode the effect is torn down and re-run immediately, and a

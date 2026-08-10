@@ -145,3 +145,39 @@ describe('startPush with a supplied token', () => {
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body).access_token).toBe('student-jwt')
   })
 })
+
+describe('stopPushOnUnload', () => {
+  it('uses keepalive so the request outlives the page', async () => {
+    // Effect cleanup does not run on a tab close or hard refresh, which is how
+    // most lessons end. Without a stop that survives teardown the sidecar keeps
+    // the bearer token and keeps recording for up to an hour after the student
+    // walked away -- a consent problem, not a tidiness one.
+    const fetchSpy = mockFetch(async () => ok())
+
+    await sidecar.stopPushOnUnload()
+
+    const [url, opts] = fetchSpy.mock.calls[0]
+    expect(url).toContain('/api/v1/push/stop')
+    expect(opts.keepalive).toBe(true)
+  })
+
+  it('carries the sidecar token when one is configured', async () => {
+    // sendBeacon is the usual tool for an unload request and is no use here:
+    // it cannot set an Authorization header, and the sidecar requires one.
+    vi.stubEnv('VITE_EEG_LOCAL_TOKEN', 'local-tok')
+    vi.resetModules()
+    const fresh = await import('./sidecar')
+    const fetchSpy = mockFetch(async () => ok())
+
+    await fresh.stopPushOnUnload()
+
+    expect(fetchSpy.mock.calls[0][1].headers.Authorization).toBe('Bearer local-tok')
+    vi.unstubAllEnvs()
+  })
+
+  it('never throws from a page that is going away', async () => {
+    mockFetch(() => { throw new TypeError('Failed to fetch') })
+
+    await expect(sidecar.stopPushOnUnload()).resolves.toBeUndefined()
+  })
+})

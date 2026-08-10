@@ -268,6 +268,12 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
                 print(f"=== stopping previous poller for same user (session={sid[:8]})", flush=True)
                 p.stop()
                 _active.pop(sid, None)
+                # The fourth stop path, and the one the helper missed when it
+                # was introduced to cover the other three. Every way a poller
+                # ends has to clear its record or the set is bounded by uptime,
+                # which is the claim its comment denies -- and this is the path
+                # a student hits just by starting a second session.
+                _forget_warning(sid)
         p = _Poller(supabase, user_id, session_id, device_id)
         p.start()
         _active[session_id] = p

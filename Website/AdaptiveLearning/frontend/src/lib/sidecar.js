@@ -104,6 +104,33 @@ export async function stopPush() {
 }
 
 /**
+ * The same stop, issued from a page that is going away.
+ *
+ * React effect cleanup does not run on a tab close, a hard refresh, or a
+ * navigation away, so the ordinary `stopPush` never fires for the most common
+ * way a student ends a lesson. The sidecar would keep the bearer token and keep
+ * posting until the token expired -- up to an hour of recording after the
+ * student thought they were done, which is a consent problem rather than a
+ * tidiness one.
+ *
+ * `keepalive` is what makes it work: the browser lets the request outlive the
+ * document. `sendBeacon` is the usual tool here and is no use, because it
+ * cannot set an `Authorization` header.
+ */
+export function stopPushOnUnload() {
+  try {
+    return fetch(`${SIDECAR_URL}/api/v1/push/stop`, {
+      method: 'POST',
+      headers: SIDECAR_TOKEN ? { Authorization: `Bearer ${SIDECAR_TOKEN}` } : {},
+      keepalive: true,
+    }).catch(() => {})
+  } catch {
+    // Nothing useful to do from a page that is unloading.
+    return Promise.resolve()
+  }
+}
+
+/**
  * Queue depths and delivery counts.
  *
  * `recorded` is what the backend said it *stored*, not what was sent — it drops

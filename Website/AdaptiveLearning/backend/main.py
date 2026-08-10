@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+import math
+from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
@@ -2383,6 +2384,14 @@ def ack_consent(request: Request):
 
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────
 
+# The keys inside `features`/`bands` that land in numeric columns. Everything
+# else in those dicts is metadata and ends up in `raw`, which is jsonb.
+_COGNITIVE_NUMERIC_KEYS = (
+    "focus_score", "calm_score", "confidence",
+    "alpha", "beta", "theta", "delta", "gamma",
+)
+
+
 class CognitiveSample(BaseModel):
     """One EEG reading, in either of two shapes.
 
@@ -2408,12 +2417,44 @@ class CognitiveSample(BaseModel):
     delta:      float | None = None
     gamma:      float | None = None
     raw:        dict  | None = None
-    # The sidecar-native alternative described above. Left as free-form dicts
-    # deliberately: they are forwarded whole to `signal_mapping`, which reads
-    # the keys it knows and ignores the rest, so a sidecar gaining a feature
-    # does not need this model changed in lockstep to keep posting.
+    # The sidecar-native alternative described above. Free-form keys, so a
+    # sidecar gaining a feature does not need this model changed in lockstep --
+    # but the *values* that reach numeric columns are checked, below.
     features:   dict  | None = None
     bands:      dict  | None = None
+
+    @field_validator("features", "bands")
+    @classmethod
+    def _numeric_values_must_be_storable(cls, v: dict | None) -> dict | None:
+        """Reject what the numeric columns cannot hold, here rather than at the
+        database.
+
+        The flat fields are typed `float | None` and Pydantic rejects a string
+        or a NaN for them. These two were `dict`, so the same values went
+        straight through to `alpha`/`beta`/... and failed at PostgREST -- which
+        takes down the *whole batch*, including every valid sample in it, and
+        reports it as a 500 from a write that the client will then retry. A
+        trust boundary that defers its checking to the database is not one.
+
+        Only the keys that become columns are checked. Anything else is
+        passed-through metadata bound for `raw`, a jsonb column that can hold
+        it.
+        """
+        if v is None:
+            return v
+        for key in _COGNITIVE_NUMERIC_KEYS:
+            if key not in v or v[key] is None:
+                continue
+            try:
+                n = float(v[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key!r} must be a number, got {v[key]!r}")
+            # NaN and inf survive `float()` and json.loads both, and NaN in
+            # particular is the value that gets stored as 100% focus if it ever
+            # reaches `_ratio` -- see the isfinite guard there.
+            if not math.isfinite(n):
+                raise ValueError(f"{key!r} must be finite, got {v[key]!r}")
+        return v
 
 class CognitiveBatch(BaseModel):
     session_id: str

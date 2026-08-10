@@ -431,10 +431,19 @@ Three properties worth not breaking:
   the block's presence, or a 4 Hz session writes ~14k all-null rows an hour, every one counted as a
   sample by the aggregates. `source` alone does not test it: the heart block sets `rppg`
   unconditionally.
-- **Nothing after `raise_for_status()` may raise.** The rows are committed by then, a throw restores
-  the batch, and the re-post duplicates them — `cognitive_signals` and `face_signals` have no dedupe
-  key. A batch whose receipt could not be read is `unaccounted`, which is neither `recorded` nor
-  `dropped_locally`.
+- **Nothing after `raise_for_status()` may raise, and no POST is cancelled mid-flight.** The rows are
+  committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
+  re-post duplicates them, and `cognitive_signals` and `face_signals` have no dedupe key. `stop()`
+  therefore *asks* the loop to finish and awaits it, cancelling only once `SHUTDOWN_BUDGET` is spent.
+  A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor `dropped_locally`.
+- **`stop()` is bounded by the clock.** An attempt cap is not a bound a reader can convert into
+  seconds; 12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C.
+
+The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
+refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
+which uses `fetch(..., {keepalive: true})`. Without it the sidecar keeps the student's token and
+keeps recording for up to an hour after they walked away — a consent problem, not untidiness.
+`sendBeacon` cannot be used: it cannot set an `Authorization` header.
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.

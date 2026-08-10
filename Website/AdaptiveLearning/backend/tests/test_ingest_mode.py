@@ -679,3 +679,51 @@ def test_the_pull_path_mapping_is_unchanged(monkeypatch):
 
     assert row["raw"]["device_id"] == "station1"
     assert row["raw"]["signal_quality"] == "good"
+
+
+def test_the_same_user_restart_path_evicts_too(monkeypatch):
+    """The fourth stop path, missed when the helper was introduced for the other
+    three -- and the one a student hits just by starting a second session."""
+    class _P:
+        def __init__(self, *a):
+            # eeg_poller.start builds it as _Poller(supabase, user, session, device)
+            self.session_id = a[2] if len(a) > 2 else "s1"
+            self.user_id = a[1] if len(a) > 1 else "u1"
+        device_id = "station1"
+        samples = 0
+        def is_alive(self): return True
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": _P("s1")})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+    monkeypatch.setattr(eeg_poller, "_Poller", _P)
+    eeg_poller.claim_double_write_warning("s1")
+    assert "s1" in eeg_poller._warned_double_write
+
+    eeg_poller.start(None, "u1", "s2", "station1")
+
+    assert "s1" not in eeg_poller._warned_double_write, \
+        "the replaced session's record outlived its poller"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), "oops", [1]])
+def test_unstorable_band_values_are_rejected_at_the_boundary(bad):
+    """The flat fields are typed and Pydantic rejects these; `features`/`bands`
+    were free-form dicts, so the same values reached the numeric columns and
+    failed at PostgREST -- taking the *whole batch* with them, valid samples
+    included, and reporting it as a 500 the client will retry."""
+    with pytest.raises(Exception):
+        main.CognitiveBatch(session_id="s", samples=[{"bands": {"alpha": bad}}])
+
+
+def test_non_column_keys_are_still_free_form():
+    """Only the keys that become columns are checked. The rest is metadata bound
+    for `raw`, which is jsonb and can hold it -- a sidecar gaining a feature
+    must not need this model changed in lockstep to keep posting."""
+    batch = main.CognitiveBatch(session_id="s", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good",
+                      "quality_basis": "contact", "batch_size": 3}},
+    ])
+    assert batch.samples[0].features["signal_quality"] == "good"

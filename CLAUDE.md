@@ -431,10 +431,19 @@ belongs in the mapper: it is the only place both deployments are guaranteed to r
 The headband is the primary heart source (the camera is emotion-only), and it reaches
 `heart_signals` through `optics_processing.build_heart_record`. Four things about it are load-bearing:
 
-- **Nothing arrives unless `MUSE_ENABLE_OPTICS` is on**, and it is still off by default. That
-  caution is about the *preset rung* — 16 CH at 64 Hz drops the BLE link — not about optics as such,
-  and the default `1035` rung is the safe one. With it off a session records no heart rate and every
-  window is refused as `no_samples`, which is the honest answer and not a fault.
+- **Nothing arrives unless `MUSE_ENABLE_OPTICS` is on**, and it is still off by default. The flag is
+  narrower than its name: the OPTICS/PPG listeners are registered unconditionally, so "emits no
+  optics" stays distinguishable from "never asked". What it gates is moving a capable headband off
+  `PRESET_21`, and **two separate things argue for leaving that alone**. The bandwidth cliff is the
+  known one — 16 CH at 64 Hz drops the BLE link, and the default `1035` rung is the safe side of it.
+  The other is the reason not to flip the default now that heart rate is a real feature: changing
+  preset at all is an *EEG* risk, since it moves bit depth 12 → 14 and on some rungs the channel
+  count, and a silent EEG regression would be blamed on whatever shipped beside it. With the flag
+  off a session records no heart rate and every window is refused as `no_samples` — the honest
+  answer, not a fault.
+  (`connect_named` setting `PRESET_21` unconditionally is not an override: `get_model()` returns
+  `MU_02` for anything post-2018 until `CONNECTED`, so the real choice happens on the connection
+  callback in `apply_model_preset`.)
 - **The window is placed on `seq`, never on `mono_ts_ms`.** The bridge's stamp records BLE *delivery*
   — ~9% of samples share one with their predecessor and the rest arrive in bursts — so `seq` is the
   only real sample index, and the stamps are used solely to measure an average rate across the whole

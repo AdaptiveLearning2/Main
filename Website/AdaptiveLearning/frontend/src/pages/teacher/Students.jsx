@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
 import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap} from 'lucide-react'
-import { FacialRecognitionToggle } from '../../components/signals/SignalPanel'
-import { readFacePref, writeFacePref } from '../../lib/facePref'
+import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
+import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
 
 // How far back the expanded row's signal averages look. Matches the weekly
@@ -72,16 +72,17 @@ const asPct = (value) => {
 // the same relationship as the "cog: teacher read" and "face: teacher read"
 // policies this query used to lean on.
 //
-// withFace=false is threaded into the aggregate, which reads no face_signals
-// row at all -- the same guarantee, rather than a value hidden on the way out.
-async function getStudentStats(studentId, withFace = true)
+// No viewer-side flag is threaded in any more. What may be read is decided by
+// stored consent, server-side; the "Hide sensor data" switch on this page is a
+// display preference and does not change the request. See lib/viewPrefs.js.
+async function getStudentStats(studentId)
 {
    const [statsRes, summary, topicRes] = await Promise.all([
     supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
     // Caught here rather than left to reject the Promise.all: a signal-summary
     // outage should cost the four signal tiles, not the academic ones sitting
     // beside them that loaded fine.
-    apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}&include_face=${withFace}`)
+    apiFetch(`/api/students/${studentId}/signal-summary?days=${SIGNAL_WINDOW_DAYS}`)
       .catch(err => { console.error('Failed to load signal summary:', err); return null }),
     supabase.from('user_math_performance')
       .select('topic_id, attempted_questions, correct_questions, math_topics(topic_name)')
@@ -126,11 +127,12 @@ async function getStudentStats(studentId, withFace = true)
     // blank a page, which is right -- but it means a successful-looking
     // response can still be carrying nothing, and only the flag says so.
     signalsFailed: summary === null || signals.retrieved === false,
-    // What was asked for, not what came back: with the summary request failed
-    // the tiles should still say "Off" rather than "—" when the switch is off.
-    // Lets the panel distinguish a switched-off control from a student with no
-    // facial readings.
-    faceIncluded: withFace,
+    // From the payload, not from a local switch: the server decides this from
+    // stored consent, and it is the difference between "the student turned the
+    // camera off" and "the camera recorded nothing this week".
+    faceIncluded: signals.emotion_included !== undefined
+      ? signals.emotion_included !== false
+      : signals.face_included !== false,
     topics: (topicRes.data || []).map(row => {
       const attempted = row.attempted_questions || 0
       const correct = row.correct_questions || 0
@@ -157,7 +159,7 @@ export default function Students() {
   // Same switch, same stored preference, as the student progress report. This
   // page reads face_signals too, and honouring the control on one surface while
   // ignoring it here would make it meaningless.
-  const [includeFace, setIncludeFace] = useState(readFacePref)
+  const [hideSensors, setHideSensors] = useState(readHideSensorData)
   // Identifies the fetch whose result is still wanted, per student. Keying the
   // staleness check on the facial setting alone was not enough: flipping the
   // switch off and back on leaves two requests in flight that both carry
@@ -231,16 +233,16 @@ export default function Students() {
     }
     setExpandedId(studentId)
     if (statsCache[studentId] || statsLoading[studentId]) return
-    await refreshStats(studentId, includeFace)
+    await refreshStats(studentId)
   }
 
-  async function refreshStats(studentId, withFace) {
+  async function refreshStats(studentId) {
     const requestId = (statsRequestIds.current[studentId] || 0) + 1
     statsRequestIds.current[studentId] = requestId
     setStatsLoading(prev => ({ ...prev, [studentId]: true }))
     let stats
     try {
-      stats = await getStudentStats(studentId, withFace)
+      stats = await getStudentStats(studentId)
     } catch (err) {
       // A throw here would otherwise leave the row's loading flag set forever,
       // and toggleExpand treats a loading student as already handled -- so the
@@ -264,25 +266,15 @@ export default function Students() {
     setStatsCache(prev => ({ ...prev, [studentId]: stats }))
   }
 
-  function handleIncludeFaceChange(next) {
-    setIncludeFace(next)
-    writeFacePref(next)
-    // Supersede every read in flight, not just the expanded row's. A student
-    // collapsed while its read was still running keeps that request, and
-    // nothing else would stop it landing afterwards and caching facial data
-    // under the new setting -- served straight back on the next expand, since
-    // toggleExpand skips the fetch when the cache is warm.
-    for (const id of Object.keys(statsRequestIds.current)) statsRequestIds.current[id] += 1
-    // Cached rows were read under the previous setting -- with facial data in
-    // them, or without. Drop the cache so what is on screen matches the switch
-    // rather than whatever happened to be fetched first.
-    setStatsCache({})
-    // Every in-flight read is superseded above, so none of them will clear
-    // their own flag. Left set, the row is stuck: toggleExpand treats a
-    // loading student as already handled and never refetches it.
-    setStatsLoading({})
-    if (expandedId) refreshStats(expandedId, next)
+  function handleHideSensorsChange(next) {
+    setHideSensors(next)
+    writeHideSensorData(next)
+    // No cache drop and no re-read, unlike the control this replaces. That one
+    // changed what the server returned, so every cached row and in-flight
+    // request had to be superseded. This one changes only what is drawn, which
+    // is the whole point of keeping it client-side.
   }
+
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -302,7 +294,7 @@ export default function Students() {
       </div>
 
       <div className="mb-6">
-        <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
+        <HideSensorDataToggle hidden={hideSensors} onChange={handleHideSensorsChange} />
       </div>
 
       {loading ? (

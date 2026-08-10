@@ -166,11 +166,19 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
                          want_heart: bool = True) -> ReportChannels:
     """Which optional channels a report may read: consent AND what was asked for.
 
-    Two different controls, composed rather than conflated. **Consent** decides
-    whether a channel was ever recorded and is not the viewer's to override.
-    The **request** flag is a viewer-side preference -- a teacher choosing not to
-    look at facial data on a page -- documented at the top of
-    `frontend/src/lib/facePref.js`. Either one being false means no read.
+    **Consent** decides whether a channel was ever recorded, and is not the
+    viewer's to override.
+
+    `want_*` is a viewer-side narrowing that no client sends any more. The
+    frontend switch that used to set it is retired: it was a read filter wearing
+    the vocabulary of consent, and stored consent now does the job it appeared
+    to do. What replaced it -- the teacher's "Hide sensor data" switch,
+    `frontend/src/lib/viewPrefs.js` -- is client-side and changes no request.
+
+    The parameters stay because they cost nothing and a caller may legitimately
+    want less than consent allows; they default to True, so absent means "as
+    much as consent permits". They are not a privacy boundary and nothing should
+    be built on them as one.
 
     Consent is authoritative and cannot be widened by a caller, which is why it
     is resolved here rather than trusted from a query parameter. A revoked

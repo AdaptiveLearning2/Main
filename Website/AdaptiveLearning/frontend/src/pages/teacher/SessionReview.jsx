@@ -27,7 +27,7 @@ export default function SessionReview() {
     setLoading(true)
     // Returns one session's raw facial samples, plotted below, and
     // deliberately does NOT honour the facial-recognition switch in
-    // lib/facePref.js -- that control covers the reporting surfaces, which
+    // lib/viewPrefs.js -- that control covers the reporting surfaces, which
     // render it, and this page does not. See the scope note there before
     // wiring it in.
     apiFetch(`/api/signals/session/${sessionId}`)

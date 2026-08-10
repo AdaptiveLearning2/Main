@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
-import { WeeklySignalReport, LiveSignalSummary, FacialRecognitionToggle, StrategyPanel } from '../signals/SignalPanel'
+import { WeeklySignalReport, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 // Persisted so the choice survives navigation between students -- switching
 // facial reporting off and having it silently come back on the next page is
 // the kind of thing that makes a privacy control untrustworthy. Shared with the
 // teacher student list, which reads the same facial signals.
-import { readFacePref, writeFacePref } from '../../lib/facePref'
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
@@ -33,6 +32,16 @@ const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', alge
  * @param {boolean}  [showStrategies] render the at-home strategies panel. Parent
  *   route only -- the copy is written for someone supporting a child at home.
  */
+/**
+ * `showSignals` is the teacher's *"Hide sensor data"* view preference, passed
+ * in rather than read here: this component is rendered by a parent surface too,
+ * and that surface has no such switch. Defaulting to true means a caller that
+ * knows nothing about the filter renders everything, which is the honest
+ * default for a control that only declutters.
+ *
+ * It hides rendering only. What may be *read* is decided by stored consent,
+ * server-side -- see `lib/viewPrefs.js` for why that split is deliberate.
+ */
 export default function StudentProgressReport({
   studentId,
   initialName = 'Student',
@@ -42,6 +51,7 @@ export default function StudentProgressReport({
   emptyTopicText = 'No topic data yet.',
   nameFetch,
   showStrategies = false,
+  showSignals = true,
 }) {
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
@@ -51,7 +61,6 @@ export default function StudentProgressReport({
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
   const [loadError, setLoadError]       = useState(null)
-  const [includeFace, setIncludeFace]   = useState(readFacePref)
   const [strategies, setStrategies]     = useState(null)
   const [strategySource, setStrategySource]   = useState(null)
   // Whether the aggregate the advice was derived from actually loaded.
@@ -108,7 +117,7 @@ export default function StudentProgressReport({
   // it does not cause an extra fetch on toggle.
   useEffect(() => {
     let cancelled = false
-    apiFetch(`/api/students/${studentId}/weekly-report?include_face=${includeFace}`)
+    apiFetch(`/api/students/${studentId}/weekly-report`)
       .then(r => {
         if (cancelled) return
         setSignalReport(r)
@@ -126,86 +135,12 @@ export default function StudentProgressReport({
         setSignalReport(null)
         setSignalError(err.message || 'Could not load signal report')
       })
-    // Toggling twice quickly can land the responses out of order, and the
-    // report carries the face data the toggle is meant to exclude -- so a
-    // stale resolve could put it back on screen after it was switched off.
+    // A stale resolve can still land after a navigation to another student,
+    // which would show one student's report under another's name.
     return () => { cancelled = true }
-  }, [studentId, includeFace, nameFetch])
+  }, [studentId, nameFetch])
 
-  function handleIncludeFaceChange(next) {
-    setIncludeFace(next)
-    writeFacePref(next)
 
-    // Drop the facial values from the report already on screen rather than
-    // leaving them up for the round-trip. The switch governs what gets read,
-    // but a viewer who has just asked to exclude facial data should not go on
-    // looking at it while the replacement request is in flight -- which is what
-    // happened here: the panels kept rendering the previous payload, whose
-    // face_included is true, so Face Attention, Dominant Emotion and the
-    // attention series stayed on screen with the switch already reading "off".
-    //
-    // face_included goes false in both directions, including when the switch is
-    // being turned back on, because the flag describes the payload in hand and
-    // this one no longer carries facial data. The panels therefore read "Off"
-    // until the response lands, rather than "N/A" -- which would report a
-    // measurement as missing when it is simply on its way. Same treatment the
-    // parent dashboard gives its own tiles.
-    //
-    // The per-day face_retrieved flags go to null, not false: null is "not
-    // requested", and leaving a cap-driven false behind would go on blaming a
-    // retrieval gap on facial data this report no longer shows.
-    //
-    // summary goes too, and it is the one field here that is not a number. The
-    // backend joins its clauses into a finished sentence, so a report that read
-    // facial data carries "average face attention was 72%" inside prose there is
-    // no structure left to edit -- and it renders verbatim. Nulling the numeric
-    // fields around it left that sentence up as the last facial measurement on
-    // screen, directly above the "facial recognition data was not included"
-    // note, each contradicting the other. The panel falls back to "No summary
-    // available yet." for the round-trip, which costs the still-valid EEG
-    // clauses -- the same trade the tiles above already make, and the
-    // replacement sentence is already in flight.
-    //
-    // retrieved.face follows face_retrieved to null for the same reason: the
-    // payload in hand no longer carries facial data, so a false left over from
-    // a failed facial read would keep warning about a read this report is no
-    // longer making.
-    setSignalReport(prev => prev && {
-      ...prev,
-      // Both flags, not just the legacy one. `emotionOn()` reads
-      // `emotion_included` first and only falls back to `face_included`, so
-      // scrubbing the alias alone left the true value from the backend standing
-      // -- the Face Attention line, the Dominant Emotion tile and the Emotion
-      // Mix pie all stayed on screen after the switch went off, with the
-      // attention series nulled underneath them so it drew as a flatlined gap.
-      face_included: false,
-      emotion_included: false,
-      // The pie reads this directly rather than through the flag, so it has to
-      // go too. A distribution left behind is a rendered claim about data this
-      // report is no longer including.
-      emotion_distribution: null,
-      summary: null,
-      retrieved: { ...(prev.retrieved || {}), face: null },
-      averages:   { ...(prev.averages   || {}), face_attention: null },
-      highlights: { ...(prev.highlights || {}), dominant_emotion: null },
-      latest:     { ...(prev.latest     || {}), face: null },
-      daily: (prev.daily || []).map(d => ({ ...d, attention: null, face_retrieved: null })),
-    })
-
-    // Built from a report that included facial data; keep it out of the way
-    // rather than leaving advice on screen that the new setting excludes.
-    //
-    // Bumping the request id matters as much as clearing the state: a
-    // generation already in flight was built from a report that read facial
-    // data, and letting it resolve would put that advice back on screen after
-    // the viewer switched it off.
-    strategyRequestId.current += 1
-    setStrategies(null)
-    setStrategySource(null)
-    setStrategySignals(null)
-    setStrategyError(null)
-    setStrategyLoading(false)
-  }
 
   async function generateStrategies() {
     const requestId = ++strategyRequestId.current
@@ -214,7 +149,6 @@ export default function StudentProgressReport({
     try {
       const res = await apiFetch(`/api/students/${studentId}/learning-strategies`, {
         method: 'POST',
-        body: { include_face: includeFace },
       })
       if (requestId !== strategyRequestId.current) return
       setStrategies(res.strategies || [])
@@ -282,18 +216,19 @@ export default function StudentProgressReport({
             ))}
           </div>
 
-          <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
-
           {/* Only rendered once the report loads -- the panels would otherwise
               show a full grid of "N/A" and read as "no activity" rather than
               "still loading". */}
-          {signalError && (
+          {/* The read-failure notice is hidden along with the panels. It is a
+              statement about sensor data, and a viewer who asked not to see any
+              has not asked to be told it failed to load. */}
+          {showSignals && signalError && (
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>
               <p className="text-xs text-gray-400 mt-1">{signalError}</p>
             </div>
           )}
-          {signalReport && (
+          {showSignals && signalReport && (
             <div className="grid lg:grid-cols-1 gap-6">
               <LiveSignalSummary report={signalReport} title="Latest Signal Snapshot" />
               <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />

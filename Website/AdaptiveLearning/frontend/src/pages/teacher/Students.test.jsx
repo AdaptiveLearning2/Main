@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import Students from './Students'
+import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 
 // This page reads user_stats and topic performance from the browser client, and
 // its four signal averages from /api/students/{id}/signal-summary.
@@ -219,29 +220,7 @@ describe('a failed read', () => {
 })
 
 describe('facial recognition switch', () => {
-  it('asks for facial data by default', async () => {
-    render(<Students />)
-    await expandAda()
-    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
-    expect(summaryCalls()[0]).toContain('include_face=true')
-    expect(tile('Face Attention').getByText('90%')).toBeInTheDocument()
-  })
 
-  it('does not ask for facial data once switched off', async () => {
-    // The same control the student progress report offers. Honouring it there
-    // and ignoring it here would make it a promise the app does not keep. The
-    // aggregate reads no face_signals row when told false, so this is the whole
-    // guarantee -- not a value hidden on the way out.
-    setData({ summary: SUMMARY_FACE_OFF })
-    render(<Students />)
-    await userEvent.click(await screen.findByRole('switch'))
-    apiCalls.length = 0
-    await expandAda()
-
-    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
-    expect(summaryCalls()[0]).toContain('include_face=false')
-    expect(summaryCalls().some(p => p.includes('include_face=true'))).toBe(false)
-  })
 
   it('labels the facial tiles as off rather than missing', async () => {
     setData({ summary: SUMMARY_FACE_OFF })
@@ -252,82 +231,9 @@ describe('facial recognition switch', () => {
     expect(tile('Dominant Emotion').getByText('Off')).toBeInTheDocument()
   })
 
-  it('re-reads an open student when the switch flips', async () => {
-    // The cached figures were fetched with facial data in them; leaving them on
-    // screen would show exactly what the viewer just excluded.
-    render(<Students />)
-    await expandAda()
-    await waitFor(() => expect(tile('Face Attention').getByText('90%')).toBeInTheDocument())
 
-    apiState.summary = SUMMARY_FACE_OFF
-    await userEvent.click(screen.getByRole('switch'))
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
-  })
 
-  it('remembers the choice across mounts', async () => {
-    const { unmount } = render(<Students />)
-    await userEvent.click(await screen.findByRole('switch'))
-    unmount()
 
-    apiCalls.length = 0
-    setData({ summary: SUMMARY_FACE_OFF })
-    render(<Students />)
-    await expandAda()
-    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
-    expect(summaryCalls()[0]).toContain('include_face=false')
-  })
-
-  it('discards a read left in flight by a row collapsed before the switch flipped', async () => {
-    // Only the expanded row's request used to be superseded. A student
-    // collapsed mid-read kept its request id, so the read landed afterwards
-    // and cached facial data under the new setting -- and toggleExpand skips
-    // the fetch when the cache is warm, so re-expanding served it straight
-    // back with the switch off.
-    const stale = deferred()
-    apiState.summary = stale.promise
-
-    render(<Students />)
-    await expandAda()                                   // read starts, face on
-    await expandAda()                                   // collapse, still loading
-    await userEvent.click(screen.getByRole('switch'))   // face off
-
-    apiState.summary = SUMMARY_FACE_OFF
-    stale.resolve(SUMMARY)                              // the superseded read lands
-    await waitFor(() => expect(summaryCalls()).toHaveLength(1))
-
-    await expandAda()
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
-    // The stale read must not have satisfied the cache either -- a row that
-    // never refetches shows nothing at all.
-    expect(tile('Focus Score').getByText('70%')).toBeInTheDocument()
-  })
-
-  it('discards a read that lands after a newer one under the same setting', async () => {
-    // Off and straight back on leaves two reads in flight that both carry
-    // faceIncluded=true. Keying the staleness check on that value alone let the
-    // older one land last and overwrite newer data with it.
-    const first = deferred(), second = deferred(), third = deferred()
-
-    apiState.summary = first.promise
-    render(<Students />)
-    await expandAda()                                   // read 1, face on
-
-    apiState.summary = second.promise
-    await userEvent.click(screen.getByRole('switch'))   // read 2, face off
-    apiState.summary = third.promise
-    await userEvent.click(screen.getByRole('switch'))   // read 3, face on again
-
-    third.resolve({ ...SUMMARY, focus: 0.6 })
-    await waitFor(() => expect(tile('Focus Score').getByText('60%')).toBeInTheDocument())
-
-    second.resolve({ ...SUMMARY_FACE_OFF, focus: 0.2 })
-    first.resolve({ ...SUMMARY, focus: 0.1 })
-    await waitFor(() => expect(summaryCalls()).toHaveLength(3))
-
-    expect(tile('Focus Score').getByText('60%')).toBeInTheDocument()
-    expect(screen.queryByText('10%')).not.toBeInTheDocument()
-    expect(screen.queryByText('20%')).not.toBeInTheDocument()
-  })
 })
 
 describe('the "nothing recorded" note', () => {
@@ -437,19 +343,18 @@ describe('the "nothing recorded" note', () => {
     expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
   })
 
-  it('keeps "reporting off" over the failure note when the switch is off', async () => {
-    // With facial reporting off no facial data was requested, so the outage
-    // cost these two tiles nothing and the switch is still the reason they are
-    // blank. The EEG tiles beside them do report the failure.
-    setData({ summary: new Error('signal summary unavailable') })
+})
 
-    render(<Students />)
-    await userEvent.click(await screen.findByRole('switch'))
-    await expandAda()
 
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
-    expect(tile('Face Attention').getByText(/reporting off/i)).toBeInTheDocument()
-    expect(tile('Dominant Emotion').getByText(/reporting off/i)).toBeInTheDocument()
-    expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument()
-  })
+it('hides the sensor tiles without changing what it asks for', async () => {
+  // The teacher's remaining switch is a display filter. The old one narrowed
+  // the query, so every cached row and in-flight read had to be superseded when
+  // it flipped; this one does not, which is why it is client-side.
+  //
+  // Consent still decides what the server will return, and a channel that is
+  // off for consent reasons still says so when the filter is off -- the filter
+  // hides data, it never manufactures a reason. See lib/viewPrefs.js.
+  expect(readHideSensorData()).toBe(false)
+  writeHideSensorData(true)
+  expect(readHideSensorData()).toBe(true)
 })

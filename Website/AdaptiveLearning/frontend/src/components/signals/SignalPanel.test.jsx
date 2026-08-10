@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveSignalSummary, WeeklySignalReport, FacialRecognitionToggle, StrategyPanel, pct } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
 // face_signals store. Rendering them unscaled printed focus 0.72 as "1%", so
@@ -240,28 +240,6 @@ describe('facial reporting switched off', () => {
   })
 })
 
-describe('FacialRecognitionToggle', () => {
-  it('exposes its state to assistive technology', () => {
-    const { rerender } = render(<FacialRecognitionToggle enabled onChange={() => {}} />)
-    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
-    rerender(<FacialRecognitionToggle enabled={false} onChange={() => {}} />)
-    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
-  })
-
-  it('reports the flipped value to its caller', async () => {
-    const onChange = vi.fn()
-    render(<FacialRecognitionToggle enabled onChange={onChange} />)
-    await userEvent.click(screen.getByRole('switch'))
-    expect(onChange).toHaveBeenCalledWith(false)
-  })
-
-  it('does not claim to control the camera', () => {
-    // The switch decides what the report reads, and promising more than that
-    // is a guarantee it cannot keep.
-    render(<FacialRecognitionToggle enabled onChange={() => {}} />)
-    expect(screen.getByText(/does not switch a camera on or off/i)).toBeInTheDocument()
-  })
-})
 
 describe('StrategyPanel', () => {
   const strategies = ['Review fractions for ten minutes', 'Take a short break between sets']

@@ -3,7 +3,6 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
-import { faceIncluded } from '../../lib/facePref'
 
 const FACE_OFF = 'Off'
 
@@ -78,7 +77,12 @@ function unit(value, suffix, digits = 0) {
 // channel as excluded because the field is absent.
 function emotionOn(report) {
   if (report?.emotion_included !== undefined) return report.emotion_included !== false
-  return faceIncluded(report)
+  // The legacy alias, inlined. It used to come from `lib/facePref.js`, which
+  // is gone: that module was a viewer-side read filter and stored consent
+  // replaced it. The flag itself is still emitted by the backend, so the
+  // fallback stays -- absent means a payload from before the split, and
+  // treating that as "excluded" would blank a channel that was recorded.
+  return report?.face_included !== false
 }
 
 function heartOn(report) {
@@ -410,42 +414,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   )
 }
 
-/**
- * Switch controlling whether facial-recognition data is read into a report.
- *
- * The copy is deliberate: this decides what the report *contains*, and the
- * backend skips the face_signals query outright when it is off. It does not
- * control the camera, and saying so avoids implying a hardware guarantee this
- * switch cannot make.
- */
-export function FacialRecognitionToggle({ enabled, onChange, disabled = false }) {
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 shadow-sm">
-      <div className="flex gap-3">
-        <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300 flex items-center justify-center shrink-0">
-          <Eye size={17} />
-        </div>
-        <div>
-          <p className="text-sm font-black text-gray-900 dark:text-white">Include facial recognition data</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            When off, facial signals are left out of this report and are not read. This does not switch a camera on or off.
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        aria-label="Include facial recognition data"
-        disabled={disabled}
-        onClick={() => onChange?.(!enabled)}
-        className={`relative w-12 h-7 rounded-full shrink-0 transition disabled:opacity-50 ${enabled ? 'bg-sky-600' : 'bg-gray-300 dark:bg-gray-700'}`}
-      >
-        <span className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${enabled ? 'left-6' : 'left-1'}`} />
-      </button>
-    </div>
-  )
-}
 
 /**
  * At-home practice strategies for a student, with the control that generates

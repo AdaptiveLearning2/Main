@@ -2165,6 +2165,12 @@ def _consent(student_id: str) -> dict:
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
 
 
+# The poller writes `cognitive_signals` directly with the service-role client,
+# so neither RLS nor the ingest endpoint's gate applies to it. This is what
+# subjects it to the same consent rule as the push path.
+eeg_poller.set_consent_check(lambda student_id: bool(_consent(student_id).get("eeg_enabled")))
+
+
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
     """Whether a write failed because the row already existed.
 
@@ -2892,6 +2898,34 @@ def class_live(class_id: str, request: Request):
 
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
 
+def _poller_status(user_id: str) -> dict:
+    """`eeg_poller.status`, plus why it is not running when the answer is known.
+
+    "Stopped because the student withdrew consent" and "stopped because the
+    headband dropped" are different sentences, and the frontend rendered both
+    as a poller that simply is not running.
+
+    Derived from current consent rather than remembered on the poller. A
+    remembered `stopped_reason` was the first attempt: it needed the dead
+    poller to stay in `_active` to be readable, which is the unbounded-by-uptime
+    shape this module keeps having to fix, and it could go stale the moment a
+    parent re-enabled the channel. Consent is the authority on this, so ask it.
+    """
+    status = eeg_poller.status(user_id)
+    if status.get("running"):
+        return status
+    consent = _consent(user_id)
+    if not consent.get("retrieved"):
+        # Unknown, not "withdrawn". The reporting three-state rule again: a
+        # failed read is not a refusal, and saying so wrongly to a parent is
+        # worse than saying nothing.
+        return {**status, "stopped_reason": "consent_unknown"}
+    if not consent.get("eeg_enabled"):
+        return {**status, "stopped_reason": "consent_withdrawn",
+                "revoked_at": consent.get("eeg_revoked_at")}
+    return status
+
+
 def _refuse_under_push(what: str) -> None:
     """409 rather than the 503 the liveness probe would raise.
 
@@ -3073,6 +3107,17 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(400, "Session already ended")
     # Answered before the liveness check, deliberately -- see the helper.
     _refuse_under_push("start a poller")
+    # And before the poller exists at all. Historical rows stay; nothing new is
+    # written until consent is given. `_consent` fails closed, so an unreadable
+    # row refuses rather than records.
+    consent = _consent(user["id"])
+    if not consent.get("eeg_enabled"):
+        raise HTTPException(
+            403,
+            "EEG recording is switched off for this student."
+            if consent.get("retrieved")
+            else "Could not check whether EEG recording is allowed, so it was not started.",
+        )
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
@@ -3146,7 +3191,7 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
         # null, which is the distinction the reporting rules exist to keep.
         "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
-        "poller":  eeg_poller.status(user["id"]),
+        "poller":  _poller_status(user["id"]),
     }
 
 

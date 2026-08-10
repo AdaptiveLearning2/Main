@@ -97,6 +97,13 @@ class PushClient:
         # a guess -- the same three-state discipline the reporting surfaces use.
         self._unaccounted: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
+        # Serialises `start` and `stop`. Both await, so two starts for the same
+        # new session could interleave: the slower one resumes inside its own
+        # `stop()` and clears the session and token the faster one had already
+        # installed, leaving a running loop with no token -- `status()` says
+        # running, nothing records, and the drops are not even counted because
+        # `enqueue` sees no token and treats it as "no session".
+        self._lifecycle = asyncio.Lock()
         self._wake = asyncio.Event()
         # Set by `stop()` to ask the loop to finish at a tick boundary, so no
         # request is aborted after the server has committed it.
@@ -133,16 +140,17 @@ class PushClient:
         to be posted under the new id. Both are now `stop(flush=False)`, taken
         unconditionally.
         """
-        if session_id != self._session_id:
-            await self.stop(flush=False)
-        self._session_id = session_id
-        self._token = token
-        self._stopping.clear()
-        self._backoff = 0.0
-        self._retry_at = 0.0
-        self._last_error = None
-        if not self.running:
-            self._task = asyncio.create_task(self._loop())
+        async with self._lifecycle:
+            if session_id != self._session_id:
+                await self._stop_locked(flush=False)
+            self._session_id = session_id
+            self._token = token
+            self._stopping.clear()
+            self._backoff = 0.0
+            self._retry_at = 0.0
+            self._last_error = None
+            if not self.running:
+                self._task = asyncio.create_task(self._loop())
 
     async def stop(self, *, flush: bool = True) -> None:
         """Stop pushing and forget the token.
@@ -151,6 +159,16 @@ class PushClient:
         gap between the final sample and the next tick. It is bounded by the
         same request timeout, so a dead backend delays shutdown by seconds
         rather than hanging it.
+        """
+        async with self._lifecycle:
+            await self._stop_locked(flush=flush)
+
+    async def _stop_locked(self, *, flush: bool) -> None:
+        """The body of `stop()`. Assumes `_lifecycle` is held.
+
+        Split out because `start()` needs to stop a previous session *within*
+        its own critical section -- calling the public `stop()` there would
+        deadlock on a non-reentrant lock.
         """
         deadline = time.monotonic() + SHUTDOWN_BUDGET
         task, self._task = self._task, None
@@ -388,6 +406,7 @@ class PushClient:
         if not session_id or not token:
             return
         first_error: Exception | None = None
+        delivered = False
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             for channel in _CHANNELS:
                 samples = self._take(channel)
@@ -395,6 +414,7 @@ class PushClient:
                     continue
                 try:
                     await self._post(client, channel, session_id, token, samples)
+                    delivered = True
                 except asyncio.CancelledError:
                     # Not restored. The request was in flight when it was
                     # cancelled, so the server may well have committed it, and
@@ -410,6 +430,13 @@ class PushClient:
                         first_error = exc
         if first_error is not None:
             raise first_error
+        if not delivered:
+            # Nothing was sent, so nothing was proved. Clearing the backoff here
+            # meant a lull in sampling during an outage -- a paused lesson, a
+            # student between questions -- reset a 120 s backoff to 0 and
+            # reported `last_error: null`, i.e. "recovered", on the strength of
+            # having delivered no bytes to a backend that is still down.
+            return
         self._backoff = 0.0
         self._retry_at = 0.0
         self._last_error = None

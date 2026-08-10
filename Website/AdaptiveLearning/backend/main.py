@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-import math
 from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -2423,18 +2422,32 @@ class CognitiveSample(BaseModel):
     features:   dict  | None = None
     bands:      dict  | None = None
 
+    @field_validator("focus", "stress", "engagement",
+                     "alpha", "beta", "theta", "delta", "gamma")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        """NaN and inf reach a `float | None` field untouched -- see below."""
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number")
+        return v
+
     @field_validator("features", "bands")
     @classmethod
     def _numeric_values_must_be_storable(cls, v: dict | None) -> dict | None:
         """Reject what the numeric columns cannot hold, here rather than at the
         database.
 
-        The flat fields are typed `float | None` and Pydantic rejects a string
-        or a NaN for them. These two were `dict`, so the same values went
-        straight through to `alpha`/`beta`/... and failed at PostgREST -- which
-        takes down the *whole batch*, including every valid sample in it, and
-        reports it as a 500 from a write that the client will then retry. A
-        trust boundary that defers its checking to the database is not one.
+        A `float | None` annotation is **not** this check. Pydantic v2 defaults
+        to `allow_inf_nan=True`, and `json.loads` accepts the bare `NaN` and
+        `Infinity` literals, so a non-finite value passes a typed field just as
+        happily as it passed these dicts -- an earlier version of this docstring
+        claimed the flat fields were already safe and they were not. Both paths
+        are checked now, `_finite` below for the typed ones.
+
+        What it costs to skip: `double precision` cannot hold either value, so
+        PostgREST rejects the *whole batch*, every valid sample in it included,
+        and answers with a 500 the client will retry. A trust boundary that
+        defers its checking to the database is not one.
 
         Only the keys that become columns are checked. Anything else is
         passed-through metadata bound for `raw`, a jsonb column that can hold
@@ -2613,12 +2626,17 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             # Un-nested into the shape the mapper reads, rather than handed to
             # it as one `raw` blob. The mapper takes `device_id`, `channels`,
             # `state` and `ingestion` off the *top level* and merges `raw`
-            # underneath, with derived keys winning a collision. Left nested,
-            # every one of those lookups found nothing, `_raw` dropped the
-            # resulting Nones, and the client's copies were stored -- so
-            # "derived keys win" held on the pull path and silently did not
-            # here, which is the one-path-differs-from-the-other failure this
-            # module exists to prevent.
+            # underneath. Left nested, every one of those lookups found nothing
+            # and the envelope was stored as opaque client data instead of in
+            # the fields that name it.
+            #
+            # Note what this does *not* buy. `_raw` documents that derived keys
+            # beat client-supplied ones, and on this path that is vacuous: the
+            # values promoted here are the client's own, so it wins either way.
+            # It cannot be otherwise -- the sidecar is the only thing that knows
+            # its device_id, and this endpoint has nothing of its own to prefer.
+            # The defences on the push path are session ownership and consent,
+            # not key precedence; `raw` is descriptive, not attested.
             raw = dict(s.raw or {})
             envelope = {k: raw.pop(k, None)
                         for k in ("device_id", "channels", "state", "ingestion")}
@@ -3084,13 +3102,6 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
 @app.get("/api/eeg/status")
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     user = get_user(request)
-    # Blank only the muse block, not the whole response -- the caller's own
-    # poller status (below) is always theirs to see regardless of device_id.
-    muse = (
-        eeg_client.get_muse_status(device_id)
-        if eeg_poller.can_use_device(user["id"], device_id)
-        else {"available": False, "reason": "in_use_by_other"}
-    )
     # Under push ingestion this backend has no route to a sidecar, so
     # `is_alive()` is false forever -- and the frontend polls this every 3
     # seconds and renders it as "EEG service is down". The student would get the
@@ -3098,6 +3109,29 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     # of it. Same argument as checking the mode before the liveness probe there;
     # /start was simply the only place it got applied.
     push = eeg_poller.INGEST_MODE == "push"
+    # **Before** the muse probe, not after it. The check was here but the probe
+    # ran first, so the rule this endpoint was fixed to follow was defeated by
+    # statement order:
+    #
+    #   - `get_muse_status` calls `_learner_headers()`, which raises when
+    #     EEG_API_TOKEN is unset -- the normal state of a hosted push
+    #     deployment -- and it raises *outside* the client's try block, so the
+    #     endpoint 500s. Polled every 3 s, the headband block then never
+    #     updates for the whole lesson.
+    #   - With a token set it is worse in a different way: a 2 s blocking probe
+    #     to a host that does not exist, per student, every 3 s, each holding an
+    #     anyio threadpool slot.
+    #
+    # Blank only the muse block, not the whole response -- the caller's own
+    # poller status is always theirs to see regardless of device_id.
+    if push:
+        # None, not False, for the same reason as `service` below: "not probed
+        # in this deployment" is a different claim from "probed and absent".
+        muse = {"available": None, "reason": "push_ingestion"}
+    elif eeg_poller.can_use_device(user["id"], device_id):
+        muse = eeg_client.get_muse_status(device_id)
+    else:
+        muse = {"available": False, "reason": "in_use_by_other"}
     return {
         # None, not False: "we do not probe a sidecar in this deployment" is not
         # the same claim as "we probed and it is down", and a consumer that

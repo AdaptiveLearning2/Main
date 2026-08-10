@@ -565,3 +565,66 @@ async def test_submit_payload_counts_the_shutdown_window_like_enqueue(client):
     client.submit_payload({"timestamp": "t", "features": {"focus_score": 1.0}})
 
     assert client.status()["dropped_locally"]["cognitive"] == 1
+
+
+@pytest.mark.anyio
+async def test_an_empty_pass_does_not_clear_the_backoff(client, monkeypatch):
+    """A lull in sampling during an outage -- a paused lesson, a student
+    thinking -- reset a 120s backoff to 0 and reported `last_error: null` on the
+    strength of having delivered no bytes to a backend that is still down."""
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("cognitive", {"ts": 0})
+    try:
+        await client._flush_once()
+    except Exception as exc:  # noqa: BLE001
+        client._note_failure(exc)
+    client._queues["cognitive"].clear()
+    backoff = client.status()["backoff_seconds"]
+    assert backoff > 0
+
+    await client._flush_once()  # nothing queued
+
+    assert client.status()["backoff_seconds"] == backoff, "an empty pass claimed recovery"
+    assert client.status()["last_error"] is not None
+
+
+@pytest.mark.anyio
+async def test_concurrent_starts_do_not_leave_a_running_loop_without_a_token(client):
+    """Both await, so the slower one used to resume inside its own stop() and
+    clear the session and token the other had just installed -- a running task
+    with no token: status() says running, nothing records, and the drops are not
+    even counted because enqueue reads it as "no session"."""
+    await _started(client, "s0")
+
+    await asyncio.gather(client.start("s1", "tok1"), client.start("s1", "tok1"))
+
+    assert client.running
+    assert client._token == "tok1"
+    assert client._session_id == "s1"
+    client.enqueue("cognitive", {"ts": 0})
+    assert client.status()["queued"]["cognitive"] == 1
+
+
+@pytest.mark.anyio
+async def test_a_successful_pass_still_clears_the_backoff(client, monkeypatch):
+    """The guard above must not have broken recovery."""
+    failing = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: failing)
+    await _started(client)
+    client.enqueue("cognitive", {"ts": 0})
+    try:
+        await client._flush_once()
+    except Exception as exc:  # noqa: BLE001
+        client._note_failure(exc)
+    assert client.status()["backoff_seconds"] > 0
+
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: _FakeClient())
+    await client._flush_once()
+
+    assert client.status()["backoff_seconds"] == 0
+    assert client.status()["last_error"] is None

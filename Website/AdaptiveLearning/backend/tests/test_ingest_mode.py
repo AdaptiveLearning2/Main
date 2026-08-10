@@ -322,7 +322,13 @@ class _StubClient:
 
     @staticmethod
     def get_muse_status(*_a, **_k):
-        return {}
+        # Raises, like the real one. `eeg_client._learner_headers()` throws when
+        # EEG_API_TOKEN is unset -- the normal state of a hosted push
+        # deployment -- and it throws outside the request try block, so the
+        # endpoint 500s. A stub returning `{}` made `/api/eeg/status` look
+        # mode-aware while the probe in front of the check was crashing it, and
+        # the parametrised test that exists to catch exactly that passed.
+        raise RuntimeError("Missing EEG_API_TOKEN environment variable")
 
     @staticmethod
     def list_devices():
@@ -338,6 +344,19 @@ class _StubClient:
 
     @staticmethod
     def muse_disconnect(*_a, **_k):
+        return {}
+
+
+class _StubClientConfigured(_StubClient):
+    """A pull deployment: EEG_API_TOKEN is set, so the probe runs and answers.
+
+    Separate from `_StubClient` because the two deployments differ in exactly
+    the way that mattered -- under push there is no token and the probe throws,
+    which is what the base stub models.
+    """
+
+    @staticmethod
+    def get_muse_status(*_a, **_k):
         return {}
 
 
@@ -388,7 +407,7 @@ def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monk
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
-    monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "eeg_client", _StubClientConfigured)
 
     call, key = _MODE_AWARE[endpoint]
     out = call()
@@ -727,3 +746,42 @@ def test_non_column_keys_are_still_free_form():
                       "quality_basis": "contact", "batch_size": 3}},
     ])
     assert batch.samples[0].features["signal_quality"] == "good"
+
+
+def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
+    """The probe ran *before* the mode check, so the rule this endpoint was
+    fixed to follow was defeated by statement order. With EEG_API_TOKEN unset --
+    the normal state of a hosted push deployment -- it 500s, and the frontend
+    polls it every 3 s, so the headband block never updates all lesson."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+
+    probed = []
+
+    class _Exploding(_StubClient):
+        @staticmethod
+        def get_muse_status(*_a, **_k):
+            probed.append(1)
+            raise RuntimeError("Missing EEG_API_TOKEN environment variable")
+
+    monkeypatch.setattr(main, "eeg_client", _Exploding)
+
+    out = main.eeg_status(None)
+
+    assert probed == [], "the sidecar was probed under push"
+    assert out["service"] is None
+    assert out["muse"]["available"] is None, "'not probed' rendered as 'absent'"
+    assert out["muse"]["reason"] == "push_ingestion"
+
+
+def test_a_device_claimed_by_another_user_still_reads_that_way_under_pull(monkeypatch):
+    """The push branch must not have swallowed the in-use case."""
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: False)
+    monkeypatch.setattr(main, "eeg_client", _StubClientConfigured)
+
+    out = main.eeg_status(None)
+
+    assert out["muse"] == {"available": False, "reason": "in_use_by_other"}

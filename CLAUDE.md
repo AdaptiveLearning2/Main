@@ -391,6 +391,14 @@ fault when the deployment simply does not work that way. Two shapes:
   wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
   that claimed to have replaced it.
 
+**"Before" means before every sidecar call, not just before the liveness probe.** `/api/eeg/status`
+had the check and still 500'd under push, because `get_muse_status()` ran a few lines above it.
+`eeg_client._learner_headers()` raises when `EEG_API_TOKEN` is unset — the normal state of a hosted
+push deployment — and it raises *outside* the request try, so the endpoint dies before reaching the
+check that exists to protect it. Test stubs for `eeg_client` must therefore **raise** from
+`get_muse_status`, as `_StubClient` in `test_ingest_mode.py` does: a stub returning `{}` modelled a
+deployment that does not exist and hid this for two rounds.
+
 A ninth endpoint needs the same treatment and an entry in `_MODE_AWARE` or `_MODE_AWARE_RAISING` in
 `backend/tests/test_ingest_mode.py`, which parametrises both push and pull over every member. This
 was found one endpoint at a time across five review rounds because each site was written by hand and

@@ -199,9 +199,17 @@ discriminators are in `EEGResearch/tests/fixtures/README.md`.
 **Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
 against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**
 against a true 88, on five minutes with the face found in 8988 of 8988 frames. Not a
-derivation bug -- the pulse is absent from the video, and the raw R/G/B channels show the
-same, so POS is not at fault. The autocorrelation peak was 0.02 where a real pulse gives
-0.3-0.7.
+derivation bug: the pulse is not recoverable **from the mean RGB of our three ROI boxes by
+POS**, and the raw R/G/B channels of those means show the same, so POS is not at fault. The
+autocorrelation peak was 0.02 where a real pulse gives 0.3-0.7.
+
+Scope that claim carefully. It is not "the pulse is absent from the video" -- an earlier version
+of this rule said that and it overreached. Three spatial averages per frame is a small fraction of
+what a frame contains, and a learned model over per-pixel, multi-region input has far more to work
+with. The reference implementation this project started from reports ~95% accuracy on its best
+tests using RhythmMamba over full video, which is not in conflict with the result above because it
+is a different method on different information. What blocks it here is the licence -- those
+weights are behind a per-requester Data Usage Agreement -- not physics.
 
 The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
 to a single-channel source.** Its three terms were built for the headband's four contact
@@ -351,9 +359,51 @@ FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public';
 ```
 
+## Ingestion is push or pull, and which one is a setting rather than a guess
+
+`eeg_poller` runs **inside the backend** and polls the sidecar over HTTP. That works only because
+`start.ps1` puts both on one machine. The camera breaks it: the sidecar is a per-student local
+process, and a hosted backend has no route to a student's laptop. So the sidecar POSTs to
+`/api/signals/*` with the student's own token instead.
+
+`INGEST_MODE` (`pull`, the default, or `push`) says which is live. **Explicit because the failure is
+silent otherwise** — a poller that cannot reach a sidecar produces no rows, raises nothing, and
+leaves a session looking live: indistinguishable from a headband nobody put on. Deploy the backend
+anywhere but the student's machine and every session degrades that way with nothing to read.
+
+Under `push`, `eeg_poller.start` raises `PushModeError`. `INGEST_MODE` binds **the poller only** —
+the ingest endpoints stay open in both modes, so a developer can hand-post a batch under `pull`.
+That is why the double-write warning asks `eeg_poller.claim_double_write_warning(session_id)`, which
+is the real condition, rather than reading the mode as a proxy for it.
+
+**Every endpoint that probes the sidecar checks the mode first, and there are eight of them.** "EEG
+service is not running on port 8001" is true under `push` and entirely misleading — it reads as a
+fault when the deployment simply does not work that way. Two shapes:
+
+- **Returns a payload** (`/api/eeg/{health,status,debug,devices}`) — the liveness field is `None`,
+  never `False`, and `ingest_mode` rides alongside so the caller can say *why*. `None` because "not
+  probed in this deployment" is a different claim from "probed and down", and **a consumer that
+  branches on falsiness renders both identically** — which is exactly how the outage string survived
+  in the debug panel after the endpoint behind it was fixed. Same three-state rule as the reporting
+  helpers.
+- **Raises** (`/api/eeg/{start,muse/refresh,muse/connect,muse/disconnect}`) — call
+  `_refuse_under_push(what)` in `main.py`, *before* `eeg_client.is_alive()`, or the misleading 503
+  wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
+  that claimed to have replaced it.
+
+A ninth endpoint needs the same treatment and an entry in `_MODE_AWARE` or `_MODE_AWARE_RAISING` in
+`backend/tests/test_ingest_mode.py`, which parametrises both push and pull over every member. This
+was found one endpoint at a time across five review rounds because each site was written by hand and
+the test listed only the endpoints someone had already remembered.
+
+Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, which is the pull
+*transport*; the push path would have had to import an HTTP client it never calls to reach a pure
+function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
+storing percentages while the other stores ratios.
+
 ## Two columns are called stress and only one measures it
 
-`cognitive_signals.stress` is `1.0 - calm`, written by `eeg_client.py:175`. There is no `calm`
+`cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`
 column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
 and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
 

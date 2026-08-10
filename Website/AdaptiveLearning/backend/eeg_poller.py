@@ -10,6 +10,49 @@ import eeg_client
 
 POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 
+# Which ingestion path is live, stated rather than inferred.
+#
+# `pull` is this poller: it runs inside the backend and polls the sidecar over
+# HTTP, which works only because start.ps1 puts both on one machine. `push` is
+# the sidecar POSTing to /api/signals/* with the student's own token, which is
+# what the camera forces -- a hosted backend has no route to a student's laptop.
+#
+# Explicit because the failure is silent otherwise. A poller that cannot reach
+# the sidecar looks exactly like a headband that never connected: no rows, no
+# error, a live-looking session. Deploy the backend anywhere but the student's
+# machine and every session degrades that way with nothing to read. So `push`
+# makes start() refuse loudly instead of starting a thread that will never
+# succeed, and the refusal names the setting.
+#
+# **It binds the poller only. The ingest endpoints are always open.**
+# `/api/signals/*` accepts in either mode, deliberately -- rejecting the push
+# endpoints under `pull` would break the mixed local-dev case where a developer
+# runs the poller and posts a batch by hand.
+#
+# The consequence is worth stating rather than discovering: a deployment left on
+# `pull` whose sidecar *also* pushes writes `cognitive_signals` twice for every
+# sample. The rows are valid and the counts are wrong, silently -- and unlike
+# the heart path there is no dedupe key to catch it, because
+# `heart_session_source_ts_key` has no equivalent on a table that already holds
+# production rows. `main.ingest_cognitive` warns when it is used under `pull`
+# for that reason; `face_signals` and `heart_signals` are unexposed to this,
+# since the poller never writes them.
+INGEST_MODE = (os.getenv("INGEST_MODE", "pull") or "pull").strip().lower()
+_VALID_MODES = ("pull", "push")
+if INGEST_MODE not in _VALID_MODES:
+    print(f"[eeg-poller] INGEST_MODE={INGEST_MODE!r} is not one of {_VALID_MODES}; "
+          f"falling back to 'pull'", flush=True)
+    INGEST_MODE = "pull"
+
+
+class PushModeError(RuntimeError):
+    """Raised when something asks the poller to run under push ingestion.
+
+    A distinct type rather than a bare RuntimeError so the endpoint can answer
+    with a specific message: this is a configuration statement, not a failure to
+    reach hardware, and the two would otherwise reach a student identically.
+    """
+
 
 class DeviceClaimedError(Exception):
     """Raised when a device is already claimed by another user's live poller."""
@@ -143,11 +186,55 @@ class _Poller(threading.Thread):
 
 
 _active: Dict[str, _Poller] = {}
+# Sessions already warned about for double-writing. Lives here rather than in
+# `main` because `stop()` is what bounds it: a set kept over there had nothing
+# to evict it and grew with every session ever double-written for the life of
+# the process -- "bounded by concurrent sessions" was what the comment claimed
+# and the opposite of what it did. Next to `_active`, under the same lock, and
+# discarded by the same call that ends the poller.
+_warned_double_write: set[str] = set()
 _lock = threading.Lock()
+
+
+def is_polling(session_id: str) -> bool:
+    """Whether this backend has a live poller for that session.
+
+    The actual condition, rather than `INGEST_MODE == "pull"`, which is only a
+    proxy for it. A developer hand-posting a batch while no poller runs is not
+    double-writing, and treating the mode as the answer reports them anyway.
+    """
+    with _lock:
+        p = _active.get(session_id)
+        return bool(p and p.is_alive())
+
+
+def claim_double_write_warning(session_id: str) -> bool:
+    """True once per live-polled session, for logging a double write.
+
+    Answers "is this session being written by both paths, and have we not said
+    so yet" in one step under one lock, so the check and the claim cannot race
+    into two log lines. Returns False for a session with no live poller, which
+    is the hand-posted dev batch the ingest endpoint stays open for.
+    """
+    with _lock:
+        p = _active.get(session_id)
+        if not (p and p.is_alive()) or session_id in _warned_double_write:
+            return False
+        _warned_double_write.add(session_id)
+        return True
 
 
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
     print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
+    if INGEST_MODE == "push":
+        # Not a silent no-op. Returning {"running": False} here would be
+        # indistinguishable from a sidecar that is simply not up yet, which is
+        # the confusion this mode setting exists to remove.
+        raise PushModeError(
+            "INGEST_MODE=push: the sidecar posts to /api/signals/* itself, so "
+            "this backend does not poll it. Set INGEST_MODE=pull for a "
+            "co-located deployment (start.ps1, dev, single-machine classroom)."
+        )
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
             print(f"=== already running for this session", flush=True)
@@ -194,6 +281,10 @@ def can_use_device(user_id: str, device_id: str) -> bool:
 
 def stop(session_id: str) -> dict:
     with _lock:
+        # The eviction that makes the warned-set bounded by concurrent sessions
+        # rather than by uptime. A session that is no longer polled cannot be
+        # double-written, so the record of having warned about it is spent.
+        _warned_double_write.discard(session_id)
         p = _active.pop(session_id, None)
         if p:
             p.stop()

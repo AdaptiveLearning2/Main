@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 import LLM_topic_decider
 import eeg_client
+import signal_mapping
 import eeg_poller
 
 load_dotenv()
@@ -440,9 +441,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     cog_oldest_day = _oldest(cog, "ts")[:10]
     face_oldest_day = _oldest(face, "ts")[:10]
     ses_oldest_day = _oldest(sessions, "started_at")[:10]
+    heart_oldest_day = _oldest(heart, "ts")[:10]
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
+    # Newest *trusted* reading, matching every other heart figure in this
+    # payload. An untrusted latest would be the one number here not subject to
+    # the quality gate, and it is the one rendered largest.
+    latest_heart = next((r for r in heart if r.get("trusted") is True), None)
 
     # Three states per table per day, not two. The cap trims oldest-first, so
     # the oldest day that came back is the day it cut *into*: part of that day
@@ -489,6 +495,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
+        # Per day, like the three above. `heart_ok and not heart_cut` was
+        # table-wide: one heart read over the row cap marked *every* day
+        # unretrieved, so the chart drew nothing even for days that came back
+        # complete. The cap binds per table, so the coverage has to be per day.
+        heart_missing, heart_whole = _coverage(heart_ok, heart_cut, heart_oldest_day, day)
         # Skip only when nothing we actually asked for could be retrieved. With
         # face reporting off there is no face request to fail, so the day hinges
         # on the other two -- otherwise an always-False face_missing would keep
@@ -498,10 +509,20 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # cap, so a day whose signals were trimmed can still have a session
         # count that was retrieved intact. Dropping the day threw that away and
         # reported the day as absent rather than partial.
-        if cog_missing and (face_missing or not include_emotion) and ses_missing:
+        # Heart included, or a day whose cognitive and session reads failed but
+        # whose heart read succeeded is dropped from `daily` entirely -- and the
+        # heart data that *was* retrieved never reaches the chart.
+        if (cog_missing and (face_missing or not include_emotion)
+                and (heart_missing or not include_heart) and ses_missing):
             continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        # Trusted only, matching the week's averages. A day whose every sample
+        # was rejected is then a null beside a `heart_retrieved` of True --
+        # "measured, unusable" -- rather than a gap that reads as sensor-off.
+        day_heart = [r for r in heart
+                     if str(r.get("ts", ""))[:10] == day and r.get("trusted") is True]
+
         daily.append({
             "date": day,
             # Withheld unless the day is whole. A partly-retrieved day averages
@@ -518,6 +539,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # give exactly half the sessions, with no hint that it is half.
             "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
                         if ses_whole else None,
+            # **Absolute units**, unlike every other series here, which are 0..1
+            # ratios rendered as percentages. A consumer applying the same
+            # scaling to these would draw a 72 bpm day at 7200% -- so they are
+            # named for the unit and the frontend gives them their own axis.
+            "heart_rate_bpm": _avg([r.get("heart_rate_bpm") for r in day_heart])
+                              if heart_whole else None,
+            "rmssd_ms": _avg([r.get("rmssd_ms") for r in day_heart])
+                        if heart_whole else None,
             # False means "we did not fetch this day in full", which a null
             # metric alone cannot distinguish from "nothing was recorded". It
             # covers the days the cap never reached, the single day it cut
@@ -527,7 +556,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # `=== false` must not treat the opt-out as a retrieval failure.
             "cognitive_retrieved": cog_whole,
             "face_retrieved": face_whole if include_emotion else None,
-            "heart_retrieved": (heart_ok and not heart_cut) if include_heart else None,
+            "heart_retrieved": heart_whole if include_heart else None,
             "sessions_retrieved": ses_whole,
         })
 
@@ -691,7 +720,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "heart_rate_bpm": (sum(heart_rates) / len(heart_rates)) if heart_rates else None,
             "rmssd_ms": (sum(rmssd_values) / len(rmssd_values)) if rmssd_values else None,
         },
-        "latest": {"cognitive": latest_cognitive, "face": latest_face},
+        # `heart` present only when the channel was read. Absent rather than
+        # null, so a snapshot cannot show an empty heart row that reads as a
+        # sensor recording nothing -- the same rule the tiles follow.
+        "latest": {"cognitive": latest_cognitive, "face": latest_face,
+                   **({"heart": latest_heart} if include_heart else {})},
         "daily": daily,
         "summary": summary,
     }
@@ -2463,6 +2496,29 @@ def _verify_session_owner(session_id: str, user_id: str):
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     _verify_session_owner(payload.session_id, user["id"])
+    # Accepted in either mode -- rejecting it under `pull` would break mixed
+    # local dev -- but warned about when this session is *actually* being
+    # double-written: a live poller for it is writing the same table from the
+    # same sidecar, so every EEG sample lands twice. Valid rows, wrong counts,
+    # no error, and no dedupe key to catch it the way `heart_signals` has.
+    #
+    # The condition is a live poller for this session, not `INGEST_MODE ==
+    # "pull"`. The mode was only a proxy, and a wrong one in both directions: it
+    # fired on the hand-posted dev batch the openness exists for, and -- with a
+    # once-per-process flag -- that benign first post spent the warning, so a
+    # genuine double-write later in the same process was never reported.
+    #
+    # Per session rather than per process: the sessions are the thing at risk,
+    # there are few of them, and this still logs once each rather than at the
+    # sample rate.
+    # One call, one lock: checking liveness and claiming the warning separately
+    # let two concurrent batches both pass the check and log twice. It also puts
+    # the eviction next to `stop()`, which is the only thing that can bound it.
+    if eeg_poller.claim_double_write_warning(payload.session_id):
+        print(f"[ingest] session {payload.session_id[:8]} is being written by both "
+              f"the poller and /api/signals/cognitive. Every EEG sample is landing "
+              f"twice and cognitive_signals has no dedupe key to catch it.",
+              flush=True)
     rows = [{
         "session_id": payload.session_id,
         "user_id":    user["id"],
@@ -2493,19 +2549,22 @@ def ingest_face(payload: FaceBatch, request: Request):
                 "reason": ("consent unavailable" if not consent.get("retrieved")
                            else "camera not consented")}
 
-    rows = [{
-        "session_id":          payload.session_id,
-        "user_id":             user["id"],
-        "ts":                  s.ts or _utc_now().isoformat(),
-        "emotion":             s.emotion,
-        "attention":           s.attention,
-        "gaze_x":              s.gaze_x,
-        "gaze_y":              s.gaze_y,
-        "identity_confidence": s.identity_confidence,
-        "emotion_confidence":  s.emotion_confidence,
-        "emotion_trusted":     s.emotion_trusted,
-        "raw":                 s.raw,
-    } for s in payload.samples]
+    # Through the shared mapper, not inline. Two copies of this had already
+    # drifted -- the mapper dropped gaze_x/gaze_y that this endpoint wrote --
+    # which is exactly the divergence the module was extracted to prevent, and
+    # it went unnoticed because nothing called it.
+    rows = [r for r in (
+        signal_mapping.map_face_to_face_signal(
+            {"timestamp": s.ts or _utc_now().isoformat(),
+             "face": {"emotion": s.emotion, "attention": s.attention,
+                      "gaze_x": s.gaze_x, "gaze_y": s.gaze_y,
+                      "identity_confidence": s.identity_confidence,
+                      "emotion_confidence": s.emotion_confidence,
+                      "trusted": s.emotion_trusted},
+             "raw": s.raw},
+            payload.session_id, user["id"])
+        for s in payload.samples
+    ) if r is not None]
     # Insert, not upsert: `face_signals` has no dedupe key yet. See
     # 20260809120000 for why that is deferred rather than undecided, and the
     # query to run before adding one.
@@ -2549,19 +2608,18 @@ def ingest_heart(payload: HeartBatch, request: Request):
         reason = ("consent unavailable" if not consent.get("retrieved")
                   else "no consented heart sensor")
 
-    rows = [{
-        "session_id":      payload.session_id,
-        "user_id":         user["id"],
-        "ts":              s.ts or _utc_now().isoformat(),
-        "source":          s.source,
-        "heart_rate_bpm":  s.heart_rate_bpm,
-        "rmssd_ms":        s.rmssd_ms,
-        "sqi":             s.sqi,
-        "stress_score":    s.stress_score,
-        "stress_category": s.stress_category,
-        "trusted":         s.trusted,
-        "raw":             s.raw,
-    } for s in kept]
+    rows = [r for r in (
+        signal_mapping.map_heart_to_heart_signal(
+            {"timestamp": s.ts or _utc_now().isoformat(),
+             "heart": {"source": s.source, "bpm": s.heart_rate_bpm,
+                       "rmssd_ms": s.rmssd_ms, "sqi": s.sqi,
+                       "stress_score": s.stress_score,
+                       "stress_category": s.stress_category,
+                       "trusted": s.trusted},
+             "raw": s.raw},
+            payload.session_id, user["id"])
+        for s in kept
+    ) if r is not None]
 
     written = 0
     if rows:
@@ -2698,6 +2756,33 @@ def class_live(class_id: str, request: Request):
 
 # ─── EEG sidecar integration ─────────────────────────���───────────────────
 
+def _refuse_under_push(what: str) -> None:
+    """409 rather than the 503 the liveness probe would raise.
+
+    Under push ingestion this backend has no route to a sidecar, so "EEG service
+    not running on port 8001" is true and entirely misleading: it reads as a
+    fault when the deployment simply does not work that way.
+
+    Every endpoint in the family that raises goes through here, /api/eeg/start
+    included. It kept its own inline copy for one commit on the grounds that its
+    wording was older, which left two hand-written versions of one refusal and a
+    docstring claiming they were shared -- exactly the drift this helper exists
+    to stop. The `/api/signals/*` pointer moved in here because it is the answer
+    everywhere: it is where the data goes in this deployment, whatever the
+    caller was trying to do.
+
+    Called *before* `eeg_client.is_alive()` everywhere, or the misleading
+    message wins the race to the client.
+    """
+    if eeg_poller.INGEST_MODE == "push":
+        raise HTTPException(
+            409,
+            f"This deployment uses push ingestion: the sidecar on the student's "
+            f"own device posts to /api/signals/*, and this backend cannot {what}. "
+            f"Nothing is wrong with the headband.",
+        )
+
+
 @app.post("/api/eeg/muse/refresh")
 def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
@@ -2711,6 +2796,7 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     # close.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("scan for headbands")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -2729,6 +2815,7 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     # See eeg_muse_refresh above.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("connect to a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -2746,6 +2833,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     # live session), so it's guarded the same way for consistency.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -2764,16 +2852,29 @@ def eeg_devices(request: Request):
     what leaks. Considered non-sensitive.
     """
     get_user(request)
+    # The fourth and last endpoint in this family to learn the mode. /start,
+    # /status and /health each needed it for the same reason, found in three
+    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
+    # student sees, but leaving it is how it gets found a fourth time.
+    if eeg_poller.INGEST_MODE == "push":
+        return {"available": None, "ingest_mode": "push", "devices": []}
     if not eeg_client.is_alive():
-        return {"available": False, "devices": []}
-    return {"available": True, "devices": eeg_client.list_devices()}
+        return {"available": False, "ingest_mode": "pull", "devices": []}
+    return {"available": True, "ingest_mode": "pull",
+            "devices": eeg_client.list_devices()}
 
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
     user = get_user(request)
+    # The last of the five in this family to learn the mode. /start, /status,
+    # /health and /devices each needed it for the same reason, found across
+    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
+    # student sees, but leaving it is how it gets found again.
+    if eeg_poller.INGEST_MODE == "push":
+        return {"available": None, "ingest_mode": "push"}
     if not eeg_client.is_alive():
-        return {"available": False}
+        return {"available": False, "ingest_mode": "pull"}
     # A station with a live poller is that poller's owner's in-progress
     # biometric data, not shared classroom data -- don't let another user
     # read it just because they know the device_id.
@@ -2792,10 +2893,23 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 
 @app.get("/api/eeg/health")
 def eeg_health():
-    """Tells the frontend whether the EEGResearch sidecar service is reachable."""
+    """Tells the frontend whether the EEGResearch sidecar service is reachable.
+
+    Under push ingestion there is nothing to be reachable *from here*, and this
+    is the poll that runs from page load -- the status one is gated on a session
+    existing. Reporting a flat `available: False` put "EEG service not reachable
+    on port 8001. Make sure the EEGResearch backend is running." on the first
+    screen a student sees, which is the sentence the mode check was added to
+    stop showing. Fixing it at /start and /status alone just moved it here.
+    """
+    if eeg_poller.INGEST_MODE == "push":
+        # `available` is None rather than False for the same reason as /status:
+        # "not probed in this deployment" is not "probed and down".
+        return {"available": None, "ingest_mode": "push", "url": None}
     alive = eeg_client.is_alive()
     if not alive:
-        return {"available": False, "url": eeg_client.EEG_API_URL}
+        return {"available": False, "ingest_mode": "pull",
+                "url": eeg_client.EEG_API_URL}
     # is_alive() hits the sidecar's unauthenticated /healthz, so a reachable
     # sidecar tells us nothing about auth. get_muse_status() needs the learner
     # token and raises (by design -- see eeg_client.get_state) when it is
@@ -2821,6 +2935,8 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, "Not your session")
     if sess.data.get("ended_at"):
         raise HTTPException(400, "Session already ended")
+    # Answered before the liveness check, deliberately -- see the helper.
+    _refuse_under_push("start a poller")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
@@ -2862,8 +2978,21 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
         if eeg_poller.can_use_device(user["id"], device_id)
         else {"available": False, "reason": "in_use_by_other"}
     )
+    # Under push ingestion this backend has no route to a sidecar, so
+    # `is_alive()` is false forever -- and the frontend polls this every 3
+    # seconds and renders it as "EEG service is down". The student would get the
+    # carefully-worded 409 from /start once and then a continuous contradiction
+    # of it. Same argument as checking the mode before the liveness probe there;
+    # /start was simply the only place it got applied.
+    push = eeg_poller.INGEST_MODE == "push"
     return {
-        "service": eeg_client.is_alive(),
+        # None, not False: "we do not probe a sidecar in this deployment" is not
+        # the same claim as "we probed and it is down", and a consumer that
+        # branches on falsiness would render both identically.
+        "service": None if push else eeg_client.is_alive(),
+        # Carried so a client can say *why* rather than inferring it from a
+        # null, which is the distinction the reporting rules exist to keep.
+        "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
         "poller":  eeg_poller.status(user["id"]),
     }

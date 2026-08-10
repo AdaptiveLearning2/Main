@@ -342,3 +342,122 @@ describe('pct', () => {
     for (const v of [Infinity, -Infinity, NaN, 'abc']) expect(pct(v)).toBe('N/A')
   })
 })
+
+// ── heart and emotion: two channels where there used to be one ──────────────
+
+const heartReport = {
+  ...report,
+  heart_included: true,
+  emotion_included: true,
+  consent_retrieved: true,
+  highlights: { ...report.highlights, heart_rate_bpm: 72.4, rmssd_ms: 41.8 },
+  sample_counts: { ...report.sample_counts, heart: 90 },
+  heart_sources: ['muse_optics'],
+  emotion_distribution: { happy: 12, neutral: 7, sad: 3 },
+  retrieved: { cognitive: true, face: true, heart: true, sessions: true },
+  daily: report.daily.map((d, i) => ({ ...d, heart_rate_bpm: 70 + i, heart_retrieved: true })),
+}
+
+test('heart figures render in absolute units, not as percentages', () => {
+  // The trap this guards: every other series here is a 0..1 ratio the panel
+  // multiplies by 100. Putting 72.4 bpm through the same path prints "7240%".
+  render(<WeeklySignalReport report={heartReport} />)
+
+  // Scoped to the tile. A bare queryByText('72%') would collide with the
+  // summary sentence, which legitimately says "average focus was 72%" -- and a
+  // test that fails on a correct render is worse than no test.
+  const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
+  expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
+  expect(within(bpmTile).queryByText(/%/)).not.toBeInTheDocument()
+
+  const rmssdTile = screen.getByText(/Avg RMSSD/i).closest('div')
+  expect(within(rmssdTile).getByText('42 ms')).toBeInTheDocument()
+  expect(screen.queryByText(/7240/)).not.toBeInTheDocument()
+})
+
+test('the heart row is absent entirely when the channel was not read', () => {
+  // Rather than a row of N/A, which is indistinguishable from a headband that
+  // recorded nothing.
+  render(<WeeklySignalReport report={{ ...heartReport, heart_included: false }} />)
+
+  expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
+})
+
+test('a payload from before the split does not claim the heart channel is off', () => {
+  // It has no heart_included at all. Defaulting to true would draw an empty
+  // series and report a sensor that never existed as having recorded nothing.
+  render(<WeeklySignalReport report={report} />)
+
+  expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
+})
+
+test('the sensor behind the readings is named', () => {
+  render(<WeeklySignalReport report={heartReport} />)
+  expect(screen.getByText('Headband (optical)')).toBeInTheDocument()
+})
+
+test('samples recorded but all rejected reads as unusable, not absent', () => {
+  // Three states: measured and fine, measured and unusable, never measured.
+  // A null average with a nonzero count is the middle one.
+  render(<WeeklySignalReport report={{
+    ...heartReport,
+    highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
+  }} />)
+
+  expect(screen.getByText(/none met the quality threshold/i)).toBeInTheDocument()
+})
+
+test('a failed consent read is not rendered as a refusal', () => {
+  render(<WeeklySignalReport report={{
+    ...heartReport, consent_retrieved: false, heart_included: false, emotion_included: false,
+  }} />)
+
+  expect(screen.getByText(/Consent settings could not be read/i)).toBeInTheDocument()
+})
+
+test('a failed heart read is named in the failure sentence', () => {
+  render(<WeeklySignalReport report={{
+    ...heartReport,
+    retrieved: { cognitive: true, face: true, heart: false, sessions: true },
+  }} />)
+
+  expect(screen.getByText(/heart-rate signals.*could not be loaded/i)).toBeInTheDocument()
+})
+
+test('the emotion mix is rendered as a distribution, not just its argmax', () => {
+  render(<WeeklySignalReport report={heartReport} />)
+  expect(screen.getByText(/Emotion Mix/i)).toBeInTheDocument()
+})
+
+test('no emotion mix is drawn when the channel was not read', () => {
+  // An empty pie is a claim about a quiet week that an unread channel has not
+  // earned.
+  render(<WeeklySignalReport report={{
+    ...heartReport, emotion_included: false, emotion_distribution: null,
+  }} />)
+
+  expect(screen.queryByText(/Emotion Mix/i)).not.toBeInTheDocument()
+})
+
+test('the live snapshot shows heart in bpm when the channel was read', () => {
+  render(<LiveSignalSummary report={{
+    ...heartReport,
+    latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 },
+              heart: { heart_rate_bpm: 68.2, source: 'muse_optics' } },
+  }} />)
+
+  const tile = screen.getByText(/Heart Rate/i).closest('div')
+  expect(within(tile).getByText('68 bpm')).toBeInTheDocument()
+  expect(within(tile).queryByText(/%/)).not.toBeInTheDocument()
+})
+
+test('the live snapshot omits heart rather than showing an empty tile', () => {
+  // The backend leaves the key out when the channel was not read; a tile built
+  // from {} would read as a sensor that recorded nothing.
+  render(<LiveSignalSummary report={{
+    ...heartReport,
+    latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 } },
+  }} />)
+
+  expect(screen.queryByText(/Heart Rate/i)).not.toBeInTheDocument()
+})

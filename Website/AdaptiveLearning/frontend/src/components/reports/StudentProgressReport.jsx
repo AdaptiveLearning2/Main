@@ -172,7 +172,18 @@ export default function StudentProgressReport({
     // longer making.
     setSignalReport(prev => prev && {
       ...prev,
+      // Both flags, not just the legacy one. `emotionOn()` reads
+      // `emotion_included` first and only falls back to `face_included`, so
+      // scrubbing the alias alone left the true value from the backend standing
+      // -- the Face Attention line, the Dominant Emotion tile and the Emotion
+      // Mix pie all stayed on screen after the switch went off, with the
+      // attention series nulled underneath them so it drew as a flatlined gap.
       face_included: false,
+      emotion_included: false,
+      // The pie reads this directly rather than through the flag, so it has to
+      // go too. A distribution left behind is a rendered claim about data this
+      // report is no longer including.
+      emotion_distribution: null,
       summary: null,
       retrieved: { ...(prev.retrieved || {}), face: null },
       averages:   { ...(prev.averages   || {}), face_attention: null },

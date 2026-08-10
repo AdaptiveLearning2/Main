@@ -337,3 +337,109 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
     by_id = {c["user_id"]: c["signal_summary"] for c in children}
     assert by_id["kid-a"]["consent_retrieved"] is True
     assert by_id["kid-b"]["consent_retrieved"] is False
+
+
+def test_daily_buckets_carry_heart_in_absolute_units(monkeypatch):
+    """The chart needs a per-day series, and it is **not** a 0..1 ratio.
+
+    Every other daily metric is a ratio the frontend multiplies by 100. Feeding
+    these through the same scaling would draw a 72 bpm day at 7200%, which is
+    why they are named for their unit and get their own axis.
+    """
+    day = _ts(1)[:10]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 70.0, "rmssd_ms": 40.0, "trusted": True},
+               {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 74.0, "rmssd_ms": 44.0, "trusted": True},
+               # Rejected: must not move the day's average.
+               {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 190.0, "rmssd_ms": 5.0, "trusted": False}],
+    )))
+    report = main._weekly_signal_report(STUDENT)
+    bucket = next(d for d in report["daily"] if d["date"] == day)
+
+    assert bucket["heart_rate_bpm"] == 72.0
+    assert bucket["rmssd_ms"] == 42.0
+    assert bucket["heart_retrieved"] is True
+
+
+def test_a_day_of_only_untrusted_samples_is_null_not_absent(monkeypatch):
+    """`heart_retrieved: True` beside a null average is "measured, unusable".
+    A gap alone would read as the sensor being off."""
+    day = _ts(1)[:10]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
+              "engagement": 0.6}],
+        heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 190.0, "trusted": False}],
+    )))
+    bucket = next(d for d in main._weekly_signal_report(STUDENT)["daily"]
+                  if d["date"] == day)
+
+    assert bucket["heart_rate_bpm"] is None
+    assert bucket["heart_retrieved"] is True
+
+
+def test_an_excluded_heart_channel_leaves_the_daily_series_null(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
+              "engagement": 0.6}],
+    )))
+    bucket = main._weekly_signal_report(STUDENT, include_heart=False)["daily"][0]
+
+    assert bucket["heart_rate_bpm"] is None
+    assert bucket["heart_retrieved"] is None, "an opt-out is not a failed read"
+
+
+def test_a_nan_score_is_dropped_rather_than_stored_as_full_engagement(monkeypatch):
+    """Every comparison against NaN is False, so `min(1.0, nan)` is 1.0 and the
+    clamp stored a NaN focus as **100% focus** -- the same "disengaged region
+    recorded as full engagement" failure the scale-sniffing caused, and it
+    pushes difficulty up. stdlib json parses NaN, so a sidecar can send one."""
+    import signal_mapping
+
+    row = signal_mapping.map_eeg_to_cognitive(
+        {"features": {"focus_score": float("nan"), "calm_score": float("inf"),
+                      "confidence": float("-inf")}}, "s", "u")
+
+    assert row["focus"] is None
+    assert row["engagement"] is None
+    assert row["stress"] is None, "an infinite calm became a confident zero stress"
+
+
+def test_a_capped_heart_read_does_not_blank_the_days_that_came_back(monkeypatch):
+    """Coverage is per day, like the other three tables. It was table-wide, so
+    one heart read over the row cap marked *every* day unretrieved and the chart
+    drew nothing -- including for days that were complete."""
+    monkeypatch.setattr(main, "_REPORT_ROW_CAP", 2)
+    rows = [{"user_id": STUDENT, "ts": _ts(i), "source": "muse_optics",
+             "heart_rate_bpm": 70.0, "trusted": True} for i in range(1, 5)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _tables(_consent_row(), heart=rows), max_rows={"heart_signals": 2}))
+
+    report = main._weekly_signal_report(STUDENT)
+    whole = [d for d in report["daily"] if d["heart_retrieved"] is True]
+
+    assert whole, "every day was marked unretrieved because one table was capped"
+
+
+def test_a_day_with_only_heart_data_is_not_dropped(monkeypatch):
+    """The skip guard listed cognitive, face and sessions. If those three failed
+    and heart succeeded, the day vanished from `daily` and the heart data that
+    *was* retrieved never reached the chart."""
+    fake = _FakeSupabase(
+        _tables(_consent_row(),
+                heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                        "heart_rate_bpm": 71.0, "trusted": True}]),
+        table_raises={"cognitive_signals", "sessions"})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    report = main._weekly_signal_report(STUDENT)
+    days = [d for d in report["daily"] if d["heart_rate_bpm"] is not None]
+
+    assert days, "the day was dropped despite a successful heart read"
+    assert days[0]["heart_rate_bpm"] == 71.0

@@ -2761,10 +2761,15 @@ def _refuse_under_push(what: str) -> None:
 
     Under push ingestion this backend has no route to a sidecar, so "EEG service
     not running on port 8001" is true and entirely misleading: it reads as a
-    fault when the deployment simply does not work that way. Same argument as
-    /api/eeg/start, and shared with it rather than restated -- the check got
-    applied one endpoint at a time across four review rounds precisely because
-    each site wrote it out by hand.
+    fault when the deployment simply does not work that way.
+
+    Every endpoint in the family that raises goes through here, /api/eeg/start
+    included. It kept its own inline copy for one commit on the grounds that its
+    wording was older, which left two hand-written versions of one refusal and a
+    docstring claiming they were shared -- exactly the drift this helper exists
+    to stop. The `/api/signals/*` pointer moved in here because it is the answer
+    everywhere: it is where the data goes in this deployment, whatever the
+    caller was trying to do.
 
     Called *before* `eeg_client.is_alive()` everywhere, or the misleading
     message wins the race to the client.
@@ -2772,8 +2777,8 @@ def _refuse_under_push(what: str) -> None:
     if eeg_poller.INGEST_MODE == "push":
         raise HTTPException(
             409,
-            f"This deployment uses push ingestion: the headband is owned by the "
-            f"sidecar on the student's own device, so this backend cannot {what}. "
+            f"This deployment uses push ingestion: the sidecar on the student's "
+            f"own device posts to /api/signals/*, and this backend cannot {what}. "
             f"Nothing is wrong with the headband.",
         )
 
@@ -2930,17 +2935,8 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, "Not your session")
     if sess.data.get("ended_at"):
         raise HTTPException(400, "Session already ended")
-    # Answered before the liveness check, deliberately. Under push ingestion
-    # this backend never talks to a sidecar, so "EEG service is not running on
-    # port 8001" would be both true and completely misleading -- it reads as a
-    # broken service when the deployment simply does not work that way.
-    if eeg_poller.INGEST_MODE == "push":
-        raise HTTPException(
-            409,
-            "This deployment uses push ingestion: the sidecar on the student's "
-            "own device posts to /api/signals/* and this endpoint does not "
-            "start a poller. Nothing is wrong with the headband.",
-        )
+    # Answered before the liveness check, deliberately -- see the helper.
+    _refuse_under_push("start a poller")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID

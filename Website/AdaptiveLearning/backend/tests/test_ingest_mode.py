@@ -398,18 +398,36 @@ def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monk
 
 # Endpoints that raise instead of returning a payload. Same reason, same check,
 # different shape of answer -- a 409 naming the configuration rather than the
-# 503 the liveness probe underneath would give. `/api/eeg/start` is the fourth
-# and is covered by the first test in this file, which predates the table.
+# 503 the liveness probe underneath would give.
 #
-# These three are reachable only from `connectHeadband`, behind a Connect button
-# that is disabled under push -- but that was equally true of /start, which got
-# the 409 anyway on the argument that a true-and-misleading message should not
-# exist in the codepath at all. Consistency here is the whole point.
+# /start is in here too, though it has its own older test above. Left out, it
+# was the one endpoint of eight whose refusal was neither produced by the helper
+# nor asserted by these tests, so a change to the shared wording would have
+# diverged from it silently -- which is the failure the helper exists to stop,
+# reintroduced by the commit that added the helper.
+#
+# The three muse handlers are reachable only from `connectHeadband`, behind a
+# Connect button disabled under push. That was equally true of /start, which got
+# the 409 anyway: a true-and-misleading message should not exist in the codepath
+# at all.
 _MODE_AWARE_RAISING = {
     "eeg_muse_refresh":    lambda: main.eeg_muse_refresh(None, body={}),
     "eeg_muse_connect":    lambda: main.eeg_muse_connect(None, body={"name": "Muse-1234"}),
     "eeg_muse_disconnect": lambda: main.eeg_muse_disconnect(None, body={}),
+    "eeg_start":           lambda: main.eeg_start(
+        type("P", (), {"session_id": "s1", "device_id": None})(), None),
 }
+
+
+class _OwnedSession:
+    """A live session belonging to the stubbed caller, so /start reaches the
+    mode check rather than being turned away as 404/403 first."""
+    data = {"user_id": "u", "ended_at": None}
+
+    def select(self, *_a): return self
+    def eq(self, *_a): return self
+    def single(self): return self
+    def execute(self): return self
 
 
 @pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE_RAISING))
@@ -421,6 +439,8 @@ def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monke
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "supabase",
+                        type("S", (), {"table": lambda _s, _n: _OwnedSession()})())
 
     with pytest.raises(main.HTTPException) as exc:
         _MODE_AWARE_RAISING[endpoint]()
@@ -436,6 +456,8 @@ def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, m
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "supabase",
+                        type("S", (), {"table": lambda _s, _n: _OwnedSession()})())
 
     with pytest.raises(main.HTTPException) as exc:
         _MODE_AWARE_RAISING[endpoint]()

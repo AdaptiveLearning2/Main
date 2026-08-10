@@ -367,11 +367,22 @@ def _ts(days_ago: int, hour: int = 12) -> str:
     return d.replace(hour=hour, minute=0, second=0, microsecond=0).isoformat()
 
 
-def _signal_tables(cog_rows, face_rows=None, session_rows=None):
+# Consent is resolved before any report reads a channel, and `_consent` fails
+# closed -- so a fake without this row reports nothing at all, which is correct
+# behaviour and useless as a fixture. Permissive by default; the tests that care
+# about consent set their own.
+_CONSENT_ALL = {"user_id": "student-1", "eeg_enabled": True,
+                "headband_optical_enabled": True, "camera_enabled": True}
+
+
+def _signal_tables(cog_rows, face_rows=None, session_rows=None,
+                   heart_rows=None, consent_rows=None):
     return {
         "cognitive_signals": cog_rows,
         "face_signals": face_rows if face_rows is not None else [],
+        "heart_signals": heart_rows or [],
         "sessions": session_rows or [],
+        "signal_consent": consent_rows if consent_rows is not None else [_CONSENT_ALL],
     }
 
 
@@ -462,7 +473,7 @@ def test_weekly_report_keeps_a_day_whose_sessions_survived_the_cap(monkeypatch):
         _signal_tables(cog, session_rows=sessions), max_rows={"cognitive_signals": 3}))
     # Face reporting off, so the only thing that could have kept these days
     # before was the face query -- which is not running.
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     trimmed = [d for d in report["daily"] if d["cognitive_retrieved"] is False]
     assert trimmed, "days beyond cognitive's reach must still be reported"
@@ -506,7 +517,7 @@ def test_weekly_report_withholds_the_day_the_cap_cut_into(monkeypatch):
            for d in range(0, 3) for h in (9, 12, 15)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog), max_rows={"cognitive_signals": 4}))
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     assert report["sample_counts"]["cognitive"] == 4, "fixture must actually be cut"
     days = {d["date"]: d for d in report["daily"]}
@@ -540,7 +551,7 @@ def test_weekly_report_withholds_a_session_count_the_cap_cut_into(monkeypatch):
                 for d in range(0, 3) for h in (9, 12, 15)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables([], session_rows=sessions), max_rows={"sessions": 4}))
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     days = {d["date"]: d for d in report["daily"]}
     whole, boundary = _ts(0)[:10], _ts(1)[:10]
@@ -566,7 +577,7 @@ def test_a_cap_landing_on_a_day_boundary_understates_rather_than_overstates(monk
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 5)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog), max_rows={"cognitive_signals": 3}))
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     days = {d["date"]: d for d in report["daily"]}
     assert days[_ts(0)[:10]]["cognitive_retrieved"] is True
@@ -684,7 +695,7 @@ def test_a_failed_face_read_is_not_the_opt_out(monkeypatch):
     assert "facial recognition data could not be loaded" in failed["summary"].lower()
 
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], [])))
-    opted_out = main._weekly_signal_report("student-1", include_face=False)
+    opted_out = main._weekly_signal_report("student-1", include_emotion=False)
     assert opted_out["retrieved"]["face"] is None
     # Neither an absence nor a failure is assertable about a read never made.
     assert "facial" not in opted_out["summary"].lower()
@@ -701,7 +712,7 @@ def test_a_read_trimmed_to_nothing_is_not_treated_as_untrimmed(monkeypatch):
     cog = [{"user_id": "student-1", "ts": _ts(d), "focus": 0.5} for d in range(0, 7)]
     monkeypatch.setattr(main, "supabase", _FakeSupabase(
         _signal_tables(cog, [], []), max_rows={"cognitive_signals": 0}))
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     assert report["truncated"] is True
     assert report["sample_counts"]["cognitive"] == 0
@@ -717,8 +728,9 @@ def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([], [], [])))
     report = main._weekly_signal_report("student-1")
 
-    assert report["retrieved"] == {"cognitive": True, "face": True, "sessions": True}
-    assert report["summary"] == "No EEG or facial recognition samples were recorded this week."
+    assert report["retrieved"] == {"cognitive": True, "face": True,
+                                   "heart": True, "sessions": True}
+    assert report["summary"] == "No EEG, facial recognition or heart rate samples were recorded this week."
     assert report["sessions_recorded"] == 0
 
 
@@ -900,19 +912,19 @@ def test_signal_summaries_pass_the_opt_out_into_the_aggregate(monkeypatch):
     """
     fake = _FakeSupabase({}, rpc_results={"student_signal_summary_many": []})
     monkeypatch.setattr(main, "supabase", fake)
-    main._signal_summaries(["student-1"], include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    main._signal_summaries(["student-1"], include_emotion=False)
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
 
     fake.rpc_calls.clear()
     main._signal_summaries(["student-1"])
-    assert fake.rpc_calls[0][1]["p_include_face"] is True, "included unless asked otherwise"
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is True, "included unless asked otherwise"
 
 
 def test_signal_summary_passes_the_opt_out_into_the_aggregate(monkeypatch):
     fake = _FakeSupabase({}, rpc_results={"student_signal_summary": []})
     monkeypatch.setattr(main, "supabase", fake)
-    main._signal_summary("student-1", include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    main._signal_summary("student-1", include_emotion=False)
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
 
 
 def test_summary_marks_the_opt_out_rather_than_reporting_no_face_data(monkeypatch):
@@ -923,7 +935,7 @@ def test_summary_marks_the_opt_out_rather_than_reporting_no_face_data(monkeypatc
          "sessions": 2, "cognitive_samples": 10, "face_samples": 0},
     ]})
     monkeypatch.setattr(main, "supabase", fake)
-    off = main._signal_summaries(["student-1"], include_face=False)
+    off = main._signal_summaries(["student-1"], include_emotion=False)
     assert off["student-1"]["face_included"] is False
     on = main._signal_summaries(["student-1"])
     assert on["student-1"]["face_included"] is True
@@ -940,7 +952,7 @@ def test_children_endpoint_threads_the_opt_out(monkeypatch):
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     children = main.my_children(None, include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
     # The fallback shape for a child the RPC returned no row for has to carry
     # the flag too, or the dashboard renders "N/A" where it should say "Off".
     assert all(c["signal_summary"]["face_included"] is False for c in children)
@@ -963,8 +975,10 @@ _SUMMARY_ROW = {
 }
 
 
-def _summary_fake(monkeypatch, viewer, row=None):
-    fake = _FakeSupabase(TABLES, rpc_results={
+def _summary_fake(monkeypatch, viewer, row=None, consent=None):
+    fake = _FakeSupabase({**TABLES,
+                          "signal_consent": [consent] if consent else [_CONSENT_ALL]},
+                         rpc_results={
         "student_signal_summary": [row if row is not None else _SUMMARY_ROW],
     })
     monkeypatch.setattr(main, "supabase", fake)
@@ -1018,11 +1032,11 @@ def test_signal_summary_endpoint_counts_the_whole_window_not_a_row_cap(monkeypat
 def test_signal_summary_endpoint_threads_the_opt_out(monkeypatch):
     fake = _summary_fake(monkeypatch, TEACHER)
     main.student_signal_summary("student-1", None, include_face=False)
-    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
 
     fake.rpc_calls.clear()
     main.student_signal_summary("student-1", None)
-    assert fake.rpc_calls[0][1]["p_include_face"] is True, "included unless asked otherwise"
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is True, "included unless asked otherwise"
 
 
 def test_signal_summary_endpoint_clamps_the_day_range(monkeypatch):
@@ -1122,7 +1136,7 @@ def test_report_without_face_never_queries_face_signals(monkeypatch):
         [{"user_id": "student-1", "ts": _ts(1), "attention": 0.9, "emotion": "happy"}],
     ))
     monkeypatch.setattr(main, "supabase", fake)
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
 
     assert "face_signals" not in fake.table_calls
     assert report["face_included"] is False
@@ -1140,7 +1154,7 @@ def test_report_without_face_marks_days_not_applicable_rather_than_unretrieved(m
     fake = _FakeSupabase(_signal_tables(
         [{"user_id": "student-1", "ts": _ts(1), "focus": 0.7}]))
     monkeypatch.setattr(main, "supabase", fake)
-    report = main._weekly_signal_report("student-1", include_face=False)
+    report = main._weekly_signal_report("student-1", include_emotion=False)
     assert report["daily"], "days should still be reported"
     assert all(d["face_retrieved"] is None for d in report["daily"])
 
@@ -1149,8 +1163,8 @@ def test_report_without_face_does_not_claim_facial_data_was_absent(monkeypatch):
     """Saying "no facial recognition samples were recorded" reports an absence
     that was never measured."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_signal_tables([])))
-    off = main._weekly_signal_report("student-1", include_face=False)
-    on = main._weekly_signal_report("student-1", include_face=True)
+    off = main._weekly_signal_report("student-1", include_emotion=False)
+    on = main._weekly_signal_report("student-1", include_emotion=True)
     assert "facial recognition" not in off["summary"]
     assert "facial recognition" in on["summary"]
 
@@ -1239,7 +1253,7 @@ def test_strategy_basis_threads_the_opt_out_into_the_aggregate(monkeypatch):
                          rpc_results={"student_signal_summary": []})
     monkeypatch.setattr(main, "supabase", fake)
     main._strategy_basis("student-1", 7, False)
-    assert fake.rpc_calls[0][1]["p_include_face"] is False
+    assert fake.rpc_calls[0][1]["p_include_emotion"] is False
     assert "face_signals" not in fake.table_calls
 
 

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from supabase import create_client
+from typing import NamedTuple
 
 import LLM_topic_decider
 import eeg_client
@@ -141,7 +142,52 @@ def _topic_breakdown(student_id: str):
     return out
 
 
-def _summary_rpc(name: str, params: dict, include_face: bool):
+class ReportChannels(NamedTuple):
+    """Which optional channels a report may read, and whether we know.
+
+    Named rather than a bare tuple because the first version returned
+    `(heart, emotion)` while its parameters read `(want_emotion, want_heart)`,
+    and one call site unpacked it with `*reversed(...)`. That silently swapped
+    the flags: a student who allowed the headband and declined the camera had
+    `face_signals` read for them. Fields cannot be transposed by accident.
+
+    `consent_retrieved` is carried for the same reason `_consent` carries it --
+    "nobody consented" and "we could not find out" both yield False here, and
+    the reporting rules require a surface to tell them apart before it says a
+    channel was not requested.
+    """
+    heart: bool
+    emotion: bool
+    consent_retrieved: bool
+
+
+def _reportable_channels(student_id: str, want_emotion: bool = True,
+                         want_heart: bool = True) -> ReportChannels:
+    """Which optional channels a report may read: consent AND what was asked for.
+
+    Two different controls, composed rather than conflated. **Consent** decides
+    whether a channel was ever recorded and is not the viewer's to override.
+    The **request** flag is a viewer-side preference -- a teacher choosing not to
+    look at facial data on a page -- documented at the top of
+    `frontend/src/lib/facePref.js`. Either one being false means no read.
+
+    Consent is authoritative and cannot be widened by a caller, which is why it
+    is resolved here rather than trusted from a query parameter. A revoked
+    channel has no rows to read anyway; gating the read as well means a stale
+    row from before a withdrawal cannot surface in a report.
+
+    Fails closed, like `_consent` itself: an unreadable consent row reports
+    nothing rather than everything.
+    """
+    consent = _consent(student_id)
+    heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
+    emotion = bool(consent.get("camera_enabled"))
+    return ReportChannels(heart=want_heart and heart,
+                          emotion=want_emotion and emotion,
+                          consent_retrieved=bool(consent.get("retrieved")))
+
+
+def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
     """Call a summary RPC with the facial opt-out threaded in.
 
     This used to retry without p_include_face when the database had no matching
@@ -154,10 +200,14 @@ def _summary_rpc(name: str, params: dict, include_face: bool):
     -- a bad rollback, an environment provisioned from an old dump -- degraded
     to a silently wrong answer instead of failing.
     """
-    return supabase.rpc(name, {**params, "p_include_face": include_face}).execute()
+    return supabase.rpc(name, {**params,
+                               "p_include_heart": include_heart,
+                               "p_include_emotion": include_emotion}).execute()
 
 
-def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -> dict:
+def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
+                    include_emotion: bool = True,
+                    consent_retrieved: bool = True) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
@@ -165,9 +215,9 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
     list that loads every visit. This returns the same headline figures without
     transferring any rows -- see the student_signal_summary migration.
 
-    include_face=False is passed down into the aggregate, so no facial row is
-    read at all -- the same guarantee _weekly_signal_report makes, rather than
-    a null applied on the way out.
+    Both flags are passed down into the aggregate, so a declined channel has no
+    row read at all -- the same guarantee _weekly_signal_report makes, rather
+    than a null applied on the way out.
 
     Carries dominant_emotion, which _signal_summaries does not: only the
     single-student RPC computes it, because only the surfaces that read one
@@ -177,7 +227,8 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
     retrieved = True
     try:
         res = _summary_rpc("student_signal_summary",
-                           {"p_student_id": student_id, "p_days": days}, include_face)
+                           {"p_student_id": student_id, "p_days": days},
+                           include_heart, include_emotion)
     except Exception as e:
         print(f"[signal_summary] {e}")
         # The figures below are about to become defaults rather than
@@ -189,24 +240,34 @@ def _signal_summary(student_id: str, days: int = 7, include_face: bool = True) -
     else:
         rows = res.data or []
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    summary = _shape_summary(row, include_face, retrieved)
+    summary = _shape_summary(row, include_heart, include_emotion, retrieved,
+                             consent_retrieved)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
     # figure that was never asked for. Explicitly None with the opt-out on for
     # the same reason the SQL yields NULL there -- and on the deploy-window
     # fallback path, where the old signature has no such column at all.
-    summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_face else None
+    summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
     return summary
 
 
-_EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
-                  "face_attention": None, "sessions": 0,
-                  "cognitive_samples": 0, "face_samples": 0,
-                  "face_included": True, "retrieved": True}
+_EMPTY_SUMMARY = {"consent_retrieved": True,
+                  "focus": None, "stress": None, "engagement": None,
+                  "face_attention": None, "heart_rate_bpm": None,
+                  "rmssd_ms": None, "sessions": 0,
+                  "cognitive_samples": 0, "face_samples": 0, "heart_samples": 0,
+                  # `face_included` is kept alongside the two new flags rather
+                  # than replaced. Existing consumers branch on it, and removing
+                  # it would turn "the field is gone" into a falsy value at
+                  # every one of them -- silently reporting a channel as
+                  # excluded. It now means the emotion channel specifically.
+                  "face_included": True, "emotion_included": True,
+                  "heart_included": True, "retrieved": True}
 
 
-def _shape_summary(row, include_face: bool = True, retrieved: bool = True) -> dict:
+def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
+                   retrieved: bool = True, consent_retrieved: bool = True) -> dict:
     """The summary payload.
 
     `retrieved` is the third thing a caller has to be able to tell apart, after
@@ -221,12 +282,18 @@ def _shape_summary(row, include_face: bool = True, retrieved: bool = True) -> di
     database, including one that legitimately came back with no rows.
     """
     if not row:
-        return {**_EMPTY_SUMMARY, "face_included": include_face, "retrieved": retrieved}
+        return {**_EMPTY_SUMMARY, "face_included": include_emotion,
+                "emotion_included": include_emotion, "heart_included": include_heart,
+                "retrieved": retrieved, "consent_retrieved": consent_retrieved}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
         "engagement": row.get("engagement"),
         "face_attention": row.get("face_attention"),
+        # Absolute units, unlike every other figure here, which are 0..1 ratios.
+        # `toPct()` on the frontend must not be applied to them.
+        "heart_rate_bpm": row.get("heart_rate_bpm"),
+        "rmssd_ms": row.get("rmssd_ms"),
         "sessions": row.get("sessions") or 0,
         # Surfaced rather than dropped: an average of None next to a sample
         # count of 0 means "nothing recorded", while None next to a nonzero
@@ -234,19 +301,33 @@ def _shape_summary(row, include_face: bool = True, retrieved: bool = True) -> di
         # measurements specifically so that distinction holds.
         "cognitive_samples": row.get("cognitive_samples") or 0,
         "face_samples": row.get("face_samples") or 0,
-        # With the opt-out on, face_attention is null and face_samples 0 --
-        # identical to a student the camera never saw. Same distinction the
-        # weekly report draws with its own face_included.
-        "face_included": include_face,
+        "heart_samples": row.get("heart_samples") or 0,
+        # With a channel excluded its average is null and its count 0 --
+        # identical to a student that sensor never read. Same distinction the
+        # weekly report draws with its own flags.
+        # Kept as an alias for emotion_included, and narrower than its name:
+        # it means the *emotion* channel, not "anything facial". Consumers
+        # branch on it, so removing it would turn "field absent" into a falsy
+        # value at each of them. Deprecated -- read emotion_included in new
+        # code, and do not fold a third channel into this one.
+        "face_included": include_emotion,
+        "emotion_included": include_emotion,
+        "heart_included": include_heart,
         # A row got here, so the read succeeded by construction. Carried
         # anyway rather than hardcoded True, so the field is present on every
         # payload and a consumer never has to treat "absent" as a third state.
         "retrieved": retrieved,
+        # `retrieved` is about the aggregate query; this is about the consent
+        # read that decided which channels it could ask for. Both False means
+        # the channel flags are "we could not find out" rather than "declined",
+        # and the parent dashboard is the surface that renders that difference.
+        "consent_retrieved": consent_retrieved,
     }
 
 
 def _signal_summaries(student_ids: list[str], days: int = 7,
-                      include_face: bool = True) -> dict[str, dict] | None:
+                      include_heart: bool = True,
+                      include_emotion: bool = True) -> dict[str, dict] | None:
     """Headline averages for many students in one round-trip.
 
     The single-student RPC removes the row transfer but still costs one
@@ -263,28 +344,31 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
         return {}
     try:
         res = _summary_rpc("student_signal_summary_many",
-                           {"p_student_ids": student_ids, "p_days": days}, include_face)
+                           {"p_student_ids": student_ids, "p_days": days},
+                           include_heart, include_emotion)
     except Exception as e:
         print(f"[signal_summaries] {e}")
         return None
     rows = res.data or []
     if isinstance(rows, dict):
         rows = [rows]
-    return {str(r.get("student_id")): _shape_summary(r, include_face)
+    return {str(r.get("student_id")): _shape_summary(r, include_heart, include_emotion)
             for r in rows if r.get("student_id")}
 
 
-def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = True):
+def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
+                          include_emotion: bool = True,
+                          consent_retrieved: bool = True):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
     Returns averages, highlights and per-day buckets. Callers must have already
     established that the requester may see this student.
 
-    include_face=False skips the face_signals query outright rather than
-    fetching and discarding: the point of the opt-out is that facial data isn't
-    read at all, and it also drops the heaviest of the three queries. Every
-    face-derived field then comes back None, and `face_included` tells the
-    caller that means "not requested" rather than "nothing recorded".
+    A false flag skips that channel's query outright rather than fetching and
+    discarding: the point is that the data isn't read at all, and it also drops
+    the heaviest of the queries. Every field from that channel then comes back
+    None, and `heart_included` / `emotion_included` tell the caller that means
+    "not requested" rather than "nothing recorded".
     """
     since = _iso_days_ago(days)
 
@@ -330,7 +414,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     # ok=True with the opt-out on: nothing failed, there was simply nothing to
     # ask for. `face_included` is what says the query never ran, and conflating
     # the two would have the opt-out reported as a broken read.
-    face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_face \
+    face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_emotion \
+        else ([], False, None, True)
+    heart, heart_cut, _, heart_ok = _fetch("heart_signals", "ts", _REPORT_ROW_CAP) if include_heart \
         else ([], False, None, True)
     # Truncation kept, not discarded. A student over the cap was shown a count
     # that silently stopped at it -- and with the other two tables under their
@@ -350,7 +436,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
     def _oldest(rows: list, ts_col: str) -> str:
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
-    truncated = cog_cut or face_cut or ses_cut
+    truncated = cog_cut or face_cut or heart_cut or ses_cut
     cog_oldest_day = _oldest(cog, "ts")[:10]
     face_oldest_day = _oldest(face, "ts")[:10]
     ses_oldest_day = _oldest(sessions, "started_at")[:10]
@@ -412,7 +498,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # cap, so a day whose signals were trimmed can still have a session
         # count that was retrieved intact. Dropping the day threw that away and
         # reported the day as absent rather than partial.
-        if cog_missing and (face_missing or not include_face) and ses_missing:
+        if cog_missing and (face_missing or not include_emotion) and ses_missing:
             continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
@@ -440,9 +526,27 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             # no retrieval to succeed or fail, and the consumers that count
             # `=== false` must not treat the opt-out as a retrieval failure.
             "cognitive_retrieved": cog_whole,
-            "face_retrieved": face_whole if include_face else None,
+            "face_retrieved": face_whole if include_emotion else None,
+            "heart_retrieved": (heart_ok and not heart_cut) if include_heart else None,
             "sessions_retrieved": ses_whole,
         })
+
+    # Only trusted heart samples are averaged. An untrusted one carries a rate;
+    # it is just not one worth putting in front of a parent, and the same rule
+    # runs in the SQL aggregate so the two surfaces cannot disagree.
+    heart_rates = [r["heart_rate_bpm"] for r in heart
+                   if r.get("heart_rate_bpm") is not None and r.get("trusted") is True]
+    rmssd_values = [r["rmssd_ms"] for r in heart
+                    if r.get("rmssd_ms") is not None and r.get("trusted") is True]
+    # Which sensor produced them, so a reader can tell a headband week from a
+    # camera week -- accuracy differs materially between sources, and after
+    # Phase 4 only the headband is validated at all.
+    # Trusted rows only, matching the averages. Listing a source whose every
+    # sample was rejected renders as "the headband was on and measured nothing"
+    # beside a null average -- the "measured, unusable" state claiming to be a
+    # working sensor.
+    heart_sources = sorted({r["source"] for r in heart
+                            if r.get("source") and r.get("trusted") is True})
 
     emotion_counts: dict[str, int] = {}
     for r in face:
@@ -481,8 +585,20 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         (measured if cog_ok else unread).append("EEG")
         # Naming facial recognition at all would report on something that was
         # never measured, since the caller opted out of reading it.
-        if include_face:
+        if include_emotion:
             (measured if face_ok else unread).append("facial recognition")
+        if include_heart:
+            (measured if heart_ok else unread).append("heart rate")
+
+        def _join(items: list[str], conjunction: str) -> str:
+            # "a, b or c" rather than "a or b or c", which reads badly once a
+            # third channel exists. Takes the conjunction because the two
+            # sentences want different ones -- "no X or Y were recorded" against
+            # "X and Y could not be loaded" -- and having the logic twice meant
+            # the second copy did not get the comma fix.
+            if len(items) <= 1:
+                return "".join(items)
+            return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
         def _sentence_case(text: str) -> str:
             # Not .capitalize(), which lowercases the rest and turns "EEG" into
@@ -491,9 +607,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
 
         parts = []
         if measured:
-            parts.append(f"No {' or '.join(measured)} samples were recorded this week.")
+            parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
         if unread:
-            parts.append(_sentence_case(f"{' and '.join(unread)} data could not be loaded."))
+            parts.append(_sentence_case(
+                f"{_join(unread, 'and')} data could not be loaded."))
         summary = " ".join(parts)
 
     return {
@@ -503,7 +620,28 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         "truncated": truncated,
         # Distinguishes "facial reporting is switched off for this view" from
         # "the camera recorded nothing". Both leave every face field null.
-        "face_included": include_face,
+        #
+        # `face_included` is kept as an alias for `emotion_included` and is
+        # narrower than its name: it means the *emotion* channel, not "anything
+        # facial". Consumers branch on it, so removing it would turn "field
+        # absent" into a falsy value at each of them. Deprecated -- read
+        # emotion_included in new code, and do not fold a third channel into it.
+        "face_included": include_emotion,
+        "emotion_included": include_emotion,
+        "heart_included": include_heart,
+        # False means the two flags above are "we could not find out", not "the
+        # student declined". Both suppress every optional channel and only one
+        # is a fault; a surface saying "not requested" about the first would be
+        # reporting a database outage as a preference.
+        "consent_retrieved": consent_retrieved,
+        # The tally, not just its argmax. Nothing on the frontend could render a
+        # pie before this: emotion reached it only as a scalar `dominant_emotion`,
+        # so a distribution had to be recomputed from raw rows or not shown. The
+        # loop above already counts these to pick the dominant one.
+        "emotion_distribution": (dict(sorted(emotion_counts.items(),
+                                             key=lambda kv: (-kv[1], kv[0])))
+                                 if include_emotion else None),
+        "heart_sources": heart_sources if include_heart else None,
         # Which of the three reads actually happened. Everything else in this
         # payload is a figure computed from whatever came back, and a query that
         # failed contributes the same empty rows as a student who recorded
@@ -516,10 +654,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
         # consumer checking `is False` must not read the opt-out as a failure.
         "retrieved": {
             "cognitive": cog_ok,
-            "face": face_ok if include_face else None,
+            "face": face_ok if include_emotion else None,
+            "heart": heart_ok if include_heart else None,
             "sessions": ses_ok,
         },
-        "sample_counts": {"cognitive": len(cog), "face": len(face), "sessions": len(sessions)},
+        "sample_counts": {"cognitive": len(cog), "face": len(face),
+                          # Rows retrieved, not rows averaged. A week of nothing
+                          # but untrusted samples is then a nonzero count beside
+                          # a null average -- "measured, unusable" -- rather than
+                          # indistinguishable from a week the sensor was off.
+                          "heart": len(heart), "sessions": len(sessions)},
         # How many sessions there *were*, as opposed to how many rows came back
         # under _SESSION_ROW_CAP. sample_counts is rows-retrieved throughout, so
         # rendering its sessions figure as the report's headline showed a heavy
@@ -544,6 +688,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_face: bool = T
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
             "lowest_focus": round(lowest_focus, 2) if lowest_focus is not None else None,
             "dominant_emotion": max(emotion_counts, key=emotion_counts.get) if emotion_counts else None,
+            "heart_rate_bpm": (sum(heart_rates) / len(heart_rates)) if heart_rates else None,
+            "rmssd_ms": (sum(rmssd_values) / len(rmssd_values)) if rmssd_values else None,
         },
         "latest": {"cognitive": latest_cognitive, "face": latest_face},
         "daily": daily,
@@ -855,14 +1001,22 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
     they're entitled to see, so namespacing it under /api/teacher/ would be
     misleading. Access is decided by relationship, not by role name.
 
-    include_face=false omits facial-recognition data from the report entirely;
+    include_face=false omits facial-recognition data from the report entirely.
+    It is a viewer preference and narrows only: stored consent decides what may
+    be read at all, and a caller cannot widen past it -- see
+    `_reportable_channels`. The parameter keeps its name because the frontend
+    control and its localStorage key still use it;
     see _weekly_signal_report.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
+    channels = _reportable_channels(student_id, include_face)
     return {
         "student_name": p.get("display_name") or p.get("email") or "Student",
-        **_weekly_signal_report(student_id, max(1, min(days, 30)), include_face=include_face),
+        **_weekly_signal_report(student_id, max(1, min(days, 30)),
+                                include_heart=channels.heart,
+                                include_emotion=channels.emotion,
+                                consent_retrieved=channels.consent_retrieved),
     }
 
 
@@ -894,7 +1048,11 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
     "face: teacher read" RLS policies encode, so the scope is unchanged.
     """
     _verify_can_view_student(get_user(request), student_id)
-    return _signal_summary(student_id, max(1, min(days, 30)), include_face=include_face)
+    channels = _reportable_channels(student_id, include_face)
+    return _signal_summary(student_id, max(1, min(days, 30)),
+                           include_heart=channels.heart,
+                           include_emotion=channels.emotion,
+                           consent_retrieved=channels.consent_retrieved)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -1317,7 +1475,10 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     include_face is threaded down into the aggregate, so with the opt-out on no
     facial row is read here either.
     """
-    summary = _signal_summary(student_id, days, include_face=include_face)
+    channels = _reportable_channels(student_id, include_face)
+    summary = _signal_summary(student_id, days, include_heart=channels.heart,
+                              include_emotion=channels.emotion,
+                              consent_retrieved=channels.consent_retrieved)
     return {
         "days": days,
         "face_included": summary["face_included"],
@@ -2736,6 +2897,10 @@ def my_children(request: Request, include_face: bool = True):
     aggregate, so the dashboard honours the same control as the child's report.
     Without it, switching facial reporting off on a report and navigating back
     put facial attention straight back on screen.
+
+    Stored consent is resolved per child on top of that, so one sibling's
+    refusal cannot suppress another's data and no child's declined channel is
+    read because a sibling permitted it.
     """
     user = get_user(request)
     links = supabase.table("parent_child_links").select("child_id, created_at") \
@@ -2744,8 +2909,45 @@ def my_children(request: Request, include_face: bool = True):
     # child inside the loop below. Note the rest of this loop is still a query
     # per child (stats, sessions, performance, profile); this fixes the query
     # added here, not the endpoint's overall shape.
-    summaries = _signal_summaries([lnk["child_id"] for lnk in (links.data or [])],
-                                  include_face=include_face)
+    # Grouped by consent, because consent is per child and the batch RPC takes
+    # one flag pair for the whole call. Passing a single pair would mean either
+    # reading a channel a child declined, or hiding one a sibling permitted --
+    # and the first of those is the one that matters.
+    #
+    # At most four groups exist (heart x emotion) and in practice one, since
+    # siblings are usually configured the same way, so this is normally still a
+    # single round-trip. Correctness first: a fifth query is cheaper than
+    # reading a channel a child refused.
+    # Resolved once per child and reused below. This endpoint is already a
+    # query per child; reading consent twice for each would make it N+2 for
+    # nothing.
+    child_ids = [lnk["child_id"] for lnk in (links.data or [])]
+    channels_by_child = {cid: _reportable_channels(cid, include_face)
+                         for cid in child_ids}
+    # Keyed on the flags alone, not the whole ReportChannels. `consent_retrieved`
+    # does not change what the RPC is asked for, so including it would split two
+    # children with identical flags into separate round-trips and break the
+    # "at most four groups" bound this relies on.
+    by_channels: dict[tuple[bool, bool], list[str]] = {}
+    for cid, ch in channels_by_child.items():
+        by_channels.setdefault((ch.heart, ch.emotion), []).append(cid)
+
+    summaries: dict | None = {}
+    for (heart_flag, emotion_flag), group in by_channels.items():
+        part = _signal_summaries(group, include_heart=heart_flag,
+                                 include_emotion=emotion_flag)
+        if part is None:
+            # One failed group fails the whole call, discarding groups that
+            # succeeded. Deliberate, and the conservative choice rather than an
+            # oversight: `summaries_retrieved` is one flag for the endpoint, so
+            # a partial result would have to report the succeeded children as
+            # retrieved and the failed ones as empty -- and "empty" is exactly
+            # the word that must not stand in for "we could not read it". Every
+            # child falling back to an explicitly-unretrieved payload is the
+            # honest answer until the flag is per child.
+            summaries = None
+            break
+        summaries.update(part)
     # None is the failed read; {} is a read that returned nothing. Both leave
     # every child falling back below, and the fallback has to say which one it
     # is standing in for -- otherwise a broken RPC reaches a parent as "your
@@ -2771,8 +2973,18 @@ def my_children(request: Request, include_face: bool = True):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": summaries.get(str(cid))
-                              or _shape_summary(None, include_face, summaries_retrieved),
+            # Grouping keys on the flags alone, so a child whose consent read
+            # *failed* shares a group with one who genuinely declined both
+            # channels -- same RPC call, different meaning. The RPC path cannot
+            # know which, so it is stamped per child here.
+            "signal_summary": {**summaries[str(cid)],
+                               "consent_retrieved": channels_by_child[cid].consent_retrieved}
+                              if str(cid) in summaries
+                              else _shape_summary(None,
+                                                channels_by_child[cid].heart,
+                                                channels_by_child[cid].emotion,
+                                                summaries_retrieved,
+                                                channels_by_child[cid].consent_retrieved),
         })
     return children
 

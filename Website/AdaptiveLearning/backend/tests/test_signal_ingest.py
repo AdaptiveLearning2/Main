@@ -399,6 +399,35 @@ def test_a_clients_raw_blob_survives_the_mapper(store):
     assert store["face_signals"][0]["raw"]["probe"] == "kept"
 
 
+def test_rmssd_gating_fields_reach_the_stored_row(store):
+    """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates, kept
+    apart from `rejected_by`: a row can carry a good heart rate and no RMSSD,
+    and these say which of the two was refused. They have to survive the push
+    ingest endpoint the same way the pull path's mapper carries them, or a
+    push-mode row loses the reason a null rmssd_ms is null."""
+    _consent(store, headband_optical_enabled=True)
+
+    _post_heart([_heart(rmssd_ms=None, beat_coverage=0.91,
+                         rmssd_rejected_by="coverage")])
+    row = store["heart_signals"][0]
+    assert row["raw"]["beat_coverage"] == 0.91
+    assert row["raw"]["rmssd_rejected_by"] == "coverage"
+
+
+def test_a_non_finite_heart_value_is_refused_by_the_model(store):
+    """Same check as `CognitiveSample._finite`, for the same reason: a
+    `float | None` annotation alone does not reject NaN/Infinity, both survive
+    JSON and Pydantic, and `double precision` cannot hold either -- so an
+    unvalidated one fails the insert and takes the whole batch down with it."""
+    from pydantic import ValidationError
+
+    for field in ("heart_rate_bpm", "rmssd_ms", "beat_coverage",
+                  "sqi", "stress_score"):
+        with pytest.raises(ValidationError):
+            main.HeartBatch(session_id=SESSION,
+                            samples=[_heart(**{field: float("nan")})])
+
+
 def test_derived_fields_win_over_a_client_supplied_key(store):
     """A client should not be able to overwrite what this backend observed by
     picking a key name."""

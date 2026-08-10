@@ -150,6 +150,28 @@ def test_heart_values_are_carried_in_absolute_units():
     assert row["trusted"] is True
 
 
+def test_a_row_can_carry_a_heart_rate_and_no_rmssd():
+    """RMSSD is an enrichment, and about one window in five is gated out even on
+    a good seated recording. So a null `rmssd_ms` beside a trusted
+    `heart_rate_bpm` is the normal case, not a broken one -- the cause is
+    carried under its own name so the row can be read back and explained."""
+    row = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:00Z",
+        "heart": {"source": "muse_optics", "bpm": 70.2, "trusted": True,
+                  "rejected_by": None, "rmssd_ms": None,
+                  "beat_coverage": 0.91, "rmssd_rejected_by": "coverage"},
+    }, "s", "u")
+
+    assert row["heart_rate_bpm"] == 70.2
+    assert row["trusted"] is True
+    assert row["rmssd_ms"] is None
+    # Distinct from the rate's own `rejected_by`, which is what says whether
+    # there is a reading at all.
+    assert row["raw"]["rmssd_rejected_by"] == "coverage"
+    assert row["raw"]["beat_coverage"] == 0.91
+    assert row["raw"].get("rejected_by") is None
+
+
 def test_a_heart_row_is_stamped_by_the_reading_not_the_tick():
     """The headband's block covers 25s, is recomputed every 10s and is held on
     the payload in between -- so it rides ~40 consecutive ticks. Stamped from

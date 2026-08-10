@@ -90,14 +90,16 @@ class _Poller(threading.Thread):
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
-        # Set when a re-check finds consent withdrawn, so `status()` can say
-        # *why* this poller ended -- "stopped because the student withdrew" is
-        # not the same as "stopped because the headband dropped", and a session
-        # that quietly produces nothing is the failure this whole area guards.
-        self.stopped_reason = None
+        # First re-check is one interval away, not immediate: `start()` has
+        # just read consent, and initialising this to 0.0 made loop 1 read it
+        # again milliseconds later.
         self._consent_checked_at = 0.0
 
     def run(self):
+        # Not 0.0 at construction: `start()` read consent moments ago, and
+        # starting the clock here means the first re-check is a full interval
+        # away rather than immediate.
+        self._consent_checked_at = time.monotonic()
         print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]} device={self.device_id}", flush=True)
         try:
             r = eeg_client.start_session(self.device_id)
@@ -122,7 +124,6 @@ class _Poller(threading.Thread):
                     still_consented = False
                     print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
                 if not still_consented:
-                    self.stopped_reason = "consent_withdrawn"
                     print(f"<<< [eeg-poller] consent withdrawn for session={self.session_id[:8]}, stopping", flush=True)
                     self._stop_event.set()
                     break
@@ -178,6 +179,17 @@ class _Poller(threading.Thread):
             # rapid disconnect+reconnect could have this thread kill the stream
             # right after a new poller started depending on it.
             with _lock:
+                # Deregister *here*, in the one stop path that nothing outside
+                # this thread drives. `stop`, `stop_for_user`, `start`'s
+                # same-user replacement and `stop_all` all pop and forget; a
+                # poller that ends itself -- consent withdrawn -- had no caller
+                # to do it, so the entry and the warning record outlived it.
+                # That is the fifth stop path, and `_forget_warning`'s docstring
+                # says every one of them. Inside the lock this block already
+                # takes, and before the liveness scan below, so a dead self
+                # cannot count as a reason to keep the sidecar stream open.
+                _active.pop(self.session_id, None)
+                _forget_warning(self.session_id)
                 stream_still_needed = any(
                     p.is_alive() for p in _active.values() if p.device_id == self.device_id
                 )

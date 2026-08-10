@@ -45,6 +45,8 @@ export default function Adaptive() {
   const [recorder, setRecorder]   = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [headband, setHeadband]   = useState({
+    // `pushMode` deliberately absent until a health response lands: guessing
+    // "not push" is what produced an outage message on first paint.
     available: false, connected: false, samples: 0, lastTs: null,
     phase: 'idle', // idle | starting | scanning | connecting | connected
     deviceName: null,
@@ -79,7 +81,17 @@ export default function Adaptive() {
     const checkHealth = async () => {
       try {
         const h = await eegHealth()
-        if (alive) setHeadband(s => ({ ...s, available: !!h.available }))
+        // The mode has to come from *this* poll. This one runs from mount; the
+        // status effect returns early until a session exists, so before the
+        // student answers anything `pushMode` was undefined and `available`
+        // false -- putting "EEG service not reachable on port 8001" on the
+        // first screen they see, which is the sentence the mode check exists to
+        // stop showing. Fixing /start and /status alone moved it here.
+        if (alive) setHeadband(s => ({
+          ...s,
+          pushMode: h.ingest_mode === 'push',
+          available: !!h.available,
+        }))
       } catch { if (alive) setHeadband(s => ({ ...s, available: false })) }
     }
     checkHealth()

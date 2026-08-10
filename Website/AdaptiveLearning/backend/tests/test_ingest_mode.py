@@ -198,3 +198,58 @@ def test_status_still_reports_liveness_under_pull(monkeypatch):
     out = main.eeg_status(None, device_id="station1")
     assert out["service"] is True
     assert out["ingest_mode"] == "pull"
+
+
+def test_health_does_not_report_an_outage_under_push(push_mode):
+    """This is the poll that runs from page load -- /status is gated on a
+    session existing. Reporting `available: False` here put "EEG service not
+    reachable on port 8001" on the first screen a student sees, which is the
+    sentence the mode check exists to stop showing. Fixing /start and /status
+    alone only moved it."""
+    out = main.eeg_health()
+
+    assert out["available"] is None, "'not probed here' rendered as 'probed and down'"
+    assert out["ingest_mode"] == "push"
+
+
+def test_health_still_reports_a_real_outage_under_pull(monkeypatch):
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "eeg_client",
+                        type("C", (), {"is_alive": staticmethod(lambda: False),
+                                       "EEG_API_URL": "http://127.0.0.1:8001"}))
+
+    out = main.eeg_health()
+    assert out["available"] is False
+    assert out["ingest_mode"] == "pull"
+
+
+def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsys):
+    """A live poller for *this session*, not `INGEST_MODE == "pull"`. The mode
+    was a proxy and wrong in both directions: it fired on the hand-posted dev
+    batch the endpoint's openness exists for, and -- with a once-per-process
+    flag -- that benign post spent the warning so a genuine double-write later
+    was never reported."""
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "_warned_double_write", set())
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "supabase",
+                        type("S", (), {"table": lambda _s, _n: type("Q", (), {
+                            "insert": lambda _q, _r: type("E", (), {
+                                "execute": lambda _e: None})()})()})())
+
+    batch = main.CognitiveBatch(session_id="sess-1", samples=[])
+
+    # No poller for this session: the benign case, and it must stay quiet.
+    monkeypatch.setattr(eeg_poller, "is_polling", lambda _sid: False)
+    main.ingest_cognitive(batch, None)
+    assert "landing" not in capsys.readouterr().out
+
+    # A live poller for it: the actual double-write.
+    monkeypatch.setattr(eeg_poller, "is_polling", lambda _sid: True)
+    main.ingest_cognitive(batch, None)
+    assert "twice" in capsys.readouterr().out
+
+    # ...and once per session, not per request.
+    main.ingest_cognitive(batch, None)
+    assert "twice" not in capsys.readouterr().out

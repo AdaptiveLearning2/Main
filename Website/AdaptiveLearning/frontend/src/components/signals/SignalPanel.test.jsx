@@ -438,3 +438,26 @@ test('no emotion mix is drawn when the channel was not read', () => {
 
   expect(screen.queryByText(/Emotion Mix/i)).not.toBeInTheDocument()
 })
+
+test('the live snapshot shows heart in bpm when the channel was read', () => {
+  render(<LiveSignalSummary report={{
+    ...heartReport,
+    latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 },
+              heart: { heart_rate_bpm: 68.2, source: 'muse_optics' } },
+  }} />)
+
+  const tile = screen.getByText(/Heart Rate/i).closest('div')
+  expect(within(tile).getByText('68 bpm')).toBeInTheDocument()
+  expect(within(tile).queryByText(/%/)).not.toBeInTheDocument()
+})
+
+test('the live snapshot omits heart rather than showing an empty tile', () => {
+  // The backend leaves the key out when the channel was not read; a tile built
+  // from {} would read as a sensor that recorded nothing.
+  render(<LiveSignalSummary report={{
+    ...heartReport,
+    latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 } },
+  }} />)
+
+  expect(screen.queryByText(/Heart Rate/i)).not.toBeInTheDocument()
+})

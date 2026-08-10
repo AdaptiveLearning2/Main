@@ -186,6 +186,18 @@ class _Poller(threading.Thread):
 
 
 _active: Dict[str, _Poller] = {}
+
+
+def is_polling(session_id: str) -> bool:
+    """Whether this backend has a live poller for that session.
+
+    The actual condition, rather than `INGEST_MODE == "pull"`, which is only a
+    proxy for it. A developer hand-posting a batch while no poller runs is not
+    double-writing, and treating the mode as the answer reports them anyway.
+    """
+    with _lock:
+        p = _active.get(session_id)
+        return bool(p and p.is_alive())
 _lock = threading.Lock()
 
 

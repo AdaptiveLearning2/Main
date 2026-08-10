@@ -116,12 +116,19 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
   const cog = latest.cognitive || {}
   const face = latest.face || {}
   const faceOn = emotionOn(report)
+  // `heart` is absent from `latest` when the channel was not read, so presence
+  // is the signal -- the backend omits the key rather than sending a null, and
+  // a tile rendered from `{}` would read as a sensor recording nothing.
+  const heart = latest.heart
+  const heartShown = heartOn(report) && !!heart
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
-          <p className="text-xs text-gray-400">Most recent EEG and facial-recognition readings.</p>
+          <p className="text-xs text-gray-400">
+            Most recent EEG{heartShown ? ', heart' : ''} and facial-recognition readings.
+          </p>
         </div>
         <Radio size={18} className="text-emerald-500" />
       </div>
@@ -132,6 +139,11 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         {/* "Off" rather than "N/A": the viewer switched facial reporting off,
             which is a different statement from having no reading. */}
         <MiniMetric label="Face Attention" value={faceOn ? pct(face.attention) : FACE_OFF} icon={Eye} tone="sky" />
+        {/* bpm, not a percentage -- the same unit trap the weekly chart gives
+            its own axis for. `unit()` never touches the 0..1 path. */}
+        {heartShown && (
+          <MiniMetric label="Heart Rate" value={unit(heart.heart_rate_bpm, ' bpm')} icon={Heart} tone="rose" />
+        )}
       </div>
       <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">

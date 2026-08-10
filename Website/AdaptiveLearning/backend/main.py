@@ -1292,7 +1292,9 @@ _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _ingest_hits: dict[str, list[float]] = {}
-_warned_cognitive_push_under_pull = False
+# Sessions already warned about, so the log fires once each rather than at
+# the sample rate. Bounded by concurrent sessions, not by uptime.
+_warned_double_write: set[str] = set()
 _ingest_hits_lock = threading.Lock()
 # Same sweep as the strategy limiter, and needed more here: entries are
 # otherwise pruned only on that caller's *next* request, so every student who
@@ -2498,18 +2500,27 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     _verify_session_owner(payload.session_id, user["id"])
     # Accepted in either mode -- rejecting it under `pull` would break mixed
-    # local dev -- but warned about, because under `pull` the in-process poller
-    # is writing this same table from the same sidecar. Both paths active means
-    # every EEG sample lands twice, and `cognitive_signals` has no dedupe key to
-    # catch it the way `heart_signals` does. Valid rows, wrong counts, no error.
-    # Once per process: this endpoint runs at the sample rate and a per-request
-    # log would bury everything else.
-    global _warned_cognitive_push_under_pull
-    if eeg_poller.INGEST_MODE == "pull" and not _warned_cognitive_push_under_pull:
-        _warned_cognitive_push_under_pull = True
-        print("[ingest] /api/signals/cognitive was posted to while INGEST_MODE=pull. "
-              "If the sidecar is pushing *and* the poller is running, every EEG "
-              "sample is being written twice and nothing will catch it.", flush=True)
+    # local dev -- but warned about when this session is *actually* being
+    # double-written: a live poller for it is writing the same table from the
+    # same sidecar, so every EEG sample lands twice. Valid rows, wrong counts,
+    # no error, and no dedupe key to catch it the way `heart_signals` has.
+    #
+    # The condition is a live poller for this session, not `INGEST_MODE ==
+    # "pull"`. The mode was only a proxy, and a wrong one in both directions: it
+    # fired on the hand-posted dev batch the openness exists for, and -- with a
+    # once-per-process flag -- that benign first post spent the warning, so a
+    # genuine double-write later in the same process was never reported.
+    #
+    # Per session rather than per process: the sessions are the thing at risk,
+    # there are few of them, and this still logs once each rather than at the
+    # sample rate.
+    if (eeg_poller.is_polling(payload.session_id)
+            and payload.session_id not in _warned_double_write):
+        _warned_double_write.add(payload.session_id)
+        print(f"[ingest] session {payload.session_id[:8]} is being written by both "
+              f"the poller and /api/signals/cognitive. Every EEG sample is landing "
+              f"twice and cognitive_signals has no dedupe key to catch it.",
+              flush=True)
     rows = [{
         "session_id": payload.session_id,
         "user_id":    user["id"],
@@ -2841,10 +2852,23 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 
 @app.get("/api/eeg/health")
 def eeg_health():
-    """Tells the frontend whether the EEGResearch sidecar service is reachable."""
+    """Tells the frontend whether the EEGResearch sidecar service is reachable.
+
+    Under push ingestion there is nothing to be reachable *from here*, and this
+    is the poll that runs from page load -- the status one is gated on a session
+    existing. Reporting a flat `available: False` put "EEG service not reachable
+    on port 8001. Make sure the EEGResearch backend is running." on the first
+    screen a student sees, which is the sentence the mode check was added to
+    stop showing. Fixing it at /start and /status alone just moved it here.
+    """
+    if eeg_poller.INGEST_MODE == "push":
+        # `available` is None rather than False for the same reason as /status:
+        # "not probed in this deployment" is not "probed and down".
+        return {"available": None, "ingest_mode": "push", "url": None}
     alive = eeg_client.is_alive()
     if not alive:
-        return {"available": False, "url": eeg_client.EEG_API_URL}
+        return {"available": False, "ingest_mode": "pull",
+                "url": eeg_client.EEG_API_URL}
     # is_alive() hits the sidecar's unauthenticated /healthz, so a reachable
     # sidecar tells us nothing about auth. get_muse_status() needs the learner
     # token and raises (by design -- see eeg_client.get_state) when it is

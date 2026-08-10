@@ -461,8 +461,22 @@ The headband is the primary heart source (the camera is emotion-only), and it re
 - **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
   channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
 
-`rmssd_ms`, `sqi` and `stress_score` are **not derived yet** on either path; the columns stay null.
-`heart_signals.stress_score` therefore has no producer — don't read an empty tile as a broken query.
+**`rmssd_ms` is an enrichment, and a null one is the normal case.** `build_heart_record` derives it
+through `hrv_processing.estimate_hrv` over the same 25s window and the same rate — sharing them is
+required, not incidental, so the two cannot disagree about whether a window is usable. Roughly one
+window in five is gated out even seated and at rest, so **nothing may make a heart rate conditional
+on RMSSD being present**: `stress_score` is defined on heart rate alone, and a score whose
+definition shifted when an input dropped out would be unreadable across a session. The refusal has
+its own field (`rmssd_rejected_by`, carried into `raw`) precisely so it is never confused with
+`rejected_by`, which says whether there is a reading at all.
+
+Validated against six simultaneous watch ECGs, seated: r = 0.75 at the 30s window it was captured
+on. **The production 25s window has its own numbers** — r = 0.77, bias −3.1 ms, RMS 5.2 ms, worst
+window 21% against 15% — measured in `test_optics_rmssd.py` rather than carried across, because a
+shorter window has fewer beats to average. Don't quote the 30s figures for the shipped path.
+
+`sqi` and `stress_score` are still **not derived** on either path; those columns stay null, so
+`heart_signals.stress_score` has no producer — don't read an empty tile as a broken query.
 
 **The poller's heart write is consent-gated, and that gate is the only one there is.** It writes with
 the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.

@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.app.services.eeg_ingestion import OpticsWindow
+from src.app.services.hrv_processing import estimate_hrv
 from src.app.services.ppg_processing import HeartRateTracker
 
 # How much optical history a rate is derived over. 25s is what the estimator
@@ -93,6 +94,14 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
         # state. This module's verdict, not a restatement of `confidence`.
         "trusted": False,
         "rejected_by": None,
+        # RMSSD is an *enrichment*: present when the beats can be counted, absent
+        # otherwise, and never a reason the rate is or is not recorded. Its own
+        # gates get their own field, because `rejected_by` names why there is no
+        # heart rate and a reader that saw one name in both places would take a
+        # perfectly good bpm for a refused window.
+        "rmssd_ms": None,
+        "beat_coverage": None,
+        "rmssd_rejected_by": None,
     }
 
     if len(window.channels) == 0:
@@ -135,4 +144,24 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
     # `confidence` are not the same claim: the second is a number, the first is
     # this module's verdict on it, and `heart_signals` stores both.
     record["trusted"] = True
+
+    # Only after the rate is settled, and only ever adding to the record. The
+    # rate is the measurement `stress_score` is defined on; RMSSD enriches it
+    # when the beats are countable and is simply absent when they are not --
+    # which is roughly one window in six even on a good recording, and always
+    # while the headband is off. A score that changed meaning when this dropped
+    # out would be unreadable across a session, so nothing below may reach
+    # `bpm`, `trusted` or `rejected_by`.
+    #
+    # The same 25s window and the same rate, deliberately: `estimate_hrv` takes
+    # the rate rather than re-deriving it so that the two cannot disagree about
+    # whether the window is usable. It is also the reason RMSSD cannot simply be
+    # given a longer window of its own.
+    hrv = estimate_hrv(window.channels, window.fs,
+                       estimate.bpm, estimate.confidence)
+    record["beat_coverage"] = round(float(hrv.coverage), 3)
+    if hrv.rmssd_ms is None:
+        record["rmssd_rejected_by"] = hrv.rejected_by or "no_rmssd"
+        return record
+    record["rmssd_ms"] = round(float(hrv.rmssd_ms), 1)
     return record

@@ -29,19 +29,41 @@ Two steps, and neither alone is enough:
    settled window of the through-exercise recording 45.7ms -- inside the
    physiological range for the first time.
 
-This is NOT validated
----------------------
-Landing in range is necessary, not sufficient. There is no independent RMSSD to
-check against: a consumer wrist device derives HRV from its own noisy optical
-signal and cannot referee this one, and no chest strap or ECG reference has been
-recorded. Worse, the convergence test is inconclusive -- 2-channel subsets of the
-resting window spread 79ms and 3-channel subsets 72ms, both wider than the
-physiological range, so the 39.0ms figure is one draw from a distribution whose
-spread we cannot yet bound.
+What it was validated against
+-----------------------------
+Six simultaneous watch ECGs across one 8-minute seated recording, ~50s apart:
+**r = 0.75, mean bias -1.3ms, RMS error 4.7ms**, every reported window within
+15%, heart rate within 1 bpm on all six. Six references rather than three is what
+made it a result -- against three points every candidate fix merely moved *which*
+window was wrong, which is indistinguishable from an improvement.
+`tests/test_hrv_against_dense_ecg.py` holds the table.
 
-**So this must not back a displayed number or a difficulty decision until a
-reference measurement exists.** It is far enough along to be worth having and
-nowhere near far enough to be trusted.
+Those figures are for **30s** windows. `optics_processing` derives over the 25s
+the rate estimator was validated on, where the same six windows give r = 0.77,
+bias -3.1ms, RMS 5.2ms and a worst window of 21% -- correlation holds, accuracy
+is slightly worse, and no window is gated out. The production path is pinned to
+its own numbers in `test_optics_rmssd.py`; don't carry the 30s figures across.
+
+So it ships, as an enrichment
+-----------------------------
+`heart_signals.stress_score` is defined on heart rate alone and RMSSD is added
+when available. That is a hard requirement rather than a preference: this is
+unavailable whenever the headband is off, and roughly one window in six is gated
+out even when it is on. A score whose definition shifted when an input dropped
+out would be unreadable across a session.
+
+Two claims an earlier version of this docstring made, both now corrected:
+
+- **The true RMSSD moves far more than one short capture implies** -- 29.2-48.9ms
+  across 4.5 minutes here at near-constant heart rate. An earlier capture measured
+  2.0ms across 95 seconds and that got generalised into "the true value is
+  constant, so all spread in the derived value is its own error". True at 95
+  seconds, false at five minutes: a substantial part of the spread previously
+  blamed on this module was the wearer's heart.
+- **The 50% outlier did not recur.** Five of five reported windows in the dense
+  capture land within 15%, so it was one window in one recording rather than a
+  characteristic failure -- and a discriminator built to catch it would have been
+  fitted to noise.
 
 And it inherits the motion defect whole
 ---------------------------------------
@@ -53,9 +75,10 @@ coverage cannot catch it, because the beats are perfectly consistent with the
 wrong rate.
 
 So the gate below cannot be "does this look self-consistent". It has to defer to
-the rate derivation's own confidence, and that in turn is not sufficient either
-while motion remains undetectable -- see the CLAUDE.md note on accelerometer
-gating. Nothing here may be recorded before that lands.
+the rate derivation's own confidence, which is why `estimate_hrv` takes the rate
+rather than deriving a second opinion. That inherits the rate's scope exactly:
+**seated use, which is validated; gait, which is not.** Nothing here narrows or
+widens it.
 """
 
 from __future__ import annotations

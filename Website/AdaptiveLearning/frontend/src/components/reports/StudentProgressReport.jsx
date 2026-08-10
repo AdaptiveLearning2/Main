@@ -147,8 +147,15 @@ export default function StudentProgressReport({
     setStrategyLoading(true)
     setStrategyError(null)
     try {
+      // A body is required even though every field of it has a default:
+      // FastAPI treats a Pydantic-model parameter with no default of its own
+      // as a required body, so a bodyless POST 422s regardless of what the
+      // fields inside it default to. include_face used to ride along here;
+      // now that consent (not a viewer-side flag) decides what is read, an
+      // empty object is the honest request -- "use the server's defaults".
       const res = await apiFetch(`/api/students/${studentId}/learning-strategies`, {
         method: 'POST',
+        body: {},
       })
       if (requestId !== strategyRequestId.current) return
       setStrategies(res.strategies || [])

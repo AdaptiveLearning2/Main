@@ -100,6 +100,23 @@ describe('at-home strategies', () => {
 
 
 
+  it('POSTs a JSON body, not an empty request', async () => {
+    // The endpoint's only parameter is a Pydantic model with no default of
+    // its own, so FastAPI requires a body even though every field inside the
+    // model defaults -- a bodyless POST 422s. This regression shipped once
+    // already: the old includeFace body was deleted with the viewer-side
+    // control and nothing took its place. apiFetch is mocked here, so this
+    // cannot exercise real serialization -- it only asserts the call itself
+    // still carries a body for lib/api.js's `if (body)` to serialize.
+    renderReport({ showStrategies: true })
+    await screen.findByText('Recent Sessions')
+    await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
+
+    await waitFor(() => expect(urlsFor('/learning-strategies')).toHaveLength(1))
+    const [, opts] = apiFetch.mock.calls.find(c => String(c[0]).includes('/learning-strategies'))
+    expect(opts.body).toBeTruthy()
+  })
+
   it('surfaces a failure instead of silently showing nothing', async () => {
     apiFetch.mockImplementation((url) => {
       const u = String(url)

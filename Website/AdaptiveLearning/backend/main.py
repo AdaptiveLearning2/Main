@@ -1083,9 +1083,11 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
     include_face=false omits facial-recognition data from the report entirely.
     It is a viewer preference and narrows only: stored consent decides what may
     be read at all, and a caller cannot widen past it -- see
-    `_reportable_channels`. The parameter keeps its name because the frontend
-    control and its localStorage key still use it;
-    see _weekly_signal_report.
+    `_reportable_channels`. No client sends it any more -- the viewer-side
+    control it named (facePref.js) is retired, and stored consent does the
+    job it appeared to do. Kept anyway: the parameters cost nothing, and a
+    caller may legitimately want less than consent allows.
+    See _weekly_signal_report.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
@@ -2877,6 +2879,38 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 
 # ─── live monitoring (only show truly active sessions) ───────────────────
 
+# Small and dedicated rather than reused from _strategy_pool: that pool's
+# worker count and wait bounds are tuned for the LLM call it exists to gate,
+# and conflating the two would let a live-monitoring poll compete with a
+# strategies request for the same two slots. Four is enough to fan the reads
+# below out concurrently for one session at a time -- this endpoint's own
+# per-member loop stays sequential, so peak concurrency here never exceeds
+# the four reads for whichever session is currently open.
+_LIVE_SIGNALS_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="live-signals")
+
+
+def _latest_session_signals(session_id: str) -> tuple[list, list, list, list]:
+    """The four independent per-session reads class_live needs for one open
+    session, fanned out concurrently instead of run one after another.
+
+    Each pays its own network round-trip, and this endpoint is polled on an
+    interval by the live-monitoring page -- sequentially that cost is
+    additive per open session, and heart_signals added a third such
+    round-trip on top of the two that were already here.
+    """
+    futures = [
+        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("cognitive_signals").select("*")
+                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("face_signals").select("*")
+                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("heart_signals").select("*")
+                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("session_answers").select("answered_at")
+                                   .eq("session_id", session_id).order("answered_at", desc=True).limit(1).execute().data),
+    ]
+    return tuple(f.result() for f in futures)
+
+
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
     """Live signals for the students of a class the caller owns.
@@ -2915,14 +2949,7 @@ def class_live(class_id: str, request: Request):
         if open_sessions:
             sess = open_sessions[0]
             sid2 = sess["id"]
-            c = supabase.table("cognitive_signals").select("*") \
-                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
-            f = supabase.table("face_signals").select("*") \
-                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
-            h = supabase.table("heart_signals").select("*") \
-                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
-            a = supabase.table("session_answers").select("answered_at") \
-                .eq("session_id", sid2).order("answered_at", desc=True).limit(1).execute().data
+            c, f, h, a = _latest_session_signals(sid2)
 
             latest_cog  = c[0] if c else None
             latest_face = f[0] if f else None

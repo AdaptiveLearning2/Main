@@ -50,6 +50,17 @@ MIN_WINDOW_COVERAGE = 0.80
 # Longest interval between consecutive samples that interpolation may fill.
 # Beyond it the straight line between two samples is invention rather than
 # measurement, and at a second it lands squarely in the pulse band.
+#
+# A second is longer than a cardiac cycle above 60 bpm, so a gap just under this
+# swallows a whole beat -- which sounds like it should matter and, measured, does
+# not. Punching 0.92s holes into the resting fixture (69.4 bpm intact): one hole
+# reads 69.7, three read 69.6, six read 68.8. A 25s window holds ~28 beats and
+# the autocorrelation is not troubled by a few interpolated ones.
+#
+# So this gate is not what protects against sample loss, and tightening it is
+# not the way to. What does is `MIN_SAMPLE_RATE` against `received_rate_hz`:
+# the damage comes from the *proportion* of the window that is reconstructed,
+# not from the length of any one hole.
 MAX_GAP_SECONDS = 1.0
 
 # Nyquist for MAX_BPM (180 bpm = 3 Hz) is 6 Hz. 10 Hz leaves margin for the

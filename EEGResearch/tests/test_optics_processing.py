@@ -180,6 +180,39 @@ def test_heavy_sample_loss_is_refused_on_a_real_recording(keep_one_in, was):
     assert record["trusted"] is False
 
 
+def test_isolated_gaps_do_not_distort_the_rate():
+    """Why MAX_GAP_SECONDS is not the defence against sample loss.
+
+    A second is longer than a cardiac cycle above 60 bpm, so a 0.92s hole
+    swallows a whole beat -- which sounds like it should matter. Six of them,
+    each swallowing a beat, move the reported rate by 0.6 bpm. A 25s window
+    holds ~28 beats. The damage comes from the proportion of the window that is
+    reconstructed, not from the length of any one hole, which is what
+    `received_rate_hz` measures and this does not.
+    """
+    with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
+                   "rt", encoding="utf-8") as fh:
+        frames = [json.loads(line) for line in fh if line.strip()]
+    start = frames[0]["mono_ts_ms"]
+    frames = [f for f in frames if f["mono_ts_ms"] - start <= 45_000]
+
+    blocked = set()
+    for hole in range(6):
+        at = int(len(frames) * (hole + 1) / 7)
+        blocked.update(range(at, at + 58))  # ~0.92s at 64Hz
+
+    adapter = TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
+    for i, frame in enumerate(frames):
+        if i not in blocked:
+            adapter._store_optics(frame)
+    window = adapter.optics_window(RATE_WINDOW_SECONDS)
+    record = _build(window)
+
+    assert window.largest_gap_seconds == pytest.approx(0.92, abs=0.05)
+    assert record["rejected_by"] is None
+    assert record["bpm"] == pytest.approx(RESTING_BPM, abs=3.0)
+
+
 def test_light_sample_loss_still_reads_correctly():
     """The gate has to cost windows that are genuinely usable, or it is just a
     stricter version of not working. One in four lost leaves 16Hz, comfortably

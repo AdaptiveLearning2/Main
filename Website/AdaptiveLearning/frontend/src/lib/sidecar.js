@@ -78,9 +78,19 @@ export async function sidecarAlive() {
  * `Adaptive.jsx`. Calling it for a different session drops the old queue,
  * because those samples belong to a session this token may not own.
  */
-export async function startPush(sessionId) {
-  const { data } = await supabase.auth.getSession()
-  const accessToken = data?.session?.access_token
+export async function startPush(sessionId, accessTokenOverride = null) {
+  // `accessTokenOverride` exists for one caller: the `onAuthStateChange`
+  // handler, which is *given* the new session and must not ask for it.
+  // supabase-js v2 holds an internal auth lock while dispatching that callback,
+  // and `getSession()` waits on the same lock -- so awaiting it from inside the
+  // callback deadlocks. The refresh handler would hang forever, the sidecar
+  // would keep the expired token, and every push would 401 for the rest of the
+  // lesson with nothing raised anywhere.
+  let accessToken = accessTokenOverride
+  if (!accessToken) {
+    const { data } = await supabase.auth.getSession()
+    accessToken = data?.session?.access_token
+  }
   if (!accessToken) throw new Error('Not signed in')
   return call('/api/v1/push/start', {
     method: 'POST',

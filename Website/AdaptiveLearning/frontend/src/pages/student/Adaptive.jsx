@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
@@ -75,12 +75,17 @@ export default function Adaptive() {
   // Serialises start against stop. Both are async and the effect can tear down
   // while a start is still in flight, so they are chained rather than raced.
   const pushHandoff = useRef(Promise.resolve())
+  // Read by `recover`, which is a stable callback and must not close over a
+  // stale session id.
+  const sessionIdRef = useRef(null)
 
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
   const [debugOpen, setDebugOpen]     = useState(true)
   const debugTimer  = useRef(null)
   const phaseTimer  = useRef(null)
+
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   // load profile default grade + classes
   useEffect(() => {
@@ -135,6 +140,18 @@ export default function Adaptive() {
     })
     return () => { alive = false }
   }, [headband.available])
+
+  // Re-offers the session to the sidecar. Shared by the initial handover and
+  // by the status poll, because the two failures are the same one seen at
+  // different times: the sidecar not up yet, and the sidecar gone again.
+  const recover = useCallback(() => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    pushHandoff.current = pushHandoff.current
+      .catch(() => {})
+      .then(() => startPush(sid))
+      .catch(() => {})
+  }, [])
 
   const creating = useRef(null)
 
@@ -218,8 +235,21 @@ export default function Adaptive() {
     // pushes start 401ing partway through and the samples pile up in a bounded
     // queue until they are dropped. Re-handing the same session id replaces the
     // token in place and leaves the queue alone.
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'TOKEN_REFRESHED' && !killed) startPush(sessionId).catch(() => {})
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event !== 'TOKEN_REFRESHED' || killed) return
+      // The token comes from the callback argument. Calling `getSession()` in
+      // here deadlocks on supabase-js v2's auth lock, which is held while this
+      // dispatches -- and a deadlock in the refresh path means the sidecar
+      // keeps an expired token and every push 401s for the rest of the lesson.
+      //
+      // On the same chain as start and stop, so a refresh landing during
+      // teardown cannot re-hand a token to a sidecar that is being stopped.
+      const token = session?.access_token
+      if (!token) return
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => (killed ? null : startPush(sessionId, token)))
+        .catch(() => {})
     })
 
     return () => {
@@ -247,6 +277,12 @@ export default function Adaptive() {
     const tick = () => pushStatus()
       .then(d => {
         if (killed) return
+        // A sidecar that went away after a successful handover: the initial
+        // retry loop has long since stopped, so without this the session never
+        // recovers -- and a restarted sidecar has no session and no token, so
+        // it will not resume on its own either. `enabled: false` is excluded:
+        // that one is configuration, and re-handing would just 409 forever.
+        if (d.enabled !== false && !d.running) recover()
         // `enabled: false` means the sidecar is reachable and deliberately not
         // pushing -- PUSH_ENABLED is off while this backend is in push mode, so
         // nobody is writing this session at all. Merging a flat
@@ -256,11 +292,17 @@ export default function Adaptive() {
         // recorded, and they are not the same claim.
         setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running }))
       })
-      .catch(() => { if (!killed) setPush(p => ({ ...(p || {}), reachable: false, running: false })) })
+      .catch(() => {
+        if (killed) return
+        setPush(p => ({ ...(p || {}), reachable: false, running: false }))
+        // Unreachable now but reachable before -- the sidecar was restarted or
+        // the lesson outlived it. Same recovery.
+        recover()
+      })
     tick()
     const id = setInterval(tick, 10000)
     return () => { killed = true; clearInterval(id) }
-  }, [sessionId, headband.pushMode])
+  }, [sessionId, headband.pushMode, recover])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
@@ -497,7 +539,13 @@ export default function Adaptive() {
                 that may claim recording. Collapsing "not asked" into "not
                 recording" is how a surface ends up reporting an absence in data
                 that simply had not loaded. */}
-            {headband.pushMode && push && (push.reachable === false || push.enabled === false) && (
+            {/* `running: false` counts. A restarted sidecar answers
+                `enabled: true, running: false` -- reachable, configured, and
+                recording nothing -- which fell through both earlier conditions
+                and left the panel showing a stale reading count and no warning
+                at all. Any known not-recording state is amber. */}
+            {headband.pushMode && push && push.running !== true &&
+             (push.reachable === false || push.enabled === false || push.running === false) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
             {headband.pushMode && push?.reachable && push?.running && (

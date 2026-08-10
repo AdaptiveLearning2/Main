@@ -380,7 +380,7 @@ async def test_the_emitted_payload_carries_what_the_pull_path_stores():
 
     seen = []
     session.on_payload = seen.append
-    session._emit()
+    await session._emit()
 
     assert "bands" in seen[0], "band powers never reached the push path"
     assert set(seen[0]["bands"]) == {"delta", "theta", "alpha", "beta", "gamma"}
@@ -402,7 +402,7 @@ async def test_a_raising_consumer_does_not_kill_the_sampling_loop():
         raise RuntimeError("network on fire")
 
     session.on_payload = boom
-    session._emit()  # must not raise
+    await session._emit()  # must not raise
 
 
 @pytest.mark.anyio
@@ -466,3 +466,102 @@ async def test_no_session_is_not_a_drop():
     pc.enqueue("cognitive", {"ts": 0})
 
     assert pc.status()["dropped_locally"]["cognitive"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_rejected_face_window_is_not_a_row(client):
+    """`build_face_record` always returns a dict -- a rejected window arrives as
+    `emotion: None, rejected_by: "no_face"`, not as an absent block. Enqueuing
+    on the block's presence wrote ~14k all-null rows an hour, each counted as a
+    sample by the aggregates and by `dominant_emotion`."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t", "device_id": "cam0",
+        "face": {"emotion": None, "emotion_confidence": None,
+                 "trusted": False, "rejected_by": "no_face"},
+    })
+
+    assert client.status()["queued"]["face"] == 0
+
+
+@pytest.mark.anyio
+async def test_an_untrusted_emotion_is_still_a_reading(client):
+    """`emotion_trusted` is a column and fusion gates on it. Dropping untrusted
+    readings here would silently narrow what the backend gets to decide about."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t",
+        "face": {"emotion": "sad", "emotion_confidence": 0.3, "trusted": False},
+    })
+
+    assert client.status()["queued"]["face"] == 1
+    assert client._queues["face"][0]["emotion_trusted"] is False
+
+
+@pytest.mark.anyio
+async def test_a_rejected_heart_window_is_not_a_row(client):
+    """`build_heart_record` sets `source: "rppg"` unconditionally, including on
+    warming_up and no_face rejects, so `source` alone was not enough of a test.
+    Latent only because FACE_HEART_ENABLED is off."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t",
+        "heart": {"source": "rppg", "bpm": None, "confidence": 0.0,
+                  "rejected_by": "warming_up"},
+    })
+
+    assert client.status()["queued"]["heart"] == 0
+
+
+@pytest.mark.anyio
+async def test_an_unreadable_receipt_does_not_re_post_a_committed_batch(client, monkeypatch):
+    """Past `raise_for_status()` the rows are written. Throwing while reading the
+    body would restore the batch and post it again -- and neither
+    `cognitive_signals` nor `face_signals` has a dedupe key."""
+    class _BadBody(_Response):
+        def json(self):
+            raise ValueError("truncated body")
+
+    fake = _FakeClient(responder=lambda *_a, **_k: _BadBody(status_code=200))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("cognitive", {"ts": 0})
+
+    await client._flush_once()  # must not raise
+
+    assert client.status()["queued"]["cognitive"] == 0, "a committed batch was re-queued"
+    # Neither recorded nor lost: the write happened, our knowledge of it did not.
+    assert client.status()["recorded"]["cognitive"] == 0
+    assert client.status()["unaccounted"]["cognitive"] == 1
+
+
+@pytest.mark.anyio
+async def test_counters_do_not_carry_into_the_next_session(client):
+    """A fresh session showing readings recorded before any were taken is a
+    worse lie than a blank tile."""
+    await _started(client, "s1")
+    client.enqueue("cognitive", {"ts": 0})
+    await client._flush_once()
+    assert client.status()["recorded"]["cognitive"] == 1
+
+    await client.start("s2", "tok2")
+
+    assert client.status()["recorded"]["cognitive"] == 0
+    assert client.status()["dropped_locally"]["cognitive"] == 0
+
+
+@pytest.mark.anyio
+async def test_submit_payload_counts_the_shutdown_window_like_enqueue(client):
+    """It had its own `running` guard in front of `enqueue`, so it short-circuited
+    the accounting `enqueue` was fixed to do."""
+    await _started(client)
+    client._task.cancel()
+    try:
+        await client._task
+    except asyncio.CancelledError:
+        pass
+
+    client.submit_payload({"timestamp": "t", "features": {"focus_score": 1.0}})
+
+    assert client.status()["dropped_locally"]["cognitive"] == 1

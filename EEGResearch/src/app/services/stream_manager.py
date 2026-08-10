@@ -58,13 +58,19 @@ class DeviceSession:
         # the sampling loop must not be able to fail because of the network.
         self.on_payload: Callable[[dict[str, Any]], None] | None = None
 
-    def _emit(self) -> None:
+    async def _emit(self) -> None:
         """Hand the tick's payload to whatever is consuming it.
 
         Swallows everything. A consumer that raises would otherwise kill the
         sampling loop, which is the one thing in this process that must keep
         running: losing the local stream to fix up a remote write is strictly
         worse than losing the remote write.
+
+        `snapshot()` off the event loop thread. It calls
+        `adapter.get_ingestion_meta()`, which is the very call `_loop` already
+        wraps in `to_thread` because it can block on lock contention in the TCP
+        adapter -- taking it inline here put it straight back on the loop and
+        made every API request wait behind a tick.
         """
         if self.on_payload is None:
             return
@@ -77,7 +83,7 @@ class DeviceSession:
             # stored them. One deployment silently recording less than the
             # other is exactly the divergence the shared mapping was meant to
             # rule out, reintroduced one layer upstream of it.
-            self.on_payload(self.snapshot())
+            self.on_payload(await asyncio.to_thread(self.snapshot))
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.warning("payload consumer failed for device %s: %s: %s",
                            self.device_id, type(exc).__name__, exc)
@@ -211,7 +217,7 @@ class DeviceSession:
                 try:
                     self.latest_payload = self._face_payload(samples, raw_meta)
                     self.samples_processed += len(samples)
-                    self._emit()
+                    await self._emit()
                 except Exception as exc:
                     self.errors_seen += 1
                     logger.warning(
@@ -259,7 +265,7 @@ class DeviceSession:
                     },
                 }
                 self.samples_processed += len(samples)
-                self._emit()
+                await self._emit()
             except Exception as exc:
                 # A real sample was read successfully, so this is a bug in the
                 # processing pipeline (not a signal-loss condition) -- log and

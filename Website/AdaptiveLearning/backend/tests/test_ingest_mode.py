@@ -638,3 +638,44 @@ def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
 
     assert "s1" not in eeg_poller._warned_double_write, \
         f"{stopper} left the record behind"
+
+
+def test_derived_keys_win_on_the_push_path_too(monkeypatch):
+    """"Derived keys win a collision" held on the pull path and silently did not
+    here. The push client nests device_id/channels/state/ingestion under `raw`,
+    so the mapper's top-level lookups all found None, `_raw` dropped the Nones,
+    and the client's values were stored -- one path differing from the other,
+    which is the thing `signal_mapping` exists to prevent."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good"},
+         "raw": {"device_id": "station1", "state": {"label": "focused"},
+                 "signal_quality": "spoofed", "note": "kept"}},
+    ]), None)
+
+    raw = written[0]["raw"]
+    # The envelope is read as the envelope, not left buried under `raw`.
+    assert raw["device_id"] == "station1"
+    assert raw["state"] == {"label": "focused"}
+    # Derived beats client-supplied, the same way it does on the pull path.
+    assert raw["signal_quality"] == "good"
+    # And anything outside the envelope still survives.
+    assert raw["note"] == "kept"
+
+
+def test_the_pull_path_mapping_is_unchanged(monkeypatch):
+    """The un-nesting must not have moved the poller's goalposts: it passes the
+    envelope at the top level already."""
+    row = signal_mapping.map_eeg_to_cognitive(
+        {"timestamp": "t", "device_id": "station1",
+         "features": {"focus_score": 50.0, "signal_quality": "good"},
+         "state": {"label": "focused"}},
+        "s", "u")
+
+    assert row["raw"]["device_id"] == "station1"
+    assert row["raw"]["signal_quality"] == "good"

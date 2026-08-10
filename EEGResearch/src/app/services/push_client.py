@@ -87,6 +87,10 @@ class PushClient:
         }
         self._dropped: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._sent: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Committed by the backend but with an unreadable receipt. Neither
+        # recorded nor lost, and lumping it into either would make that number
+        # a guess -- the same three-state discipline the reporting surfaces use.
+        self._unaccounted: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         self._wake = asyncio.Event()
         self._backoff = 0.0
@@ -168,6 +172,13 @@ class PushClient:
         self._token = None
         for channel in _CHANNELS:
             self._queues[channel].clear()
+        # Counters are per session, like the queues. Carried over, a fresh
+        # session opens showing readings recorded before any were taken -- the
+        # panel would say "412 readings recorded from this computer" about a
+        # lesson that has not started, which is a worse lie than a blank tile.
+        self._sent = {channel: 0 for channel in _CHANNELS}
+        self._dropped = {channel: 0 for channel in _CHANNELS}
+        self._unaccounted = {channel: 0 for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -216,7 +227,12 @@ class PushClient:
         nulling it, so an absent block here means "switched off", which must not
         become a row.
         """
-        if not self.running or not self._token:
+        # No guard on `running` here: `enqueue` decides, and it distinguishes
+        # the two cases this cannot. No session at all is not a loss (nothing to
+        # send it to); a session whose loop has ended is, and gets counted.
+        # Returning early here skipped that accounting for exactly the samples
+        # `enqueue` was fixed to count.
+        if not self._token:
             return
         ts = payload.get("timestamp")
         device_id = payload.get("device_id")
@@ -235,7 +251,17 @@ class PushClient:
             })
 
         face = payload.get("face")
-        if face:
+        # `build_face_record` always returns a dict -- a rejected window is
+        # reported as `emotion: None, rejected_by: "no_face"`, not as an absent
+        # block. Enqueuing on the block's presence therefore wrote a row every
+        # tick: ~14k all-null `face_signals` rows an hour, every one of them
+        # counted as a sample by the aggregates and by `dominant_emotion`.
+        #
+        # A reading is an emotion. Untrusted ones still go -- `emotion_trusted`
+        # is a column and fusion gates on it -- but a rejection is not a
+        # measurement of anything and belongs in the sidecar's own state, which
+        # is where `/api/v1/state` already reports it.
+        if face and face.get("emotion") is not None:
             self.enqueue("face", {
                 "ts": ts,
                 "emotion": face.get("emotion"),
@@ -257,12 +283,14 @@ class PushClient:
             })
 
         heart = payload.get("heart")
-        # `source` is required by the endpoint and constrained in the database,
-        # because consent is per sensor: a reading that cannot say which sensor
-        # produced it cannot be consent-checked. Dropping it here rather than
-        # sending it and having the row rejected keeps the failure local and
-        # counted.
-        if heart and heart.get("source"):
+        # Two conditions, and `source` alone was not enough. `build_heart_record`
+        # sets `source: "rppg"` unconditionally, including on `warming_up` and
+        # `no_face` rejects, so every rejected window became a null-bpm row --
+        # the same all-null flood as the face channel, latent only because
+        # FACE_HEART_ENABLED is off. `source` is still required: consent is per
+        # sensor, and a reading that cannot name its sensor cannot be
+        # consent-checked.
+        if heart and heart.get("source") and heart.get("bpm") is not None:
             self.enqueue("heart", {
                 "ts": ts,
                 "source": heart.get("source"),
@@ -381,17 +409,35 @@ class PushClient:
             # and the backoff widens, rather than being counted as delivered.
             raise RuntimeError("rate limited by backend (429)")
         response.raise_for_status()
-        body = response.json() if response.content else {}
+        # Past this line the server has committed the rows, so nothing below may
+        # raise: the caller restores a failed batch to the queue and re-posts it,
+        # and `cognitive_signals` and `face_signals` have no dedupe key, so a
+        # throw here would duplicate every row the request just wrote. Reading a
+        # response body is exactly the sort of thing that fails late -- a short
+        # read, a truncated body, a proxy returning HTML.
+        try:
+            body = response.json() if response.content else {}
+            inserted = int(body.get("inserted", 0))
+            dropped = int(body.get("dropped", 0))
+            reason = body.get("reason", "unspecified")
+        except Exception as exc:  # noqa: BLE001 - see above
+            # Counted as delivered-but-unknown rather than not delivered. The
+            # write happened; only our knowledge of how much of it landed did
+            # not, and pretending otherwise is what causes the duplicate.
+            logger.warning("push: %s batch committed but its receipt was "
+                           "unreadable (%s); %d sample(s) unaccounted",
+                           channel, exc, len(samples))
+            self._unaccounted[channel] += len(samples)
+            return
         # The server's own count, not `len(samples)`. It drops samples whose
         # sensor the student has not consented to, and reports how many -- a
         # client that counted what it *sent* would report success for a batch
         # that recorded nothing, which is the write-side version of a dashboard
         # that cannot tell "no data" from "zero".
-        self._sent[channel] += int(body.get("inserted", 0))
-        dropped = int(body.get("dropped", 0))
+        self._sent[channel] += inserted
         if dropped:
             logger.info("push: backend dropped %d %s sample(s): %s",
-                        dropped, channel, body.get("reason", "unspecified"))
+                        dropped, channel, reason)
 
     # ── introspection ────────────────────────────────────────────────────────
 
@@ -410,6 +456,10 @@ class PushClient:
             # Named for what happened rather than for the queue: these were
             # produced by this sidecar and never reached the backend.
             "dropped_locally": dict(self._dropped),
+            # Written, but we could not read how much. Not folded into
+            # `recorded`, which would overstate it, nor into `dropped_locally`,
+            # which would claim a loss that did not happen.
+            "unaccounted": dict(self._unaccounted),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

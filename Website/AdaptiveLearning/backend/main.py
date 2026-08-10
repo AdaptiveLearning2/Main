@@ -2569,14 +2569,25 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
         # 0..1 conversion and the `stress = 1 - calm` inversion. Flat samples are
         # already in table units and are stored as given.
         if s.features is not None or s.bands is not None:
+            # Un-nested into the shape the mapper reads, rather than handed to
+            # it as one `raw` blob. The mapper takes `device_id`, `channels`,
+            # `state` and `ingestion` off the *top level* and merges `raw`
+            # underneath, with derived keys winning a collision. Left nested,
+            # every one of those lookups found nothing, `_raw` dropped the
+            # resulting Nones, and the client's copies were stored -- so
+            # "derived keys win" held on the pull path and silently did not
+            # here, which is the one-path-differs-from-the-other failure this
+            # module exists to prevent.
+            raw = dict(s.raw or {})
+            envelope = {k: raw.pop(k, None)
+                        for k in ("device_id", "channels", "state", "ingestion")}
             return signal_mapping.map_eeg_to_cognitive(
                 {"timestamp": s.ts or _utc_now().isoformat(),
                  "features": s.features or {}, "bands": s.bands or {},
-                 # Under `raw`, not spread across the payload. The mapper reads
-                 # named keys off the top level and merges `raw` separately, so
-                 # spreading it let a client shadow `device_id` or `state` --
-                 # and dropped every key the mapper does not know about.
-                 "raw": s.raw},
+                 **envelope,
+                 # Whatever the client sent that is not part of the envelope.
+                 # Still merged, still losing to a derived key of the same name.
+                 "raw": raw},
                 payload.session_id, user["id"])
         return {
             "session_id": payload.session_id,

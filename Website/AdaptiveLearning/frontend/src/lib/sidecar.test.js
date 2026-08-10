@@ -118,3 +118,30 @@ describe('startPush retry', () => {
     await expect(sidecar.startPush('s')).resolves.toMatchObject({ status: 'pushing' })
   })
 })
+
+describe('startPush with a supplied token', () => {
+  it('does not call getSession when given one', async () => {
+    // The auth-lock deadlock. supabase-js v2 holds an internal lock while
+    // dispatching onAuthStateChange, and getSession() waits on that same lock,
+    // so awaiting it from inside the callback hangs forever -- the sidecar
+    // keeps the expired token and every push 401s for the rest of the lesson,
+    // silently. The refresh handler passes the session it was handed.
+    const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
+    getSession.mockImplementation(() => {
+      throw new Error('getSession must not be called from the refresh path')
+    })
+
+    await sidecar.startPush('sess-1', 'refreshed-jwt')
+
+    expect(getSession).not.toHaveBeenCalled()
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).access_token).toBe('refreshed-jwt')
+  })
+
+  it('still falls back to getSession when not given one', async () => {
+    const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
+
+    await sidecar.startPush('sess-1')
+
+    expect(JSON.parse(fetchSpy.mock.calls[0][1].body).access_token).toBe('student-jwt')
+  })
+})

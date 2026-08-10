@@ -422,9 +422,19 @@ Three properties worth not breaking:
 - **A failure in one channel must not cost the others.** Each channel is drained immediately before
   its own POST, not all three up front; the first version re-raised on the first failure and threw
   away two already-popped batches.
-- **The sampling hook emits `snapshot()`, not `latest_payload`.** `bands` and `ingestion` are
+- **The sampling hook emits `snapshot()`, not `latest_payload`** — `bands` and `ingestion` are
   assembled in `snapshot()`, so emitting the raw payload gave push-ingested rows null band powers
-  while pull-ingested ones had them.
+  while pull-ingested ones had them — and it does so via `to_thread`, because `snapshot()` reaches
+  `get_ingestion_meta()`, the one call the sampling loop already offloads for blocking.
+- **A rejected window is not a reading.** `build_face_record` and `build_heart_record` always return
+  a dict, with `emotion: None` / `bpm: None` and a `rejected_by`. Enqueue on *the reading*, not on
+  the block's presence, or a 4 Hz session writes ~14k all-null rows an hour, every one counted as a
+  sample by the aggregates. `source` alone does not test it: the heart block sets `rppg`
+  unconditionally.
+- **Nothing after `raise_for_status()` may raise.** The rows are committed by then, a throw restores
+  the batch, and the re-post duplicates them — `cognitive_signals` and `face_signals` have no dedupe
+  key. A batch whose receipt could not be read is `unaccounted`, which is neither `recorded` nor
+  `dropped_locally`.
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.
@@ -450,6 +460,12 @@ them.
 longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
 `TOKEN_REFRESHED`, which replaces the token in place — same session id, queue untouched. Without it
 the pushes 401 partway through and the samples sit in a bounded queue until they are dropped.
+
+**Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2
+holds an internal auth lock while dispatching, and `getSession()` waits on it — awaiting it there
+deadlocks. Use the `session` the callback is handed; that is why `startPush` takes an optional token.
+The symptom is the worst kind: the refresh handler hangs, the sidecar keeps the expired token, and
+every push 401s for the rest of the lesson with nothing raised anywhere.
 
 `ALLOWED_ORIGINS` on the sidecar must name the **frontend** origin, not just the backend's. Getting
 it wrong fails every local call on CORS while the sidecar itself looks perfectly healthy.

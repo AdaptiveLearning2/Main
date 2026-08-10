@@ -636,6 +636,20 @@ and carries `retrieved` so callers can tell "nobody consented" from "we couldn't
 opposite of the reporting helpers below, deliberately: a dashboard degrading to empty is fine, a
 consent check degrading to *enabled* records data against a refusal.
 
+**Withdrawal stops future recording and keeps what is already stored.** Decided 2026-08-10: a
+revoked channel records nothing further until consent is given again, and no past row is deleted or
+hidden. Withdrawal is not erasure — a separate question, tracked in #75.
+
+That rule has to hold on **both ingestion paths**, and for a while it did not. `/api/signals/*` has
+called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
+the **service-role** client, so neither RLS nor the ingest endpoint applies to it, and under
+`INGEST_MODE=pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses **403** (not the 409
+push uses — one says this student said no, the other says this deployment does not work that way),
+and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS` so a mid-lesson withdrawal
+lands without waiting for the session to end. `eeg_poller.set_consent_check()` is wired from `main`
+at import and has **no default**: unwired, `start()` raises rather than assuming yes, because an
+unwired deployment that assumes yes is indistinguishable from a wired one.
+
 **Writes only through the backend.** The table has no insert/update/delete policy for anyone, so
 with RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the
 frontend bundle. `main.py` is the enforcement:

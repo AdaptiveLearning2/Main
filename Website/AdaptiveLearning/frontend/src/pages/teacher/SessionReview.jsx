@@ -10,10 +10,13 @@ import { apiFetch } from '../../lib/api'
 
 // Fixed per label, so a colour means the same thing between two sessions --
 // index-based colours would repaint the same emotion differently whenever the
-// set of labels present changed.
+// set of labels present changed. Keyed on the FER+ labels the backend
+// actually stores (EEGResearch/src/app/services/face_emotion.py), the same
+// ones the EMOJI map below uses -- not the -happiness/-sadness/-anger nouns,
+// which never match a real sample and silently fell back to neutral's grey.
 const EMOTION_COLOURS = {
-  neutral: '#94a3b8', happiness: '#10b981', surprise: '#38bdf8',
-  sadness: '#6366f1', anger: '#f43f5e', disgust: '#84cc16',
+  neutral: '#94a3b8', happy: '#10b981', surprise: '#38bdf8',
+  sad: '#6366f1', angry: '#f43f5e', disgust: '#84cc16',
   fear: '#a855f7', contempt: '#f59e0b',
 }
 
@@ -109,11 +112,20 @@ export default function SessionReview() {
   let hi = 0
   for (const row of series) {
     while (hi + 1 < heartByT.length && heartByT[hi + 1].t <= row.t) hi++
-    const near = heartByT[hi]
+    // The nearest heart reading is one of the two entries bracketing row.t in
+    // the sorted array: the last one at-or-before it (hi) and the first one
+    // after it (hi + 1). Checking only the floor missed a closer *later*
+    // reading whenever the heart channel sampled less often than the
+    // cognitive one -- the point of "nearest", not "most recent".
+    const floor = heartByT[hi]
+    const ceil  = heartByT[hi + 1]
+    const floorDist = floor ? Math.abs(floor.t - row.t) : Infinity
+    const ceilDist  = ceil  ? Math.abs(ceil.t - row.t)  : Infinity
+    const near = ceilDist < floorDist ? ceil : floor
     // Only if it is actually near. Carrying a reading forward across a gap
     // would draw a flat heart rate through a stretch where the sensor was off,
     // which is the "cannot tell no-data from a value" failure on a chart.
-    if (near && Math.abs(near.t - row.t) <= 15_000) {
+    if (near && Math.min(floorDist, ceilDist) <= 15_000) {
       row.heart_rate_bpm = typeof near.h.heart_rate_bpm === 'number' ? near.h.heart_rate_bpm : null
       row.rmssd_ms = typeof near.h.rmssd_ms === 'number' ? near.h.rmssd_ms : null
     }
@@ -240,7 +252,12 @@ export default function SessionReview() {
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
                 <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
-                <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+                {/* Named "EEG stress" rather than bare "stress": this is
+                    cognitive_signals.stress (inverted calm), a different
+                    measurement from the heart-derived stress_category pie
+                    below, and CLAUDE.md is explicit that the two must never
+                    share a label. */}
+                <Line yAxisId="ratio" type="monotone" dataKey="stress" name="EEG stress" stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
 
                 {/* Omitted rather than drawn as an all-null line: an empty
                     legend entry reads as a measurement that flatlined. */}
@@ -254,8 +271,13 @@ export default function SessionReview() {
                 )}
 
                 {/* Sensor changed here. Distinct from the answer markers below
-                    by colour and by being solid. */}
-                {failovers.map((f, i) => (
+                    by colour and by being solid. Gated on hasHeart, not just
+                    failovers.length: failovers is built from raw heart_signals
+                    source changes and can be non-empty (every window rejected
+                    but still carrying a source) while no row ever got a
+                    numeric heart_rate_bpm -- and the "abs" axis these markers
+                    reference only mounts when hasHeart is true. */}
+                {hasHeart && failovers.map((f, i) => (
                   <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
                                  stroke="#a855f7" strokeOpacity={0.5} />
                 ))}
@@ -339,7 +361,11 @@ export default function SessionReview() {
           )}
           {stressSlices.length > 0 && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
-              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Stress</h2>
+              {/* Not bare "Stress": heart_signals.stress_category is a
+                  physiological measurement, distinct from the EEG-derived
+                  "EEG stress" series in the timeline chart above. CLAUDE.md:
+                  never render both under one "Stress" label. */}
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>

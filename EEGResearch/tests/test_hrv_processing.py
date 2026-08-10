@@ -1,14 +1,10 @@
 """RMSSD derivation.
 
-Every physiological assertion here is provisional. There is no reference
-measurement yet, so these tests pin *behaviour that was measured* -- the gates
-firing on the right windows, the two-stage improvement doing what it claims --
-and not correctness of the RMSSD values themselves. Where a number is asserted,
-the tolerance is wide and the docstring says what it is standing in for.
-
-When an ECG reference is recorded, the values below become checkable and the
-tolerances should tighten. Until then a passing suite here means "unchanged",
-not "right".
+Behaviour, not accuracy. These pin the gates firing on the right windows and the
+two-stage improvement doing what it claims; the accuracy of the values is settled
+against ECG references in `test_hrv_against_dense_ecg.py` (30s) and
+`test_optics_rmssd.py` (the 25s production path). Where a number is asserted
+here, the tolerance is wide and the docstring says what it is standing in for.
 """
 
 from __future__ import annotations
@@ -17,13 +13,16 @@ import numpy as np
 import pytest
 
 from src.app.services.hrv_processing import (
+    MAX_BEAT_COVERAGE,
     MIN_BEAT_COVERAGE,
+    MIN_RATE_CONFIDENCE,
+    _channels_needed,
     consensus_beats,
     detect_beats,
     estimate_hrv,
     rmssd_from_beats,
 )
-from src.app.services.ppg_processing import estimate_window
+from src.app.services.ppg_processing import BANDPASS_ORDER, estimate_window
 from test_ppg_processing import _load
 
 PHYSIOLOGICAL_MS = (10.0, 120.0)
@@ -45,7 +44,10 @@ def test_rmssd_of_a_perfectly_regular_beat_is_zero():
     beats = [i * 0.8 for i in range(30)]
     rmssd, n = rmssd_from_beats(beats)
     assert rmssd == pytest.approx(0.0, abs=1e-9)
-    assert n == 29
+    # 30 beats, 29 intervals, 28 successive differences -- and the count returned
+    # is the last of those, because it is the number of terms the mean of squares
+    # is actually taken over and the number MIN_INTERVALS is meant to bound.
+    assert n == 28
 
 
 def test_rmssd_is_successive_differences_not_spread():
@@ -223,3 +225,113 @@ def test_rmssd_is_stable_across_a_still_recording():
     assert all(v < 100.0 for v in values), (
         "a resting adult does not have an RMSSD near 100ms"
     )
+
+
+# ── consensus needs channels to be a consensus ───────────────────────────────
+
+def test_the_agreement_requirement_scales_with_the_channel_count():
+    """A flat count would be 3-of-16 on the wide optics presets.
+
+    The table is the contract: never one, never unanimity where a channel can be
+    spared, and 3-of-4 preserved because that is the rung it was tuned on.
+    """
+    assert [_channels_needed(n) for n in (2, 3, 4, 8, 16)] == [2, 2, 3, 6, 12]
+
+
+def test_one_live_channel_is_refused_rather_than_believed():
+    """The gate that stops this module quietly becoming the thing it replaces.
+
+    With a single populated channel, consensus is the identity on that channel's
+    detections and the cross-channel averaging does nothing -- which is the
+    29-246ms per-channel detector the module docstring exists to describe. Run
+    against the six ECG-referenced windows one channel at a time it reported
+    every one, never refusing, at up to +75% error.
+
+    It cannot be caught downstream: `estimate_window`'s agreement term is 1.00
+    by construction against a single waveform, so rate confidence can be 1.00 on
+    exactly the window that least deserves it -- the same inapplicable-confidence
+    trap CLAUDE.md records for camera rPPG.
+    """
+    window, fs = _window("optics_ecg_dense.jsonl.gz", 52, 77)
+    bpm, confidence = _rate(window, fs)
+
+    single = estimate_hrv(window[:, :1], fs, bpm, confidence)
+    assert single.rmssd_ms is None
+    assert single.beat_count == 0
+
+    # And it is the channel count doing it, not the window: the same 25s of
+    # signal with all four channels reports.
+    assert estimate_hrv(window, fs, bpm, confidence).rmssd_ms is not None
+
+
+def test_a_dead_channel_does_not_make_a_quorum():
+    """`populated` counts channels with detections, not columns in the array, so
+    padding a single live channel with silent ones must not buy agreement."""
+    window, fs = _window("optics_ecg_dense.jsonl.gz", 52, 77)
+    padded = np.hstack([window[:, :1], np.zeros((len(window), 3))])
+    assert consensus_beats(padded, fs) == []
+
+
+# ── coverage is bounded both ways ────────────────────────────────────────────
+
+def test_more_beats_than_the_rate_accounts_for_is_refused():
+    """The lower bound catches missed beats; nothing else catches invented ones.
+
+    A double-detected dicrotic notch or an octave-low rate both land well above
+    1.0 and every count-based statistic beneath them looks healthy, so without
+    this they are indistinguishable from a clean window. Simulated by halving
+    the rate the coverage is judged against, which is what an octave error does.
+    """
+    window, fs = _window("optics_ecg_dense.jsonl.gz", 52, 77)
+    bpm, confidence = _rate(window, fs)
+
+    out = estimate_hrv(window, fs, bpm / 2.0, confidence)
+    assert out.rmssd_ms is None
+    assert out.rejected_by == "excess_beats"
+    assert out.coverage > MAX_BEAT_COVERAGE
+
+
+def test_a_window_that_was_never_examined_has_no_coverage():
+    """None, not 0.0. The rate-confidence gate returns before any beat is
+    counted, so a 0.0 would reach `heart_signals.raw` as "0% of beats detected"
+    for a window nobody looked at -- and `_raw` drops nulls but keeps zeros, so
+    the distinction survives here or not at all."""
+    window, fs = _window("optics_ecg_dense.jsonl.gz", 52, 77)
+
+    for out in (estimate_hrv(window, fs, None, 1.0),
+                estimate_hrv(window, fs, 70.0, MIN_RATE_CONFIDENCE - 0.01)):
+        assert out.coverage is None
+        assert out.beat_count == 0
+
+    # Where beats *were* counted, a real number.
+    assert estimate_hrv(window, fs, *_rate(window, fs)).coverage is not None
+
+
+# ── the counts mean what they say ────────────────────────────────────────────
+
+def test_intervals_stranded_between_artefacts_are_not_counted():
+    """`interval_count` gates MIN_INTERVALS, so it has to be the number of terms
+    the mean of squares is taken over. Isolated intervals contribute no
+    successive difference; counting them would let six stranded pairs report
+    twelve and clear a gate of ten on six real terms."""
+    # Alternating good pair / artefact: every run is length 2, so each yields
+    # exactly one difference.
+    beats, t = [0.0], 0.0
+    for _ in range(6):
+        for step in (0.80, 0.81, 2.00):
+            t += step
+            beats.append(t)
+
+    rmssd, n = rmssd_from_beats(beats)
+    assert rmssd is not None
+    assert n == 6, "expected one difference per surviving pair"
+
+
+def test_a_window_too_short_for_the_filter_is_empty_not_an_exception():
+    """`filtfilt` requires strictly more than its padlen, and the guard used to
+    admit exactly that length. `ppg_processing` carries a comment saying this
+    bound was already gotten wrong once."""
+    padlen = 3 * (2 * BANDPASS_ORDER + 1)
+    assert detect_beats(np.random.default_rng(0).normal(size=padlen), 64.0).size == 0
+    # One more sample and it runs rather than raising.
+    detect_beats(np.random.default_rng(0).normal(size=padlen + 1), 64.0)

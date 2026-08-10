@@ -471,9 +471,26 @@ its own field (`rmssd_rejected_by`, carried into `raw`) precisely so it is never
 `rejected_by`, which says whether there is a reading at all.
 
 Validated against six simultaneous watch ECGs, seated: r = 0.75 at the 30s window it was captured
-on. **The production 25s window has its own numbers** — r = 0.77, bias −3.1 ms, RMS 5.2 ms, worst
+on. **The production 25s window has its own numbers** — r = 0.78, bias −3.1 ms, RMS 5.2 ms, worst
 window 21% against 15% — measured in `test_optics_rmssd.py` rather than carried across, because a
 shorter window has fewer beats to average. Don't quote the 30s figures for the shipped path.
+
+**All of that depends on more than one optical channel being alive, and a count-based quorum is how
+it silently stops.** RMSSD is only usable because beats are agreed across channels and timed by
+averaging the channels that saw each one; with one live channel both steps become the identity and
+what is recorded is the raw per-channel detector, which ranged 29–246 ms across four channels
+watching the same heart. Run single-channel against the six ECG windows it reports **all six, never
+refusing, at up to +75% error**. Nothing downstream catches it — `estimate_window`'s `agreement`
+term is 1.00 by construction against one waveform, the same inapplicable-confidence trap as camera
+rPPG — so `consensus_beats` refuses below `MIN_POPULATED_CHANNELS` and scales its quorum as
+`CONSENSUS_FRACTION` of the channels that produced detections. A fixed count is what to avoid: 3
+was tuned on 4 channels and would be 3-of-16 on the wide optics presets.
+
+Beat coverage is bounded **both ways** for the same reason. The lower bound catches missed beats;
+without an upper one a double-detected notch or an octave-low rate is indistinguishable from clean,
+since every count beneath it looks healthy. Genuine 4-channel windows reach 1.054 — a 25s window at
+70 bpm expects 29.2 beats and can honestly hold 30 — so the bound sits at 1.15, above real data and
+well below the 1.20–1.26 that single-channel runs produce.
 
 `sqi` and `stress_score` are still **not derived** on either path; those columns stay null, so
 `heart_signals.stress_score` has no producer — don't read an empty tile as a broken query.
@@ -586,7 +603,7 @@ from "zero".
 
 `stress_score` is defined **on heart rate alone**. RMSSD is an enrichment term, added when available
 and absent without changing what the score means — a hard requirement, not a preference, because
-RMSSD is unavailable whenever the headband is off and one window in six is gated out even when it is
+RMSSD is unavailable whenever the headband is off and one window in five is gated out even when it is
 on. A score whose definition shifts when an input drops out is unreadable across a session.
 
 ## Fusion is asymmetric on purpose — easing off wins, pushing harder defers

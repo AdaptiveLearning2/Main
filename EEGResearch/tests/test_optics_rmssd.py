@@ -18,7 +18,7 @@ not the same numbers. Same six windows, same references:
     t=299    29.2ms   32.6ms    33.4ms
 
     30s: n=5  r=0.75  bias -1.3ms  rms 4.7ms  worst 15%
-    25s: n=6  r=0.77  bias -3.1ms  rms 5.2ms  worst 21%
+    25s: n=6  r=0.78  bias -3.1ms  rms 5.2ms  worst 21%
 
 Correlation holds and one more window reports; bias and the worst case both grow.
 That is the trade for sharing the rate's window, and sharing it is not optional --
@@ -65,10 +65,18 @@ def dense():
 
 @pytest.fixture(scope="module")
 def paired(dense):
-    """The six ECG-referenced windows, as (reference RMSSD, built record)."""
+    """The six ECG-referenced windows, as (reference RMSSD, built record).
+
+    One tracker across all six, in offset order, because that is what production
+    does: `HeartRateTracker` carries the previous window's bpm and its continuity
+    rule can refuse a window that would pass in isolation. Estimating each with a
+    fresh tracker would test a path the sidecar never takes.
+    """
     data, fs = dense
+    tracker = HeartRateTracker()
     return [(rmssd_from_beats(_ecg_beats(_load_ecg(name)))[0],
-             _record(data, fs, offset)) for name, offset in PAIRS]
+             _record(data, fs, offset, tracker))
+            for name, offset in sorted(PAIRS, key=lambda p: p[1])]
 
 
 def test_the_production_window_still_tracks_the_reference(paired):
@@ -136,8 +144,8 @@ def test_a_refused_rmssd_never_costs_the_heart_rate(dense):
     assert enriched, "no window produced RMSSD at all"
     assert rated > enriched, "no window exercised the refusal path"
     # Named causes, so a null column can be explained rather than guessed at.
-    assert refusals <= {"rate_confidence", "coverage", "too_few_intervals",
-                        "no_rate", "no_rmssd"}, refusals
+    assert refusals <= {"rate_confidence", "coverage", "excess_beats",
+                        "too_few_intervals", "no_rate", "no_rmssd"}, refusals
 
 
 def test_a_refused_rate_is_not_enriched(dense):
@@ -160,6 +168,29 @@ def test_a_refused_rate_is_not_enriched(dense):
     # beyond the rate's own refusal.
     assert record["rmssd_rejected_by"] is None
     assert record["beat_coverage"] is None
+
+
+def test_a_window_no_beat_was_counted_in_has_no_beat_coverage(dense):
+    """Null, never 0.0, and this is the write path so it is the one that counts.
+
+    RMSSD's confidence gate is 0.9 against the rate's 0.55, so confidence in
+    between is routine -- 2 of 46 windows on this recording. `_raw` drops nulls
+    and keeps zeros, so a 0.0 here reaches the database indistinguishable from a
+    window where every beat really was missed, which is the same
+    can't-tell-no-data-from-zero failure the mappers exist to prevent.
+    """
+    data, fs = dense
+    tracker = HeartRateTracker()
+    seen = 0
+    for start in range(0, int(len(data) / fs - RATE_WINDOW_SECONDS),
+                       int(EMIT_EVERY_SECONDS)):
+        record = _record(data, fs, start, tracker)
+        if record["rmssd_rejected_by"] != "rate_confidence":
+            continue
+        seen += 1
+        assert record["beat_coverage"] is None
+
+    assert seen, "no window exercised the rate-confidence path"
 
 
 def test_every_block_carries_the_rmssd_fields(dense):

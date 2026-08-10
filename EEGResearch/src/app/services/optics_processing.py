@@ -148,7 +148,7 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
     # Only after the rate is settled, and only ever adding to the record. The
     # rate is the measurement `stress_score` is defined on; RMSSD enriches it
     # when the beats are countable and is simply absent when they are not --
-    # which is roughly one window in six even on a good recording, and always
+    # which is roughly one window in five even on a good recording, and always
     # while the headband is off. A score that changed meaning when this dropped
     # out would be unreadable across a session, so nothing below may reach
     # `bpm`, `trusted` or `rejected_by`.
@@ -159,7 +159,13 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
     # given a longer window of its own.
     hrv = estimate_hrv(window.channels, window.fs,
                        estimate.bpm, estimate.confidence)
-    record["beat_coverage"] = round(float(hrv.coverage), 3)
+    # Only where beats were actually counted. `coverage` is None when the rate
+    # confidence gate returned before detection ran, and a 0.0 there would be
+    # stored as "0% of beats detected" on a window nobody looked for beats in --
+    # `_raw` drops nulls but keeps zeros, so the distinction has to survive here
+    # or it does not survive at all.
+    if hrv.coverage is not None:
+        record["beat_coverage"] = round(float(hrv.coverage), 3)
     if hrv.rmssd_ms is None:
         record["rmssd_rejected_by"] = hrv.rejected_by or "no_rmssd"
         return record

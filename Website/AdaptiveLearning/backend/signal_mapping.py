@@ -237,7 +237,7 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
                     channel_count=heart.get("channel_count"),
                     # RMSSD's own gates, kept apart from `rejected_by` above.
                     # A row can carry a good heart rate and no RMSSD -- roughly
-                    # one window in six does -- and these say which of the two
+                    # one window in five does -- and these say which of the two
                     # was refused, so a null `rmssd_ms` beside a real
                     # `heart_rate_bpm` is readable rather than a puzzle.
                     beat_coverage=heart.get("beat_coverage"),

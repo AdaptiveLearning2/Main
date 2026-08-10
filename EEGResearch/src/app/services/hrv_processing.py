@@ -39,7 +39,7 @@ window was wrong, which is indistinguishable from an improvement.
 `tests/test_hrv_against_dense_ecg.py` holds the table.
 
 Those figures are for **30s** windows. `optics_processing` derives over the 25s
-the rate estimator was validated on, where the same six windows give r = 0.77,
+the rate estimator was validated on, where the same six windows give r = 0.78,
 bias -3.1ms, RMS 5.2ms and a worst window of 21% -- correlation holds, accuracy
 is slightly worse, and no window is gated out. The production path is pinned to
 its own numbers in `test_optics_rmssd.py`; don't carry the 30s figures across.
@@ -48,7 +48,7 @@ So it ships, as an enrichment
 -----------------------------
 `heart_signals.stress_score` is defined on heart rate alone and RMSSD is added
 when available. That is a hard requirement rather than a preference: this is
-unavailable whenever the headband is off, and roughly one window in six is gated
+unavailable whenever the headband is off, and roughly one window in five is gated
 out even when it is on. A score whose definition shifted when an input dropped
 out would be unreadable across a session.
 
@@ -84,18 +84,19 @@ widens it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import ceil
 
 import numpy as np
 from scipy.signal import find_peaks
 
-from .ppg_processing import MAX_BPM, bandpass
+from .ppg_processing import BANDPASS_ORDER, MAX_BPM, MIN_BPM, bandpass
 
 # Physiologically possible beat intervals, in ms. The bounds mirror MIN_BPM and
 # MAX_BPM in ppg_processing: 42 bpm is 1429ms, 180 bpm is 333ms. An interval
 # outside this is a detector artefact rather than a beat, and is dropped before
 # it can contribute its square to the result.
 MIN_IBI_MS = 60_000.0 / MAX_BPM
-MAX_IBI_MS = 1429.0
+MAX_IBI_MS = 60_000.0 / MIN_BPM
 
 # How far one interval may sit from the window's median before it is treated as
 # a detector artefact rather than a beat. This is the filter that matters; see
@@ -121,10 +122,31 @@ BEAT_MATCH_TOLERANCE_S = 0.06
 # after the bandpass the pulse is the only thing left with this shape.
 PEAK_PROMINENCE_SD = 0.3
 
-# A beat must be seen by this many channels, or all but one where there are
-# fewer. Requiring unanimity would discard real beats that one badly seated
-# emitter missed, which reintroduces exactly the gap this exists to close.
-MIN_CHANNELS_PER_BEAT = 3
+# What fraction of the populated channels must have seen a beat. 0.75 is the
+# tuned 3-of-4 expressed proportionally, and it is a fraction rather than a
+# count so that it still means something on the 8- and 16-channel optics presets
+# (`MUSE_OPTICS_PRESET` 1031-1034): a flat 3 was tuned against four channels and
+# would be 3-of-16 there, which is barely an agreement requirement at all.
+CONSENSUS_FRACTION = 0.75
+
+# ...but never unanimity, where there are enough channels to spare one. Requiring
+# every channel would discard real beats that one badly seated emitter missed,
+# which reintroduces exactly the gap consensus exists to close.
+MAX_CHANNELS_SPARED = 1
+
+# Below this many channels with any detections, there is no consensus to take and
+# the answer is a refusal rather than one channel's opinion.
+#
+# This is the gate, not a formality. A single channel run through the six
+# ECG-referenced windows reports every one of them -- never refusing -- at up to
+# +75% error, because with one channel neither the agreement requirement nor the
+# cross-channel averaging does anything and what is left is the raw per-channel
+# detector this module exists to replace. It cannot be caught downstream either:
+# `estimate_window`'s agreement term is 1.00 by construction against a single
+# waveform, so the rate confidence gate below can be passed at 1.00 by exactly
+# the window that least deserves it. Same shape as the camera-rPPG confidence
+# trap in CLAUDE.md, and the reason it has to be tested here.
+MIN_POPULATED_CHANNELS = 2
 
 # Detected beats as a fraction of what the rate implies. Below this, beats are
 # being missed and every miss inflates RMSSD.
@@ -136,13 +158,27 @@ MIN_CHANNELS_PER_BEAT = 3
 # derivation's confidence -- it is the second of two independent gates.
 MIN_BEAT_COVERAGE = 0.95
 
+# And the other side of it, which the lower bound alone does not give. Coverage
+# well above 1 means beats were detected that the rate says are not there --
+# a double-detected dicrotic notch, or a rate an octave low -- and without this
+# they are indistinguishable from a clean window, because every count-based
+# statistic below them looks healthy.
+#
+# 1.15 rather than something nearer 1.0: a 25s window at 70 bpm expects 29.2
+# beats and can honestly contain 30, so a single boundary beat is already 1.03.
+# Measured across the two ECG-referenced recordings, genuine 4-channel windows
+# reach 1.054 -- a tighter bound would reject real data. The failures this is
+# aimed at are far above it: single-channel runs of the same windows produce
+# 1.20-1.26, and a doubled rate lands near 2.0.
+MAX_BEAT_COVERAGE = 1.15
+
 # The rate derivation's own confidence, below which RMSSD is not attempted.
 # Higher than its MIN_CONFIDENCE of 0.55: a window good enough to report a rate
 # from is not automatically good enough to count individual beats in.
 MIN_RATE_CONFIDENCE = 0.9
 
-# Fewer intervals than this and the mean of squared successive differences is
-# dominated by whichever interval happened to be worst.
+# Fewer successive differences than this and the mean of their squares is
+# dominated by whichever one happened to be worst.
 MIN_INTERVALS = 10
 
 
@@ -151,13 +187,19 @@ class HrvEstimate:
     """RMSSD for one window, or the reason there isn't one."""
     rmssd_ms: float | None
     # Beats accepted by consensus, as a fraction of what the rate implies should
-    # be in the window. Near 1.0 means none were missed.
-    coverage: float
+    # be in the window. Near 1.0 means none were missed and none were invented.
+    #
+    # **None when no beat was ever counted**, which is not the same claim as 0.0
+    # and must not be stored as one: the rate-confidence gate returns before
+    # `consensus_beats` runs, so a 0.0 there would reach the database as "0% of
+    # beats detected" on a window where detection was never attempted. Same
+    # can't-tell-no-data-from-zero rule the write path follows everywhere else.
+    coverage: float | None
     beat_count: int
     interval_count: int
     # Machine-readable cause, when there is one: "rate_confidence" |
-    # "coverage" | "too_few_intervals" | "no_rate". Control flow matches this;
-    # `reason` is for display only.
+    # "coverage" | "excess_beats" | "too_few_intervals" | "no_rate". Control flow
+    # matches this; `reason` is for display only.
     rejected_by: str | None = None
     reason: str = ""
     beat_times_s: list[float] = field(default_factory=list)
@@ -173,7 +215,11 @@ def detect_beats(x: np.ndarray, fs: float) -> np.ndarray:
     it is the one that would remain after they were fixed.
     """
     x = np.asarray(x, dtype=float)
-    if x.size < 3 * (2 * 4 + 1):
+    # `filtfilt`'s padlen, which it requires the input to exceed *strictly* --
+    # equal is already too short. Written the same way as the guard in
+    # `ppg_processing.estimate_channel`, and importing the order rather than
+    # repeating it, so a filter change cannot desync the two.
+    if x.size <= 3 * (2 * BANDPASS_ORDER + 1):
         return np.empty(0)
     y = bandpass(x, fs)
     sd = float(np.std(y))
@@ -199,6 +245,23 @@ def detect_beats(x: np.ndarray, fs: float) -> np.ndarray:
     return np.asarray(refined) / fs
 
 
+def _channels_needed(populated: int) -> int:
+    """How many channels must agree, given how many produced any detections.
+
+        populated   2   3   4   8   16
+        needed      2   2   3   6   12
+
+    Three constraints at once, and the middle one is the reason this is not a
+    single `min()`. The fraction scales with the preset; sparing one channel is
+    what keeps a badly seated emitter from vetoing every beat -- but it is only
+    affordable where losing one still leaves a real agreement, which is why the
+    floor of two overrides it at two channels rather than collapsing to one.
+    """
+    spared = populated - MAX_CHANNELS_SPARED
+    return max(MIN_POPULATED_CHANNELS,
+               min(spared, ceil(CONSENSUS_FRACTION * populated)))
+
+
 def consensus_beats(channels: np.ndarray, fs: float) -> list[float]:
     """Beat times agreed by most channels, each averaged over the channels that
     saw it.
@@ -215,14 +278,17 @@ def consensus_beats(channels: np.ndarray, fs: float) -> list[float]:
 
     per_channel = [detect_beats(channels[:, c], fs) for c in range(channels.shape[1])]
     populated = [b for b in per_channel if b.size]
-    if not populated:
+    if len(populated) < MIN_POPULATED_CHANNELS:
+        # Not "fall back to what we have". With one channel this function is the
+        # identity on that channel's detections, and it is the *only* thing
+        # standing between them and a recorded number -- see MIN_POPULATED_CHANNELS.
         return []
 
     # The channel with the most detections is the roll-call, not channel 0.
     # Starting from a sparse channel silently caps the result at its beat count,
     # which reads as a clean recording rather than a poor reference.
     reference = max(populated, key=len)
-    needed = min(MIN_CHANNELS_PER_BEAT, len(populated))
+    needed = _channels_needed(len(populated))
 
     agreed: list[float] = []
     for t in reference:
@@ -278,7 +344,6 @@ def rmssd_from_beats(beat_times_s: list[float]) -> tuple[float | None, int]:
     # entirely by consecutive pairs. The error is largest exactly where the
     # signal was worst, so it inflates the windows already least trustworthy.
     diffs: list[np.ndarray] = []
-    kept = 0
     run: list[float] = []
     for value, ok in zip(ibi, valid):
         if ok:
@@ -286,16 +351,18 @@ def rmssd_from_beats(beat_times_s: list[float]) -> tuple[float | None, int]:
             continue
         if len(run) >= 2:
             diffs.append(np.diff(np.asarray(run)))
-        kept += len(run)
         run = []
     if len(run) >= 2:
         diffs.append(np.diff(np.asarray(run)))
-    kept += len(run)
 
     if not diffs:
-        return None, kept
+        return None, 0
     all_diffs = np.concatenate(diffs)
-    return float(np.sqrt(np.mean(all_diffs ** 2))), kept
+    # Successive differences, not surviving intervals. An interval stranded
+    # between two dropped ones contributes nothing to the result, so counting it
+    # towards MIN_INTERVALS would let six isolated pairs report twelve and clear
+    # a gate whose whole purpose is that the mean of squares has enough terms.
+    return float(np.sqrt(np.mean(all_diffs ** 2))), int(all_diffs.size)
 
 
 def estimate_hrv(
@@ -324,7 +391,7 @@ def estimate_hrv(
     duration_s = len(channels) / fs if fs > 0 else 0.0
 
     if bpm is None:
-        return HrvEstimate(None, 0.0, 0, 0, "no_rate",
+        return HrvEstimate(None, None, 0, 0, "no_rate",
                            "no heart rate for this window")
 
     # First gate: the rate derivation's own verdict. Checked before any beat
@@ -332,7 +399,9 @@ def estimate_hrv(
     # computing one anyway would mean a number exists that must then be
     # suppressed somewhere downstream.
     if rate_confidence < MIN_RATE_CONFIDENCE:
-        return HrvEstimate(None, 0.0, 0, 0, "rate_confidence",
+        # `coverage=None`, not 0.0 -- no beat was counted here, which is a
+        # different claim from none having been found.
+        return HrvEstimate(None, None, 0, 0, "rate_confidence",
                            f"rate confidence {rate_confidence:.2f} below "
                            f"{MIN_RATE_CONFIDENCE}")
 
@@ -340,12 +409,19 @@ def estimate_hrv(
     expected = bpm / 60.0 * duration_s
     coverage = len(beats) / expected if expected > 0 else 0.0
 
-    # Second gate, independent of the first: are the beats all here? Missing
-    # beats are what inflates RMSSD, and they can be missing from a window whose
-    # rate is perfectly correct.
+    # Second gate, independent of the first: are these the beats, all of them and
+    # only them? Missing beats inflate RMSSD and can be missing from a window
+    # whose rate is perfectly correct; invented ones deflate it and look
+    # healthier than the truth, which is why the band is bounded both ways.
     if coverage < MIN_BEAT_COVERAGE:
         return HrvEstimate(None, coverage, len(beats), 0, "coverage",
                            f"only {coverage:.0%} of expected beats detected",
+                           beat_times_s=beats)
+
+    if coverage > MAX_BEAT_COVERAGE:
+        return HrvEstimate(None, coverage, len(beats), 0, "excess_beats",
+                           f"{coverage:.0%} of expected beats detected -- more "
+                           f"beats than the rate accounts for",
                            beat_times_s=beats)
 
     rmssd, intervals = rmssd_from_beats(beats)

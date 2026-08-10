@@ -185,7 +185,12 @@ export default function Live() {
         rows.forEach(r => {
           const c = r.latest_cognitive
           const h = r.latest_heart
-          if (!c) return
+          // Not `if (!c) return`: a student can consent to the heart sensor
+          // without EEG (independent switches), in which case c is always
+          // null while h keeps arriving. Skipping the whole tick on c alone
+          // left that student's badge showing a live bpm with a permanently
+          // empty trend line beneath it.
+          if (!c && !h) return
           const arr = historyRef.current[r.user_id] || []
           // Null, not 0. A row can exist with null measurements when the
           // headband reported bad electrode contact -- the row is kept so the
@@ -194,9 +199,9 @@ export default function Live() {
           // which is a fabricated reading presented as a real one. recharts
           // leaves a gap for null (connectNulls defaults to false).
           arr.push({
-            focus:      c.focus ?? null,
-            engagement: c.engagement ?? null,
-            stress:     c.stress ?? null,
+            focus:      c?.focus ?? null,
+            engagement: c?.engagement ?? null,
+            stress:     c?.stress ?? null,
             // Null when there is no heart row for this tick, or when the row
             // exists with a rejected window. Same reasoning as the three above:
             // recharts leaves a gap for null, and a 0 here would draw a

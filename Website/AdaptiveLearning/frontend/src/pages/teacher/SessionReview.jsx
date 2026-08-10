@@ -87,18 +87,14 @@ export default function SessionReview() {
   const answers   = Array.isArray(data?.answers)   ? data.answers   : []
 
   // numeric ms x-axis — way more stable than category strings
-  const series = cognitive
-    .map(c => {
-      const t = new Date(c.ts).getTime()
-      return Number.isFinite(t) ? {
-        t,
-        focus:      typeof c.focus      === 'number' ? c.focus      : null,
-        engagement: typeof c.engagement === 'number' ? c.engagement : null,
-        stress:     typeof c.stress     === 'number' ? c.stress     : null,
-      } : null
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.t - b.t)
+  const cognitiveByT = new Map(
+    cognitive
+      .map(c => {
+        const t = new Date(c.ts).getTime()
+        return Number.isFinite(t) ? [t, c] : null
+      })
+      .filter(Boolean),
+  )
 
   // Heart merged into the same rows by nearest timestamp rather than plotted
   // from its own array: Recharts wants one dataset, and the two channels are
@@ -108,6 +104,25 @@ export default function SessionReview() {
     .map(h => ({ t: new Date(h.ts).getTime(), h }))
     .filter(x => Number.isFinite(x.t))
     .sort((a, b) => a.t - b.t)
+
+  // Row timestamps are the union of both channels, not cognitive alone: a
+  // student can consent to the heart sensor without EEG (independent
+  // switches -- ConsentChannels.jsx), in which case cognitive is empty and
+  // heart is not. Building the base series from cognitive only left that
+  // session with zero rows to ever merge a heart reading onto, so the bpm
+  // axis, lines and failover markers below silently never rendered even
+  // though real heart data existed.
+  const series = Array.from(new Set([...cognitiveByT.keys(), ...heartByT.map(x => x.t)]))
+    .sort((a, b) => a - b)
+    .map(t => {
+      const c = cognitiveByT.get(t)
+      return {
+        t,
+        focus:      typeof c?.focus      === 'number' ? c.focus      : null,
+        engagement: typeof c?.engagement === 'number' ? c.engagement : null,
+        stress:     typeof c?.stress     === 'number' ? c.stress     : null,
+      }
+    })
 
   let hi = 0
   for (const row of series) {
@@ -219,8 +234,11 @@ export default function SessionReview() {
         {!hasChart ? (
           <div className="text-center py-12">
             <div className="text-5xl mb-2">🧠</div>
-            <p className="text-sm text-gray-400">No cognitive samples for this session yet.</p>
-            <p className="text-[11px] text-gray-400 mt-1">Once the headband starts streaming, it'll show up here.</p>
+            {/* Now reachable from heart-only data too (series merges both
+                channels' timestamps), so this can no longer name just the
+                one channel it used to be the only source for. */}
+            <p className="text-sm text-gray-400">No signal samples for this session yet.</p>
+            <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
           </div>
         ) : (
           <div className="h-72">

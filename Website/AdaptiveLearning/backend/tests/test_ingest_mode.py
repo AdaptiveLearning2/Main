@@ -150,6 +150,36 @@ def test_heart_values_are_carried_in_absolute_units():
     assert row["trusted"] is True
 
 
+def test_a_heart_row_is_stamped_by_the_reading_not_the_tick():
+    """The headband's block covers 25s, is recomputed every 10s and is held on
+    the payload in between -- so it rides ~40 consecutive ticks. Stamped from
+    the tick, one measurement becomes forty rows; stamped from itself, the
+    unique (session_id, source, ts) makes the repeats no-ops."""
+    row = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:07Z",
+        "heart": {"source": "muse_optics", "bpm": 68.2,
+                  "ts": "2026-08-09T10:00:00+00:00", "sample_rate_hz": 64.2,
+                  "largest_gap_s": 0.03, "channel_count": 4},
+    }, "s", "u")
+
+    assert row["ts"] == "2026-08-09T10:00:00+00:00"
+    # The headband's counterparts to measured_fps, kept under their own names:
+    # one is a camera's frame rate, the other a BLE link's sample rate.
+    assert row["raw"]["sample_rate_hz"] == 64.2
+    assert row["raw"]["channel_count"] == 4
+
+
+def test_a_camera_heart_row_still_takes_the_ticks_stamp():
+    """The camera's block has no `ts` of its own and must be unaffected."""
+    row = signal_mapping.map_heart_to_heart_signal({
+        "timestamp": "2026-08-09T10:00:07Z",
+        "heart": {"source": "rppg", "bpm": 71.0},
+    }, "s", "u")
+
+    assert row["ts"] == "2026-08-09T10:00:07Z"
+    assert "sample_rate_hz" not in row["raw"]
+
+
 def test_the_two_face_confidences_stay_separate():
     """One is how sure we are of the expression, the other whose face it is. The
     fusion rule reads only the first, and read the second by mistake once."""

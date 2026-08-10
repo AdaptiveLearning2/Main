@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from src.app.config import DEFAULT_DEVICE_ID, DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
 from src.app.services.eeg_ingestion import build_ingestion_adapter, enrich_ingestion_dict
+from src.app.services.optics_processing import (
+    EMIT_EVERY_SECONDS,
+    RATE_WINDOW_SECONDS,
+    build_heart_record,
+)
+from src.app.services.ppg_processing import HeartRateTracker
 from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
@@ -47,6 +54,12 @@ class DeviceSession:
         )
         self.processor = SignalProcessor()
         self.adaptation = AdaptationEngine()
+        # Heart rate off the headband's optical channels. Held per session
+        # because continuity -- the only check that catches an octave error --
+        # compares each window against the last one *this device* produced.
+        self._heart_tracker: HeartRateTracker | None = None
+        self._heart_block: dict[str, Any] | None = None
+        self._heart_emitted_at: float | None = None
         self.latest_payload: dict[str, Any] = {}
         self.samples_processed = 0
         self.errors_seen = 0
@@ -87,6 +100,61 @@ class DeviceSession:
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.warning("payload consumer failed for device %s: %s: %s",
                            self.device_id, type(exc).__name__, exc)
+
+    def _optical_heart_block(self) -> dict[str, Any] | None:
+        """The `heart` block for this tick, or None if this device has no optics.
+
+        Two properties, both of which the ingestion paths depend on.
+
+        **Recomputed on a cadence, not per tick.** It is a 25s window either
+        way, so a 4Hz tick would run an autocorrelation over 1600x4 samples
+        sixteen times to produce the same answer -- and `MAX_BPM_CHANGE_PER_S`,
+        the continuity rule that rejects octave errors, is calibrated against
+        the 10s step the estimator was validated on. A quarter-second step
+        would make every window's predecessor 99% itself.
+
+        **Held between recomputes, and carrying its own `ts`.** A block that
+        appeared for one tick and vanished would be seen by a 4Hz push consumer
+        and mostly missed by a 1Hz poller, so the two deployments would record
+        different sessions from the same headband. Holding it means both see
+        every reading; the stamp is what lets both write it exactly once.
+        """
+        window_fn = getattr(self.adapter, "optics_window", None)
+        if window_fn is None:
+            # Not a headband, or a headband whose adapter cannot buffer optics.
+            # The simulator is deliberately included in that: it does not model
+            # an optical channel, and a simulated pulse would be a number on a
+            # parent's chart with nothing behind it.
+            return None
+
+        now = time.monotonic()
+        if self._heart_emitted_at is not None and now - self._heart_emitted_at < EMIT_EVERY_SECONDS:
+            return self._heart_block
+        if self._heart_tracker is None:
+            self._heart_tracker = HeartRateTracker()
+        # On the first window there is no previous one; the tracker reads this
+        # only to size how far a rate is allowed to have moved, and the nominal
+        # step is the honest answer for "we have not measured before".
+        since = (EMIT_EVERY_SECONDS if self._heart_emitted_at is None
+                 else now - self._heart_emitted_at)
+        self._heart_emitted_at = now
+        self._heart_block = build_heart_record(
+            window_fn(RATE_WINDOW_SECONDS), self._heart_tracker, since
+        )
+        return self._heart_block
+
+    def _reset_heart(self) -> None:
+        """Forget the tracked rate and the held block.
+
+        Called wherever the EEG signal is lost or the stream stops, for the
+        same reason `processor.reset()` is: the tracker's anchor and the held
+        block both describe a stretch of signal that has ended, and continuing
+        to publish the block would keep a rate on the dashboard -- and in the
+        database, under fresh timestamps -- for a headband that is off.
+        """
+        self._heart_tracker = None
+        self._heart_block = None
+        self._heart_emitted_at = None
 
     def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
         """The camera equivalent of the EEG payload.
@@ -169,6 +237,7 @@ class DeviceSession:
             # "idle" via /api/v1/state instead of a fabricated zero reading.
             self.processor.reset()
             self.adaptation.reset_for_signal_loss()
+            self._reset_heart()
             self.latest_payload = self._no_signal_payload()
 
     async def _loop(self) -> None:
@@ -203,6 +272,7 @@ class DeviceSession:
                 )
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
+                self._reset_heart()
                 self.latest_payload = self._no_signal_payload()
                 await asyncio.sleep(period)
                 continue
@@ -264,6 +334,15 @@ class DeviceSession:
                         "calm_score": state.calm_score,
                     },
                 }
+                # Alongside the cognitive block, not inside it. Two sensors on
+                # one device, separately consented and separately capable of
+                # failing, so the key is absent rather than null when the
+                # device has no optical channel at all -- "switched off" and
+                # "could not measure" are the distinction the camera payload
+                # keeps for the same reason.
+                heart = self._optical_heart_block()
+                if heart is not None:
+                    self.latest_payload["heart"] = heart
                 self.samples_processed += len(samples)
                 await self._emit()
             except Exception as exc:

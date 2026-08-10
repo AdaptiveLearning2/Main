@@ -426,6 +426,44 @@ These rules lived inline in `eeg_poller` and were absent from the push path, so 
 headband wrote nothing under pull and a zeroed row per tick under push. Anything of this kind
 belongs in the mapper: it is the only place both deployments are guaranteed to read.
 
+### Headband heart rate is a held window, not a per-tick reading
+
+The headband is the primary heart source (the camera is emotion-only), and it reaches
+`heart_signals` through `optics_processing.build_heart_record`. Four things about it are load-bearing:
+
+- **Nothing arrives unless `MUSE_ENABLE_OPTICS` is on**, and it is still off by default. That
+  caution is about the *preset rung* — 16 CH at 64 Hz drops the BLE link — not about optics as such,
+  and the default `1035` rung is the safe one. With it off a session records no heart rate and every
+  window is refused as `no_samples`, which is the honest answer and not a fault.
+- **The window is placed on `seq`, never on `mono_ts_ms`.** The bridge's stamp records BLE *delivery*
+  — ~9% of samples share one with their predecessor and the rest arrive in bursts — so `seq` is the
+  only real sample index, and the stamps are used solely to measure an average rate across the whole
+  window, where the batching averages out. That rate is `seq`-span over elapsed seconds, not
+  `len(rows)`: with samples dropped, counting rows reports a rate low by exactly the loss and scales
+  every bpm down with it. This is the opposite call to `rgb_window`'s median-of-intervals, and the
+  reason is the clock, not preference.
+- **25s window, recomputed every 10s, then *held* on the payload.** The 10s step is what
+  `MAX_BPM_CHANGE_PER_S` was validated against. Holding is what lets a 1 Hz poller see every reading;
+  emitting for one tick would have push record everything and pull record almost nothing.
+- **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
+  ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
+  client dedupes per `(device, source)`, and the poller upserts on
+  `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
+- **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
+  channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
+
+`rmssd_ms`, `sqi` and `stress_score` are **not derived yet** on either path; the columns stay null.
+`heart_signals.stress_score` therefore has no producer — don't read an empty tile as a broken query.
+
+**The poller's heart write is consent-gated, and that gate is the only one there is.** It writes with
+the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.
+`eeg_poller.set_heart_consent_check(fn)` is wired from `main` at import; `fn(user_id, source)` is
+built from the same `_consent` + `_permitted_heart_sources` pair the endpoint uses, so the two paths
+cannot disagree about one student. Unwired it denies, a failed read denies, and it is re-read every
+`HEART_CONSENT_RECHECK_SECONDS` so a mid-lesson withdrawal lands without waiting for the session to
+end. Per *source*, not per channel: a student who allowed the headband and refused the camera has
+consented to `muse_optics` and not to `rppg`.
+
 ### The sidecar's push client does no arithmetic
 
 `EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with

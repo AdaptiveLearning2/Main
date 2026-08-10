@@ -1,0 +1,141 @@
+"""The `heart` block built from a headband optical window.
+
+Two things are pinned: that every refusal is named rather than reported as a
+null reading, and that a real recording gets through the gates and produces the
+rate the fixture is known to contain.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from src.app.services.eeg_ingestion import OpticsWindow, TcpMuseBridgeAdapter
+from src.app.services.optics_processing import (
+    EMIT_EVERY_SECONDS,
+    RATE_WINDOW_SECONDS,
+    build_heart_record,
+)
+from src.app.services.ppg_processing import HeartRateTracker
+
+# Ground truth for optics_rest_60s: 67.9 bpm by independent spectral analysis,
+# and the wearer's watch agreed. Same slice test_ppg_processing validates on.
+RESTING_BPM = 68.0
+
+
+def _window(samples=1600, fs=64.0, span=None, gap=None, channels=4):
+    span = RATE_WINDOW_SECONDS if span is None else span
+    data = np.zeros((samples, channels)) if samples else np.empty((0, channels))
+    return OpticsWindow(data, fs, span, gap, channels)
+
+
+def _build(window, tracker=None, since=EMIT_EVERY_SECONDS):
+    return build_heart_record(window, tracker or HeartRateTracker(), since)
+
+
+def test_a_refusal_is_never_a_reading():
+    """The property the ingestion paths depend on.
+
+    `source` is set unconditionally, so a caller enqueuing on the block rather
+    than on the reading writes a null row every tick -- ~14k an hour at 4Hz,
+    each one counted as a sample by the aggregates.
+    """
+    record = _build(_window(samples=0, fs=None, span=0.0))
+    assert record["source"] == "muse_optics"
+    assert record["bpm"] is None
+    assert record["trusted"] is False
+    assert record["rejected_by"] == "no_samples"
+
+
+def test_the_first_seconds_of_a_session_are_warming_up_not_a_failure():
+    record = _build(_window(samples=320, span=5.0))
+    assert record["rejected_by"] == "warming_up"
+    assert record["window_coverage"] == pytest.approx(0.2)
+
+
+def test_an_unmeasured_rate_is_refused_rather_than_assumed():
+    """Falling back to the preset's nominal 64Hz is the assumption the
+    measurement exists to remove: a link running slow would then report every
+    rate high by exactly the shortfall, with full confidence."""
+    record = _build(_window(fs=None))
+    assert record["rejected_by"] == "unmeasured_sample_rate"
+    assert record["sample_rate_hz"] is None
+
+
+def test_a_collapsed_link_is_refused_and_says_so():
+    record = _build(_window(fs=6.0))
+    assert record["rejected_by"] == "sample_rate_too_low"
+    # Reported even though it is the reason for the rejection: it is the
+    # diagnosis, and a row that hid it could not be read back.
+    assert record["sample_rate_hz"] == 6.0
+
+
+def test_a_long_gap_is_refused_because_interpolation_would_invent_it():
+    record = _build(_window(gap=2.5))
+    assert record["rejected_by"] == "sampling_gap"
+    assert record["largest_gap_s"] == 2.5
+
+
+def test_flat_channels_produce_no_rate():
+    record = _build(_window())
+    assert record["bpm"] is None
+    assert record["rejected_by"] is not None
+
+
+def _window_from(name: str, through_seconds: float | None = None):
+    """A window built the way the sidecar builds one: bridge lines in, buffer,
+    then the same `optics_window` call the tick makes."""
+    with gzip.open(Path(__file__).parent / "fixtures" / name, "rt", encoding="utf-8") as fh:
+        frames = [json.loads(line) for line in fh if line.strip()]
+    if through_seconds is not None:
+        start = frames[0]["mono_ts_ms"]
+        frames = [f for f in frames if f["mono_ts_ms"] - start <= through_seconds * 1000]
+    adapter = TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
+    for frame in frames:
+        adapter._store_optics(frame)
+    return adapter.optics_window(RATE_WINDOW_SECONDS)
+
+
+@pytest.fixture(scope="module")
+def recorded_window():
+    # 20-45s of the resting recording: the same slice test_ppg_processing uses,
+    # past the noisy opening, against a watch-confirmed 67.9 bpm.
+    return _window_from("optics_rest_60s.jsonl.gz", through_seconds=45.0)
+
+
+def test_a_real_resting_recording_produces_its_known_rate(recorded_window):
+    """The whole path, from bridge lines to the block that gets recorded.
+
+    Seated and at rest, which is the only condition this is cleared for: the
+    same estimator reports step cadence at confidence 1.00 through gait, and
+    nothing derived from these channels tells the two oscillators apart.
+    """
+    record = _build(recorded_window)
+    assert record["rejected_by"] is None
+    assert record["bpm"] == pytest.approx(RESTING_BPM, abs=3.0)
+    assert record["ts"]
+    assert record["trusted"] is True
+    assert record["confidence"] > 0.55
+    assert record["channel_count"] == 4
+    assert record["sample_rate_hz"] == pytest.approx(64.2, abs=0.5)
+
+
+def test_every_record_carries_a_parseable_stamp_of_its_own():
+    """Both writers key the row on this rather than on the tick's timestamp.
+
+    The block is held on the payload between recomputes, so it arrives on ~40
+    consecutive ticks; without a stamp of its own, one measurement would be
+    forty rows on the push path and mostly missed readings on the pull one.
+    Present on rejections too, so the field has one meaning in both cases.
+    """
+    for window in (_window(), _window(samples=0, fs=None, span=0.0)):
+        stamp = _build(window)["ts"]
+        parsed = datetime.fromisoformat(stamp)
+        # Timezone-aware: `heart_signals.ts` is timestamptz, and a naive stamp
+        # would be read as whatever the database's zone happens to be.
+        assert parsed.tzinfo is not None

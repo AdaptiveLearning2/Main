@@ -6,8 +6,12 @@ import queue
 import random
 import socket
 import threading
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, TextIO
+
+import numpy as np
 
 from src.app.config import Settings
 from src.app.models import EegSample
@@ -337,6 +341,32 @@ class SimulatedMuseIngestionAdapter:
         raise RuntimeError("Muse bridge commands require EEG_SOURCE=muse (TCP bridge)")
 
 
+@dataclass(frozen=True)
+class OpticsWindow:
+    """A slice of optical history, and what is known about its time base.
+
+    A record rather than a tuple because every field here is a gate the caller
+    has to apply: three of the four exist so a window that cannot be measured
+    is refused by name instead of silently producing a number.
+    """
+
+    # (samples, channels), placed on a uniform grid by sample index. Empty when
+    # there is nothing usable -- never partially filled.
+    channels: np.ndarray
+    # Samples per second, measured across the window. None when it could not be
+    # measured, which is not the same as slow; the caller must not substitute a
+    # nominal rate, since that assumption is what this measurement removes.
+    fs: float | None
+    # Seconds of history actually held, from the bridge's own stamps.
+    span_seconds: float
+    # Longest interval between consecutive samples. Interpolation fills the
+    # small ones; this is what says whether any of them were too big to fill.
+    largest_gap_seconds: float | None
+    # How many optical channels the headband is emitting. Preset-dependent
+    # (4, 8 or 16), so carried rather than assumed.
+    channel_count: int
+
+
 class TcpMuseBridgeAdapter:
     """Reads normalized samples from a native bridge over localhost TCP."""
 
@@ -344,6 +374,17 @@ class TcpMuseBridgeAdapter:
     # Mirrors the native bridge's own drop-oldest policy at the same size
     # (eeg_queue_ cap in muse_bridge_service.cpp).
     EEG_QUEUE_MAXSIZE = 2048
+
+    # Optical samples are buffered as a *window*, not kept as a latest value.
+    # Heart rate is derived by autocorrelation over ~25s of a ~64Hz signal, so
+    # a consumer reading the newest sample at the 4Hz tick rate samples that
+    # signal 16x too slowly and no amount of buffering downstream recovers it.
+    #
+    # ~64 samples/s, so this holds ~64s -- comfortably more than the 25s window
+    # the derivation asks for, and enough that a tick arriving late still finds
+    # a full one. Drop-oldest, matching the EEG queue: an optical sample older
+    # than the window is of no use to anybody.
+    OPTICS_BUFFER_MAXLEN = 4096
 
     def __init__(self, host: str, port: int, timeout_seconds: int) -> None:
         self.host = host
@@ -375,6 +416,13 @@ class TcpMuseBridgeAdapter:
         self._ingestion_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._eeg_queue: queue.Queue[EegSample] = queue.Queue(maxsize=self.EEG_QUEUE_MAXSIZE)
+        # (seq, mono_ts_ms, channel values). Its own lock: the window read is a
+        # copy of up to a few thousand rows and holding _ingestion_lock for it
+        # would block the reader thread's per-line metadata update.
+        self._optics: deque[tuple[int, float, tuple[float, ...]]] = deque(
+            maxlen=self.OPTICS_BUFFER_MAXLEN
+        )
+        self._optics_lock = threading.Lock()
         self._reader_stop = threading.Event()
         self._reader_thread: threading.Thread | None = None
 
@@ -405,6 +453,14 @@ class TcpMuseBridgeAdapter:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if payload.get("kind") == "optics":
+                # Handled and dropped before the metadata update below, not
+                # after. An optics line carries no status fields at all, so the
+                # only thing that update takes from one is `kind` -- which would
+                # then flap between "optics", "eeg" and "status" 64 times a
+                # second on a field the API reports as the device's kind.
+                self._store_optics(payload)
+                continue
             try:
                 with self._ingestion_lock:
                     _apply_bridge_ingestion_fields(self._ingestion_meta, payload)
@@ -418,6 +474,112 @@ class TcpMuseBridgeAdapter:
             except (ValueError, TypeError, KeyError):
                 continue
             self._enqueue_sample(sample)
+
+    def _store_optics(self, payload: dict) -> None:
+        """One `kind: optics` line onto the window buffer.
+
+        Malformed lines are dropped rather than raised on, like malformed EEG
+        ones: this runs on the reader thread, where a raise costs the stream.
+        """
+        try:
+            seq = int(payload["seq"])
+            ts_ms = float(payload["mono_ts_ms"])
+            raw = payload["ch"]
+        except (KeyError, TypeError, ValueError):
+            return
+        if not isinstance(raw, list) or not raw:
+            return
+        try:
+            values = tuple(float(v) for v in raw)
+        except (TypeError, ValueError):
+            # The bridge writes JSON null for a non-finite reading rather than
+            # `nan`, which no parser accepts. The whole sample goes: the
+            # derivation reads the channels of one sample together, and a
+            # sample missing a channel cannot be placed on the grid.
+            return
+        if not all(math.isfinite(v) for v in values):
+            return
+        with self._optics_lock:
+            if self._optics and seq <= self._optics[-1][0]:
+                # seq is a per-bridge-run counter, so going backwards means a
+                # new bridge process rather than a reordered sample. Keeping
+                # the older rows would splice two recordings onto one
+                # reconstructed clock, inventing a gap of arbitrary size.
+                self._optics.clear()
+            self._optics.append((seq, ts_ms, values))
+
+    def optics_window(self, seconds: float) -> OpticsWindow:
+        """The most recent `seconds` of optical samples, on a uniform grid.
+
+        The headband equivalent of the camera adapter's `rgb_window`, and it
+        reconstructs its time base the opposite way round, because the two
+        clocks fail differently.
+
+        `mono_ts_ms` is *not* a per-sample clock: it records when a BLE batch
+        was delivered, so ~9% of samples share a stamp with their predecessor
+        and the rest arrive in bursts (pinned in tests/test_optics_fixture.py).
+        A window placed on those stamps would be measuring Bluetooth
+        scheduling. `seq` is the real sample index -- the bridge increments it
+        once per optical sample -- so samples are placed by seq, and the
+        stamps are used only to establish the *average* rate across the whole
+        window, where the batching averages out. That is also why the rate here
+        is span-based where the camera's is a median of intervals: the median
+        of a batched stream is 0.
+
+        Gaps in seq are interpolated, which is the same trade the camera path
+        makes in `resample_uniform` -- and bounded the same way, by the caller
+        rejecting a window whose `largest_gap_s` is too long to fill honestly.
+        """
+        with self._optics_lock:
+            if not self._optics:
+                return OpticsWindow(np.empty((0, 0)), None, 0.0, None, 0)
+            newest_ts = self._optics[-1][1]
+            width = self._optics[-1][2] and len(self._optics[-1][2])
+            cutoff = -float("inf") if seconds == float("inf") else newest_ts - seconds * 1000.0
+            rows: list[tuple[int, float, tuple[float, ...]]] = []
+            for row in reversed(self._optics):
+                # Both conditions end the walk rather than skip the row. A
+                # channel count that changed mid-buffer is a preset change, and
+                # the samples either side of it are different measurements;
+                # taking the trailing run keeps the window on one of them.
+                if row[1] < cutoff or len(row[2]) != width:
+                    break
+                rows.append(row)
+            rows.reverse()
+
+        if len(rows) < 2:
+            return OpticsWindow(np.empty((0, width)), None, 0.0, None, width)
+
+        seqs = np.array([r[0] for r in rows], dtype=float)
+        ts_s = np.array([r[1] for r in rows], dtype=float) / 1000.0
+        values = np.array([r[2] for r in rows], dtype=float)
+
+        span_s = float(ts_s[-1] - ts_s[0])
+        # Elapsed *samples*, from seq, not `len(rows) - 1`. With samples
+        # dropped anywhere in the window the two differ, and the second one
+        # then reports a rate lower than the headband is running at -- which
+        # scales every derived bpm down by exactly the loss rate, confidently.
+        seq_span = float(seqs[-1] - seqs[0])
+        fs = (seq_span / span_s) if span_s > 0 and seq_span > 0 else None
+        if fs is None:
+            return OpticsWindow(np.empty((0, width)), None, span_s, None, width)
+
+        largest_gap_s = float(np.max(np.diff(seqs))) / fs
+
+        grid_len = int(seq_span) + 1
+        if grid_len == len(rows):
+            channels = values
+        elif grid_len > self.OPTICS_BUFFER_MAXLEN * 4:
+            # A seq jump this large is corruption, not loss. Returning no
+            # samples (with the gap intact, so the caller can still say why)
+            # beats allocating a grid sized from a bad number.
+            channels = np.empty((0, width))
+        else:
+            grid = np.arange(grid_len, dtype=float) + seqs[0]
+            channels = np.column_stack(
+                [np.interp(grid, seqs, values[:, c]) for c in range(width)]
+            )
+        return OpticsWindow(channels, fs, span_s, largest_gap_s, width)
 
     def _try_connect(self) -> bool:
         """Attempt one TCP connection. Returns True on success, False if bridge not up yet."""
@@ -477,6 +639,11 @@ class TcpMuseBridgeAdapter:
                 self._eeg_queue.get_nowait()
             except queue.Empty:
                 break
+        with self._optics_lock:
+            # Dropped for the same reason the EEG queue is: whatever spans a
+            # disconnect is two recordings, and the optical window is placed on
+            # a reconstructed clock that cannot represent the join.
+            self._optics.clear()
         self._reader_stop.clear()
 
     def drain_samples(self, max_batch: int) -> list[EegSample]:

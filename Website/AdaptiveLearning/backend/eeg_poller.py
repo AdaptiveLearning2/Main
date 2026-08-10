@@ -80,6 +80,107 @@ class _Poller(threading.Thread):
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
+        # Heart readings are tracked separately from EEG ones. They arrive on a
+        # different cadence -- one per ~10s window, held on the payload in
+        # between -- so the EEG `last_ts`, which changes every tick, cannot say
+        # whether a heart reading has already been recorded.
+        self.last_heart_ts   = None
+        self.heart_samples   = 0
+        self._heart_consent  = False
+        self._heart_source   = None
+        # None, not 0.0. time.monotonic()'s reference point is undefined, so
+        # 0.0 is not a "never checked" sentinel -- on a host that has been up
+        # for less than the interval it is a claim that we checked at boot.
+        self._heart_checked_at = None
+
+    def _may_record_heart(self, source: str) -> bool:
+        """Whether this student consents to heart data from `source`.
+
+        The poller writes with the **service-role** client, so neither RLS nor
+        `/api/signals/heart`'s per-sample check applies to anything it inserts:
+        this call is the only thing standing between a withdrawal and a heart
+        row under `INGEST_MODE=pull`.
+
+        Per source, not per channel, because one channel arrives from two
+        sensors under two separate permissions -- a student who allowed the
+        headband and refused the camera has consented to `muse_optics` and not
+        to `rppg`, and a heart-rate failover must never open a webcam they
+        declined.
+
+        Re-read on a slow cadence rather than per sample: a lesson outlives a
+        change of mind, and a poller that only asked at the start would keep
+        recording against a mid-lesson withdrawal until the session ended.
+        Unwired, it denies -- a deployment nobody wired the check into is
+        otherwise indistinguishable from one whose student said yes.
+        """
+        now = time.monotonic()
+        if (self._heart_checked_at is not None and source == self._heart_source
+                and now - self._heart_checked_at < HEART_CONSENT_RECHECK_SECONDS):
+            return self._heart_consent
+        self._heart_checked_at = now
+        self._heart_source = source
+        try:
+            self._heart_consent = bool(
+                _heart_consent_check(self.user_id, source)) if _heart_consent_check else False
+        except Exception as e:
+            # Fails closed, like `_consent` itself and unlike the reporting
+            # helpers. A failed read must never be the reason a refusal stops
+            # being enforced -- recording looks identical either way.
+            self._heart_consent = False
+            print(f"!!! [eeg-poller] heart consent check failed, not recording: {e}", flush=True)
+        return self._heart_consent
+
+    def _record_heart(self, data: dict, loops: int) -> None:
+        """Write one heart reading, if the payload carries a new one.
+
+        The headband is the primary heart source and nothing wrote
+        `heart_signals` from this path at all, so a pull deployment recorded no
+        heart rate while an identical push one recorded it fully -- the same
+        two-deployments-diverging failure the shared mapper exists to prevent,
+        one layer above it.
+
+        A rejected window is not a reading: the sidecar's block always has a
+        `source` and reports refusal as `bpm: None` with a `rejected_by`, so
+        gating on the block's presence would write a null row per tick.
+        """
+        heart = data.get("heart")
+        if not heart or heart.get("bpm") is None:
+            return
+        source = heart.get("source")
+        if not source:
+            # Same rule as the mapper's: consent is decided per sensor, so a
+            # reading that cannot name its sensor cannot be checked at all.
+            return
+        # Falls back to the tick's stamp exactly as the mapper does, so the
+        # value compared here is the one that ends up in the row.
+        heart_ts = heart.get("ts") or data.get("timestamp")
+        if heart_ts == self.last_heart_ts:
+            return
+        self.last_heart_ts = heart_ts
+
+        if not self._may_record_heart(source):
+            if loops <= 3 or loops % 10 == 0:
+                print(f">>> [eeg-poller] loop={loops} heart {source} not consented, skipping", flush=True)
+            return
+
+        row = signal_mapping.map_heart_to_heart_signal(data, self.session_id, self.user_id)
+        if row is None:
+            return
+        try:
+            # Upsert, matching `/api/signals/heart`. `heart_session_source_ts_key`
+            # makes a repeat a no-op, which is what keeps a deployment left on
+            # `pull` while its sidecar also pushes from double-counting this
+            # channel -- the protection `cognitive_signals` has no key for.
+            self.supabase.table("heart_signals").upsert(
+                row, on_conflict="session_id,source,ts", ignore_duplicates=True
+            ).execute()
+            self.heart_samples += 1
+            if self.heart_samples <= 3 or self.heart_samples % 10 == 0:
+                print(f"+++ [eeg-poller] HEART #{self.heart_samples} session={self.session_id[:8]} "
+                      f"source={source} bpm={row.get('heart_rate_bpm')}", flush=True)
+        except Exception as e:
+            self.errors += 1
+            print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
 
     def run(self):
         print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]} device={self.device_id}", flush=True)
@@ -95,6 +196,14 @@ class _Poller(threading.Thread):
             data = eeg_client.get_state(self.device_id)
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
+
+            # Outside the EEG freshness check below, deliberately. A heart
+            # reading covers a 25s window and is held on the payload between
+            # recomputes, so it has its own cadence and its own stamp; nesting
+            # it under "the EEG timestamp moved" would tie it to a channel it
+            # does not come from and drop it whenever EEG stalled.
+            if data:
+                self._record_heart(data, loops)
 
             if data and data.get("timestamp") and data["timestamp"] != self.last_ts:
                 self.last_ts = data["timestamp"]
@@ -158,6 +267,34 @@ class _Poller(threading.Thread):
 
     def stop(self):
         self._stop_event.set()
+
+
+# How often a running poller re-reads heart consent. Not per sample: a reading
+# arrives every ~10s, and a Supabase round trip per reading would put the
+# consent table on the recording path. Not per session either -- a lesson runs
+# longer than a change of mind, and this bounds how long a withdrawal keeps
+# being recorded against.
+HEART_CONSENT_RECHECK_SECONDS = 30.0
+
+# `_consent` lives in `main`, and importing it here would be a cycle, so `main`
+# hands it in at import. Takes the sensor as well as the student: one channel
+# arrives from two sensors under two separate permissions, and a single boolean
+# would let a headband's consent authorise a camera.
+#
+# No default, and None denies. An unwired deployment that assumed yes would
+# record against refusals and look exactly like a wired one doing its job.
+_heart_consent_check = None
+
+
+def set_heart_consent_check(fn) -> None:
+    """Register how this module asks whether a student consents to a heart sensor.
+
+    `fn(user_id, source) -> bool`. Wired from `main` at import, against the same
+    `_consent` read and the same source map `/api/signals/heart` enforces, so
+    the two ingestion paths cannot come to different answers about one student.
+    """
+    global _heart_consent_check
+    _heart_consent_check = fn
 
 
 _active: Dict[str, _Poller] = {}
@@ -367,5 +504,11 @@ def status(user_id: str) -> dict:
                     "samples":    p.samples,
                     "errors":     p.errors,
                     "last_ts":    p.last_ts,
+                    # Counted separately from `samples`. A session recording
+                    # EEG happily while its heart channel is refused, declined
+                    # or unmeasurable is a normal state, and one combined
+                    # number would report it as healthy.
+                    "heart_samples": p.heart_samples,
+                    "last_heart_ts": p.last_heart_ts,
                 }
     return {"running": False}

@@ -2165,6 +2165,12 @@ def _consent(student_id: str) -> dict:
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
 
 
+# The poller writes `cognitive_signals` directly with the service-role client,
+# so neither RLS nor the ingest endpoint's gate applies to it. This is what
+# subjects it to the same consent rule as the push path.
+eeg_poller.set_consent_check(lambda student_id: bool(_consent(student_id).get("eeg_enabled")))
+
+
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
     """Whether a write failed because the row already existed.
 
@@ -3073,6 +3079,17 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(400, "Session already ended")
     # Answered before the liveness check, deliberately -- see the helper.
     _refuse_under_push("start a poller")
+    # And before the poller exists at all. Historical rows stay; nothing new is
+    # written until consent is given. `_consent` fails closed, so an unreadable
+    # row refuses rather than records.
+    consent = _consent(user["id"])
+    if not consent.get("eeg_enabled"):
+        raise HTTPException(
+            403,
+            "EEG recording is switched off for this student."
+            if consent.get("retrieved")
+            else "Could not check whether EEG recording is allowed, so it was not started.",
+        )
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID

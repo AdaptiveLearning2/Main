@@ -46,6 +46,16 @@ if INGEST_MODE not in _VALID_MODES:
     INGEST_MODE = "pull"
 
 
+class ConsentError(PermissionError):
+    """Raised when EEG recording is not consented for this student.
+
+    Distinct from PushModeError so the endpoint can answer 403 rather than 409:
+    one says this deployment does not work that way, the other says this student
+    said no. Rendering them the same would let a refusal read as a
+    misconfiguration.
+    """
+
+
 class PushModeError(RuntimeError):
     """Raised when something asks the poller to run under push ingestion.
 
@@ -80,6 +90,12 @@ class _Poller(threading.Thread):
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
+        # Set when a re-check finds consent withdrawn, so `status()` can say
+        # *why* this poller ended -- "stopped because the student withdrew" is
+        # not the same as "stopped because the headband dropped", and a session
+        # that quietly produces nothing is the failure this whole area guards.
+        self.stopped_reason = None
+        self._consent_checked_at = 0.0
 
     def run(self):
         print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]} device={self.device_id}", flush=True)
@@ -92,6 +108,25 @@ class _Poller(threading.Thread):
         loops = 0
         while not self._stop_event.is_set():
             loops += 1
+            # Re-read consent on a slow cadence. A student may withdraw
+            # mid-lesson, and a poller that only checked at start would keep
+            # recording against that refusal until the session ended.
+            now = time.monotonic()
+            if now - self._consent_checked_at >= CONSENT_RECHECK_SECONDS:
+                self._consent_checked_at = now
+                try:
+                    still_consented = _consent_check(self.user_id) if _consent_check else False
+                except Exception as e:
+                    # Fails closed, like `_consent` itself. A read error must
+                    # not be the reason recording continues.
+                    still_consented = False
+                    print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
+                if not still_consented:
+                    self.stopped_reason = "consent_withdrawn"
+                    print(f"<<< [eeg-poller] consent withdrawn for session={self.session_id[:8]}, stopping", flush=True)
+                    self._stop_event.set()
+                    break
+
             data = eeg_client.get_state(self.device_id)
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
@@ -213,6 +248,30 @@ def claim_double_write_warning(session_id: str) -> bool:
         return True
 
 
+# How often a running poller re-reads consent. Not per tick: at 4 Hz that is a
+# database read four times a second per student, to answer a question that
+# changes at most a few times a session. Not never, either -- a withdrawal that
+# only takes effect at the next session means recording against a refusal for as
+# long as the current one runs, which is the thing consent exists to prevent.
+CONSENT_RECHECK_SECONDS = 20.0
+
+# Injected by `main` at start(). A callable rather than an import, because
+# `_consent` lives in `main` and importing it here would be a cycle -- and
+# because it keeps the dependency pointing one way, `main` -> `eeg_poller`.
+_consent_check = None
+
+
+def set_consent_check(fn) -> None:
+    """Register how this module asks whether a student still consents to EEG.
+
+    Required before `start()` will run. There is deliberately no default: a
+    fallback of "assume yes" would make an unwired deployment record against a
+    refusal, and it would look identical to a wired one.
+    """
+    global _consent_check
+    _consent_check = fn
+
+
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
     print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
     if INGEST_MODE == "push":
@@ -223,6 +282,20 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
             "INGEST_MODE=push: the sidecar posts to /api/signals/* itself, so "
             "this backend does not poll it. Set INGEST_MODE=pull for a "
             "co-located deployment (start.ps1, dev, single-machine classroom)."
+        )
+    # Consent, before anything starts polling. The push path has had this at
+    # `/api/signals/*` since it existed; the poller writes `cognitive_signals`
+    # directly with the service-role client, which bypasses RLS *and* the ingest
+    # endpoint, so under pull nothing checked at all. Same rule, both paths.
+    if _consent_check is None:
+        raise ConsentError(
+            "eeg_poller has no consent check wired. Refusing to poll rather "
+            "than assume consent -- see set_consent_check()."
+        )
+    if not _consent_check(user_id):
+        raise ConsentError(
+            "EEG recording is switched off for this student. A parent can turn "
+            "it back on in Settings."
         )
     with _lock:
         if session_id in _active and _active[session_id].is_alive():

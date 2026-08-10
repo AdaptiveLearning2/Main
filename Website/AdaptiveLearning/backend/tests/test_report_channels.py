@@ -337,3 +337,59 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
     by_id = {c["user_id"]: c["signal_summary"] for c in children}
     assert by_id["kid-a"]["consent_retrieved"] is True
     assert by_id["kid-b"]["consent_retrieved"] is False
+
+
+def test_daily_buckets_carry_heart_in_absolute_units(monkeypatch):
+    """The chart needs a per-day series, and it is **not** a 0..1 ratio.
+
+    Every other daily metric is a ratio the frontend multiplies by 100. Feeding
+    these through the same scaling would draw a 72 bpm day at 7200%, which is
+    why they are named for their unit and get their own axis.
+    """
+    day = _ts(1)[:10]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 70.0, "rmssd_ms": 40.0, "trusted": True},
+               {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 74.0, "rmssd_ms": 44.0, "trusted": True},
+               # Rejected: must not move the day's average.
+               {"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 190.0, "rmssd_ms": 5.0, "trusted": False}],
+    )))
+    report = main._weekly_signal_report(STUDENT)
+    bucket = next(d for d in report["daily"] if d["date"] == day)
+
+    assert bucket["heart_rate_bpm"] == 72.0
+    assert bucket["rmssd_ms"] == 42.0
+    assert bucket["heart_retrieved"] is True
+
+
+def test_a_day_of_only_untrusted_samples_is_null_not_absent(monkeypatch):
+    """`heart_retrieved: True` beside a null average is "measured, unusable".
+    A gap alone would read as the sensor being off."""
+    day = _ts(1)[:10]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
+              "engagement": 0.6}],
+        heart=[{"user_id": STUDENT, "ts": _ts(1), "source": "muse_optics",
+                "heart_rate_bpm": 190.0, "trusted": False}],
+    )))
+    bucket = next(d for d in main._weekly_signal_report(STUDENT)["daily"]
+                  if d["date"] == day)
+
+    assert bucket["heart_rate_bpm"] is None
+    assert bucket["heart_retrieved"] is True
+
+
+def test_an_excluded_heart_channel_leaves_the_daily_series_null(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        _consent_row(),
+        cog=[{"user_id": STUDENT, "ts": _ts(1), "focus": 0.7, "stress": 0.3,
+              "engagement": 0.6}],
+    )))
+    bucket = main._weekly_signal_report(STUDENT, include_heart=False)["daily"][0]
+
+    assert bucket["heart_rate_bpm"] is None
+    assert bucket["heart_retrieved"] is None, "an opt-out is not a failed read"

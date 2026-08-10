@@ -1,8 +1,30 @@
-import { Activity, Brain, Eye, Radio, Sparkles, Zap } from 'lucide-react'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import { Activity, Brain, Eye, Heart, Radio, Sparkles, Zap } from 'lucide-react'
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  PieChart, Pie, Cell, Legend,
+} from 'recharts'
 import { faceIncluded } from '../../lib/facePref'
 
 const FACE_OFF = 'Off'
+
+// One colour per FER+ label, fixed rather than positional: a palette assigned by
+// slice order would recolour every emotion whenever the distribution changed,
+// so the same week viewed twice would look like different data.
+const EMOTION_COLOURS = {
+  happy: '#10b981', neutral: '#94a3b8', surprise: '#f59e0b',
+  sad: '#6366f1', anger: '#ef4444', fear: '#8b5cf6',
+  disgust: '#14b8a6', contempt: '#f97316',
+}
+
+// muse_optics / muse_ppg / rppg are storage values, not display strings.
+const SOURCE_LABELS = {
+  muse_optics: 'Headband (optical)',
+  muse_ppg: 'Headband (PPG)',
+  rppg: 'Camera',
+}
+function sourceLabel(source) {
+  return SOURCE_LABELS[source] || source
+}
 
 // Signal values cross the wire as 0..1 ratios -- that is what cognitive_signals
 // and face_signals store, and what /live and the parent dashboard tiles both
@@ -41,6 +63,31 @@ function toPct(value) {
   return n === null ? null : n * 100
 }
 
+// Absolute units, not ratios. `toPct` must never touch these: a 72 bpm day put
+// through it draws at 7200%, which is why the heart series gets its own axis
+// rather than sharing the 0-100 one every other series uses.
+function unit(value, suffix, digits = 0) {
+  const n = ratio(value)
+  return n === null ? 'N/A' : `${n.toFixed(digits)}${suffix}`
+}
+
+// Two channels are now consented separately, so one flag cannot answer for
+// both. `face_included` is kept by the backend as a deprecated alias for the
+// emotion channel; reading the new field first and falling back means a payload
+// from before the split still renders correctly rather than reporting the
+// channel as excluded because the field is absent.
+function emotionOn(report) {
+  if (report?.emotion_included !== undefined) return report.emotion_included !== false
+  return faceIncluded(report)
+}
+
+function heartOn(report) {
+  // Absent means a pre-split payload, which had no heart data at all -- so the
+  // honest default is off, not on. Defaulting to true would draw an empty
+  // series and claim the sensor recorded nothing.
+  return report?.heart_included === true
+}
+
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
   const tones = {
     indigo: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
@@ -68,7 +115,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
   const latest = report?.latest || {}
   const cog = latest.cognitive || {}
   const face = latest.face || {}
-  const faceOn = faceIncluded(report)
+  const faceOn = emotionOn(report)
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -108,7 +155,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const avg = report?.averages || {}
   const highlights = report?.highlights || {}
   const counts = report?.sample_counts || {}
-  const faceOn = faceIncluded(report)
+  const faceOn = emotionOn(report)
+  const heartShown = heartOn(report)
   // Scaled to percent to match the YAxis domain below. Left as 0..1 ratios,
   // every series drew flat along the axis floor.
   const chartData = (report?.daily || []).map(d => ({
@@ -116,6 +164,12 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     focus: toPct(d.focus),
     stress: toPct(d.stress),
     attention: toPct(d.attention),
+    // Deliberately NOT through toPct. These arrive in beats per minute and
+    // milliseconds; scaling them by 100 would put them three orders of
+    // magnitude off, and on a shared axis they would flatten every other series
+    // against the floor. `ratio()` only sanitises -- null stays null so a day
+    // with no reading leaves a gap rather than drawing at zero.
+    heart_rate_bpm: ratio(d.heart_rate_bpm),
     label: d.date ? d.date.slice(5) : '',
   }))
   // Days the row cap kept us from retrieving, as opposed to days with no
@@ -123,6 +177,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const unretrieved = (report?.daily || []).filter(
     d => d.cognitive_retrieved === false
       || d.face_retrieved === false
+      || d.heart_retrieved === false
       || d.sessions_retrieved === false
   ).length
   // Which of the report's three reads happened. A failed query returns the same
@@ -134,7 +189,23 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   const cogFailed = retrieved.cognitive === false
   const faceFailed = retrieved.face === false
   const sessionsFailed = retrieved.sessions === false
-  const anyFailed = cogFailed || faceFailed || sessionsFailed
+  const heartFailed = retrieved.heart === false
+  const anyFailed = cogFailed || faceFailed || heartFailed || sessionsFailed
+  // A separate failure from any of the above: the consent lookup that decides
+  // which channels may be read at all. False means the channel flags mean "we
+  // could not find out", not "the student declined" -- and every tile below
+  // would otherwise read as a respected refusal.
+  const consentFailed = report?.consent_retrieved === false
+  // Counts, so "measured but unusable" is distinguishable from "never measured".
+  // A week of nothing but untrusted samples is a null average beside a nonzero
+  // count; without the count it looks like the sensor was off.
+  const heartSamples = counts.heart || 0
+  // Sorted by count so the legend reads in the order the slices appear, and
+  // built from the tally the backend already computed to pick the dominant
+  // emotion rather than recounting raw rows the frontend does not have.
+  const emotionSlices = Object.entries(report?.emotion_distribution || {})
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -182,17 +253,31 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
               <XAxis dataKey="label" fontSize={11} tickLine={false} />
-              <YAxis domain={[0, 100]} fontSize={11} tickLine={false} />
+              {/* Two axes, because the series are in different units. The left
+                  one is percent for the 0..1 ratios; heart rate is beats per
+                  minute and would either flatten everything else against the
+                  floor or, if scaled to match, be drawn at 7200%. Explicit ids
+                  on both -- adding a second axis without giving the first one
+                  an id silently binds every existing series to the new axis. */}
+              <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
+              {heartShown && (
+                <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
+                       fontSize={11} tickLine={false} unit=" bpm" />
+              )}
               <Tooltip />
               {/* Distinct colours per series -- all three were "currentColor",
                   which rendered them identically and made the chart unreadable.
                   Matches the MiniMetric tones above. */}
-              <Line type="monotone" dataKey="focus" stroke="#10b981" strokeWidth={2} dot={false} name="Focus" />
-              <Line type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={false} name="Stress" />
+              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#10b981" strokeWidth={2} dot={false} name="Focus" />
+              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={false} name="Stress" />
               {/* Omitted entirely with facial reporting off, rather than drawn
                   as an all-null series -- an empty legend entry reads as a
                   measurement that flatlined. */}
-              {faceOn && <Line type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={false} name="Face Attention" />}
+              {faceOn && <Line yAxisId="pct" type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={false} name="Face Attention" />}
+              {/* Same reasoning as the facial series: omitted rather than drawn
+                  as an all-null line, because an empty legend entry reads as a
+                  measurement that flatlined. */}
+              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={false} name="Heart Rate (bpm)" />}
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -215,10 +300,77 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
       </div>
 
+      {/* Heart, in its own row and its own units. Only rendered when the
+          channel was actually read -- a row of N/A would be indistinguishable
+          from a headband that recorded nothing. */}
+      {heartShown && (
+        <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
+          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg Heart Rate</p>
+            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.heart_rate_bpm, ' bpm')}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg RMSSD</p>
+            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.rmssd_ms, ' ms')}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Sensor</p>
+            {/* Named because accuracy differs materially by source, and the
+                camera one is unvalidated -- a reader comparing two weeks should
+                be able to see the sensor changed. */}
+            <p className="font-bold text-gray-900 dark:text-white">
+              {(report?.heart_sources || []).length
+                ? report.heart_sources.map(sourceLabel).join(', ')
+                : 'N/A'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* The distribution, not just its argmax. `dominant_emotion` alone hides
+          a week split 40/35/25 behind one word. Rendered only when there is
+          something to render: an empty pie is a claim about a quiet week that
+          an unread channel has not earned. */}
+      {faceOn && emotionSlices.length > 0 && (
+        <div className="mt-4">
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
+          <div className="h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={emotionSlices} dataKey="value" nameKey="name"
+                     innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                  {emotionSlices.map(slice => (
+                    <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
       <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">{report?.summary || 'No summary available yet.'}</p>
       {report && !faceOn && (
         <p className="mt-1 text-xs text-gray-400">
           Facial recognition data was not included in this report.
+        </p>
+      )}
+      {/* "Measured, unusable" is a third state. A null average beside a nonzero
+          sample count means the headband was on and every reading failed its
+          quality gate -- which is not the same as a week it never ran. */}
+      {heartShown && heartSamples > 0 && ratio(highlights.heart_rate_bpm) === null && (
+        <p className="mt-1 text-xs text-gray-400">
+          Heart-rate samples were recorded but none met the quality threshold, so no average is shown.
+        </p>
+      )}
+      {/* Distinct from the per-table failures below: this is the consent lookup
+          itself failing, which suppresses every optional channel. Without it,
+          a database problem renders identically to a student who declined. */}
+      {consentFailed && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          Consent settings could not be read, so heart and facial data were left out of this report — that is not a record of what was permitted.
         </p>
       )}
       {/* Named per table rather than as one blanket warning: the reads fail
@@ -231,6 +383,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           {[
             cogFailed && 'EEG signals',
             faceFailed && 'facial recognition signals',
+            heartFailed && 'heart-rate signals',
             sessionsFailed && 'session counts',
           ].filter(Boolean).join(', ')} could not be loaded — the figures shown for them are not measurements.
         </p>

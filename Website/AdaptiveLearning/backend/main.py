@@ -502,6 +502,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        # Trusted only, matching the week's averages. A day whose every sample
+        # was rejected is then a null beside a `heart_retrieved` of True --
+        # "measured, unusable" -- rather than a gap that reads as sensor-off.
+        day_heart = [r for r in heart
+                     if str(r.get("ts", ""))[:10] == day and r.get("trusted") is True]
+        heart_whole = heart_ok and not heart_cut
         daily.append({
             "date": day,
             # Withheld unless the day is whole. A partly-retrieved day averages
@@ -518,6 +524,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # give exactly half the sessions, with no hint that it is half.
             "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
                         if ses_whole else None,
+            # **Absolute units**, unlike every other series here, which are 0..1
+            # ratios rendered as percentages. A consumer applying the same
+            # scaling to these would draw a 72 bpm day at 7200% -- so they are
+            # named for the unit and the frontend gives them their own axis.
+            "heart_rate_bpm": _avg([r.get("heart_rate_bpm") for r in day_heart])
+                              if heart_whole else None,
+            "rmssd_ms": _avg([r.get("rmssd_ms") for r in day_heart])
+                        if heart_whole else None,
             # False means "we did not fetch this day in full", which a null
             # metric alone cannot distinguish from "nothing was recorded". It
             # covers the days the cap never reached, the single day it cut
@@ -527,7 +541,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # `=== false` must not treat the opt-out as a retrieval failure.
             "cognitive_retrieved": cog_whole,
             "face_retrieved": face_whole if include_emotion else None,
-            "heart_retrieved": (heart_ok and not heart_cut) if include_heart else None,
+            "heart_retrieved": heart_whole if include_heart else None,
             "sessions_retrieved": ses_whole,
         })
 

@@ -282,12 +282,23 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
     import threading
     import time as _time
 
-    slow = threading.Event()
+    # Gated, not slept. A 0.4s sleep made this pass locally and fail in CI: the
+    # window it was trying to hit is "the old thread is inside a read while the
+    # replacement registers", and a duration only hits that window if the
+    # scheduler cooperates. On the CI runner the old thread reached its teardown
+    # *between* reads, `_active` was momentarily empty, and stopping the stream
+    # was then the correct thing to do -- so the test failed on behaviour that
+    # was right, which is the worst kind of flake to chase.
+    #
+    # The gate makes the ordering an invariant instead of a probability: the
+    # first read blocks until the test has registered the replacement, so the
+    # old thread is guaranteed to be inside it.
+    entered_read = threading.Event()
+    may_finish_read = threading.Event()
 
-    def _slow_get_state(*_a, **_k):
-        # Long enough that the old thread is still inside this call while the
-        # replacement registers, which is what makes the race the common case.
-        slow.wait(0.4)
+    def _gated_get_state(*_a, **_k):
+        entered_read.set()
+        may_finish_read.wait(5)
         return None
 
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
@@ -297,17 +308,22 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
     stopped_streams = []
     monkeypatch.setattr(eeg_poller.eeg_client, "stop_session",
                         lambda device_id=None, *_a, **_k: stopped_streams.append(device_id) or {"ok": True})
-    monkeypatch.setattr(eeg_poller.eeg_client, "get_state", _slow_get_state)
+    monkeypatch.setattr(eeg_poller.eeg_client, "get_state", _gated_get_state)
 
     eeg_poller.start(None, "u1", "s1", "devA")
     old = eeg_poller._active["s1"]
+    assert entered_read.wait(5), "the poller never reached a read"
 
-    # Disconnect, then reconnect the same session before the old thread has
-    # finished the read it is inside.
+    # Disconnect, then reconnect the same session *while* the old thread is
+    # still inside that read -- guaranteed, not hoped for.
     eeg_poller.stop("s1")
     eeg_poller.start(None, "u1", "s1", "devA")
     new = eeg_poller._active["s1"]
     assert new is not old
+
+    # Only now let the read return, so the old thread's teardown runs with the
+    # replacement already registered.
+    may_finish_read.set()
 
     # Let the old thread reach its teardown.
     deadline = _time.monotonic() + 5

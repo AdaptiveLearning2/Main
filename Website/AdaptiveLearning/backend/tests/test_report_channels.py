@@ -46,10 +46,13 @@ def test_a_declined_channel_is_never_queried(monkeypatch):
     fake = _FakeSupabase(_tables(_consent_row(headband=False, camera=False)))
     monkeypatch.setattr(main, "supabase", fake)
 
-    heart, emotion, _ = main._reportable_channels(STUDENT)
-    assert (heart, emotion) == (False, False)
+    # By name, not by position. Positional unpacking is what this NamedTuple
+    # exists to prevent -- and it broke the moment two defaulted fields were
+    # added, which is the failure arriving early rather than as a swap.
+    channels = main._reportable_channels(STUDENT)
+    assert (channels.heart, channels.emotion) == (False, False)
 
-    main._weekly_signal_report(STUDENT, include_heart=heart, include_emotion=emotion)
+    main._weekly_signal_report(STUDENT, include_heart=channels.heart, include_emotion=channels.emotion)
     assert "heart_signals" not in fake.table_calls
     assert "face_signals" not in fake.table_calls
 

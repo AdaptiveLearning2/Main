@@ -41,10 +41,13 @@ async def _lifespan(app: FastAPI):
     try:
         eeg_poller.stop_all()
     finally:
-        # In a finally: a poller that somehow raises on the way out must not
-        # take the pool's shutdown down with it. Both are cleanup, and neither
-        # gets a second chance after this.
-        _shutdown_strategy_pool()
+        # Nested finally: neither shutdown gets a second chance after this, so
+        # one raising must not skip the other -- the same reason eeg_poller's
+        # own shutdown is in a finally above.
+        try:
+            _shutdown_strategy_pool()
+        finally:
+            _shutdown_live_signals_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -156,21 +159,38 @@ class ReportChannels(NamedTuple):
     "nobody consented" and "we could not find out" both yield False here, and
     the reporting rules require a surface to tell them apart before it says a
     channel was not requested.
+
+    The `*_revoked_at` timestamps ride along so a surface can say *when* a
+    channel was switched off rather than only that it is. "Not recorded --
+    turned off on 3 August" and a blank tile are very different things to put
+    in front of a parent, and the second one reads as a fault.
     """
     heart: bool
     emotion: bool
     consent_retrieved: bool
+    # Defaulted, so every existing construction site keeps working and a caller
+    # that does not care is not forced to thread them through.
+    heart_revoked_at: str | None = None
+    emotion_revoked_at: str | None = None
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
                          want_heart: bool = True) -> ReportChannels:
     """Which optional channels a report may read: consent AND what was asked for.
 
-    Two different controls, composed rather than conflated. **Consent** decides
-    whether a channel was ever recorded and is not the viewer's to override.
-    The **request** flag is a viewer-side preference -- a teacher choosing not to
-    look at facial data on a page -- documented at the top of
-    `frontend/src/lib/facePref.js`. Either one being false means no read.
+    **Consent** decides whether a channel was ever recorded, and is not the
+    viewer's to override.
+
+    `want_*` is a viewer-side narrowing that no client sends any more. The
+    frontend switch that used to set it is retired: it was a read filter wearing
+    the vocabulary of consent, and stored consent now does the job it appeared
+    to do. What replaced it -- the teacher's "Hide sensor data" switch,
+    `frontend/src/lib/viewPrefs.js` -- is client-side and changes no request.
+
+    The parameters stay because they cost nothing and a caller may legitimately
+    want less than consent allows; they default to True, so absent means "as
+    much as consent permits". They are not a privacy boundary and nothing should
+    be built on them as one.
 
     Consent is authoritative and cannot be widened by a caller, which is why it
     is resolved here rather than trusted from a query parameter. A revoked
@@ -183,9 +203,20 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     consent = _consent(student_id)
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
+    # Heart can come from either sensor, so it is off only when *both* are, and
+    # the honest date is the later of the two -- the moment it actually stopped
+    # being recorded, not the moment the first of the pair was switched off.
+    heart_revoked = None
+    if not heart:
+        stamps = [consent.get("headband_optical_revoked_at"),
+                  consent.get("camera_revoked_at")]
+        stamps = [t for t in stamps if t]
+        heart_revoked = max(stamps) if stamps else None
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
-                          consent_retrieved=bool(consent.get("retrieved")))
+                          consent_retrieved=bool(consent.get("retrieved")),
+                          heart_revoked_at=heart_revoked,
+                          emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"))
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -208,7 +239,9 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     include_emotion: bool = True,
-                    consent_retrieved: bool = True) -> dict:
+                    consent_retrieved: bool = True,
+                    emotion_revoked_at: str | None = None,
+                    heart_revoked_at: str | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
@@ -242,7 +275,9 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
         rows = res.data or []
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
     summary = _shape_summary(row, include_heart, include_emotion, retrieved,
-                             consent_retrieved)
+                             consent_retrieved,
+                             emotion_revoked_at=emotion_revoked_at,
+                             heart_revoked_at=heart_revoked_at)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
@@ -268,7 +303,9 @@ _EMPTY_SUMMARY = {"consent_retrieved": True,
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
-                   retrieved: bool = True, consent_retrieved: bool = True) -> dict:
+                   retrieved: bool = True, consent_retrieved: bool = True,
+                   emotion_revoked_at: str | None = None,
+                   heart_revoked_at: str | None = None) -> dict:
     """The summary payload.
 
     `retrieved` is the third thing a caller has to be able to tell apart, after
@@ -285,7 +322,9 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
-                "retrieved": retrieved, "consent_retrieved": consent_retrieved}
+                "retrieved": retrieved, "consent_retrieved": consent_retrieved,
+                "emotion_revoked_at": emotion_revoked_at,
+                "heart_revoked_at": heart_revoked_at}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -323,6 +362,12 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # the channel flags are "we could not find out" rather than "declined",
         # and the parent dashboard is the surface that renders that difference.
         "consent_retrieved": consent_retrieved,
+        # When, not just whether. "Not recorded -- turned off on 3 August" is a
+        # different sentence from a blank tile, and the blank one reads as a
+        # fault. Null while the channel is on, so a surface cannot end up
+        # rendering a revocation date next to live data.
+        "emotion_revoked_at": emotion_revoked_at,
+        "heart_revoked_at": heart_revoked_at,
     }
 
 
@@ -359,7 +404,9 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
                           include_emotion: bool = True,
-                          consent_retrieved: bool = True):
+                          consent_retrieved: bool = True,
+                          emotion_revoked_at: str | None = None,
+                          heart_revoked_at: str | None = None):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
     Returns averages, highlights and per-day buckets. Callers must have already
@@ -663,6 +710,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # is a fault; a surface saying "not requested" about the first would be
         # reporting a database outage as a preference.
         "consent_retrieved": consent_retrieved,
+        "emotion_revoked_at": emotion_revoked_at,
+        "heart_revoked_at": heart_revoked_at,
         # The tally, not just its argmax. Nothing on the frontend could render a
         # pie before this: emotion reached it only as a scalar `dominant_emotion`,
         # so a distribution had to be recomputed from raw rows or not shown. The
@@ -1037,9 +1086,11 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
     include_face=false omits facial-recognition data from the report entirely.
     It is a viewer preference and narrows only: stored consent decides what may
     be read at all, and a caller cannot widen past it -- see
-    `_reportable_channels`. The parameter keeps its name because the frontend
-    control and its localStorage key still use it;
-    see _weekly_signal_report.
+    `_reportable_channels`. No client sends it any more -- the viewer-side
+    control it named (facePref.js) is retired, and stored consent does the
+    job it appeared to do. Kept anyway: the parameters cost nothing, and a
+    caller may legitimately want less than consent allows.
+    See _weekly_signal_report.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
@@ -1049,7 +1100,9 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
         **_weekly_signal_report(student_id, max(1, min(days, 30)),
                                 include_heart=channels.heart,
                                 include_emotion=channels.emotion,
-                                consent_retrieved=channels.consent_retrieved),
+                                consent_retrieved=channels.consent_retrieved,
+                                emotion_revoked_at=channels.emotion_revoked_at,
+                                heart_revoked_at=channels.heart_revoked_at),
     }
 
 
@@ -1085,7 +1138,9 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
     return _signal_summary(student_id, max(1, min(days, 30)),
                            include_heart=channels.heart,
                            include_emotion=channels.emotion,
-                           consent_retrieved=channels.consent_retrieved)
+                           consent_retrieved=channels.consent_retrieved,
+                           emotion_revoked_at=channels.emotion_revoked_at,
+                           heart_revoked_at=channels.heart_revoked_at)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -2848,15 +2903,81 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 
     cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
     fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
+    hrt = supabase.table("heart_signals").select("*").eq("session_id", session_id)
     if since:
-        cog = cog.gt("ts", since); fac = fac.gt("ts", since)
+        cog = cog.gt("ts", since); fac = fac.gt("ts", since); hrt = hrt.gt("ts", since)
     cog_data = cog.order("ts").limit(20000).execute().data or []
     fac_data = fac.order("ts").limit(20000).execute().data or []
+    # Third array, same shape of read. `source` rides along on every row because
+    # accuracy differs materially by sensor and the session can fail over
+    # mid-way -- a reader comparing two halves of one trace has to be able to
+    # see the sensor changed rather than inferring a physiological event.
+    hrt_data = hrt.order("ts").limit(20000).execute().data or []
     answers  = supabase.table("session_answers").select("*").eq("session_id", session_id).order("answered_at").execute().data or []
-    return {"cognitive": cog_data, "face": fac_data, "answers": answers}
+    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
 
 
 # ─── live monitoring (only show truly active sessions) ───────────────────
+
+# Small and dedicated rather than reused from _strategy_pool: that pool's
+# worker count and wait bounds are tuned for the LLM call it exists to gate,
+# and conflating the two would let a live-monitoring poll compete with a
+# strategies request for the same two slots. Four is enough to fan the reads
+# below out concurrently for one session at a time -- this endpoint's own
+# per-member loop stays sequential, so peak concurrency here never exceeds
+# the four reads for whichever session is currently open.
+#
+# Same lazy-init-under-lock / _lifespan-shutdown shape as _strategy_pool,
+# for the same reason: a shutdown call cannot interrupt a worker already
+# mid-request (the interpreter's own atexit join is what eventually collects
+# it either way), but resetting the global to None matters for a reload in
+# the same process, and cancelling not-yet-started futures costs nothing.
+_LIVE_SIGNALS_POOL: ThreadPoolExecutor | None = None
+_live_signals_pool_lock = threading.Lock()
+
+
+def _live_signals_pool() -> ThreadPoolExecutor:
+    global _LIVE_SIGNALS_POOL
+    with _live_signals_pool_lock:
+        if _LIVE_SIGNALS_POOL is None:
+            _LIVE_SIGNALS_POOL = ThreadPoolExecutor(max_workers=4,
+                                                    thread_name_prefix="live-signals")
+        return _LIVE_SIGNALS_POOL
+
+
+def _shutdown_live_signals_pool():
+    """Drop the queue on the way out. Called from _lifespan. See
+    _shutdown_strategy_pool for why wait=False/cancel_futures=True and the
+    global reset, rather than a clean join."""
+    global _LIVE_SIGNALS_POOL
+    with _live_signals_pool_lock:
+        pool, _LIVE_SIGNALS_POOL = _LIVE_SIGNALS_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _latest_session_signals(session_id: str) -> tuple[list, list, list, list]:
+    """The four independent per-session reads class_live needs for one open
+    session, fanned out concurrently instead of run one after another.
+
+    Each pays its own network round-trip, and this endpoint is polled on an
+    interval by the live-monitoring page -- sequentially that cost is
+    additive per open session, and heart_signals added a third such
+    round-trip on top of the two that were already here.
+    """
+    pool = _live_signals_pool()
+    futures = [
+        pool.submit(lambda: supabase.table("cognitive_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("face_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("heart_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("session_answers").select("answered_at")
+                    .eq("session_id", session_id).order("answered_at", desc=True).limit(1).execute().data),
+    ]
+    return tuple(f.result() for f in futures)
+
 
 @app.get("/api/teacher/classes/{class_id}/live")
 def class_live(class_id: str, request: Request):
@@ -2891,24 +3012,26 @@ def class_live(class_id: str, request: Request):
             .order("started_at", desc=True).limit(1).execute().data or []
 
         active = None
-        latest_cog = latest_face = None
+        latest_cog = latest_face = latest_heart = None
 
         if open_sessions:
             sess = open_sessions[0]
             sid2 = sess["id"]
-            c = supabase.table("cognitive_signals").select("*") \
-                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
-            f = supabase.table("face_signals").select("*") \
-                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
-            a = supabase.table("session_answers").select("answered_at") \
-                .eq("session_id", sid2).order("answered_at", desc=True).limit(1).execute().data
+            c, f, h, a = _latest_session_signals(sid2)
 
             latest_cog  = c[0] if c else None
             latest_face = f[0] if f else None
+            # Newest row, trusted or not -- unlike the weekly aggregate, which
+            # takes the newest *trusted* one. A live card showing nothing while
+            # a sensor is producing untrusted readings is indistinguishable from
+            # a sensor that stopped, and the row carries `trusted` so the card
+            # can say which of the two it is.
+            latest_heart = h[0] if h else None
 
             candidates = []
             if latest_cog and latest_cog.get("ts"):       candidates.append(latest_cog["ts"])
             if latest_face and latest_face.get("ts"):     candidates.append(latest_face["ts"])
+            if latest_heart and latest_heart.get("ts"):   candidates.append(latest_heart["ts"])
             if a and a[0].get("answered_at"):             candidates.append(a[0]["answered_at"])
             if sess.get("started_at"):                    candidates.append(sess["started_at"])
             last_activity = max(candidates) if candidates else sess.get("started_at")
@@ -2918,7 +3041,7 @@ def class_live(class_id: str, request: Request):
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
                 eeg_poller.stop(sid2)
-                active = None; latest_cog = None; latest_face = None
+                active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
 
@@ -2929,6 +3052,11 @@ def class_live(class_id: str, request: Request):
             "active_session":   active,
             "latest_cognitive": latest_cog,
             "latest_face":      latest_face,
+            # `source` rides along so the card can show which sensor is live.
+            # Accuracy differs materially between them, and a teacher watching a
+            # trace change shape should be able to see that the sensor changed
+            # rather than read it as the student changing.
+            "latest_heart":     latest_heart,
         })
     return out
 
@@ -3340,14 +3468,24 @@ def my_children(request: Request, include_face: bool = True):
             # *failed* shares a group with one who genuinely declined both
             # channels -- same RPC call, different meaning. The RPC path cannot
             # know which, so it is stamped per child here.
+            # emotion_revoked_at / heart_revoked_at are stamped here for the same
+            # reason consent_retrieved is: `_signal_summaries`' batch RPC groups
+            # children by flag pair, not by revocation date, so it cannot carry a
+            # per-child timestamp. Without this a revoked channel came back with
+            # "emotion_revoked_at": null from this endpoint, degrading a surface
+            # that wants "Off since <date>" to the generic "Not recorded".
             "signal_summary": {**summaries[str(cid)],
-                               "consent_retrieved": channels_by_child[cid].consent_retrieved}
+                               "consent_retrieved": channels_by_child[cid].consent_retrieved,
+                               "emotion_revoked_at": channels_by_child[cid].emotion_revoked_at,
+                               "heart_revoked_at": channels_by_child[cid].heart_revoked_at}
                               if str(cid) in summaries
                               else _shape_summary(None,
                                                 channels_by_child[cid].heart,
                                                 channels_by_child[cid].emotion,
                                                 summaries_retrieved,
-                                                channels_by_child[cid].consent_retrieved),
+                                                channels_by_child[cid].consent_retrieved,
+                                                emotion_revoked_at=channels_by_child[cid].emotion_revoked_at,
+                                                heart_revoked_at=channels_by_child[cid].heart_revoked_at),
         })
     return children
 

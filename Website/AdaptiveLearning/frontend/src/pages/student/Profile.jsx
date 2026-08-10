@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Copy, Check, Save } from 'lucide-react'
+import ConsentChannels from '../../components/consent/ConsentChannels'
 import { useAuth } from '../../context/AuthContext'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
@@ -242,23 +243,20 @@ export default function Profile() {
             {/* DEVICES */}
             {tab === 'Devices' && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm space-y-4">
-                <h3 className="font-black text-gray-900 dark:text-white">Device Integrations</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Connect cognitive monitoring devices for enhanced adaptive learning.</p>
-                {[
-                  { name: 'Muse Headband', desc: 'EEG signal monitoring — measures focus and stress in real time', icon: '🧠' },
-                  { name: 'Webcam',        desc: 'Facial recognition — detects engagement and confusion',          icon: '📷' },
-                ].map(d => (
-                  <div key={d.name} className="flex items-start justify-between p-4 bg-slate-50 dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700">
-                    <div className="flex items-start gap-3">
-                      <span className="text-2xl">{d.icon}</span>
-                      <div>
-                        <p className="font-bold text-gray-900 dark:text-white text-sm">{d.name}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 max-w-xs">{d.desc}</p>
-                      </div>
-                    </div>
-                    <button className="flex-shrink-0 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition">Connect</button>
-                  </div>
-                ))}
+                <h3 className="font-black text-gray-900 dark:text-white">Sensors</h3>
+                {/* This tab used to list Muse Headband and Webcam with "Connect"
+                    buttons that did nothing when clicked -- the only
+                    sensor-related control a student could find, and decorative.
+                    Real consent state is what they should have been showing.
+
+                    The switches live here rather than on the practice screen on
+                    purpose: a student sits down and answers questions, and
+                    sensor settings are somewhere else, the way they are in any
+                    normal app. */}
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Choose what gets measured while you practise. You can turn anything off at any time.
+                </p>
+                {user?.id && <ConsentChannels studentId={user.id} role="student" />}
               </div>
             )}
 

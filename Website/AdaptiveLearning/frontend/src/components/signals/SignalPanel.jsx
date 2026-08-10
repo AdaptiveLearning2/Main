@@ -3,9 +3,70 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
-import { faceIncluded } from '../../lib/facePref'
 
-const FACE_OFF = 'Off'
+// One string cannot answer for three channels any more, so this is a function
+// of *which* channel and *why* it is not showing a value. The old `FACE_OFF =
+// 'Off'` meant "the viewer switched facial reporting off", which was true when
+// there was one viewer-side switch and is now wrong in three different ways:
+// the channel may be off because the student withdrew it, because the sensor
+// is not present, or because the read failed.
+//
+// The distinction the reporting rules exist for: **never render "no data" for
+// something that was not recorded.** A tile saying "N/A" for a withdrawn
+// channel reports an absence in data that was never collected, and one saying
+// "Off" for a failed read reports a preference that nobody expressed.
+const CHANNEL_STATE = {
+  // Consent: the channel is off, and we know when. `since` is the date the
+  // student or a parent switched it off.
+  revoked: since => (since ? `Off since ${since}` : 'Not recorded'),
+  // The consent read itself failed. Distinct from revoked, because saying "the
+  // student turned this off" when we could not find out is a claim we have not
+  // earned.
+  unknown: () => 'Unavailable',
+  // Consented and present, but this window produced nothing usable -- a
+  // rejected reading, or a baseline still being established.
+  calibrating: () => 'Calibrating',
+  // Consented, but no sensor produced anything at all this period.
+  noSensor: () => 'No sensor',
+}
+
+// Formats an ISO timestamp as a short date, or null when there isn't one --
+// so a caller can tell "off, and here is when" from "off, and we don't know
+// when", rather than printing "Invalid Date" at a parent.
+function shortDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined,
+    { day: 'numeric', month: 'short' })
+}
+
+/**
+ * What to show in a tile for a channel that has no value.
+ *
+ * `on` is whether the channel was read at all, `revokedAt` when it was switched
+ * off, `consentRetrieved` whether we could find out, and `samples` how many
+ * readings the period produced.
+ */
+export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
+  if (consentRetrieved === false) return CHANNEL_STATE.unknown()
+  if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
+  // On, and read, but empty. `samples > 0` means readings arrived and none was
+  // usable -- which is the calibrating/rejected case, not an absent sensor.
+  return samples > 0 ? CHANNEL_STATE.calibrating() : CHANNEL_STATE.noSensor()
+}
+
+/**
+ * A rendered value, or the reason there isn't one.
+ *
+ * Every tile goes through here rather than branching on the channel flag
+ * directly. Branching only on "is the channel on" left `pct()`'s own 'N/A'
+ * standing whenever a consented channel produced nothing usable -- which is
+ * the string this whole change exists to stop showing, surviving in the case
+ * the change was least likely to be tested against.
+ */
+export function valueOrReason(value, reason) {
+  return (value && value !== 'N/A') ? value : offLabel(reason)
+}
 
 // One colour per FER+ label, fixed rather than positional: a palette assigned by
 // slice order would recolour every emotion whenever the distribution changed,
@@ -76,9 +137,14 @@ function unit(value, suffix, digits = 0) {
 // emotion channel; reading the new field first and falling back means a payload
 // from before the split still renders correctly rather than reporting the
 // channel as excluded because the field is absent.
-function emotionOn(report) {
+export function emotionOn(report) {
   if (report?.emotion_included !== undefined) return report.emotion_included !== false
-  return faceIncluded(report)
+  // The legacy alias, inlined. It used to come from `lib/facePref.js`, which
+  // is gone: that module was a viewer-side read filter and stored consent
+  // replaced it. The flag itself is still emitted by the backend, so the
+  // fallback stays -- absent means a payload from before the split, and
+  // treating that as "excluded" would blank a channel that was recorded.
+  return report?.face_included !== false
 }
 
 function heartOn(report) {
@@ -86,6 +152,20 @@ function heartOn(report) {
   // honest default is off, not on. Defaulting to true would draw an empty
   // series and claim the sensor recorded nothing.
   return report?.heart_included === true
+}
+
+// The offLabel `reason` for every face-derived tile on this panel -- one
+// definition, so a future change to which field backs the revocation date or
+// sample count cannot update four call sites and miss the fifth, the way
+// `pct()`'s own duplication (see its export comment) once let a fix to one
+// copy leave the other silently wrong.
+function faceReason(report, faceOn) {
+  return {
+    on: faceOn,
+    revokedAt: report?.emotion_revoked_at,
+    consentRetrieved: report?.consent_retrieved,
+    samples: report?.sample_counts?.face,
+  }
 }
 
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
@@ -136,9 +216,12 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <MiniMetric label="Focus" value={pct(cog.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={pct(cog.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(cog.engagement)} icon={Activity} tone="indigo" />
-        {/* "Off" rather than "N/A": the viewer switched facial reporting off,
-            which is a different statement from having no reading. */}
-        <MiniMetric label="Face Attention" value={faceOn ? pct(face.attention) : FACE_OFF} icon={Eye} tone="sky" />
+        {/* Never "N/A" for a channel that was not recorded: that reports an
+            absence in data nobody collected. `offLabel` picks between
+            withdrawn, unavailable, calibrating and no-sensor. */}
+<MiniMetric label="Face Attention"
+                    value={valueOrReason(faceOn && pct(face.attention), faceReason(report, faceOn))}
+                    icon={Eye} tone="sky" />
         {/* bpm, not a percentage -- the same unit trap the weekly chart gives
             its own axis for. `unit()` never touches the 0..1 path. */}
         {heartShown && (
@@ -148,14 +231,18 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
       <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Facial Emotion</p>
+          {/* Not a binary faceOn ? value : "Reporting off": a failed consent
+              read also leaves faceOn false, and offLabel is what tells that
+              apart from a genuine withdrawal -- the same reason the Face
+              Attention tile above goes through it rather than branching here. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {faceOn ? (face.emotion || 'No data') : 'Reporting off'}
+            {valueOrReason(faceOn && face.emotion, faceReason(report, faceOn))}
           </p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
           <p className="font-bold text-gray-900 dark:text-white">
-            {faceOn ? pct(face.identity_confidence) : 'Reporting off'}
+            {valueOrReason(faceOn && pct(face.identity_confidence), faceReason(report, faceOn))}
           </p>
         </div>
       </div>
@@ -230,7 +317,9 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={faceOn ? pct(avg.face_attention) : FACE_OFF} icon={Eye} tone="sky" />
+<MiniMetric label="Face Attention"
+                    value={valueOrReason(faceOn && pct(avg.face_attention), faceReason(report, faceOn))}
+                    icon={Eye} tone="sky" />
         {/* sessions_recorded, not sample_counts.sessions: the latter is rows
             retrieved under the session row cap, so a heavy week showed exactly
             the cap here while the parent dashboard -- which counts in Postgres
@@ -306,24 +395,62 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Dominant Emotion</p>
+          {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
+              read also leaves faceOn false, and offLabel is what tells that
+              apart from an actual withdrawal. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {faceOn ? (highlights.dominant_emotion || 'N/A') : 'Reporting off'}
+            {valueOrReason(faceOn && highlights.dominant_emotion, faceReason(report, faceOn))}
           </p>
         </div>
       </div>
 
-      {/* Heart, in its own row and its own units. Only rendered when the
-          channel was actually read -- a row of N/A would be indistinguishable
-          from a headband that recorded nothing. */}
+      {/* Three states, and the middle one is the point.
+          - Read: values.
+          - Explicitly not read (`heart_included === false`): the row stays, with
+            *why* in place of the numbers. Dropping it here would tell a parent
+            who switched the sensor off nothing at all, and the plan's rule is
+            that a channel that is off says so and never reads as "no data".
+          - Field absent: a payload predating the split, which had no heart data
+            to describe. The row is omitted, because there is nothing true to
+            say about a channel this payload does not know about. */}
+      {report?.heart_included === false && (
+        <div className="mt-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3 text-sm">
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Heart</p>
+          <p className="font-bold text-gray-900 dark:text-white">
+            {offLabel({
+              on: false,
+              revokedAt: report?.heart_revoked_at,
+              consentRetrieved: report?.consent_retrieved,
+              samples: report?.sample_counts?.heart,
+            })}
+          </p>
+        </div>
+      )}
       {heartShown && (
         <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg Heart Rate</p>
-            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.heart_rate_bpm, ' bpm')}</p>
+            {/* Not a raw "N/A": the channel was read (heartShown, above), so an
+                empty average means the week's samples were unusable rather than
+                the sensor never having been asked -- the same distinction the
+                "Sensor" tile below draws for its own field. */}
+            <p className="font-bold text-gray-900 dark:text-white">
+              {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), {
+                on: true,
+                consentRetrieved: report?.consent_retrieved,
+                samples: report?.sample_counts?.heart,
+              })}
+            </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg RMSSD</p>
-            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.rmssd_ms, ' ms')}</p>
+            <p className="font-bold text-gray-900 dark:text-white">
+              {valueOrReason(unit(highlights.rmssd_ms, ' ms'), {
+                on: true,
+                consentRetrieved: report?.consent_retrieved,
+                samples: report?.sample_counts?.heart,
+              })}
+            </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Sensor</p>
@@ -331,9 +458,15 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                 camera one is unvalidated -- a reader comparing two weeks should
                 be able to see the sensor changed. */}
             <p className="font-bold text-gray-900 dark:text-white">
+              {/* Not "N/A": the channel was read, so an empty source list
+                  means no reading arrived, which `offLabel` names. */}
               {(report?.heart_sources || []).length
                 ? report.heart_sources.map(sourceLabel).join(', ')
-                : 'N/A'}
+                : offLabel({
+                    on: true,
+                    consentRetrieved: report?.consent_retrieved,
+                    samples: report?.sample_counts?.heart,
+                  })}
             </p>
           </div>
         </div>
@@ -410,42 +543,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
   )
 }
 
-/**
- * Switch controlling whether facial-recognition data is read into a report.
- *
- * The copy is deliberate: this decides what the report *contains*, and the
- * backend skips the face_signals query outright when it is off. It does not
- * control the camera, and saying so avoids implying a hardware guarantee this
- * switch cannot make.
- */
-export function FacialRecognitionToggle({ enabled, onChange, disabled = false }) {
-  return (
-    <div className="flex items-start justify-between gap-4 rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 shadow-sm">
-      <div className="flex gap-3">
-        <div className="w-9 h-9 rounded-xl bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300 flex items-center justify-center shrink-0">
-          <Eye size={17} />
-        </div>
-        <div>
-          <p className="text-sm font-black text-gray-900 dark:text-white">Include facial recognition data</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            When off, facial signals are left out of this report and are not read. This does not switch a camera on or off.
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={enabled}
-        aria-label="Include facial recognition data"
-        disabled={disabled}
-        onClick={() => onChange?.(!enabled)}
-        className={`relative w-12 h-7 rounded-full shrink-0 transition disabled:opacity-50 ${enabled ? 'bg-sky-600' : 'bg-gray-300 dark:bg-gray-700'}`}
-      >
-        <span className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${enabled ? 'left-6' : 'left-1'}`} />
-      </button>
-    </div>
-  )
-}
 
 /**
  * At-home practice strategies for a student, with the control that generates

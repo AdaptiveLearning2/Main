@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { clearFacePref } from '../lib/facePref'
+import { clearViewPrefs } from '../lib/viewPrefs'
 
 const AuthContext = createContext()
 
@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
       // or revoked refresh token, and a sign-out performed in another tab. The
       // preference is per-browser, not per-account, so every route out of a
       // session has to drop it.
-      if (event === 'SIGNED_OUT') clearFacePref()
+      if (event === 'SIGNED_OUT') clearViewPrefs()
       setSession(session)
       setUser(session?.user ?? null)
       setRole(session?.user ? extractRole(session.user) : null)
@@ -56,7 +56,7 @@ export function AuthProvider({ children }) {
       // localStorage, which is scoped to the browser rather than the account.
       // Leaving it behind on a shared machine hands the next person to sign in
       // a privacy setting they never chose.
-      clearFacePref()
+      clearViewPrefs()
     }
   }
 

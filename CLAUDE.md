@@ -765,13 +765,54 @@ either. Nulling values on the way out is not an implementation of this. If there
 tell the database to skip the rows, the correct answer is a blank tile, not a read — never fall
 back to a query that reads what the caller opted out of.
 
-Scope is documented at the top of `frontend/src/lib/facePref.js` and is narrower than the name
-suggests: a **viewer-side read control over the reporting surfaces**, not stored consent over a
-child's biometrics. It doesn't stop recording and doesn't travel with the student. Live class
-monitoring and session review are deliberately outside it and deliberately don't render the switch.
-Both call sites point back at that file — keep them in sync, and if you extend the control, render
-the switch there too. A control that silently changes a page it's absent from is worse than one
-with a stated edge.
+**That rule now belongs to consent, which is server-side and genuinely skips the read.** The
+viewer-side switch it was written for is gone: `facePref.js` was a read filter wearing the
+vocabulary of consent, and it needed a disclaimer in its own UI copy — *"this does not switch a
+camera on or off"* — to stop being read as one. Needing that sentence was the signal the control was
+wrong.
+
+**The teacher's replacement deliberately breaks the rule, and says so.** `frontend/src/lib/viewPrefs.js`
+(*"Hide sensor data"*, on `/teacher/students` and `/teacher/students/:id/report`) is **client-side
+only: it fetches the data and does not draw it.** That is acceptable there and nowhere else — the
+teacher is already authorised for the data by relationship, so it is decluttering, not a privacy
+boundary. Keeping it client-side also avoids a second `include_face`-style axis through every
+reporting endpoint. A future reader will otherwise find a filter that fetches what it hides and
+assume it is a bug.
+
+It hides **all** sensor data, not just facial: heart rate now comes from the headband as often as
+the camera, so a facial-only filter would leave HR and HRV on screen and satisfy nobody. Live class
+monitoring and session review stay outside it and deliberately don't render the switch — a control
+that silently changes a page it is absent from is worse than one with a stated edge. And it never
+manufactures a reason: a channel off for consent reasons still reads "not recorded — turned off on
+<date>" when the filter is off.
+
+`_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
+They default to True and are not a privacy boundary; don't build one on them.
+
+### A tile never says "no data" for something that was not recorded
+
+`SignalPanel`'s `offLabel` picks between four states, and every tile goes through
+`valueOrReason` rather than branching on the channel flag itself:
+
+| State | Shown | Because |
+| --- | --- | --- |
+| consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
+| consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
+| read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |
+| read, no samples at all | `No sensor` | consented, but nothing produced anything |
+
+The single `FACE_OFF = 'Off'` this replaces meant "the viewer switched facial
+reporting off" — true when there was one viewer-side switch, and now wrong in
+three ways at once. Branching on the flag alone is the trap: it leaves `pct()`'s
+own `'N/A'` standing whenever a *consented* channel produced nothing usable,
+which is the exact string the rule exists to stop showing, surviving in the case
+least likely to be tested.
+
+A channel that is off keeps its tile. Dropping the row tells a parent who
+switched a sensor off nothing at all — the same failure wearing a different
+shape. The one exception is a payload predating the channel (`heart_included`
+absent rather than `false`): there is nothing true to say about a channel the
+payload does not know about, so the row is omitted.
 
 ## The strategies model pass is optional and bounded
 

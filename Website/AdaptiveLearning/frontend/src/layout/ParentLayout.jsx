@@ -1,13 +1,17 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { LayoutDashboard, Link as LinkIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Link as LinkIcon, Settings as SettingsIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 
 const NAV = [
   { path: '/parent',      label: 'Dashboard',  icon: LayoutDashboard, exact: true },
   { path: '/parent/link', label: 'Link Child',  icon: LinkIcon },
+  // The only surface that can turn a withdrawn channel back on. Without it the
+  // student's "off" was effectively permanent, which is not what the consent
+  // model says and not what a parent was told.
+  { path: '/parent/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
 function SidebarContent({ collapsed, mobile, onClose }) {

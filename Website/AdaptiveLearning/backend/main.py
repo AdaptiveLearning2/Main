@@ -2569,6 +2569,26 @@ def _permitted_heart_sources(consent: dict) -> set[str]:
     return allowed
 
 
+def _heart_consent_for_poller(student_id: str, source: str) -> bool:
+    """Whether `student_id` consents to heart data from `source`.
+
+    Handed to `eeg_poller` at import (below) because the poller writes with the
+    service-role client -- neither RLS nor the ingest endpoint's per-sample
+    check reaches it, so under `INGEST_MODE=pull` this is the only enforcement
+    there is.
+
+    Built from `_consent` and `_permitted_heart_sources`, the same two calls
+    `/api/signals/heart` makes, rather than a second read of the same table:
+    the two ingestion paths giving different answers about one student is the
+    failure this whole arrangement exists to prevent. `_consent` already fails
+    closed on a read error, so no denial is added here.
+    """
+    return source in _permitted_heart_sources(_consent(student_id))
+
+
+eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
+
+
 def _verify_session_owner(session_id: str, user_id: str):
     sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
     if not sess.data:

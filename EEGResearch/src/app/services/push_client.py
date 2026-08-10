@@ -90,6 +90,11 @@ class PushClient:
         self._queues: dict[str, deque[dict[str, Any]]] = {
             channel: deque(maxlen=MAX_QUEUE) for channel in _CHANNELS
         }
+        # The stamp of the last heart reading enqueued, per (device, source).
+        # See `submit_payload`: the headband's block is held on the payload
+        # between recomputes, so this is what turns ~40 arrivals of one
+        # measurement back into one row.
+        self._last_heart_ts: dict[tuple[str | None, str | None], str | None] = {}
         self._dropped: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._sent: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         # Committed by the backend but with an unreadable receipt. Neither
@@ -220,6 +225,10 @@ class PushClient:
         self._token = None
         for channel in _CHANNELS:
             self._queues[channel].clear()
+        # Per session, like the queues. A stamp held across sessions could
+        # suppress the first reading of the next one, and it describes a
+        # session whose rows this process may no longer be entitled to write.
+        self._last_heart_ts.clear()
         # Counters are per session, like the queues. Carried over, a fresh
         # session opens showing readings recorded before any were taken -- the
         # panel would say "412 readings recorded from this computer" about a
@@ -338,9 +347,26 @@ class PushClient:
         # FACE_HEART_ENABLED is off. `source` is still required: consent is per
         # sensor, and a reading that cannot name its sensor cannot be
         # consent-checked.
-        if heart and heart.get("source") and heart.get("bpm") is not None:
+        #
+        # A third condition, for the headband. Its block is a 25s window
+        # recomputed every 10s and *held on the payload* in between -- which is
+        # what lets a 1Hz poller see every reading rather than most of them --
+        # so one measurement arrives on ~40 consecutive ticks. Keyed on the
+        # tick's timestamp each of those is a distinct row, and `heart_signals`
+        # would hold forty copies of one 25-second window. The block carries its
+        # own `ts` for exactly this; the camera's has none and falls back to the
+        # tick's, unchanged.
+        #
+        # Per (device, source), not one field: a laptop running a headband and a
+        # camera has two sessions feeding this one client, and a single slot
+        # would let each suppress the other's readings.
+        heart_ts = (heart or {}).get("ts") or ts
+        heart_key = (device_id, (heart or {}).get("source"))
+        if (heart and heart.get("source") and heart.get("bpm") is not None
+                and self._last_heart_ts.get(heart_key) != heart_ts):
+            self._last_heart_ts[heart_key] = heart_ts
             self.enqueue("heart", {
-                "ts": ts,
+                "ts": heart_ts,
                 "source": heart.get("source"),
                 "heart_rate_bpm": heart.get("bpm"),
                 "rmssd_ms": heart.get("rmssd_ms"),
@@ -353,6 +379,14 @@ class PushClient:
                         "rejected_by": heart.get("rejected_by"),
                         "measured_fps": heart.get("measured_fps"),
                         "window_coverage": heart.get("window_coverage"),
+                        # Headband-side equivalents of measured_fps. Kept under
+                        # their own names rather than folded into it: one is a
+                        # camera's frame rate and one is a BLE link's sample
+                        # rate, and a row that conflates them cannot be read
+                        # back to say which sensor was struggling.
+                        "sample_rate_hz": heart.get("sample_rate_hz"),
+                        "largest_gap_s": heart.get("largest_gap_s"),
+                        "channel_count": heart.get("channel_count"),
                         "ingestion": payload.get("ingestion")},
             })
 

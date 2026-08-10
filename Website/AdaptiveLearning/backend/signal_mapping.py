@@ -203,7 +203,14 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
     return {
         "session_id": session_id,
         "user_id": user_id,
-        "ts": payload.get("timestamp"),
+        # The reading's own stamp in preference to the tick's. The headband's
+        # block is a 25s window recomputed every 10s and held on the payload in
+        # between -- so that a 1Hz poller sees every reading rather than most of
+        # them -- and it arrives on ~40 consecutive ticks. Keyed on the tick,
+        # one measurement becomes forty rows; keyed on itself, the unique
+        # (session_id, source, ts) makes the repeats no-ops. The camera's block
+        # carries no `ts` and falls back to the tick's, as it always did.
+        "ts": heart.get("ts") or payload.get("timestamp"),
         "source": source,
         "heart_rate_bpm": heart.get("bpm"),
         "rmssd_ms": heart.get("rmssd_ms"),
@@ -220,6 +227,14 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
                     rejected_by=heart.get("rejected_by"),
                     measured_fps=heart.get("measured_fps"),
                     window_coverage=heart.get("window_coverage"),
+                    # The headband's counterparts to measured_fps, under their
+                    # own names: one is a camera's frame rate and one is a BLE
+                    # link's sample rate, and a row that merged them could not
+                    # be read back to say which sensor was struggling. `_raw`
+                    # drops the nulls, so a camera row is unchanged.
+                    sample_rate_hz=heart.get("sample_rate_hz"),
+                    largest_gap_s=heart.get("largest_gap_s"),
+                    channel_count=heart.get("channel_count"),
                     ingestion=payload.get("ingestion")),
     }
 

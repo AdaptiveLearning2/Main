@@ -628,3 +628,53 @@ async def test_a_successful_pass_still_clears_the_backoff(client, monkeypatch):
 
     assert client.status()["backoff_seconds"] == 0
     assert client.status()["last_error"] is None
+
+
+@pytest.mark.anyio
+async def test_a_held_heart_block_is_enqueued_once(client):
+    """The headband's block is a 25s window recomputed every 10s and held on the
+    payload in between -- which is what lets a 1Hz poller see every reading
+    rather than most of them -- so one measurement arrives on ~40 consecutive
+    ticks. Keyed on the tick's timestamp, each of those was a distinct row.
+    """
+    await _started(client)
+    block = {"source": "muse_optics", "bpm": 68.2, "confidence": 0.8,
+             "ts": "2026-08-10T10:00:00+00:00"}
+    for i in range(5):
+        client.submit_payload({
+            "timestamp": f"2026-08-10T10:00:0{i}Z", "device_id": "station1",
+            "features": {}, "heart": block,
+        })
+
+    assert client.status()["queued"]["heart"] == 1
+    # The reading's own stamp, not the tick it happened to ride in on.
+    assert client._queues["heart"][0]["ts"] == "2026-08-10T10:00:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_a_new_heart_reading_is_enqueued_again(client):
+    await _started(client)
+    for stamp in ("2026-08-10T10:00:00+00:00", "2026-08-10T10:00:10+00:00"):
+        client.submit_payload({
+            "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
+            "features": {},
+            "heart": {"source": "muse_optics", "bpm": 68.2, "ts": stamp},
+        })
+
+    assert client.status()["queued"]["heart"] == 2
+
+
+@pytest.mark.anyio
+async def test_two_devices_do_not_suppress_each_others_readings(client):
+    """A laptop running a headband and a camera has two sessions feeding one
+    client, so a single last-stamp slot would let each hide the other's."""
+    await _started(client)
+    for device, source in (("station1", "muse_optics"), ("cam0", "rppg")):
+        client.submit_payload({
+            "timestamp": "2026-08-10T10:00:00Z", "device_id": device,
+            "features": {},
+            "heart": {"source": source, "bpm": 70.0,
+                      "ts": "2026-08-10T10:00:00+00:00"},
+        })
+
+    assert client.status()["queued"]["heart"] == 2

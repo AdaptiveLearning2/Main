@@ -426,6 +426,83 @@ These rules lived inline in `eeg_poller` and were absent from the push path, so 
 headband wrote nothing under pull and a zeroed row per tick under push. Anything of this kind
 belongs in the mapper: it is the only place both deployments are guaranteed to read.
 
+### Headband heart rate is a held window, not a per-tick reading
+
+The headband is the primary heart source (the camera is emotion-only), and it reaches
+`heart_signals` through `optics_processing.build_heart_record`. Four things about it are load-bearing:
+
+- **Nothing arrives unless `MUSE_ENABLE_OPTICS` is on**, and it is still off by default. The flag is
+  narrower than its name: the OPTICS/PPG listeners are registered unconditionally, so "emits no
+  optics" stays distinguishable from "never asked". What it gates is moving a capable headband off
+  `PRESET_21`, and **two separate things argue for leaving that alone**. The bandwidth cliff is the
+  known one — 16 CH at 64 Hz drops the BLE link, and the default `1035` rung is the safe side of it.
+  The other is the reason not to flip the default now that heart rate is a real feature: changing
+  preset at all is an *EEG* risk, since it moves bit depth 12 → 14 and on some rungs the channel
+  count, and a silent EEG regression would be blamed on whatever shipped beside it. With the flag
+  off a session records no heart rate and every window is refused as `no_samples` — the honest
+  answer, not a fault.
+  (`connect_named` setting `PRESET_21` unconditionally is not an override: `get_model()` returns
+  `MU_02` for anything post-2018 until `CONNECTED`, so the real choice happens on the connection
+  callback in `apply_model_preset`.)
+- **The window is placed on `seq`, never on `mono_ts_ms`.** The bridge's stamp records BLE *delivery*
+  — ~9% of samples share one with their predecessor and the rest arrive in bursts — so `seq` is the
+  only real sample index, and the stamps are used solely to measure an average rate across the whole
+  window, where the batching averages out. That rate is `seq`-span over elapsed seconds, not
+  `len(rows)`: with samples dropped, counting rows reports a rate low by exactly the loss and scales
+  every bpm down with it. This is the opposite call to `rgb_window`'s median-of-intervals, and the
+  reason is the clock, not preference.
+- **Sample *loss* is gated separately from sample *rate*, and only the second is obvious.** `fs`
+  comes from `seq`, which counts what the headband **sent**, so it reads a healthy 64 Hz no matter
+  how few samples arrived; `window_coverage` is elapsed span, which the survivors still bracket. A
+  window can therefore pass both while being almost entirely `np.interp` output — and interpolation
+  manufactures the smooth periodicity autocorrelation rewards, so the result is a *confident* wrong
+  rate. Measured on the resting fixture (true ~68 bpm): one sample in 32 gave **55.8 bpm at
+  confidence 1.00**, one in 64 gave **44.0**. So `received_rate_hz` — real samples per second of
+  span — carries the same `MIN_SAMPLE_RATE` Nyquist bar, and `completeness` rides on the row.
+  Anything below 10 Hz effective is refused as `effective_rate_too_low`, including windows that
+  happen to still be right: nothing available here separates "sparse but above Nyquist" from
+  "aliased", and a refusal costs one window where an acceptance costs a number on a parent's chart.
+- **25s window, recomputed every 10s, then *held* on the payload.** The 10s step is what
+  `MAX_BPM_CHANGE_PER_S` was validated against. Holding is what lets a 1 Hz poller see every reading;
+  emitting for one tick would have push record everything and pull record almost nothing.
+  **An EEG no-data tick drops the held block but must not restart the cadence**
+  (`_drop_held_heart_block`, not `_reset_heart`). `drain_samples` raises whenever no EEG sample
+  arrives in its timeout, so flapping contact takes that path repeatedly; restarting the clock there
+  re-stamps the same 25 s of optical signal every tick, and since both writers dedupe on `ts` the
+  unique key cannot collapse those — up to 4 near-identical rows a second. It leaves the tracker
+  alone too: EEG dropping out says nothing about the optical emitters, and the anchor is what
+  catches octave errors.
+- **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
+  ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
+  client dedupes per `(device, source)`, and the poller upserts on
+  `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
+- **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
+  channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
+
+`rmssd_ms`, `sqi` and `stress_score` are **not derived yet** on either path; the columns stay null.
+`heart_signals.stress_score` therefore has no producer — don't read an empty tile as a broken query.
+
+**The poller's heart write is consent-gated, and that gate is the only one there is.** It writes with
+the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.
+`eeg_poller.set_heart_consent_check(fn)` is wired from `main` at import; `fn(user_id, source)` is
+built from the same `_consent` + `_permitted_heart_sources` pair the endpoint uses, so the two paths
+cannot disagree about one student. Unwired it denies, a failed read denies, and it is re-read on the
+same `CONSENT_RECHECK_SECONDS` cadence as EEG, so a mid-lesson withdrawal lands without waiting for
+the session to end. Per *source*, not per channel: a student who allowed the headband and refused the
+camera has consented to `muse_optics` and not to `rppg`.
+
+**On the pull path, EEG consent gates the heart channel as well — deliberately, and only there.**
+`_record_heart` runs inside the poller loop, and withdrawing `eeg` stops the poller outright, so it
+stops headband heart recording with it. `start()` refuses without EEG consent for the same reason, so
+a student who allows `headband_optical` and declines `eeg` records no heart rate under `pull` at all.
+That is accepted rather than overlooked: it errs the safe way — the path records *less* than consent
+allows, never more — and undoing it means a poller that keeps running with only its cognitive write
+switched off, which is a session reporting EEG stopped while still holding the device. A feature, not
+a fix; raise it as one. **Push is unaffected**, since `/api/signals/heart` checks per source and
+never consults EEG consent, so this is a real difference between the two deployments and the one
+place they are knowingly allowed to differ. Pinned by
+`test_withdrawing_eeg_consent_stops_the_heart_channel_too`.
+
 ### The sidecar's push client does no arithmetic
 
 `EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with

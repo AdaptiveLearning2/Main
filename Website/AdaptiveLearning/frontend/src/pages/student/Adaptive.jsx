@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
+import { startPush, stopPush, pushStatus } from '../../lib/sidecar'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
@@ -58,6 +59,12 @@ export default function Adaptive() {
   // (scan/connect by headband name) even starts.
   const [stations, setStations]     = useState([])
   const [stationId, setStationId]   = useState(null)
+
+  // Push ingestion: what the local sidecar reports about its own delivery.
+  // Null until asked, so "not running in this deployment" and "asked and it is
+  // down" stay distinguishable -- the same three-state rule the backend's
+  // liveness fields follow.
+  const [push, setPush]               = useState(null)
 
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
@@ -155,6 +162,59 @@ export default function Adaptive() {
     const id = setInterval(tick, 3000)
     return () => { killed = true; clearInterval(id) }
   }, [sessionId, stationId])
+
+  // Hand the session and the student's token to the local sidecar, and take
+  // them back when the session ends. Only under push: in the co-located
+  // deployment the backend's poller is the writer, and a push client running
+  // alongside it would put every EEG sample in `cognitive_signals` twice with
+  // no dedupe key to catch it. The sidecar refuses that itself (409 when
+  // PUSH_ENABLED is false); not asking is the first line of the same defence.
+  useEffect(() => {
+    if (!sessionId || !headband.pushMode) return
+    let killed = false
+
+    startPush(sessionId)
+      .then(() => { if (!killed) setPush({ running: true, reachable: true }) })
+      .catch(err => {
+        // A sidecar that is not running is the ordinary case on a machine with
+        // no headband and no camera, not an error to shout about. Recorded so
+        // the panel can say which, rather than rendering a blank tile that
+        // reads as "nothing happening".
+        if (!killed) setPush({ running: false, reachable: false, error: String(err.message || err) })
+      })
+
+    // The student's backend token expires roughly hourly and a lesson can run
+    // longer. The sidecar holds one token for the session, so without this the
+    // pushes start 401ing partway through a long session and the samples pile
+    // up in a bounded queue until they are dropped. Re-handing the same session
+    // id replaces the token in place and leaves the queue alone.
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'TOKEN_REFRESHED' && !killed) startPush(sessionId).catch(() => {})
+    })
+
+    return () => {
+      killed = true
+      sub?.subscription?.unsubscribe()
+      // Flushes the tail and drops the token on the way out. Fire-and-forget:
+      // an unreachable sidecar must not block teardown, and it clears its own
+      // token on shutdown regardless.
+      stopPush().catch(() => {})
+      setPush(null)
+    }
+  }, [sessionId, headband.pushMode])
+
+  // Delivery counts, for the panel. Slower than the 3 s status poll: this is a
+  // local request but it is only ever read by a human glancing at it.
+  useEffect(() => {
+    if (!sessionId || !headband.pushMode) return
+    let killed = false
+    const tick = () => pushStatus()
+      .then(d => { if (!killed) setPush(p => ({ ...(p || {}), ...d, reachable: true })) })
+      .catch(() => { if (!killed) setPush(p => ({ ...(p || {}), reachable: false })) })
+    tick()
+    const id = setInterval(tick, 10000)
+    return () => { killed = true; clearInterval(id) }
+  }, [sessionId, headband.pushMode])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
@@ -386,6 +446,17 @@ export default function Adaptive() {
             {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
             {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">on your device</span>}
+            {/* Three states, not two. `push === null` means we have not asked
+                yet and renders nothing; reachable-and-running is the only one
+                that may claim recording. Collapsing "not asked" into "not
+                recording" is how a surface ends up reporting an absence in data
+                that simply had not loaded. */}
+            {headband.pushMode && push && push.reachable === false && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
+            )}
+            {headband.pushMode && push?.reachable && push?.running && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
+            )}
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
@@ -396,7 +467,15 @@ export default function Adaptive() {
               headband.connected
                 ? `${headband.samples} samples sent · teacher can see your focus & stress live`
                 : headband.pushMode
-                  ? 'Your headband connects through the app on this computer, not through this page.'
+                  ? (push && push.reachable === false
+                      ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
+                      // Counted from what the backend said it *stored*, not from
+                      // what was sent -- it drops samples for a sensor that was
+                      // declined, so a sent count would read as a healthy
+                      // session that recorded nothing.
+                      : push?.recorded
+                        ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
+                        : 'Your headband connects through the app on this computer, not through this page.')
                   : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'

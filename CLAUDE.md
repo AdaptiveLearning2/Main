@@ -425,6 +425,27 @@ Three properties worth not breaking:
 writer alongside a poller — `cognitive_signals` has no dedupe key, so both running means every EEG
 sample lands twice with no error.
 
+### The browser calls the sidecar directly, and two tokens are in play
+
+`frontend/src/lib/sidecar.js`. Under push the hosted backend cannot reach a student's laptop, so
+lifecycle control comes from the page: it calls `http://127.0.0.1:8001` itself. An HTTPS page may do
+that — loopback is exempt from the mixed-content block, measured with a negative control on
+Chromium 148; evidence and limits in `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
+
+**Don't conflate the two credentials.** `VITE_EEG_LOCAL_TOKEN` is the sidecar's own `API_TOKEN`, is
+in the client bundle, and is *not a secret* — the sidecar binds to loopback, so it separates this
+page from other pages in this browser, not one user from another. The student's Supabase access
+token is a real secret, is fetched per call, and is handed to the sidecar once so it can post as
+them.
+
+**Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run
+longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
+`TOKEN_REFRESHED`, which replaces the token in place — same session id, queue untouched. Without it
+the pushes 401 partway through and the samples sit in a bounded queue until they are dropped.
+
+`ALLOWED_ORIGINS` on the sidecar must name the **frontend** origin, not just the backend's. Getting
+it wrong fails every local call on CORS while the sidecar itself looks perfectly healthy.
+
 All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
 until the push client existed, which was survivable only while its sole writer was the in-process
 poller.

@@ -232,6 +232,7 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, _n: type("Q", (), {
                             "insert": lambda _q, _r: type("E", (), {
@@ -321,7 +322,13 @@ class _StubClient:
 
     @staticmethod
     def get_muse_status(*_a, **_k):
-        return {}
+        # Raises, like the real one. `eeg_client._learner_headers()` throws when
+        # EEG_API_TOKEN is unset -- the normal state of a hosted push
+        # deployment -- and it throws outside the request try block, so the
+        # endpoint 500s. A stub returning `{}` made `/api/eeg/status` look
+        # mode-aware while the probe in front of the check was crashing it, and
+        # the parametrised test that exists to catch exactly that passed.
+        raise RuntimeError("Missing EEG_API_TOKEN environment variable")
 
     @staticmethod
     def list_devices():
@@ -337,6 +344,19 @@ class _StubClient:
 
     @staticmethod
     def muse_disconnect(*_a, **_k):
+        return {}
+
+
+class _StubClientConfigured(_StubClient):
+    """A pull deployment: EEG_API_TOKEN is set, so the probe runs and answers.
+
+    Separate from `_StubClient` because the two deployments differ in exactly
+    the way that mattered -- under push there is no token and the probe throws,
+    which is what the base stub models.
+    """
+
+    @staticmethod
+    def get_muse_status(*_a, **_k):
         return {}
 
 
@@ -387,7 +407,7 @@ def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monk
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
-    monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "eeg_client", _StubClientConfigured)
 
     call, key = _MODE_AWARE[endpoint]
     out = call()
@@ -463,3 +483,394 @@ def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, m
         _MODE_AWARE_RAISING[endpoint]()
 
     assert exc.value.status_code == 503, f"{endpoint} refuses a legitimate call"
+
+
+# ── the cognitive endpoint as a push target ─────────────────────────────────
+
+def _capture_inserts(monkeypatch):
+    """Stub supabase, returning the list the endpoint inserts into."""
+    written = []
+
+    class _Ins:
+        def __init__(self, rows): self.rows = rows
+        def execute(self): written.extend(self.rows)
+
+    class _Tbl:
+        def insert(self, rows): return _Ins(rows)
+
+    monkeypatch.setattr(main, "supabase", type("S", (), {"table": lambda _s, _n: _Tbl()})())
+    return written
+
+
+def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
+    """The push client sends the sidecar's own payload and does no arithmetic.
+
+    A /100 conversion on the sidecar would be a second copy of the poller's,
+    which is how one path ends up storing percentages and the other ratios."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z",
+         "features": {"focus_score": 72.0, "calm_score": 60.0, "confidence": 90.0}},
+    ]), None)
+
+    assert written[0]["focus"] == pytest.approx(0.72), "stored on the sidecar's scale"
+    assert written[0]["stress"] == pytest.approx(0.40), "stress is 1 - calm"
+
+
+def test_flat_samples_are_still_stored_as_given(monkeypatch):
+    """The hand-posted dev shape: already-mapped rows, in table units."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40},
+    ]), None)
+
+    assert written[0]["focus"] == pytest.approx(0.72), "converted twice"
+
+
+def test_the_cognitive_batch_is_length_bounded_like_the_others():
+    """It was the only ingest batch without a cap. Survivable while the sole
+    writer was the in-process poller; not once the writer is a process on a
+    student's machine and this endpoint is the trust boundary."""
+    with pytest.raises(Exception):
+        main.CognitiveBatch(session_id="s1",
+                            samples=[{} for _ in range(main._INGEST_MAX_BATCH + 1)])
+
+
+def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
+    """Also the only one of the three without a limit, and for the same reason
+    it now needs one."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "flooder"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_ingest_hits", {})
+
+    batch = main.CognitiveBatch(session_id="s1", samples=[])
+    for _ in range(main._INGEST_RATE_LIMIT):
+        main.ingest_cognitive(batch, None)
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.ingest_cognitive(batch, None)
+    assert exc.value.status_code == 429
+
+
+def test_eeg_samples_are_dropped_when_the_student_has_not_consented(monkeypatch):
+    """The last line of defence, and the one this endpoint was missing.
+
+    The sidecar gates on consent too, but a stale one that kept sending after a
+    withdrawal would otherwise keep recording, and the withdrawal would look
+    respected from every surface that reads."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_consent",
+                        lambda _u: {"eeg_enabled": False, "retrieved": True})
+
+    out = main.ingest_cognitive(main.CognitiveBatch(
+        session_id="s1", samples=[{"focus": 0.5}]), None)
+
+    assert written == []
+    assert out["dropped"] == 1
+    assert out["reason"] == "eeg not consented"
+
+
+def test_an_unreadable_consent_row_records_nothing(monkeypatch):
+    """`_consent` fails closed, unlike the reporting helpers. A dashboard
+    degrading to empty is fine; a consent check degrading to *enabled* records
+    data against a refusal."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"retrieved": False})
+
+    out = main.ingest_cognitive(main.CognitiveBatch(
+        session_id="s1", samples=[{"focus": 0.5}]), None)
+
+    assert written == []
+    assert out["reason"] == "consent unavailable"
+
+
+def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
+    """`map_eeg_to_cognitive` built its `raw` inline and discarded whatever the
+    caller sent -- invisible while the poller, which sends none, was the only
+    caller."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good"},
+         "raw": {"note": "kept", "signal_quality": "spoofed"}},
+    ]), None)
+
+    assert written[0]["raw"]["note"] == "kept"
+    # Derived keys win the collision: a client must not overwrite what was
+    # actually observed by choosing a key name. Only where there *is* a derived
+    # value -- `_raw` drops Nones so an absent field cannot read as a recorded
+    # null, which means a key the sidecar did not populate stays the client's.
+    # That is not a hole to close here: on this path the client *is* the
+    # sidecar, and the endpoint's defences are session ownership and consent.
+    assert written[0]["raw"]["signal_quality"] == "good"
+
+
+@pytest.mark.parametrize("stopper", ["stop", "stop_for_user", "stop_all"])
+def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
+    """"Bounded by concurrent sessions" is only true if *every* way a poller
+    ends clears its record. `stop()` did it and the other two did not -- the
+    same shape as the bug that moved this set out of `main`, one layer along."""
+    class _P:
+        user_id = "u1"
+        session_id = "s1"
+        samples = 0
+        def is_alive(self): return True
+        def stop(self): pass
+        def join(self, *_a, **_k): pass
+
+    poller = _P()
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": poller})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+    monkeypatch.setattr(eeg_poller, "live_pollers", lambda: [poller])
+    eeg_poller.claim_double_write_warning("s1")
+    assert "s1" in eeg_poller._warned_double_write
+
+    if stopper == "stop":
+        eeg_poller.stop("s1")
+    elif stopper == "stop_for_user":
+        eeg_poller.stop_for_user("u1")
+    else:
+        eeg_poller.stop_all(timeout=0.01)
+
+    assert "s1" not in eeg_poller._warned_double_write, \
+        f"{stopper} left the record behind"
+
+
+def test_derived_keys_win_on_the_push_path_too(monkeypatch):
+    """"Derived keys win a collision" held on the pull path and silently did not
+    here. The push client nests device_id/channels/state/ingestion under `raw`,
+    so the mapper's top-level lookups all found None, `_raw` dropped the Nones,
+    and the client's values were stored -- one path differing from the other,
+    which is the thing `signal_mapping` exists to prevent."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good"},
+         "raw": {"device_id": "station1", "state": {"label": "focused"},
+                 "signal_quality": "spoofed", "note": "kept"}},
+    ]), None)
+
+    raw = written[0]["raw"]
+    # The envelope is read as the envelope, not left buried under `raw`.
+    assert raw["device_id"] == "station1"
+    assert raw["state"] == {"label": "focused"}
+    # Derived beats client-supplied, the same way it does on the pull path.
+    assert raw["signal_quality"] == "good"
+    # And anything outside the envelope still survives.
+    assert raw["note"] == "kept"
+
+
+def test_the_pull_path_mapping_is_unchanged(monkeypatch):
+    """The un-nesting must not have moved the poller's goalposts: it passes the
+    envelope at the top level already."""
+    row = signal_mapping.map_eeg_to_cognitive(
+        {"timestamp": "t", "device_id": "station1",
+         "features": {"focus_score": 50.0, "signal_quality": "good"},
+         "state": {"label": "focused"}},
+        "s", "u")
+
+    assert row["raw"]["device_id"] == "station1"
+    assert row["raw"]["signal_quality"] == "good"
+
+
+def test_the_same_user_restart_path_evicts_too(monkeypatch):
+    """The fourth stop path, missed when the helper was introduced for the other
+    three -- and the one a student hits just by starting a second session."""
+    class _P:
+        def __init__(self, *a):
+            # eeg_poller.start builds it as _Poller(supabase, user, session, device)
+            self.session_id = a[2] if len(a) > 2 else "s1"
+            self.user_id = a[1] if len(a) > 1 else "u1"
+        device_id = "station1"
+        samples = 0
+        def is_alive(self): return True
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": _P("s1")})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+    monkeypatch.setattr(eeg_poller, "_Poller", _P)
+    eeg_poller.claim_double_write_warning("s1")
+    assert "s1" in eeg_poller._warned_double_write
+
+    eeg_poller.start(None, "u1", "s2", "station1")
+
+    assert "s1" not in eeg_poller._warned_double_write, \
+        "the replaced session's record outlived its poller"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), "oops", [1]])
+def test_unstorable_band_values_are_rejected_at_the_boundary(bad):
+    """The flat fields are typed and Pydantic rejects these; `features`/`bands`
+    were free-form dicts, so the same values reached the numeric columns and
+    failed at PostgREST -- taking the *whole batch* with them, valid samples
+    included, and reporting it as a 500 the client will retry."""
+    with pytest.raises(Exception):
+        main.CognitiveBatch(session_id="s", samples=[{"bands": {"alpha": bad}}])
+
+
+def test_non_column_keys_are_still_free_form():
+    """Only the keys that become columns are checked. The rest is metadata bound
+    for `raw`, which is jsonb and can hold it -- a sidecar gaining a feature
+    must not need this model changed in lockstep to keep posting."""
+    batch = main.CognitiveBatch(session_id="s", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good",
+                      "quality_basis": "contact", "batch_size": 3}},
+    ])
+    assert batch.samples[0].features["signal_quality"] == "good"
+
+
+def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
+    """The probe ran *before* the mode check, so the rule this endpoint was
+    fixed to follow was defeated by statement order. With EEG_API_TOKEN unset --
+    the normal state of a hosted push deployment -- it 500s, and the frontend
+    polls it every 3 s, so the headband block never updates all lesson."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+
+    probed = []
+
+    class _Exploding(_StubClient):
+        @staticmethod
+        def get_muse_status(*_a, **_k):
+            probed.append(1)
+            raise RuntimeError("Missing EEG_API_TOKEN environment variable")
+
+    monkeypatch.setattr(main, "eeg_client", _Exploding)
+
+    out = main.eeg_status(None)
+
+    assert probed == [], "the sidecar was probed under push"
+    assert out["service"] is None
+    assert out["muse"]["available"] is None, "'not probed' rendered as 'absent'"
+    assert out["muse"]["reason"] == "push_ingestion"
+
+
+def test_a_device_claimed_by_another_user_still_reads_that_way_under_pull(monkeypatch):
+    """The push branch must not have swallowed the in-use case."""
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: False)
+    monkeypatch.setattr(main, "eeg_client", _StubClientConfigured)
+
+    out = main.eeg_status(None)
+
+    assert out["muse"] == {"available": False, "reason": "in_use_by_other"}
+
+
+# ── the quality rules, which used to exist on one path only ─────────────────
+
+_UNWORN = {"timestamp": "t", "features": {"signal_quality": "no_signal",
+                                          "focus_score": 0.0, "calm_score": 0.0,
+                                          "confidence": 0.0}}
+_BAD_CONTACT = {"timestamp": "t", "bands": {"alpha": 0.3},
+                "features": {"signal_quality": "poor", "quality_basis": "contact",
+                             "focus_score": 84.8, "calm_score": 20.0}}
+_LEGACY_POOR = {"timestamp": "t",
+                "features": {"signal_quality": "poor", "quality_basis": "heuristic",
+                             "focus_score": 84.8, "calm_score": 20.0}}
+
+
+def test_an_unworn_headband_produces_no_row():
+    """Zeroed scores from a disconnected headset are not a reading of zero.
+
+    Worse than nulls: aggregates average zeros as real readings and exclude
+    nulls, so a headband on the desk read as sustained zero focus rather than as
+    no data -- the can't-tell-no-data-from-zero failure arriving through the
+    write side, where none of the reporting rules can see it."""
+    assert signal_mapping.map_eeg_to_cognitive(_UNWORN, "s", "u") is None
+
+
+def test_bad_contact_keeps_the_row_and_nulls_the_measurements():
+    """"We were recording but could not measure" is not "no session happened",
+    and `class_live` derives staleness from the newest row's ts -- dropping
+    these would age out a session the student is still working in."""
+    row = signal_mapping.map_eeg_to_cognitive(_BAD_CONTACT, "s", "u")
+
+    assert row is not None
+    assert all(row[c] is None for c in signal_mapping._MEASUREMENT_COLUMNS)
+    # Still explicable after the fact.
+    assert row["raw"]["signal_quality"] == "poor"
+    assert row["raw"]["quality_basis"] == "contact"
+
+
+def test_the_legacy_poor_heuristic_is_not_treated_as_bad_contact():
+    """It reports "poor" for any focused student and says nothing about
+    electrodes. Treating it as bad contact would silently disable collection for
+    a whole session."""
+    row = signal_mapping.map_eeg_to_cognitive(_LEGACY_POOR, "s", "u")
+
+    assert row["focus"] == pytest.approx(0.848)
+
+
+@pytest.mark.parametrize("payload,expected", [(_UNWORN, "no_signal"),
+                                              (_BAD_CONTACT, "contact_poor"),
+                                              (_LEGACY_POOR, "ok")])
+def test_both_paths_read_one_verdict(payload, expected):
+    """The rules were inline in `eeg_poller` and absent from the push path, so
+    the same headband behaved differently depending on the deployment. One
+    function, both callers."""
+    assert signal_mapping.eeg_quality(payload) == expected
+
+
+def test_the_push_endpoint_drops_no_signal_ticks(monkeypatch):
+    """The half that was missing entirely."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    out = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": _UNWORN["features"]},
+        {"features": {"signal_quality": "good", "focus_score": 60.0}},
+    ]), None)
+
+    assert len(written) == 1, "a zeroed row was stored"
+    assert out["inserted"] == 1
+    # Counted, so a caller can tell "sent 2, recorded 1" from "sent 1".
+    assert out["dropped"] == 1
+
+
+def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": _BAD_CONTACT["features"], "bands": _BAD_CONTACT["bands"]},
+    ]), None)
+
+    assert written[0]["focus"] is None
+    assert written[0]["alpha"] is None, "a band computed from bad electrodes was stored"

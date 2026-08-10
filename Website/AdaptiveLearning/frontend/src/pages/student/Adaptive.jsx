@@ -1,12 +1,20 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
+import { startPush, stopPush, stopPushOnUnload, pushStatus } from '../../lib/sidecar'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
+
+// How long to wait before offering the session to the sidecar again. The
+// student opening the lesson before starting the local app is the ordinary
+// sequence, so this is a normal path rather than an error path -- long enough
+// not to hammer a loopback port, short enough that a lesson does not get far
+// before recording begins.
+const PUSH_RETRY_MS = 5000
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -59,11 +67,25 @@ export default function Adaptive() {
   const [stations, setStations]     = useState([])
   const [stationId, setStationId]   = useState(null)
 
+  // Push ingestion: what the local sidecar reports about its own delivery.
+  // Null until asked, so "not running in this deployment" and "asked and it is
+  // down" stay distinguishable -- the same three-state rule the backend's
+  // liveness fields follow.
+  const [push, setPush]               = useState(null)
+  // Serialises start against stop. Both are async and the effect can tear down
+  // while a start is still in flight, so they are chained rather than raced.
+  const pushHandoff = useRef(Promise.resolve())
+  // Read by `recover`, which is a stable callback and must not close over a
+  // stale session id.
+  const sessionIdRef = useRef(null)
+
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
   const [debugOpen, setDebugOpen]     = useState(true)
   const debugTimer  = useRef(null)
   const phaseTimer  = useRef(null)
+
+  useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
   // load profile default grade + classes
   useEffect(() => {
@@ -119,6 +141,25 @@ export default function Adaptive() {
     return () => { alive = false }
   }, [headband.available])
 
+  // Re-offers the session to the sidecar. Shared by the initial handover and
+  // by the status poll, because the two failures are the same one seen at
+  // different times: the sidecar not up yet, and the sidecar gone again.
+  const recover = useCallback(() => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    pushHandoff.current = pushHandoff.current
+      .catch(() => {})
+      .then(() => startPush(sid))
+      .then(() => setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null })))
+      .catch(err => {
+        // Same reasoning as the initial handover: a 409 is the sidecar
+        // deliberately declining, and re-offering cannot change its mind.
+        if (err?.status === 409) {
+          setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false }))
+        }
+      })
+  }, [])
+
   const creating = useRef(null)
 
   const getOrCreateSession = async () => {
@@ -155,6 +196,140 @@ export default function Adaptive() {
     const id = setInterval(tick, 3000)
     return () => { killed = true; clearInterval(id) }
   }, [sessionId, stationId])
+
+  // Hand the session and the student's token to the local sidecar, and take
+  // them back when the session ends. Only under push: in the co-located
+  // deployment the backend's poller is the writer, and a push client running
+  // alongside it would put every EEG sample in `cognitive_signals` twice with
+  // no dedupe key to catch it. The sidecar refuses that itself (409 when
+  // PUSH_ENABLED is false); not asking is the first line of the same defence.
+  useEffect(() => {
+    if (!sessionId || !headband.pushMode) return
+    let killed = false
+
+    // Retried, not attempted once. The sidecar being slower to come up than
+    // this page is the *normal* order of events on a student's machine -- they
+    // open the lesson, then start the local app -- and a single attempt that
+    // failed meant nothing was pushed for the rest of the session while the
+    // panel promised it would "change on its own". So the panel's sentence is
+    // now true: this keeps trying until it lands.
+    let attempt = null
+    const handOver = () => {
+      // Onto the same chain the cleanup's stop goes on, so the two are ordered
+      // rather than racing. Off the chain this would be sequencing only the
+      // stop against nothing, which reads like a fix and is not one.
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => startPush(sessionId))
+        .then(() => {
+          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+        })
+        .catch(err => {
+          if (killed) return
+          if (err.status === 409) {
+            // Not a failure: the sidecar is up, answering, and declining --
+            // PUSH_ENABLED is off, so it refuses to be a second writer. Retrying
+            // that is a POST every 5 s for the whole lesson that can only ever
+            // get the same answer, and it made the panel alternate between two
+            // contradictory explanations. Reachable *and* not recording, which
+            // the badge and the copy both distinguish.
+            setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false,
+                            error: String(err.message || err) }))
+            return
+          }
+          // A sidecar that is not up is the ordinary case on a machine with no
+          // headband and no camera, not an error to shout about -- but it is
+          // recorded, so the panel can say which rather than rendering a blank
+          // tile that reads as "nothing happening".
+          setPush(p => ({ ...(p || {}), running: false, reachable: false, error: String(err.message || err) }))
+          attempt = setTimeout(handOver, PUSH_RETRY_MS)
+        })
+      return pushHandoff.current
+    }
+    handOver()
+
+    // The student's backend token expires roughly hourly and a lesson can run
+    // longer. The sidecar holds one token for the session, so without this the
+    // pushes start 401ing partway through and the samples pile up in a bounded
+    // queue until they are dropped. Re-handing the same session id replaces the
+    // token in place and leaves the queue alone.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event !== 'TOKEN_REFRESHED' || killed) return
+      // The token comes from the callback argument. Calling `getSession()` in
+      // here deadlocks on supabase-js v2's auth lock, which is held while this
+      // dispatches -- and a deadlock in the refresh path means the sidecar
+      // keeps an expired token and every push 401s for the rest of the lesson.
+      //
+      // On the same chain as start and stop, so a refresh landing during
+      // teardown cannot re-hand a token to a sidecar that is being stopped.
+      const token = session?.access_token
+      if (!token) return
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => (killed ? null : startPush(sessionId, token)))
+        .catch(() => {})
+    })
+
+    // Effect cleanup does not run on a tab close or a hard refresh, which is
+    // how most lessons actually end. Without this the sidecar keeps the token
+    // and keeps recording for up to an hour after the student walked away.
+    // `pagehide` rather than `beforeunload`: it fires for the bfcache case too,
+    // and `beforeunload` is unreliable on mobile.
+    const onPageHide = () => { stopPushOnUnload() }
+    window.addEventListener('pagehide', onPageHide)
+
+    return () => {
+      killed = true
+      clearTimeout(attempt)
+      window.removeEventListener('pagehide', onPageHide)
+      sub?.subscription?.unsubscribe()
+      // Sequenced behind whatever start is in flight, not fired alongside it.
+      // Under StrictMode the effect is torn down and re-run immediately, and a
+      // bare stopPush() could land *after* the remount's startPush -- leaving
+      // the sidecar stopped while the panel showed "RECORDING", which is the
+      // precise lie this whole change exists to prevent.
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => stopPush())
+        .catch(() => {})
+      setPush(null)
+    }
+  }, [sessionId, headband.pushMode])
+
+  // Delivery counts, for the panel. Slower than the 3 s status poll: this is a
+  // local request but it is only ever read by a human glancing at it.
+  useEffect(() => {
+    if (!sessionId || !headband.pushMode) return
+    let killed = false
+    const tick = () => pushStatus()
+      .then(d => {
+        if (killed) return
+        // A sidecar that went away after a successful handover: the initial
+        // retry loop has long since stopped, so without this the session never
+        // recovers -- and a restarted sidecar has no session and no token, so
+        // it will not resume on its own either. `enabled: false` is excluded:
+        // that one is configuration, and re-handing would just 409 forever.
+        if (d.enabled !== false && !d.running) recover()
+        // `enabled: false` means the sidecar is reachable and deliberately not
+        // pushing -- PUSH_ENABLED is off while this backend is in push mode, so
+        // nobody is writing this session at all. Merging a flat
+        // `reachable: true` over the top rendered that as a healthy session,
+        // and also erased the error from a failed handover. Reachability is
+        // about the sidecar; running is about whether anything is being
+        // recorded, and they are not the same claim.
+        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running }))
+      })
+      .catch(() => {
+        if (killed) return
+        setPush(p => ({ ...(p || {}), reachable: false, running: false }))
+        // Unreachable now but reachable before -- the sidecar was restarted or
+        // the lesson outlived it. Same recovery.
+        recover()
+      })
+    tick()
+    const id = setInterval(tick, 10000)
+    return () => { killed = true; clearInterval(id) }
+  }, [sessionId, headband.pushMode, recover])
 
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
@@ -386,6 +561,23 @@ export default function Adaptive() {
             {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
             {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">on your device</span>}
+            {/* Three states, not two. `push === null` means we have not asked
+                yet and renders nothing; reachable-and-running is the only one
+                that may claim recording. Collapsing "not asked" into "not
+                recording" is how a surface ends up reporting an absence in data
+                that simply had not loaded. */}
+            {/* `running: false` counts. A restarted sidecar answers
+                `enabled: true, running: false` -- reachable, configured, and
+                recording nothing -- which fell through both earlier conditions
+                and left the panel showing a stale reading count and no warning
+                at all. Any known not-recording state is amber. */}
+            {headband.pushMode && push && push.running !== true &&
+             (push.reachable === false || push.enabled === false || push.running === false) && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
+            )}
+            {headband.pushMode && push?.reachable && push?.running && (
+              <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
+            )}
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
@@ -396,7 +588,17 @@ export default function Adaptive() {
               headband.connected
                 ? `${headband.samples} samples sent · teacher can see your focus & stress live`
                 : headband.pushMode
-                  ? 'Your headband connects through the app on this computer, not through this page.'
+                  ? (push && push.enabled === false
+                      ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
+                    : push && push.reachable === false
+                      ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
+                      // Counted from what the backend said it *stored*, not from
+                      // what was sent -- it drops samples for a sensor that was
+                      // declined, so a sent count would read as a healthy
+                      // session that recorded nothing.
+                      : push?.recorded
+                        ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
+                        : 'Your headband connects through the app on this computer, not through this page.')
                   : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'

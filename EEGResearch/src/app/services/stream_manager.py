@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from src.app.config import DEFAULT_DEVICE_ID, DeviceConfig, Settings, get_settings, parse_eeg_devices
 from src.app.services.adaptation import AdaptationEngine
@@ -52,6 +52,41 @@ class DeviceSession:
         self.errors_seen = 0
         self._task: asyncio.Task[None] | None = None
         self.running = False
+        # Set by StreamManager when push ingestion is on. A plain callable
+        # rather than a reference to the push client, so this module stays
+        # unaware of how -- or whether -- anything is shipped off the machine;
+        # the sampling loop must not be able to fail because of the network.
+        self.on_payload: Callable[[dict[str, Any]], None] | None = None
+
+    async def _emit(self) -> None:
+        """Hand the tick's payload to whatever is consuming it.
+
+        Swallows everything. A consumer that raises would otherwise kill the
+        sampling loop, which is the one thing in this process that must keep
+        running: losing the local stream to fix up a remote write is strictly
+        worse than losing the remote write.
+
+        `snapshot()` off the event loop thread. It calls
+        `adapter.get_ingestion_meta()`, which is the very call `_loop` already
+        wraps in `to_thread` because it can block on lock contention in the TCP
+        adapter -- taking it inline here put it straight back on the loop and
+        made every API request wait behind a tick.
+        """
+        if self.on_payload is None:
+            return
+        try:
+            # `snapshot()`, not `latest_payload`. The two are not the same
+            # record: `bands` and `ingestion` are assembled in snapshot() and
+            # were never in latest_payload, so emitting the raw payload gave the
+            # push path EEG rows with null alpha/beta/theta/delta/gamma while
+            # the pull path -- which reads /api/v1/state, i.e. snapshot() --
+            # stored them. One deployment silently recording less than the
+            # other is exactly the divergence the shared mapping was meant to
+            # rule out, reintroduced one layer upstream of it.
+            self.on_payload(await asyncio.to_thread(self.snapshot))
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.warning("payload consumer failed for device %s: %s: %s",
+                           self.device_id, type(exc).__name__, exc)
 
     def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
         """The camera equivalent of the EEG payload.
@@ -182,6 +217,7 @@ class DeviceSession:
                 try:
                     self.latest_payload = self._face_payload(samples, raw_meta)
                     self.samples_processed += len(samples)
+                    await self._emit()
                 except Exception as exc:
                     self.errors_seen += 1
                     logger.warning(
@@ -229,6 +265,7 @@ class DeviceSession:
                     },
                 }
                 self.samples_processed += len(samples)
+                await self._emit()
             except Exception as exc:
                 # A real sample was read successfully, so this is a bug in the
                 # processing pipeline (not a signal-loss condition) -- log and
@@ -337,6 +374,19 @@ class StreamManager:
         self._sessions: dict[str, DeviceSession] = {
             device_id: DeviceSession(device_id, self.settings, cfg) for device_id, cfg in device_configs.items()
         }
+
+    def set_payload_consumer(self, consumer: Callable[[dict[str, Any]], None] | None) -> None:
+        """Route every device's ticks to one consumer, or to none.
+
+        Every device, because a student's own machine can have both a headband
+        and a camera registered and both feed the same session. Setting it to
+        None detaches cleanly, which is what stopping push ingestion does -- the
+        sampling loops carry on serving the local dashboard either way.
+        """
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for session in sessions:
+            session.on_payload = consumer
 
     def session(self, device_id: str = DEFAULT_DEVICE_ID) -> DeviceSession:
         """Return the DeviceSession for device_id, or raise UnknownDeviceError."""

@@ -391,6 +391,14 @@ fault when the deployment simply does not work that way. Two shapes:
   wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
   that claimed to have replaced it.
 
+**"Before" means before every sidecar call, not just before the liveness probe.** `/api/eeg/status`
+had the check and still 500'd under push, because `get_muse_status()` ran a few lines above it.
+`eeg_client._learner_headers()` raises when `EEG_API_TOKEN` is unset — the normal state of a hosted
+push deployment — and it raises *outside* the request try, so the endpoint dies before reaching the
+check that exists to protect it. Test stubs for `eeg_client` must therefore **raise** from
+`get_muse_status`, as `_StubClient` in `test_ingest_mode.py` does: a stub returning `{}` modelled a
+deployment that does not exist and hid this for two rounds.
+
 A ninth endpoint needs the same treatment and an entry in `_MODE_AWARE` or `_MODE_AWARE_RAISING` in
 `backend/tests/test_ingest_mode.py`, which parametrises both push and pull over every member. This
 was found one endpoint at a time across five review rounds because each site was written by hand and
@@ -400,6 +408,105 @@ Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, 
 *transport*; the push path would have had to import an HTTP client it never calls to reach a pure
 function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
 storing percentages while the other stores ratios.
+
+**What may be recorded is part of that shared mapping, not of either caller.** `eeg_quality()`
+answers `no_signal` / `contact_poor` / `ok`, and all three mappers return `None` for a channel that
+produced nothing:
+
+- **`no_signal`** — a disconnected headband reports *zeroed* scores. Zeros are worse than nulls:
+  aggregates average them and exclude nulls, so a headband on the desk read as sustained zero focus
+  rather than as no data. That is the can't-tell-no-data-from-zero failure arriving through the
+  *write* side, where none of the reporting rules can see it.
+- **`contact_poor`** — keep the row, null the eight measurement columns. "Recording but unable to
+  measure" is not "no session", and `class_live` derives staleness from the newest row's `ts`.
+  Only `signal_quality == "poor"` **with `quality_basis == "contact"`** counts; the legacy heuristic
+  says "poor" for any focused student.
+
+These rules lived inline in `eeg_poller` and were absent from the push path, so the same unworn
+headband wrote nothing under pull and a zeroed row per tick under push. Anything of this kind
+belongs in the mapper: it is the only place both deployments are guaranteed to read.
+
+### The sidecar's push client does no arithmetic
+
+`EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with
+`BACKEND_URL`. It cannot import `signal_mapping` — different package — so instead of converting, it
+sends the sidecar's payload **whole**: `/api/signals/cognitive` accepts a sensor-shaped sample
+(`features`/`bands`, 0..100) as well as the flat already-mapped one, and maps the first itself. That
+keeps the /100 conversion in one place reached by both paths. Don't add a divide to the sidecar.
+
+Three properties worth not breaking:
+
+- **The student's bearer token arrives from the browser and lives in memory for one session.** It is
+  never logged or written to disk — this process runs on a student's laptop. `stop()` clears it, and
+  changing session drops the old queue, since those samples belong to a session the new token may
+  not own.
+- **The queue is bounded and drops oldest, counted.** `deque(maxlen=…)` evicts silently, and an
+  uncounted eviction is a signal path losing data with nothing anywhere to say so. That applies to
+  *returning* a failed batch too — `extendleft` evicts from the far end, i.e. the newest — which is
+  why restoring goes through `_restore` rather than straight onto the deque.
+- **A failure in one channel must not cost the others.** Each channel is drained immediately before
+  its own POST, not all three up front; the first version re-raised on the first failure and threw
+  away two already-popped batches.
+- **The sampling hook emits `snapshot()`, not `latest_payload`** — `bands` and `ingestion` are
+  assembled in `snapshot()`, so emitting the raw payload gave push-ingested rows null band powers
+  while pull-ingested ones had them — and it does so via `to_thread`, because `snapshot()` reaches
+  `get_ingestion_meta()`, the one call the sampling loop already offloads for blocking.
+- **A rejected window is not a reading.** `build_face_record` and `build_heart_record` always return
+  a dict, with `emotion: None` / `bpm: None` and a `rejected_by`. Enqueue on *the reading*, not on
+  the block's presence, or a 4 Hz session writes ~14k all-null rows an hour, every one counted as a
+  sample by the aggregates. `source` alone does not test it: the heart block sets `rppg`
+  unconditionally.
+- **Nothing after `raise_for_status()` may raise, and no POST is cancelled mid-flight.** The rows are
+  committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
+  re-post duplicates them, and `cognitive_signals` and `face_signals` have no dedupe key. `stop()`
+  therefore *asks* the loop to finish and awaits it, cancelling only once `SHUTDOWN_BUDGET` is spent.
+  A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor `dropped_locally`.
+- **`stop()` is bounded by the clock.** An attempt cap is not a bound a reader can convert into
+  seconds; 12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C.
+
+The **browser** side has the matching rule: effect cleanup does not run on a tab close or hard
+refresh, so `Adaptive.jsx` also stops the sidecar from a `pagehide` listener via `stopPushOnUnload`,
+which uses `fetch(..., {keepalive: true})`. Without it the sidecar keeps the student's token and
+keeps recording for up to an hour after they walked away — a consent problem, not untidiness.
+`sendBeacon` cannot be used: it cannot set an `Authorization` header.
+- **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
+  samples for a sensor the student declined; counting sent would report a healthy session that
+  recorded nothing.
+
+`/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
+writer alongside a poller — `cognitive_signals` has no dedupe key, so both running means every EEG
+sample lands twice with no error.
+
+### The browser calls the sidecar directly, and two tokens are in play
+
+`frontend/src/lib/sidecar.js`. Under push the hosted backend cannot reach a student's laptop, so
+lifecycle control comes from the page: it calls `http://127.0.0.1:8001` itself. An HTTPS page may do
+that — loopback is exempt from the mixed-content block, measured with a negative control on
+Chromium 148; evidence and limits in `EEGResearch/docs/LOOPBACK_FROM_HTTPS.md`.
+
+**Don't conflate the two credentials.** `VITE_EEG_LOCAL_TOKEN` is the sidecar's own `API_TOKEN`, is
+in the client bundle, and is *not a secret* — the sidecar binds to loopback, so it separates this
+page from other pages in this browser, not one user from another. The student's Supabase access
+token is a real secret, is fetched per call, and is handed to the sidecar once so it can post as
+them.
+
+**Re-hand the token on refresh.** Supabase access tokens expire roughly hourly and a lesson can run
+longer; the sidecar holds one token per session. `Adaptive.jsx` re-calls `startPush` on
+`TOKEN_REFRESHED`, which replaces the token in place — same session id, queue untouched. Without it
+the pushes 401 partway through and the samples sit in a bounded queue until they are dropped.
+
+**Never call `supabase.auth.getSession()` inside an `onAuthStateChange` callback.** supabase-js v2
+holds an internal auth lock while dispatching, and `getSession()` waits on it — awaiting it there
+deadlocks. Use the `session` the callback is handed; that is why `startPush` takes an optional token.
+The symptom is the worst kind: the refresh handler hangs, the sidecar keeps the expired token, and
+every push 401s for the rest of the lesson with nothing raised anywhere.
+
+`ALLOWED_ORIGINS` on the sidecar must name the **frontend** origin, not just the backend's. Getting
+it wrong fails every local call on CORS while the sidecar itself looks perfectly healthy.
+
+All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
+until the push client existed, which was survivable only while its sole writer was the in-process
+poller.
 
 ## Two columns are called stress and only one measures it
 

@@ -14,7 +14,16 @@ class Settings(BaseSettings):
     port: int = Field(default=8001, alias="PORT")
     api_token: str = Field(alias="API_TOKEN")
     admin_token: str = Field(alias="ADMIN_TOKEN")
-    allowed_origins: str = Field(default="http://localhost:3000,http://localhost:8000", alias="ALLOWED_ORIGINS")
+    # Under push ingestion the student's browser calls this sidecar directly --
+    # the hosted backend has no route to their laptop -- so the *frontend*
+    # origin has to be here, not just the backend's. The Vite dev origin is in
+    # the default; a hosted deployment must add its own origin to
+    # ALLOWED_ORIGINS or every local call fails CORS while the sidecar itself
+    # looks perfectly healthy.
+    allowed_origins: str = Field(
+        default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
+        alias="ALLOWED_ORIGINS",
+    )
     eeg_sample_hz: int = Field(default=4, alias="EEG_SAMPLE_HZ")
     eeg_source: str = Field(default="sim", alias="EEG_SOURCE")
     muse_bridge_host: str = Field(default="127.0.0.1", alias="MUSE_BRIDGE_HOST")
@@ -43,6 +52,15 @@ class Settings(BaseSettings):
     face_emotion_model_path: str = Field(
         default="models/emotion-ferplus-8.onnx", alias="FACE_EMOTION_MODEL_PATH"
     )
+
+    # Push ingestion. Off by default, so a co-located dev stack keeps working
+    # exactly as before: there, `eeg_poller` inside the website backend polls
+    # this sidecar and nothing should be posting the same samples a second time.
+    # On, this sidecar POSTs to BACKEND_URL/api/signals/* with the student's own
+    # bearer token, which arrives from the browser at session start and is never
+    # stored -- see services/push_client.py.
+    push_enabled: bool = Field(default=False, alias="PUSH_ENABLED")
+    backend_url: str = Field(default="http://127.0.0.1:8000", alias="BACKEND_URL")
 
 
 @lru_cache

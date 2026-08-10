@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
@@ -2383,7 +2383,29 @@ def ack_consent(request: Request):
 
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────
 
+# The keys inside `features`/`bands` that land in numeric columns. Everything
+# else in those dicts is metadata and ends up in `raw`, which is jsonb.
+_COGNITIVE_NUMERIC_KEYS = (
+    "focus_score", "calm_score", "confidence",
+    "alpha", "beta", "theta", "delta", "gamma",
+)
+
+
 class CognitiveSample(BaseModel):
+    """One EEG reading, in either of two shapes.
+
+    The flat fields are **already-mapped rows**: 0..1 ratios, exactly what the
+    table stores. That is what a developer hand-posting a batch has, and it is
+    the shape this endpoint has always accepted.
+
+    `features`/`bands` are **sensor output**: the sidecar's own payload, on its
+    0..100 scale, passed through untouched. The push client sends this and does
+    no arithmetic at all, so the /100 conversion exists once, in
+    `signal_mapping`, reached identically by the poller and the push path. The
+    alternative -- having the sidecar divide before sending -- is precisely the
+    second copy of a unit conversion that module was extracted to prevent, and
+    the one that ends with one path storing percentages and the other ratios.
+    """
     ts:         str | None = None
     focus:      float | None = None
     stress:     float | None = None
@@ -2394,10 +2416,66 @@ class CognitiveSample(BaseModel):
     delta:      float | None = None
     gamma:      float | None = None
     raw:        dict  | None = None
+    # The sidecar-native alternative described above. Free-form keys, so a
+    # sidecar gaining a feature does not need this model changed in lockstep --
+    # but the *values* that reach numeric columns are checked, below.
+    features:   dict  | None = None
+    bands:      dict  | None = None
+
+    @field_validator("focus", "stress", "engagement",
+                     "alpha", "beta", "theta", "delta", "gamma")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        """NaN and inf reach a `float | None` field untouched -- see below."""
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number")
+        return v
+
+    @field_validator("features", "bands")
+    @classmethod
+    def _numeric_values_must_be_storable(cls, v: dict | None) -> dict | None:
+        """Reject what the numeric columns cannot hold, here rather than at the
+        database.
+
+        A `float | None` annotation is **not** this check. Pydantic v2 defaults
+        to `allow_inf_nan=True`, and `json.loads` accepts the bare `NaN` and
+        `Infinity` literals, so a non-finite value passes a typed field just as
+        happily as it passed these dicts -- an earlier version of this docstring
+        claimed the flat fields were already safe and they were not. Both paths
+        are checked now, `_finite` below for the typed ones.
+
+        What it costs to skip: `double precision` cannot hold either value, so
+        PostgREST rejects the *whole batch*, every valid sample in it included,
+        and answers with a 500 the client will retry. A trust boundary that
+        defers its checking to the database is not one.
+
+        Only the keys that become columns are checked. Anything else is
+        passed-through metadata bound for `raw`, a jsonb column that can hold
+        it.
+        """
+        if v is None:
+            return v
+        for key in _COGNITIVE_NUMERIC_KEYS:
+            if key not in v or v[key] is None:
+                continue
+            try:
+                n = float(v[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key!r} must be a number, got {v[key]!r}")
+            # NaN and inf survive `float()` and json.loads both, and NaN in
+            # particular is the value that gets stored as 100% focus if it ever
+            # reaches `_ratio` -- see the isfinite guard there.
+            if not math.isfinite(n):
+                raise ValueError(f"{key!r} must be finite, got {v[key]!r}")
+        return v
 
 class CognitiveBatch(BaseModel):
     session_id: str
-    samples:    list[CognitiveSample]
+    # Bounded like the other two. It was the only ingest batch without a length
+    # cap, which mattered little while the sole writer was the in-process poller
+    # and matters now: under push the writer is an untrusted local process on a
+    # student's machine, and this endpoint is the trust boundary.
+    samples:    list[CognitiveSample] = Field(max_length=_INGEST_MAX_BATCH)
 
 class FaceSample(BaseModel):
     ts:                  str | None = None
@@ -2495,7 +2573,28 @@ def _verify_session_owner(session_id: str, user_id: str):
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
+    # Before the session lookup, for the reason spelled out on /api/signals/face:
+    # the limiter needs only the caller's id, and running it second leaves a
+    # flooding client costing one `sessions` query per request. This endpoint
+    # was missing the limit entirely -- the only one of the three -- which was
+    # survivable while the in-process poller was its only writer and is not now
+    # that a process on the student's machine posts to it.
+    _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
+
+    # Consent, like the other two endpoints. The sidecar gates on it already,
+    # but a stale one that kept sending after a student withdrew would otherwise
+    # keep recording EEG, and the withdrawal would look respected from every
+    # surface that reads. This endpoint was the only one of the three without
+    # the check -- survivable when its sole writer was a poller this backend
+    # started, and not once the writer is a process on the student's machine.
+    # `_consent` fails closed, so an unreadable consent row records nothing.
+    consent = _consent(user["id"])
+    if not consent.get("eeg_enabled"):
+        return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
+                "reason": ("consent unavailable" if not consent.get("retrieved")
+                           else "eeg not consented")}
+
     # Accepted in either mode -- rejecting it under `pull` would break mixed
     # local dev -- but warned about when this session is *actually* being
     # double-written: a live poller for it is writing the same table from the
@@ -2519,16 +2618,53 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
               f"the poller and /api/signals/cognitive. Every EEG sample is landing "
               f"twice and cognitive_signals has no dedupe key to catch it.",
               flush=True)
-    rows = [{
-        "session_id": payload.session_id,
-        "user_id":    user["id"],
-        "ts":         s.ts or datetime.utcnow().isoformat(),
-        "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
-        "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
-        "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
-    } for s in payload.samples]
+    def _row(s: CognitiveSample) -> dict:
+        # Sensor output goes through the shared mapper, which owns the 0..100 ->
+        # 0..1 conversion and the `stress = 1 - calm` inversion. Flat samples are
+        # already in table units and are stored as given.
+        if s.features is not None or s.bands is not None:
+            # Un-nested into the shape the mapper reads, rather than handed to
+            # it as one `raw` blob. The mapper takes `device_id`, `channels`,
+            # `state` and `ingestion` off the *top level* and merges `raw`
+            # underneath. Left nested, every one of those lookups found nothing
+            # and the envelope was stored as opaque client data instead of in
+            # the fields that name it.
+            #
+            # Note what this does *not* buy. `_raw` documents that derived keys
+            # beat client-supplied ones, and on this path that is vacuous: the
+            # values promoted here are the client's own, so it wins either way.
+            # It cannot be otherwise -- the sidecar is the only thing that knows
+            # its device_id, and this endpoint has nothing of its own to prefer.
+            # The defences on the push path are session ownership and consent,
+            # not key precedence; `raw` is descriptive, not attested.
+            raw = dict(s.raw or {})
+            envelope = {k: raw.pop(k, None)
+                        for k in ("device_id", "channels", "state", "ingestion")}
+            return signal_mapping.map_eeg_to_cognitive(
+                {"timestamp": s.ts or _utc_now().isoformat(),
+                 "features": s.features or {}, "bands": s.bands or {},
+                 **envelope,
+                 # Whatever the client sent that is not part of the envelope.
+                 # Still merged, still losing to a derived key of the same name.
+                 "raw": raw},
+                payload.session_id, user["id"])
+        return {
+            "session_id": payload.session_id,
+            "user_id":    user["id"],
+            "ts":         s.ts or _utc_now().isoformat(),
+            "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
+            "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
+            "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
+        }
+
+    # `None` from the mapper is a no-signal tick: a disconnected headband
+    # reporting zeroed scores, which is not a reading of zero. Dropped rather
+    # than stored, and counted, so a caller can tell "sent 50, recorded 0"
+    # from "sent nothing" -- the same distinction the heart endpoint reports.
+    rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
     if rows: supabase.table("cognitive_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows)}
+    return {"ok": True, "inserted": len(rows),
+            "dropped": len(payload.samples) - len(rows)}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
@@ -2971,13 +3107,6 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
 @app.get("/api/eeg/status")
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     user = get_user(request)
-    # Blank only the muse block, not the whole response -- the caller's own
-    # poller status (below) is always theirs to see regardless of device_id.
-    muse = (
-        eeg_client.get_muse_status(device_id)
-        if eeg_poller.can_use_device(user["id"], device_id)
-        else {"available": False, "reason": "in_use_by_other"}
-    )
     # Under push ingestion this backend has no route to a sidecar, so
     # `is_alive()` is false forever -- and the frontend polls this every 3
     # seconds and renders it as "EEG service is down". The student would get the
@@ -2985,6 +3114,29 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     # of it. Same argument as checking the mode before the liveness probe there;
     # /start was simply the only place it got applied.
     push = eeg_poller.INGEST_MODE == "push"
+    # **Before** the muse probe, not after it. The check was here but the probe
+    # ran first, so the rule this endpoint was fixed to follow was defeated by
+    # statement order:
+    #
+    #   - `get_muse_status` calls `_learner_headers()`, which raises when
+    #     EEG_API_TOKEN is unset -- the normal state of a hosted push
+    #     deployment -- and it raises *outside* the client's try block, so the
+    #     endpoint 500s. Polled every 3 s, the headband block then never
+    #     updates for the whole lesson.
+    #   - With a token set it is worse in a different way: a 2 s blocking probe
+    #     to a host that does not exist, per student, every 3 s, each holding an
+    #     anyio threadpool slot.
+    #
+    # Blank only the muse block, not the whole response -- the caller's own
+    # poller status is always theirs to see regardless of device_id.
+    if push:
+        # None, not False, for the same reason as `service` below: "not probed
+        # in this deployment" is a different claim from "probed and absent".
+        muse = {"available": None, "reason": "push_ingestion"}
+    elif eeg_poller.can_use_device(user["id"], device_id):
+        muse = eeg_client.get_muse_status(device_id)
+    else:
+        muse = {"available": False, "reason": "in_use_by_other"}
     return {
         # None, not False: "we do not probe a sidecar in this deployment" is not
         # the same claim as "we probed and it is down", and a consumer that

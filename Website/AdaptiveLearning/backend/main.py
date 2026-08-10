@@ -1292,9 +1292,6 @@ _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _ingest_hits: dict[str, list[float]] = {}
-# Sessions already warned about, so the log fires once each rather than at
-# the sample rate. Bounded by concurrent sessions, not by uptime.
-_warned_double_write: set[str] = set()
 _ingest_hits_lock = threading.Lock()
 # Same sweep as the strategy limiter, and needed more here: entries are
 # otherwise pruned only on that caller's *next* request, so every student who
@@ -2514,9 +2511,10 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # Per session rather than per process: the sessions are the thing at risk,
     # there are few of them, and this still logs once each rather than at the
     # sample rate.
-    if (eeg_poller.is_polling(payload.session_id)
-            and payload.session_id not in _warned_double_write):
-        _warned_double_write.add(payload.session_id)
+    # One call, one lock: checking liveness and claiming the warning separately
+    # let two concurrent batches both pass the check and log twice. It also puts
+    # the eviction next to `stop()`, which is the only thing that can bound it.
+    if eeg_poller.claim_double_write_warning(payload.session_id):
         print(f"[ingest] session {payload.session_id[:8]} is being written by both "
               f"the poller and /api/signals/cognitive. Every EEG sample is landing "
               f"twice and cognitive_signals has no dedupe key to catch it.",
@@ -2824,16 +2822,29 @@ def eeg_devices(request: Request):
     what leaks. Considered non-sensitive.
     """
     get_user(request)
+    # The fourth and last endpoint in this family to learn the mode. /start,
+    # /status and /health each needed it for the same reason, found in three
+    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
+    # student sees, but leaving it is how it gets found a fourth time.
+    if eeg_poller.INGEST_MODE == "push":
+        return {"available": None, "ingest_mode": "push", "devices": []}
     if not eeg_client.is_alive():
-        return {"available": False, "devices": []}
-    return {"available": True, "devices": eeg_client.list_devices()}
+        return {"available": False, "ingest_mode": "pull", "devices": []}
+    return {"available": True, "ingest_mode": "pull",
+            "devices": eeg_client.list_devices()}
 
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
     user = get_user(request)
+    # The last of the five in this family to learn the mode. /start, /status,
+    # /health and /devices each needed it for the same reason, found across
+    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
+    # student sees, but leaving it is how it gets found again.
+    if eeg_poller.INGEST_MODE == "push":
+        return {"available": None, "ingest_mode": "push"}
     if not eeg_client.is_alive():
-        return {"available": False}
+        return {"available": False, "ingest_mode": "pull"}
     # A station with a live poller is that poller's owner's in-progress
     # biometric data, not shared classroom data -- don't let another user
     # read it just because they know the device_id.

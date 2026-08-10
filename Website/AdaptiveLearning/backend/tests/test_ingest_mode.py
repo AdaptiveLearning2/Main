@@ -230,7 +230,6 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
     flag -- that benign post spent the warning so a genuine double-write later
     was never reported."""
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
-    monkeypatch.setattr(main, "_warned_double_write", set())
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
     monkeypatch.setattr(main, "supabase",
@@ -241,15 +240,65 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
     batch = main.CognitiveBatch(session_id="sess-1", samples=[])
 
     # No poller for this session: the benign case, and it must stay quiet.
-    monkeypatch.setattr(eeg_poller, "is_polling", lambda _sid: False)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     main.ingest_cognitive(batch, None)
-    assert "landing" not in capsys.readouterr().out
+    assert "twice" not in capsys.readouterr().out
 
     # A live poller for it: the actual double-write.
-    monkeypatch.setattr(eeg_poller, "is_polling", lambda _sid: True)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: True)
     main.ingest_cognitive(batch, None)
     assert "twice" in capsys.readouterr().out
 
-    # ...and once per session, not per request.
-    main.ingest_cognitive(batch, None)
-    assert "twice" not in capsys.readouterr().out
+
+def test_the_claim_is_once_per_session_and_only_while_polling(monkeypatch):
+    """Check-and-claim in one call under one lock, so two concurrent batches
+    cannot both pass the check and log."""
+    class _LivePoller:
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": _LivePoller()})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+
+    assert eeg_poller.claim_double_write_warning("s1") is True
+    assert eeg_poller.claim_double_write_warning("s1") is False, "warned twice"
+    # A session with no live poller is the dev case, not a double write.
+    assert eeg_poller.claim_double_write_warning("s2") is False
+
+
+def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
+    """What makes the set bounded by concurrent sessions rather than by uptime.
+
+    It previously lived in `main` with nothing to evict it, so it grew with
+    every session ever double-written for the life of the process -- while the
+    comment beside it claimed the opposite, three lines below a note saying an
+    un-evicted set was "the wrong way round".
+    """
+    class _LivePoller:
+        def is_alive(self):
+            return True
+        def stop(self):
+            pass
+        samples = 0
+
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": _LivePoller()})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+
+    eeg_poller.claim_double_write_warning("s1")
+    assert "s1" in eeg_poller._warned_double_write
+
+    eeg_poller.stop("s1")
+    assert "s1" not in eeg_poller._warned_double_write, "the record outlived the poller"
+
+
+@pytest.mark.parametrize("endpoint", ["eeg_debug", "eeg_devices"])
+def test_every_endpoint_in_the_family_knows_the_mode(endpoint, push_mode, monkeypatch):
+    """All five, checked together rather than one per review round.
+
+    /start, /status and /health were each fixed separately for the same reason;
+    parametrising is what stops the sixth from being found the same way."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    out = getattr(main, endpoint)(None)
+
+    assert out["available"] is None, f"{endpoint} reports an outage under push"
+    assert out["ingest_mode"] == "push"

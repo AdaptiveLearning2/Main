@@ -186,6 +186,14 @@ class _Poller(threading.Thread):
 
 
 _active: Dict[str, _Poller] = {}
+# Sessions already warned about for double-writing. Lives here rather than in
+# `main` because `stop()` is what bounds it: a set kept over there had nothing
+# to evict it and grew with every session ever double-written for the life of
+# the process -- "bounded by concurrent sessions" was what the comment claimed
+# and the opposite of what it did. Next to `_active`, under the same lock, and
+# discarded by the same call that ends the poller.
+_warned_double_write: set[str] = set()
+_lock = threading.Lock()
 
 
 def is_polling(session_id: str) -> bool:
@@ -198,7 +206,22 @@ def is_polling(session_id: str) -> bool:
     with _lock:
         p = _active.get(session_id)
         return bool(p and p.is_alive())
-_lock = threading.Lock()
+
+
+def claim_double_write_warning(session_id: str) -> bool:
+    """True once per live-polled session, for logging a double write.
+
+    Answers "is this session being written by both paths, and have we not said
+    so yet" in one step under one lock, so the check and the claim cannot race
+    into two log lines. Returns False for a session with no live poller, which
+    is the hand-posted dev batch the ingest endpoint stays open for.
+    """
+    with _lock:
+        p = _active.get(session_id)
+        if not (p and p.is_alive()) or session_id in _warned_double_write:
+            return False
+        _warned_double_write.add(session_id)
+        return True
 
 
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
@@ -258,6 +281,10 @@ def can_use_device(user_id: str, device_id: str) -> bool:
 
 def stop(session_id: str) -> dict:
     with _lock:
+        # The eviction that makes the warned-set bounded by concurrent sessions
+        # rather than by uptime. A session that is no longer polled cannot be
+        # double-written, so the record of having warned about it is spent.
+        _warned_double_write.discard(session_id)
         p = _active.pop(session_id, None)
         if p:
             p.stop()

@@ -2524,6 +2524,18 @@ class HeartSample(BaseModel):
     trusted:            bool  | None = None
     raw:                dict  | None = None
 
+    @field_validator("heart_rate_bpm", "rmssd_ms", "beat_coverage",
+                     "sqi", "stress_score")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        """Same check as `CognitiveSample._finite`, for the same reason: a
+        `float | None` annotation alone does not reject NaN/Infinity, and both
+        survive `double precision` just long enough to fail the insert and take
+        the whole batch down with them."""
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number")
+        return v
+
 
 class HeartBatch(BaseModel):
     session_id: str

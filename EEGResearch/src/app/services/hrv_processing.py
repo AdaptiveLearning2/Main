@@ -89,7 +89,7 @@ from math import ceil
 import numpy as np
 from scipy.signal import find_peaks
 
-from .ppg_processing import BANDPASS_ORDER, MAX_BPM, MIN_BPM, bandpass
+from .ppg_processing import BANDPASS_ORDER, MAX_BPM, MIN_BPM, _parabolic_peak, bandpass
 
 # Physiologically possible beat intervals, in ms. The bounds mirror MIN_BPM and
 # MAX_BPM in ppg_processing: 42 bpm is 1429ms, 180 bpm is 333ms. An interval
@@ -233,15 +233,7 @@ def detect_beats(x: np.ndarray, fs: float) -> np.ndarray:
         prominence=PEAK_PROMINENCE_SD,
     )
 
-    refined = []
-    for i in peaks:
-        if 0 < i < len(y) - 1:
-            a, b, c = y[i - 1], y[i], y[i + 1]
-            denom = a - 2 * b + c
-            offset = 0.5 * (a - c) / denom if denom else 0.0
-            refined.append(i + offset)
-        else:
-            refined.append(float(i))
+    refined = [_parabolic_peak(y, i) for i in peaks]
     return np.asarray(refined) / fs
 
 

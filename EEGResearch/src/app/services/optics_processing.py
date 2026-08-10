@@ -217,7 +217,9 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
     if hrv.coverage is not None:
         record["beat_coverage"] = round(float(hrv.coverage), 3)
     if hrv.rmssd_ms is None:
-        record["rmssd_rejected_by"] = hrv.rejected_by or "no_rmssd"
+        # Always set: every path through `estimate_hrv` that leaves `rmssd_ms`
+        # None also names itself in `rejected_by`.
+        record["rmssd_rejected_by"] = hrv.rejected_by
         return record
     record["rmssd_ms"] = round(float(hrv.rmssd_ms), 1)
     return record

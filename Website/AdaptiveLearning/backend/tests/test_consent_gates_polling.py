@@ -294,7 +294,9 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
     monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
     monkeypatch.setattr(eeg_poller, "_consent_check", lambda _u: True)
     monkeypatch.setattr(eeg_poller.eeg_client, "start_session", lambda *_a, **_k: {"ok": True})
-    monkeypatch.setattr(eeg_poller.eeg_client, "stop_session", lambda *_a, **_k: {"ok": True})
+    stopped_streams = []
+    monkeypatch.setattr(eeg_poller.eeg_client, "stop_session",
+                        lambda device_id=None, *_a, **_k: stopped_streams.append(device_id) or {"ok": True})
     monkeypatch.setattr(eeg_poller.eeg_client, "get_state", _slow_get_state)
 
     eeg_poller.start(None, "u1", "s1", "devA")
@@ -319,8 +321,19 @@ def test_a_dying_poller_does_not_deregister_its_replacement(monkeypatch):
     assert not eeg_poller.can_use_device("u2", "devA"), \
         "another user could claim a device with a live poller on it"
     assert eeg_poller.status("u1")["running"] is True
+    # The fourth consequence, and the one a later refactor of the liveness scan
+    # is most likely to break without tripping any of the above: the dying
+    # thread must not tear down the sidecar stream the replacement is reading.
+    # It holds because the scan runs after the guarded pop, so it sees the live
+    # replacement -- assert it rather than rely on that ordering staying put.
+    assert stopped_streams == [],         f"the sidecar stream was stopped under a live poller: {stopped_streams}"
 
     # And it is still stoppable, which is what the student ending the session
     # depends on.
     eeg_poller.stop("s1")
     assert not eeg_poller.is_polling("s1")
+    for t in threading.enumerate():
+        if type(t).__name__ == "_Poller":
+            t.join(timeout=2)
+    # Now it is right to stop it: nothing is reading it any more.
+    assert stopped_streams == ["devA"]

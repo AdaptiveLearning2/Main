@@ -707,7 +707,14 @@ export default function Adaptive() {
 
           {debugOpen && (
             <div className="p-4 bg-gray-950 text-green-400 space-y-3">
-              {!eegDebug || !eegDebug.available ? (
+              {/* `available: null` means "not probed in this deployment", and
+                  `!null` is true -- so branching on falsiness alone put the
+                  outage sentence here under push ingestion, one layer down from
+                  where it was last fixed. The backend change buys nothing until
+                  the consumer reads the field that says why. */}
+              {eegDebug?.ingest_mode === 'push' ? (
+                <p className="text-yellow-300">INGEST_MODE=push — the sidecar runs on this device and posts to the backend, so there is nothing for the backend to probe. Read the sidecar's own logs, not this panel.</p>
+              ) : !eegDebug || !eegDebug.available ? (
                 <p className="text-red-400">⚠ EEGResearch not reachable on port 8001. Start it with: <span className="text-yellow-300">uvicorn src.app.main:app --port 8001</span></p>
               ) : (() => {
                 const snap    = eegDebug.snapshot

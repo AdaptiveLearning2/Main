@@ -239,15 +239,25 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
 
     batch = main.CognitiveBatch(session_id="sess-1", samples=[])
 
+    # Captured, not discarded. The claim is per *session*, so passing the wrong
+    # identifier -- the user id, say -- would warn once per user and then go
+    # quiet for every later session they run. A stub ignoring its argument
+    # cannot tell that apart from correct wiring.
+    asked = []
+
     # No poller for this session: the benign case, and it must stay quiet.
-    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning",
+                        lambda s: (asked.append(s), False)[1])
     main.ingest_cognitive(batch, None)
     assert "twice" not in capsys.readouterr().out
 
     # A live poller for it: the actual double-write.
-    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: True)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning",
+                        lambda s: (asked.append(s), True)[1])
     main.ingest_cognitive(batch, None)
     assert "twice" in capsys.readouterr().out
+
+    assert asked == ["sess-1", "sess-1"], f"claimed against the wrong id: {asked}"
 
 
 def test_the_claim_is_once_per_session_and_only_while_polling(monkeypatch):
@@ -291,14 +301,45 @@ def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
     assert "s1" not in eeg_poller._warned_double_write, "the record outlived the poller"
 
 
-@pytest.mark.parametrize("endpoint", ["eeg_debug", "eeg_devices"])
+# Every endpoint that answers with a liveness claim, and how to call it. The
+# signatures differ (`eeg_health` takes nothing) and so does the key carrying
+# the claim (`eeg_status` calls it `service`), which is why this is a table
+# rather than a list of names -- an earlier version listed only the two that
+# happened to share a signature while the docstring claimed all of them, so
+# someone adding a sixth would have read the list and written a standalone test.
+# `/api/eeg/start` is the one exception: it raises 409 rather than returning a
+# payload, and is covered by the first test in this file.
+_MODE_AWARE = {
+    "eeg_health":  (lambda: main.eeg_health(),       "available"),
+    "eeg_debug":   (lambda: main.eeg_debug(None),    "available"),
+    "eeg_devices": (lambda: main.eeg_devices(None),  "available"),
+    "eeg_status":  (lambda: main.eeg_status(None),   "service"),
+}
+
+
+@pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE))
 def test_every_endpoint_in_the_family_knows_the_mode(endpoint, push_mode, monkeypatch):
-    """All five, checked together rather than one per review round.
+    """Checked together rather than one per review round.
 
-    /start, /status and /health were each fixed separately for the same reason;
-    parametrising is what stops the sixth from being found the same way."""
+    /start, /status, /health, /debug and /devices were each fixed separately for
+    the same reason, in four rounds; the table above is what stops a sixth from
+    being found the same way."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    out = getattr(main, endpoint)(None)
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    # `eeg_status` still fetches the muse block under push; the frontend gates
+    # that on `pushMode` at the consumer. Stubbed so this test is about the
+    # liveness claim rather than about a transport that has no route anyway.
+    monkeypatch.setattr(main, "eeg_client",
+                        type("C", (), {"is_alive": staticmethod(lambda: False),
+                                       "get_muse_status": staticmethod(lambda *_a: {}),
+                                       "list_devices": staticmethod(lambda: []),
+                                       "get_debug_snapshot": staticmethod(lambda *_a: {}),
+                                       "DEFAULT_DEVICE_ID": "station1",
+                                       "EEG_API_URL": "http://127.0.0.1:8001"}))
 
-    assert out["available"] is None, f"{endpoint} reports an outage under push"
+    call, key = _MODE_AWARE[endpoint]
+    out = call()
+
+    assert out[key] is None, f"{endpoint} reports an outage under push"
     assert out["ingest_mode"] == "push"

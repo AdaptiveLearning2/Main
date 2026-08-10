@@ -199,9 +199,17 @@ discriminators are in `EEGResearch/tests/fixtures/README.md`.
 **Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
 against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**
 against a true 88, on five minutes with the face found in 8988 of 8988 frames. Not a
-derivation bug -- the pulse is absent from the video, and the raw R/G/B channels show the
-same, so POS is not at fault. The autocorrelation peak was 0.02 where a real pulse gives
-0.3-0.7.
+derivation bug: the pulse is not recoverable **from the mean RGB of our three ROI boxes by
+POS**, and the raw R/G/B channels of those means show the same, so POS is not at fault. The
+autocorrelation peak was 0.02 where a real pulse gives 0.3-0.7.
+
+Scope that claim carefully. It is not "the pulse is absent from the video" -- an earlier version
+of this rule said that and it overreached. Three spatial averages per frame is a small fraction of
+what a frame contains, and a learned model over per-pixel, multi-region input has far more to work
+with. The reference implementation this project started from reports ~95% accuracy on its best
+tests using RhythmMamba over full video, which is not in conflict with the result above because it
+is a different method on different information. What blocks it here is the licence -- those
+weights are behind a per-requester Data Usage Agreement -- not physics.
 
 The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
 to a single-channel source.** Its three terms were built for the headband's four contact

@@ -51,13 +51,36 @@ Against the ECG windows specifically, one window was accepted:
 
 A confident reading, wrong by 40 bpm.
 
+## What this measured, and what it did not
+
+**Scope, stated before the analysis, because the first version of this document
+overreached.** Everything below is about **POS over the mean RGB of three ROI
+boxes** -- which is what this product ships, because RhythmMamba's `.rlap`
+weights are behind a per-requester Data Usage Agreement and cannot be
+redistributed to student machines.
+
+It is *not* a measurement of whether a webcam can yield a heart rate at all.
+Three spatial averages per frame discard almost everything a frame contains, and
+a learned model over per-pixel, multi-region, temporally-modelled input has far
+more to work with. The reference implementation this project started from
+(`FacialRecg/.../rPPG_LF_NRMSSD.py`, RhythmMamba over full video) is reported by
+its author at roughly 95% accuracy on its best tests. That is not in conflict
+with the failure below; it is a different method on different information.
+
+So the honest conclusion is **"POS over ROI means does not recover a pulse on
+this hardware"**, and the thing blocking the alternative is a licence, not
+physics. Saying "the pulse is absent from the video" -- as an earlier version of
+this file did -- claims far more than the evidence supports and would be quoted
+back later as settled.
+
 ## Why, and why it is not fixable here
 
 The obvious suspicion was a half-rate lock — the autocorrelation picking every
 other beat. It is not that. 87 bpm is 1.45 Hz and the reported 47.7 is 0.795 Hz;
 the ratio is 1.82, not 2, and no harmonic relation explains it.
 
-The pulse is simply not in the recording. Per 30 s window, power within
+The pulse is simply not in *the recording* -- meaning the three-averages-per-frame
+series this fixture holds, not the frames it came from. Per 30 s window, power within
 ±0.07 Hz of the true 1.45 Hz, as a fraction of the whole 0.7–3.0 Hz pulse band:
 
 | window | spectral peak | power near true rate |
@@ -69,7 +92,11 @@ The pulse is simply not in the recording. Per 30 s window, power within
 
 And this is not POS destroying a signal that was present. The **raw** channels
 show the same thing — R, G and B each peak at 44–50 bpm, with 6–10% of in-band
-power near the true rate. There is nothing for the projection to have lost.
+power near the true rate. There is nothing for the projection to have lost *in
+those three averages*, which is the precise claim: the ROI-mean representation
+does not contain a recoverable pulse. Whether the underlying frames do is a
+question this recording cannot answer, because the frames were reduced to three
+numbers before anything was stored.
 
 The dominant 0.77–0.87 Hz peak is most likely respiration and slow illumination
 drift, which sit squarely inside the pulse band and cannot be filtered out of it.

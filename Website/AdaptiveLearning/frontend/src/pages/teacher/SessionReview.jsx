@@ -4,9 +4,29 @@ import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ReferenceLine, Legend
+  CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
 import { apiFetch } from '../../lib/api'
+
+// Fixed per label, so a colour means the same thing between two sessions --
+// index-based colours would repaint the same emotion differently whenever the
+// set of labels present changed. Keyed on the FER+ labels the backend
+// actually stores (EEGResearch/src/app/services/face_emotion.py), the same
+// ones the EMOJI map below uses -- not the -happiness/-sadness/-anger nouns,
+// which never match a real sample and silently fell back to neutral's grey.
+const EMOTION_COLOURS = {
+  neutral: '#94a3b8', happy: '#10b981', surprise: '#38bdf8',
+  sad: '#6366f1', angry: '#f43f5e', disgust: '#84cc16',
+  fear: '#a855f7', contempt: '#f59e0b',
+}
+
+// `calibrating` and `unknown` are muted rather than absent: they are states the
+// session was genuinely in, and dropping them would overstate how much of it
+// was categorised.
+const STRESS_COLOURS = {
+  low: '#10b981', moderate: '#f59e0b', high: '#f43f5e',
+  calibrating: '#cbd5e1', unknown: '#94a3b8',
+}
 
 const EMOJI = { happy: '😀', neutral: '😐', confused: '😕', frustrated: '😤', sad: '😢', surprised: '😮', angry: '😠' }
 
@@ -27,7 +47,7 @@ export default function SessionReview() {
     setLoading(true)
     // Returns one session's raw facial samples, plotted below, and
     // deliberately does NOT honour the facial-recognition switch in
-    // lib/facePref.js -- that control covers the reporting surfaces, which
+    // lib/viewPrefs.js -- that control covers the reporting surfaces, which
     // render it, and this page does not. See the scope note there before
     // wiring it in.
     apiFetch(`/api/signals/session/${sessionId}`)
@@ -63,21 +83,102 @@ export default function SessionReview() {
 
   const cognitive = Array.isArray(data?.cognitive) ? data.cognitive : []
   const face      = Array.isArray(data?.face)      ? data.face      : []
+  const heart     = Array.isArray(data?.heart)     ? data.heart     : []
   const answers   = Array.isArray(data?.answers)   ? data.answers   : []
 
   // numeric ms x-axis — way more stable than category strings
-  const series = cognitive
-    .map(c => {
-      const t = new Date(c.ts).getTime()
-      return Number.isFinite(t) ? {
-        t,
-        focus:      typeof c.focus      === 'number' ? c.focus      : null,
-        engagement: typeof c.engagement === 'number' ? c.engagement : null,
-        stress:     typeof c.stress     === 'number' ? c.stress     : null,
-      } : null
-    })
-    .filter(Boolean)
+  const cognitiveByT = new Map(
+    cognitive
+      .map(c => {
+        const t = new Date(c.ts).getTime()
+        return Number.isFinite(t) ? [t, c] : null
+      })
+      .filter(Boolean),
+  )
+
+  // Heart merged into the same rows by nearest timestamp rather than plotted
+  // from its own array: Recharts wants one dataset, and the two channels are
+  // sampled at different rates. Nulls elsewhere, with `connectNulls` on the
+  // line, so a sparse heart series draws as a line rather than as dots.
+  const heartByT = heart
+    .map(h => ({ t: new Date(h.ts).getTime(), h }))
+    .filter(x => Number.isFinite(x.t))
     .sort((a, b) => a.t - b.t)
+
+  // Row timestamps are the union of both channels, not cognitive alone: a
+  // student can consent to the heart sensor without EEG (independent
+  // switches -- ConsentChannels.jsx), in which case cognitive is empty and
+  // heart is not. Building the base series from cognitive only left that
+  // session with zero rows to ever merge a heart reading onto, so the bpm
+  // axis, lines and failover markers below silently never rendered even
+  // though real heart data existed.
+  const series = Array.from(new Set([...cognitiveByT.keys(), ...heartByT.map(x => x.t)]))
+    .sort((a, b) => a - b)
+    .map(t => {
+      const c = cognitiveByT.get(t)
+      return {
+        t,
+        focus:      typeof c?.focus      === 'number' ? c.focus      : null,
+        engagement: typeof c?.engagement === 'number' ? c.engagement : null,
+        stress:     typeof c?.stress     === 'number' ? c.stress     : null,
+      }
+    })
+
+  let hi = 0
+  for (const row of series) {
+    while (hi + 1 < heartByT.length && heartByT[hi + 1].t <= row.t) hi++
+    // The nearest heart reading is one of the two entries bracketing row.t in
+    // the sorted array: the last one at-or-before it (hi) and the first one
+    // after it (hi + 1). Checking only the floor missed a closer *later*
+    // reading whenever the heart channel sampled less often than the
+    // cognitive one -- the point of "nearest", not "most recent".
+    const floor = heartByT[hi]
+    const ceil  = heartByT[hi + 1]
+    const floorDist = floor ? Math.abs(floor.t - row.t) : Infinity
+    const ceilDist  = ceil  ? Math.abs(ceil.t - row.t)  : Infinity
+    const near = ceilDist < floorDist ? ceil : floor
+    // Only if it is actually near. Carrying a reading forward across a gap
+    // would draw a flat heart rate through a stretch where the sensor was off,
+    // which is the "cannot tell no-data from a value" failure on a chart.
+    if (near && Math.min(floorDist, ceilDist) <= 15_000) {
+      row.heart_rate_bpm = typeof near.h.heart_rate_bpm === 'number' ? near.h.heart_rate_bpm : null
+      row.rmssd_ms = typeof near.h.rmssd_ms === 'number' ? near.h.rmssd_ms : null
+    }
+  }
+
+  const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
+
+  // Where the sensor changed mid-session. Marked rather than spliced: two
+  // sensors' calibrations in one continuous trace reads as a physiological
+  // event that did not happen.
+  const failovers = []
+  for (let i = 1; i < heartByT.length; i++) {
+    if (heartByT[i].h.source && heartByT[i].h.source !== heartByT[i - 1].h.source) {
+      failovers.push({ t: heartByT[i].t, source: heartByT[i].h.source })
+    }
+  }
+
+  // Proportion, which the ribbon below cannot show: it shows sequence. The
+  // bucketing it already does is deliberately not reused here -- a pie of
+  // bucketed samples would weight a 10 s bucket the same as a 2 s one.
+  const emotionSlices = Object.entries(
+    face.reduce((acc, f) => {
+      if (!f.emotion) return acc          // a rejected window is not a reading
+      acc[f.emotion] = (acc[f.emotion] || 0) + 1
+      return acc
+    }, {}),
+  ).map(([name, value]) => ({ name, value }))
+
+  const stressSlices = Object.entries(
+    heart.reduce((acc, h) => {
+      // `calibrating` and `unknown` are kept as slices rather than dropped:
+      // a pie that silently omits them claims a session was entirely
+      // categorised when part of it was not.
+      const key = h.stress_category || 'unknown'
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {}),
+  ).map(([name, value]) => ({ name, value }))
 
   const tMin = series.length ? series[0].t : 0
   const tMax = series.length ? series[series.length - 1].t : 0
@@ -133,8 +234,11 @@ export default function SessionReview() {
         {!hasChart ? (
           <div className="text-center py-12">
             <div className="text-5xl mb-2">🧠</div>
-            <p className="text-sm text-gray-400">No cognitive samples for this session yet.</p>
-            <p className="text-[11px] text-gray-400 mt-1">Once the headband starts streaming, it'll show up here.</p>
+            {/* Now reachable from heart-only data too (series merges both
+                channels' timestamps), so this can no longer name just the
+                one channel it used to be the only source for. */}
+            <p className="text-sm text-gray-400">No signal samples for this session yet.</p>
+            <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
           </div>
         ) : (
           <div className="h-72">
@@ -150,15 +254,51 @@ export default function SessionReview() {
                   fontSize={10}
                   minTickGap={50}
                 />
-                <YAxis domain={[0, 1]} fontSize={10} />
+                {/* Two axes with explicit ids. The existing one is ratio-scaled;
+                    bpm (~40-180) and RMSSD (ms) do not belong on it. Adding a
+                    second axis without giving the first an id silently rebinds
+                    every existing series to the new one. */}
+                <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />
+                {hasHeart && (
+                  <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
+                         fontSize={10} />
+                )}
                 <Tooltip
                   labelFormatter={(v) => fmtTime(v)}
                   formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
-                <Line type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
-                <Line type="monotone" dataKey="stress"     stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+                <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
+                <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
+                {/* Named "EEG stress" rather than bare "stress": this is
+                    cognitive_signals.stress (inverted calm), a different
+                    measurement from the heart-derived stress_category pie
+                    below, and CLAUDE.md is explicit that the two must never
+                    share a label. */}
+                <Line yAxisId="ratio" type="monotone" dataKey="stress" name="EEG stress" stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+
+                {/* Omitted rather than drawn as an all-null line: an empty
+                    legend entry reads as a measurement that flatlined. */}
+                {hasHeart && (
+                  <Line yAxisId="abs" type="monotone" dataKey="heart_rate_bpm" name="Heart rate (bpm)"
+                        stroke="#a855f7" dot={false} connectNulls isAnimationActive={false} />
+                )}
+                {hasHeart && (
+                  <Line yAxisId="abs" type="monotone" dataKey="rmssd_ms" name="RMSSD (ms)"
+                        stroke="#f59e0b" dot={false} connectNulls isAnimationActive={false} />
+                )}
+
+                {/* Sensor changed here. Distinct from the answer markers below
+                    by colour and by being solid. Gated on hasHeart, not just
+                    failovers.length: failovers is built from raw heart_signals
+                    source changes and can be non-empty (every window rejected
+                    but still carrying a source) while no row ever got a
+                    numeric heart_rate_bpm -- and the "abs" axis these markers
+                    reference only mounts when hasHeart is true. */}
+                {hasHeart && failovers.map((f, i) => (
+                  <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
+                                 stroke="#a855f7" strokeOpacity={0.5} />
+                ))}
 
                 {/* answer markers as vertical reference lines (numeric x is safe) */}
                 {answers.map((a, i) => {
@@ -167,6 +307,7 @@ export default function SessionReview() {
                   return (
                     <ReferenceLine
                       key={i}
+                      yAxisId="ratio"
                       x={x}
                       stroke={a.correct ? '#10b981' : '#f43f5e'}
                       strokeDasharray="3 3"
@@ -208,6 +349,59 @@ export default function SessionReview() {
           </div>
         )}
       </div>
+
+      {/* Proportion beside sequence. The ribbon above shows the order emotions
+          came in; these show how much of the session each accounted for, which
+          the ribbon cannot -- a single bad stretch and a whole bad session look
+          alike scrolling through emojis. Rendered only when there is something
+          to render: an empty pie is a claim about a session that recorded
+          nothing, which an unread channel has not earned. */}
+      {(emotionSlices.length > 0 || stressSlices.length > 0) && (
+        <div className="grid md:grid-cols-2 gap-4">
+          {emotionSlices.length > 0 && (
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Emotion mix</h2>
+              <div className="h-52">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={emotionSlices} dataKey="value" nameKey="name"
+                         innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                      {emotionSlices.map(sl => (
+                        <Cell key={sl.name} fill={EMOTION_COLOURS[sl.name] || '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+          {stressSlices.length > 0 && (
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
+              {/* Not bare "Stress": heart_signals.stress_category is a
+                  physiological measurement, distinct from the EEG-derived
+                  "EEG stress" series in the timeline chart above. CLAUDE.md:
+                  never render both under one "Stress" label. */}
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
+              <div className="h-52">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={stressSlices} dataKey="value" nameKey="name"
+                         innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                      {stressSlices.map(sl => (
+                        <Cell key={sl.name} fill={STRESS_COLOURS[sl.name] || '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v, n) => [`${v} windows`, n]} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* answers table */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">

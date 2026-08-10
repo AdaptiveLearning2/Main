@@ -36,6 +36,7 @@ import StudentReport    from './pages/teacher/StudentReport'
 import ParentDashboard  from './pages/parent/Dashboard'
 import ParentLinkChild  from './pages/parent/LinkChild'
 import ParentChild      from './pages/parent/ChildDetail'
+import ParentSettings   from './pages/parent/Settings'
 
 import NotFound from './pages/NotFound'
 
@@ -84,6 +85,7 @@ export default function App() {
               <Route path="/parent"              element={<ParentDashboard />} />
               <Route path="/parent/link"         element={<ParentLinkChild />} />
               <Route path="/parent/child/:id"    element={<ParentChild />} />
+              <Route path="/parent/settings"     element={<ParentSettings />} />
             </Route>
 
             <Route path="/"  element={<Navigate to="/dashboard" replace />} />

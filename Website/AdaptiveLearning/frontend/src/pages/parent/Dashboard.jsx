@@ -4,14 +4,12 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
-// pct is shared rather than redefined here: this page had a verbatim copy, and
-// a fix to one of them did not reach the other.
-import { FacialRecognitionToggle, pct } from '../../components/signals/SignalPanel'
-// Same stored preference as the child's full report and the teacher student
-// list. This page shows a Face Attention tile per child, so leaving it out
-// meant switching the control off on a report and navigating back here put
-// facial data straight back on screen.
-import { readFacePref, writeFacePref, faceIncluded } from '../../lib/facePref'
+// pct, emotionOn are shared rather than redefined here: this page had verbatim
+// copies of both, which is how it kept a fixed weakness in one after the other
+// was patched. emotionOn -- whether a payload in hand was built with the
+// emotion channel in it -- is aliased to faceIncluded, this page's existing
+// name for the same check.
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
 // Exactly the values the tiles below can render -- deliberately not every
 // field the summary carries. engagement is absent because this page has no
@@ -38,42 +36,17 @@ export default function ParentDashboard() {
   const [children, setChildren]   = useState([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(false)
-  const [includeFace, setIncludeFace] = useState(readFacePref)
   const name = user?.email?.split('@')[0] || 'there'
 
   useEffect(() => {
     let cancelled = false
-    apiFetch(`/api/parent/children?include_face=${includeFace}`)
+    apiFetch('/api/parent/children')
       .then(c => { if (!cancelled) { setChildren(c || []); setError(false); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
-    // Toggling twice quickly can land the responses out of order, and the
-    // earlier one carries the facial data the switch is meant to exclude.
+    // Kept: an unmount mid-flight would otherwise set state on a gone
+    // component. There is no longer a toggle to re-run this.
     return () => { cancelled = true }
-  }, [includeFace])
-
-  function handleIncludeFaceChange(next) {
-    setIncludeFace(next)
-    writeFacePref(next)
-    // Drop the facial values from what is already on screen rather than leaving
-    // them up for the round-trip. The switch governs what gets read, but a
-    // viewer who has just asked to exclude facial data should not go on looking
-    // at it while the request is in flight.
-    //
-    // face_included goes false in both directions, including when the switch is
-    // being turned back on, because the flag describes the payload in hand and
-    // this one no longer carries facial data. The tile therefore reads "Off"
-    // until the response lands, rather than "N/A" -- which would report a
-    // measurement as missing when it is simply on its way.
-    setChildren(prev => prev.map(child => ({
-      ...child,
-      signal_summary: {
-        ...child.signal_summary,
-        face_attention: null,
-        face_samples: 0,
-        face_included: false,
-      },
-    })))
-  }
+  }, [])
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
@@ -81,8 +54,6 @@ export default function ParentDashboard() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>
       </motion.div>
-
-      <FacialRecognitionToggle enabled={includeFace} onChange={handleIncludeFaceChange} />
 
       {/* A failed refresh with rows already on screen is a banner, not a
           takeover. This effect re-runs when the facial switch flips, so the
@@ -171,10 +142,21 @@ export default function ParentDashboard() {
                     {[
                       { icon: Brain,    label: 'Weekly Focus',   value: pct(signals.focus),          color: 'text-emerald-600' },
                       { icon: Zap,      label: 'Weekly Stress',  value: pct(signals.stress),         color: 'text-rose-600' },
-                      // "Off" rather than "N/A": the viewer switched facial
-                      // reporting off, which is a different statement from the
-                      // camera having recorded nothing.
-                      { icon: Eye,      label: 'Face Attention', value: faceIncluded(signals) ? pct(signals.face_attention) : 'Off', color: 'text-sky-600' },
+                      // Never a raw "N/A" for a channel that was not recorded,
+                      // and never a raw "N/A" for one that was recorded but
+                      // produced nothing usable this week -- `valueOrReason`
+                      // (SignalPanel.jsx) picks between withdrawn, unavailable,
+                      // calibrating and no-sensor so this tile can't fall back
+                      // to the generic string the rest of the reporting surfaces
+                      // stopped showing.
+                      { icon: Eye,      label: 'Face Attention',
+                        value: valueOrReason(faceIncluded(signals) && pct(signals.face_attention), {
+                          on: faceIncluded(signals),
+                          revokedAt: signals.emotion_revoked_at,
+                          consentRetrieved: signals.consent_retrieved,
+                          samples: signals.face_samples,
+                        }),
+                        color: 'text-sky-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">

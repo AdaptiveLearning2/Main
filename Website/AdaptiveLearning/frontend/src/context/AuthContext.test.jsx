@@ -35,15 +35,15 @@ function renderAuth() {
 
 beforeEach(() => {
   localStorage.clear()
-  localStorage.setItem('signal_include_face', 'false')
+  localStorage.setItem('teacher_hide_sensor_data', 'true')
   signOut.mockReset()
   signOut.mockResolvedValue({ error: null })
 })
 
-it('clears the facial-reporting preference on sign-out', async () => {
+it('clears the teacher display preference on sign-out', async () => {
   renderAuth()
   await userEvent.click(await screen.findByText('Sign out'))
-  await waitFor(() => expect(localStorage.getItem('signal_include_face')).toBeNull())
+  await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
 })
 
 it('clears it even when sign-out fails', async () => {
@@ -52,7 +52,7 @@ it('clears it even when sign-out fails', async () => {
   signOut.mockRejectedValue(new Error('offline'))
   renderAuth()
   await userEvent.click(await screen.findByText('Sign out'))
-  await waitFor(() => expect(localStorage.getItem('signal_include_face')).toBeNull())
+  await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
 })
 
 it('clears it on a sign-out this tab did not perform', async () => {
@@ -61,12 +61,12 @@ it('clears it on a sign-out this tab did not perform', async () => {
   renderAuth()
   await screen.findByText('Sign out')
   authCallback('SIGNED_OUT', null)
-  await waitFor(() => expect(localStorage.getItem('signal_include_face')).toBeNull())
+  await waitFor(() => expect(localStorage.getItem('teacher_hide_sensor_data')).toBeNull())
 })
 
 it('leaves it alone while the session is live', async () => {
   renderAuth()
   await screen.findByText('Sign out')
   authCallback('TOKEN_REFRESHED', { user: { id: 'u1', user_metadata: { role: 'parent' } } })
-  expect(localStorage.getItem('signal_include_face')).toBe('false')
+  expect(localStorage.getItem('teacher_hide_sensor_data')).toBe('true')
 })

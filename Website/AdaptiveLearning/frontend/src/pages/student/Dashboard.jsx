@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRight, Zap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -67,6 +68,11 @@ export default function StudentDashboard() {
 
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
+      {/* Above the header, and the only signal-related thing a student sees
+          outside settings. A sensor resuming is worth telling them about; a
+          live readout of their own focus is not. */}
+      <ParentRestoredBanner studentId={user?.id} />
+
       {/* header */}
       <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
         className="flex items-center justify-between">

@@ -41,10 +41,13 @@ async def _lifespan(app: FastAPI):
     try:
         eeg_poller.stop_all()
     finally:
-        # In a finally: a poller that somehow raises on the way out must not
-        # take the pool's shutdown down with it. Both are cleanup, and neither
-        # gets a second chance after this.
-        _shutdown_strategy_pool()
+        # Nested finally: neither shutdown gets a second chance after this, so
+        # one raising must not skip the other -- the same reason eeg_poller's
+        # own shutdown is in a finally above.
+        try:
+            _shutdown_strategy_pool()
+        finally:
+            _shutdown_live_signals_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -2886,7 +2889,34 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 # below out concurrently for one session at a time -- this endpoint's own
 # per-member loop stays sequential, so peak concurrency here never exceeds
 # the four reads for whichever session is currently open.
-_LIVE_SIGNALS_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="live-signals")
+#
+# Same lazy-init-under-lock / _lifespan-shutdown shape as _strategy_pool,
+# for the same reason: a shutdown call cannot interrupt a worker already
+# mid-request (the interpreter's own atexit join is what eventually collects
+# it either way), but resetting the global to None matters for a reload in
+# the same process, and cancelling not-yet-started futures costs nothing.
+_LIVE_SIGNALS_POOL: ThreadPoolExecutor | None = None
+_live_signals_pool_lock = threading.Lock()
+
+
+def _live_signals_pool() -> ThreadPoolExecutor:
+    global _LIVE_SIGNALS_POOL
+    with _live_signals_pool_lock:
+        if _LIVE_SIGNALS_POOL is None:
+            _LIVE_SIGNALS_POOL = ThreadPoolExecutor(max_workers=4,
+                                                    thread_name_prefix="live-signals")
+        return _LIVE_SIGNALS_POOL
+
+
+def _shutdown_live_signals_pool():
+    """Drop the queue on the way out. Called from _lifespan. See
+    _shutdown_strategy_pool for why wait=False/cancel_futures=True and the
+    global reset, rather than a clean join."""
+    global _LIVE_SIGNALS_POOL
+    with _live_signals_pool_lock:
+        pool, _LIVE_SIGNALS_POOL = _LIVE_SIGNALS_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _latest_session_signals(session_id: str) -> tuple[list, list, list, list]:
@@ -2898,15 +2928,16 @@ def _latest_session_signals(session_id: str) -> tuple[list, list, list, list]:
     additive per open session, and heart_signals added a third such
     round-trip on top of the two that were already here.
     """
+    pool = _live_signals_pool()
     futures = [
-        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("cognitive_signals").select("*")
-                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("face_signals").select("*")
-                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("heart_signals").select("*")
-                                   .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        _LIVE_SIGNALS_POOL.submit(lambda: supabase.table("session_answers").select("answered_at")
-                                   .eq("session_id", session_id).order("answered_at", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("cognitive_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("face_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("heart_signals").select("*")
+                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
+        pool.submit(lambda: supabase.table("session_answers").select("answered_at")
+                    .eq("session_id", session_id).order("answered_at", desc=True).limit(1).execute().data),
     ]
     return tuple(f.result() for f in futures)
 

@@ -154,6 +154,20 @@ function heartOn(report) {
   return report?.heart_included === true
 }
 
+// The offLabel `reason` for every face-derived tile on this panel -- one
+// definition, so a future change to which field backs the revocation date or
+// sample count cannot update four call sites and miss the fifth, the way
+// `pct()`'s own duplication (see its export comment) once let a fix to one
+// copy leave the other silently wrong.
+function faceReason(report, faceOn) {
+  return {
+    on: faceOn,
+    revokedAt: report?.emotion_revoked_at,
+    consentRetrieved: report?.consent_retrieved,
+    samples: report?.sample_counts?.face,
+  }
+}
+
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
   const tones = {
     indigo: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
@@ -206,12 +220,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
             absence in data nobody collected. `offLabel` picks between
             withdrawn, unavailable, calibrating and no-sensor. */}
 <MiniMetric label="Face Attention"
-                    value={valueOrReason(faceOn && pct(face.attention), {
-                      on: faceOn,
-                      revokedAt: report?.emotion_revoked_at,
-                      consentRetrieved: report?.consent_retrieved,
-                      samples: report?.sample_counts?.face,
-                    })}
+                    value={valueOrReason(faceOn && pct(face.attention), faceReason(report, faceOn))}
                     icon={Eye} tone="sky" />
         {/* bpm, not a percentage -- the same unit trap the weekly chart gives
             its own axis for. `unit()` never touches the 0..1 path. */}
@@ -227,23 +236,13 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
               apart from a genuine withdrawal -- the same reason the Face
               Attention tile above goes through it rather than branching here. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {valueOrReason(faceOn && face.emotion, {
-              on: faceOn,
-              revokedAt: report?.emotion_revoked_at,
-              consentRetrieved: report?.consent_retrieved,
-              samples: report?.sample_counts?.face,
-            })}
+            {valueOrReason(faceOn && face.emotion, faceReason(report, faceOn))}
           </p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
           <p className="font-bold text-gray-900 dark:text-white">
-            {valueOrReason(faceOn && pct(face.identity_confidence), {
-              on: faceOn,
-              revokedAt: report?.emotion_revoked_at,
-              consentRetrieved: report?.consent_retrieved,
-              samples: report?.sample_counts?.face,
-            })}
+            {valueOrReason(faceOn && pct(face.identity_confidence), faceReason(report, faceOn))}
           </p>
         </div>
       </div>
@@ -319,12 +318,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
 <MiniMetric label="Face Attention"
-                    value={valueOrReason(faceOn && pct(avg.face_attention), {
-                      on: faceOn,
-                      revokedAt: report?.emotion_revoked_at,
-                      consentRetrieved: report?.consent_retrieved,
-                      samples: report?.sample_counts?.face,
-                    })}
+                    value={valueOrReason(faceOn && pct(avg.face_attention), faceReason(report, faceOn))}
                     icon={Eye} tone="sky" />
         {/* sessions_recorded, not sample_counts.sessions: the latter is rows
             retrieved under the session row cap, so a heavy week showed exactly
@@ -405,12 +399,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               read also leaves faceOn false, and offLabel is what tells that
               apart from an actual withdrawal. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {valueOrReason(faceOn && highlights.dominant_emotion, {
-              on: faceOn,
-              revokedAt: report?.emotion_revoked_at,
-              consentRetrieved: report?.consent_retrieved,
-              samples: report?.sample_counts?.face,
-            })}
+            {valueOrReason(faceOn && highlights.dominant_emotion, faceReason(report, faceOn))}
           </p>
         </div>
       </div>

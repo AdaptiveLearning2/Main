@@ -371,9 +371,30 @@ silent otherwise** — a poller that cannot reach a sidecar produces no rows, ra
 leaves a session looking live: indistinguishable from a headband nobody put on. Deploy the backend
 anywhere but the student's machine and every session degrades that way with nothing to read.
 
-Under `push`, `eeg_poller.start` raises `PushModeError` and `/api/eeg/start` answers 409 naming the
-configuration — checked *before* the liveness probe, because "EEG service is not running on port
-8001" would be true and entirely misleading.
+Under `push`, `eeg_poller.start` raises `PushModeError`. `INGEST_MODE` binds **the poller only** —
+the ingest endpoints stay open in both modes, so a developer can hand-post a batch under `pull`.
+That is why the double-write warning asks `eeg_poller.claim_double_write_warning(session_id)`, which
+is the real condition, rather than reading the mode as a proxy for it.
+
+**Every endpoint that probes the sidecar checks the mode first, and there are eight of them.** "EEG
+service is not running on port 8001" is true under `push` and entirely misleading — it reads as a
+fault when the deployment simply does not work that way. Two shapes:
+
+- **Returns a payload** (`/api/eeg/{health,status,debug,devices}`) — the liveness field is `None`,
+  never `False`, and `ingest_mode` rides alongside so the caller can say *why*. `None` because "not
+  probed in this deployment" is a different claim from "probed and down", and **a consumer that
+  branches on falsiness renders both identically** — which is exactly how the outage string survived
+  in the debug panel after the endpoint behind it was fixed. Same three-state rule as the reporting
+  helpers.
+- **Raises** (`/api/eeg/{start,muse/refresh,muse/connect,muse/disconnect}`) — call
+  `_refuse_under_push(what)` in `main.py`, *before* `eeg_client.is_alive()`, or the misleading 503
+  wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
+  that claimed to have replaced it.
+
+A ninth endpoint needs the same treatment and an entry in `_MODE_AWARE` or `_MODE_AWARE_RAISING` in
+`backend/tests/test_ingest_mode.py`, which parametrises both push and pull over every member. This
+was found one endpoint at a time across five review rounds because each site was written by hand and
+the test listed only the endpoints someone had already remembered.
 
 Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, which is the pull
 *transport*; the push path would have had to import an HTTP client it never calls to reach a pure
@@ -382,7 +403,7 @@ storing percentages while the other stores ratios.
 
 ## Two columns are called stress and only one measures it
 
-`cognitive_signals.stress` is `1.0 - calm`, written by `eeg_client.py:175`. There is no `calm`
+`cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`
 column, so this *is* the EEG calm score, stored inverted. No independent quantity exists behind it,
 and `infer_state` never reads it — it uses `calm_score` directly, the same number the other way up.
 

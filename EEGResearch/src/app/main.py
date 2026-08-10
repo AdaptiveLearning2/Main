@@ -12,11 +12,16 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from src.app.config import get_settings
 from src.app.schemas import Envelope
 from src.app.security import require_admin_token, require_learner_token
+from src.app.services.push_client import PushClient
 from src.app.services.stream_manager import StreamManager, UnknownDeviceError
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 stream_manager = StreamManager()
+# None when push ingestion is off, which is the default and the co-located dev
+# stack. None rather than a disabled instance so there is no object to
+# accidentally start: the failure being avoided is two writers for one session.
+push_client = PushClient(settings.backend_url) if settings.push_enabled else None
 
 app = FastAPI(
     title=settings.app_name,
@@ -53,6 +58,19 @@ async def request_timing(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Process-Time"] = f"{(perf_counter() - start):.4f}"
     return response
+
+
+@app.on_event("shutdown")
+async def _stop_pushing() -> None:
+    """Flush the tail and drop the token when the process goes down.
+
+    Without this a Ctrl-C loses whatever was queued since the last tick, which
+    is up to a flush interval of a lesson. `stop()` bounds its own flush by the
+    request timeout, so a backend that is already gone delays exit by seconds.
+    """
+    if push_client is not None:
+        stream_manager.set_payload_consumer(None)
+        await push_client.stop()
 
 
 @app.get("/healthz")
@@ -104,6 +122,63 @@ async def get_state(
     return JSONResponse(
         Envelope(status="ok", data=snapshot, message="Latest interpreted EEG state").model_dump()
     )
+
+
+class PushStartBody(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    # The student's own backend bearer token, handed over by the browser. It is
+    # held in memory for the session and never logged or persisted -- this
+    # process runs on a student's laptop, and a credential on that disk is a
+    # worse thing to own than one in RAM. Excluded from repr so it cannot reach
+    # a log line through an incidental f-string.
+    access_token: str = Field(..., min_length=1, repr=False)
+
+
+@app.post("/api/v1/push/start")
+async def push_start(body: PushStartBody, _: str = Depends(require_learner_token)) -> JSONResponse:
+    """Begin posting this session's samples to the website backend.
+
+    Refuses when push is off rather than starting a client that would duplicate
+    a poller's writes. Under pull ingestion the backend polls this sidecar, and
+    both running at once puts every EEG sample in `cognitive_signals` twice --
+    valid rows, wrong counts, no error, and no dedupe key on that table to catch
+    it. The backend logs a warning when it sees both; this refuses to be the
+    second writer in the first place.
+    """
+    if push_client is None:
+        raise HTTPException(
+            status_code=409,
+            detail=("This sidecar runs with PUSH_ENABLED=false: the website backend "
+                    "polls it instead, and pushing as well would write every sample "
+                    "twice. Nothing is wrong with the sensors."),
+        )
+    await push_client.start(body.session_id, body.access_token)
+    stream_manager.set_payload_consumer(push_client.submit_payload)
+    return JSONResponse({"status": "pushing", "session_id": body.session_id})
+
+
+@app.post("/api/v1/push/stop")
+async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
+    """Stop pushing, flush the tail, and forget the token."""
+    if push_client is None:
+        return JSONResponse({"status": "not_configured"})
+    stream_manager.set_payload_consumer(None)
+    await push_client.stop()
+    return JSONResponse({"status": "stopped"})
+
+
+@app.get("/api/v1/push/status")
+async def push_status(_: str = Depends(require_learner_token)) -> JSONResponse:
+    """Queue depths, delivery counts and the last error.
+
+    `enabled: false` rather than a 404 when push is off, and `recorded` counts
+    what the *backend* said it stored rather than what was sent -- the backend
+    drops samples for a sensor the student has not consented to. A client
+    reporting what it sent would show a healthy session that recorded nothing.
+    """
+    if push_client is None:
+        return JSONResponse({"status": "ok", "data": {"enabled": False}})
+    return JSONResponse({"status": "ok", "data": {"enabled": True, **push_client.status()}})
 
 
 class MuseConnectBody(BaseModel):

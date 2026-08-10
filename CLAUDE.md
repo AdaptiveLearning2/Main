@@ -401,6 +401,34 @@ Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, 
 function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
 storing percentages while the other stores ratios.
 
+### The sidecar's push client does no arithmetic
+
+`EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with
+`BACKEND_URL`. It cannot import `signal_mapping` — different package — so instead of converting, it
+sends the sidecar's payload **whole**: `/api/signals/cognitive` accepts a sensor-shaped sample
+(`features`/`bands`, 0..100) as well as the flat already-mapped one, and maps the first itself. That
+keeps the /100 conversion in one place reached by both paths. Don't add a divide to the sidecar.
+
+Three properties worth not breaking:
+
+- **The student's bearer token arrives from the browser and lives in memory for one session.** It is
+  never logged or written to disk — this process runs on a student's laptop. `stop()` clears it, and
+  changing session drops the old queue, since those samples belong to a session the new token may
+  not own.
+- **The queue is bounded and drops oldest, counted.** `deque(maxlen=…)` evicts silently, and an
+  uncounted eviction is a signal path losing data with nothing anywhere to say so.
+- **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
+  samples for a sensor the student declined; counting sent would report a healthy session that
+  recorded nothing.
+
+`/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
+writer alongside a poller — `cognitive_signals` has no dedupe key, so both running means every EEG
+sample lands twice with no error.
+
+All three ingest endpoints are rate-limited and length-bounded. `/api/signals/cognitive` was neither
+until the push client existed, which was survivable only while its sole writer was the in-process
+poller.
+
 ## Two columns are called stress and only one measures it
 
 `cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`

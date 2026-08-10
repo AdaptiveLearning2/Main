@@ -1,0 +1,335 @@
+"""Posts derived signals from this sidecar to the website backend.
+
+The other half of the ingestion split. `eeg_poller` inside the website backend
+polls a sidecar over HTTP, which works only when `start.ps1` puts both on one
+machine. With the camera on each student's own device the sidecar is a local
+per-student process and a hosted backend has no route to it, so the direction
+reverses: this module POSTs to `/api/signals/{cognitive,heart,face}`.
+
+Three things shape the design.
+
+**The token is the student's own, and it does not live here.** It arrives from
+the browser at session start, is held in memory for the life of the session, and
+is never logged or written to disk. This process runs on a student's laptop; a
+long-lived credential on that disk is a worse thing to own than a short-lived
+one in RAM. `stop()` clears it.
+
+**The receiving endpoints are a trust boundary.** They rate-limit and bound
+batch size because this client is, from the backend's point of view, untrusted
+code on someone's machine. So this side stays inside those bounds by
+construction rather than discovering them as 429s: batches are capped below the
+server's limit and the queue is bounded, dropping oldest.
+
+**No arithmetic happens here.** The sidecar's own payload goes up whole and the
+backend maps it with `signal_mapping`. A /100 conversion on this side would be a
+second copy of one the poller path already has, which is how one path ends up
+storing percentages while the other stores ratios.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections import deque
+from typing import Any
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# Below the backend's `INGEST_MAX_BATCH` rather than equal to it. The server
+# rejects an oversized batch outright, so a client sitting exactly on the limit
+# turns any later loosening of what a sample contains into dropped data.
+MAX_BATCH = 50
+
+# What a stalled backend is allowed to cost. The queue holds derived samples at
+# a few Hz, so this is minutes of buffer, and it drops **oldest** on overflow:
+# for a live session the recent samples are the ones worth keeping, and an
+# unbounded queue on a student's laptop is a memory leak with a friendly name.
+MAX_QUEUE = 600
+
+# One flush cycle. Long enough that a 4 Hz stream batches rather than trickling,
+# short enough that a teacher's live view is not minutes behind.
+FLUSH_SECONDS = 5.0
+
+# A backend that is down must not be retried at the flush rate for a whole
+# lesson. Doubles to this ceiling and resets on the first success.
+BACKOFF_START = 5.0
+BACKOFF_MAX = 120.0
+
+# Per-request timeout. Deliberately shorter than the flush interval so a hung
+# request cannot stack flushes on top of each other.
+REQUEST_TIMEOUT = 4.0
+
+_CHANNELS = ("cognitive", "heart", "face")
+
+
+class PushClient:
+    """Buffers samples per channel and flushes them to the backend.
+
+    One instance per sidecar process. `start()` is what supplies the session and
+    the token; before that call `enqueue` is a no-op, so a sidecar streaming for
+    a local dashboard with no session open sends nothing anywhere.
+    """
+
+    def __init__(self, backend_url: str) -> None:
+        self._backend_url = backend_url.rstrip("/")
+        self._session_id: str | None = None
+        self._token: str | None = None
+        self._queues: dict[str, deque[dict[str, Any]]] = {
+            channel: deque(maxlen=MAX_QUEUE) for channel in _CHANNELS
+        }
+        self._dropped: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        self._sent: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        self._task: asyncio.Task | None = None
+        self._wake = asyncio.Event()
+        self._backoff = 0.0
+        self._last_error: str | None = None
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    async def start(self, session_id: str, token: str) -> None:
+        """Begin pushing for one session, with that student's bearer token.
+
+        Restarting for a different session drops whatever is still queued for
+        the old one. That is deliberate: those samples belong to a session this
+        token may no longer own, and posting them would either be rejected by
+        `_verify_session_owner` or -- worse, if the same student -- attribute one
+        session's readings to another.
+        """
+        if self.running and session_id != self._session_id:
+            await self.stop()
+        self._session_id = session_id
+        self._token = token
+        self._backoff = 0.0
+        self._last_error = None
+        if not self.running:
+            self._task = asyncio.create_task(self._loop())
+
+    async def stop(self, *, flush: bool = True) -> None:
+        """Stop pushing and forget the token.
+
+        One last flush by default, so the tail of a session is not lost to the
+        gap between the final sample and the next tick. It is bounded by the
+        same request timeout, so a dead backend delays shutdown by seconds
+        rather than hanging it.
+        """
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if flush and self._token:
+            try:
+                await self._flush_once()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                logger.warning("push: final flush failed: %s", exc)
+        self._session_id = None
+        # Cleared, not merely unused. The whole argument for accepting a
+        # student's bearer token in this process is that it lives in memory for
+        # one session; keeping it past `stop()` quietly withdraws that.
+        self._token = None
+        for channel in _CHANNELS:
+            self._queues[channel].clear()
+
+    # ── producing ────────────────────────────────────────────────────────────
+
+    def enqueue(self, channel: str, sample: dict[str, Any]) -> None:
+        """Queue one derived sample. Never raises, never blocks.
+
+        Called from the sampling loops, which must not be slowed or killed by
+        anything to do with the network. A backend outage degrades to dropped
+        samples and a count, not to a stalled capture.
+        """
+        if channel not in self._queues:
+            raise ValueError(f"unknown push channel: {channel!r}")
+        if not self.running or not self._token:
+            return
+        queue = self._queues[channel]
+        if len(queue) == queue.maxlen:
+            # `deque(maxlen=...)` evicts silently, so count it here or the loss
+            # is invisible -- which is the same failure as a poller producing no
+            # rows and raising nothing.
+            self._dropped[channel] += 1
+        queue.append(sample)
+        if len(queue) >= MAX_BATCH:
+            self._wake.set()
+
+    def submit_payload(self, payload: dict[str, Any]) -> None:
+        """Split one sidecar tick into the channels the backend accepts.
+
+        Shaping only -- fields are renamed and re-nested to match the ingest
+        models, and not one number is converted. The `features`/`bands` blocks
+        go up exactly as the sidecar produced them, on the sidecar's 0..100
+        scale, and `signal_mapping` on the backend does the conversion for both
+        this path and the poller.
+
+        A camera tick can produce a face sample, a heart sample, both or
+        neither: `build_camera_payload` omits a disabled channel rather than
+        nulling it, so an absent block here means "switched off", which must not
+        become a row.
+        """
+        if not self.running or not self._token:
+            return
+        ts = payload.get("timestamp")
+        device_id = payload.get("device_id")
+
+        if payload.get("kind") != "camera":
+            self.enqueue("cognitive", {
+                "ts": ts,
+                "features": payload.get("features") or {},
+                "bands": payload.get("bands") or {},
+                # Merged into `raw` by the mapper, which is where the fields
+                # that explain a nulled measurement live.
+                "raw": {"device_id": device_id,
+                        "channels": payload.get("channels"),
+                        "state": payload.get("state"),
+                        "ingestion": payload.get("ingestion")},
+            })
+
+        face = payload.get("face")
+        if face:
+            self.enqueue("face", {
+                "ts": ts,
+                "emotion": face.get("emotion"),
+                "emotion_confidence": face.get("emotion_confidence"),
+                # The endpoint calls this `emotion_trusted`; the sidecar block
+                # calls it `trusted`. Renamed here rather than on the backend
+                # because the backend has two `trusted` fields -- one per
+                # channel -- and one flat name for both is how a face
+                # confidence gets read as a heart confidence.
+                "emotion_trusted": face.get("trusted"),
+                "attention": face.get("attention"),
+                "gaze_x": face.get("gaze_x"),
+                "gaze_y": face.get("gaze_y"),
+                "identity_confidence": face.get("identity_confidence"),
+                "raw": {"device_id": device_id,
+                        "rejected_by": face.get("rejected_by"),
+                        "degraded": face.get("degraded"),
+                        "ingestion": payload.get("ingestion")},
+            })
+
+        heart = payload.get("heart")
+        # `source` is required by the endpoint and constrained in the database,
+        # because consent is per sensor: a reading that cannot say which sensor
+        # produced it cannot be consent-checked. Dropping it here rather than
+        # sending it and having the row rejected keeps the failure local and
+        # counted.
+        if heart and heart.get("source"):
+            self.enqueue("heart", {
+                "ts": ts,
+                "source": heart.get("source"),
+                "heart_rate_bpm": heart.get("bpm"),
+                "rmssd_ms": heart.get("rmssd_ms"),
+                "sqi": heart.get("sqi"),
+                "stress_score": heart.get("stress_score"),
+                "stress_category": heart.get("stress_category"),
+                "trusted": heart.get("trusted"),
+                "raw": {"device_id": device_id,
+                        "confidence": heart.get("confidence"),
+                        "rejected_by": heart.get("rejected_by"),
+                        "measured_fps": heart.get("measured_fps"),
+                        "window_coverage": heart.get("window_coverage"),
+                        "ingestion": payload.get("ingestion")},
+            })
+
+    # ── flushing ─────────────────────────────────────────────────────────────
+
+    async def _loop(self) -> None:
+        while True:
+            delay = self._backoff or FLUSH_SECONDS
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
+            try:
+                await self._flush_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the loop outlives failures
+                self._note_failure(exc)
+
+    def _note_failure(self, exc: Exception) -> None:
+        self._last_error = str(exc)
+        self._backoff = min(BACKOFF_MAX, max(BACKOFF_START, self._backoff * 2))
+        logger.warning("push: flush failed (%s), backing off %.0fs",
+                       exc, self._backoff)
+
+    async def _flush_once(self) -> None:
+        session_id, token = self._session_id, self._token
+        if not session_id or not token:
+            return
+        pending = {c: self._take(c) for c in _CHANNELS}
+        if not any(pending.values()):
+            return
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            for channel, samples in pending.items():
+                if not samples:
+                    continue
+                try:
+                    await self._post(client, channel, session_id, token, samples)
+                except Exception:
+                    # Put them back at the *front*, so a transient failure does
+                    # not reorder a session's samples relative to what follows.
+                    self._queues[channel].extendleft(reversed(samples))
+                    raise
+        self._backoff = 0.0
+        self._last_error = None
+
+    def _take(self, channel: str) -> list[dict[str, Any]]:
+        queue = self._queues[channel]
+        return [queue.popleft() for _ in range(min(MAX_BATCH, len(queue)))]
+
+    async def _post(self, client: httpx.AsyncClient, channel: str,
+                    session_id: str, token: str,
+                    samples: list[dict[str, Any]]) -> None:
+        response = await client.post(
+            f"{self._backend_url}/api/signals/{channel}",
+            json={"session_id": session_id, "samples": samples},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code == 429:
+            # The backend's rate limit, which this client is meant to stay
+            # inside. Treated as a failure so the samples go back on the queue
+            # and the backoff widens, rather than being counted as delivered.
+            raise RuntimeError("rate limited by backend (429)")
+        response.raise_for_status()
+        body = response.json() if response.content else {}
+        # The server's own count, not `len(samples)`. It drops samples whose
+        # sensor the student has not consented to, and reports how many -- a
+        # client that counted what it *sent* would report success for a batch
+        # that recorded nothing, which is the write-side version of a dashboard
+        # that cannot tell "no data" from "zero".
+        self._sent[channel] += int(body.get("inserted", 0))
+        dropped = int(body.get("dropped", 0))
+        if dropped:
+            logger.info("push: backend dropped %d %s sample(s): %s",
+                        dropped, channel, body.get("reason", "unspecified"))
+
+    # ── introspection ────────────────────────────────────────────────────────
+
+    def status(self) -> dict[str, Any]:
+        """What this client is doing, for `/api/v1/push/status`.
+
+        Deliberately carries no token and no session-scoped secret: this is
+        readable with the learner token, which in this deployment is shipped in
+        client code and is not a secret either.
+        """
+        return {
+            "running": self.running,
+            "session_id": self._session_id,
+            "queued": {c: len(self._queues[c]) for c in _CHANNELS},
+            "recorded": dict(self._sent),
+            # Named for what happened rather than for the queue: these were
+            # produced by this sidecar and never reached the backend.
+            "dropped_locally": dict(self._dropped),
+            "backoff_seconds": self._backoff,
+            "last_error": self._last_error,
+        }

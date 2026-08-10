@@ -2384,6 +2384,20 @@ def ack_consent(request: Request):
 # ─── biosignals: cognitive (headband) + face recognition ──────────────────
 
 class CognitiveSample(BaseModel):
+    """One EEG reading, in either of two shapes.
+
+    The flat fields are **already-mapped rows**: 0..1 ratios, exactly what the
+    table stores. That is what a developer hand-posting a batch has, and it is
+    the shape this endpoint has always accepted.
+
+    `features`/`bands` are **sensor output**: the sidecar's own payload, on its
+    0..100 scale, passed through untouched. The push client sends this and does
+    no arithmetic at all, so the /100 conversion exists once, in
+    `signal_mapping`, reached identically by the poller and the push path. The
+    alternative -- having the sidecar divide before sending -- is precisely the
+    second copy of a unit conversion that module was extracted to prevent, and
+    the one that ends with one path storing percentages and the other ratios.
+    """
     ts:         str | None = None
     focus:      float | None = None
     stress:     float | None = None
@@ -2394,10 +2408,20 @@ class CognitiveSample(BaseModel):
     delta:      float | None = None
     gamma:      float | None = None
     raw:        dict  | None = None
+    # The sidecar-native alternative described above. Left as free-form dicts
+    # deliberately: they are forwarded whole to `signal_mapping`, which reads
+    # the keys it knows and ignores the rest, so a sidecar gaining a feature
+    # does not need this model changed in lockstep to keep posting.
+    features:   dict  | None = None
+    bands:      dict  | None = None
 
 class CognitiveBatch(BaseModel):
     session_id: str
-    samples:    list[CognitiveSample]
+    # Bounded like the other two. It was the only ingest batch without a length
+    # cap, which mattered little while the sole writer was the in-process poller
+    # and matters now: under push the writer is an untrusted local process on a
+    # student's machine, and this endpoint is the trust boundary.
+    samples:    list[CognitiveSample] = Field(max_length=_INGEST_MAX_BATCH)
 
 class FaceSample(BaseModel):
     ts:                  str | None = None
@@ -2495,6 +2519,13 @@ def _verify_session_owner(session_id: str, user_id: str):
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
+    # Before the session lookup, for the reason spelled out on /api/signals/face:
+    # the limiter needs only the caller's id, and running it second leaves a
+    # flooding client costing one `sessions` query per request. This endpoint
+    # was missing the limit entirely -- the only one of the three -- which was
+    # survivable while the in-process poller was its only writer and is not now
+    # that a process on the student's machine posts to it.
+    _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
     # Accepted in either mode -- rejecting it under `pull` would break mixed
     # local dev -- but warned about when this session is *actually* being
@@ -2519,14 +2550,26 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
               f"the poller and /api/signals/cognitive. Every EEG sample is landing "
               f"twice and cognitive_signals has no dedupe key to catch it.",
               flush=True)
-    rows = [{
-        "session_id": payload.session_id,
-        "user_id":    user["id"],
-        "ts":         s.ts or datetime.utcnow().isoformat(),
-        "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
-        "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
-        "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
-    } for s in payload.samples]
+    def _row(s: CognitiveSample) -> dict:
+        # Sensor output goes through the shared mapper, which owns the 0..100 ->
+        # 0..1 conversion and the `stress = 1 - calm` inversion. Flat samples are
+        # already in table units and are stored as given.
+        if s.features is not None or s.bands is not None:
+            return signal_mapping.map_eeg_to_cognitive(
+                {"timestamp": s.ts or _utc_now().isoformat(),
+                 "features": s.features or {}, "bands": s.bands or {},
+                 **(s.raw or {})},
+                payload.session_id, user["id"])
+        return {
+            "session_id": payload.session_id,
+            "user_id":    user["id"],
+            "ts":         s.ts or _utc_now().isoformat(),
+            "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
+            "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
+            "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
+        }
+
+    rows = [_row(s) for s in payload.samples]
     if rows: supabase.table("cognitive_signals").insert(rows).execute()
     return {"ok": True, "inserted": len(rows)}
 

@@ -44,6 +44,15 @@ class Settings(BaseSettings):
         default="models/emotion-ferplus-8.onnx", alias="FACE_EMOTION_MODEL_PATH"
     )
 
+    # Push ingestion. Off by default, so a co-located dev stack keeps working
+    # exactly as before: there, `eeg_poller` inside the website backend polls
+    # this sidecar and nothing should be posting the same samples a second time.
+    # On, this sidecar POSTs to BACKEND_URL/api/signals/* with the student's own
+    # bearer token, which arrives from the browser at session start and is never
+    # stored -- see services/push_client.py.
+    push_enabled: bool = Field(default=False, alias="PUSH_ENABLED")
+    backend_url: str = Field(default="http://127.0.0.1:8000", alias="BACKEND_URL")
+
 
 @lru_cache
 def get_settings() -> Settings:

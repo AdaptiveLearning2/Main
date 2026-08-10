@@ -463,3 +463,80 @@ def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, m
         _MODE_AWARE_RAISING[endpoint]()
 
     assert exc.value.status_code == 503, f"{endpoint} refuses a legitimate call"
+
+
+# ── the cognitive endpoint as a push target ─────────────────────────────────
+
+def _capture_inserts(monkeypatch):
+    """Stub supabase, returning the list the endpoint inserts into."""
+    written = []
+
+    class _Ins:
+        def __init__(self, rows): self.rows = rows
+        def execute(self): written.extend(self.rows)
+
+    class _Tbl:
+        def insert(self, rows): return _Ins(rows)
+
+    monkeypatch.setattr(main, "supabase", type("S", (), {"table": lambda _s, _n: _Tbl()})())
+    return written
+
+
+def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
+    """The push client sends the sidecar's own payload and does no arithmetic.
+
+    A /100 conversion on the sidecar would be a second copy of the poller's,
+    which is how one path ends up storing percentages and the other ratios."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z",
+         "features": {"focus_score": 72.0, "calm_score": 60.0, "confidence": 90.0}},
+    ]), None)
+
+    assert written[0]["focus"] == pytest.approx(0.72), "stored on the sidecar's scale"
+    assert written[0]["stress"] == pytest.approx(0.40), "stress is 1 - calm"
+
+
+def test_flat_samples_are_still_stored_as_given(monkeypatch):
+    """The hand-posted dev shape: already-mapped rows, in table units."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40},
+    ]), None)
+
+    assert written[0]["focus"] == pytest.approx(0.72), "converted twice"
+
+
+def test_the_cognitive_batch_is_length_bounded_like_the_others():
+    """It was the only ingest batch without a cap. Survivable while the sole
+    writer was the in-process poller; not once the writer is a process on a
+    student's machine and this endpoint is the trust boundary."""
+    with pytest.raises(Exception):
+        main.CognitiveBatch(session_id="s1",
+                            samples=[{} for _ in range(main._INGEST_MAX_BATCH + 1)])
+
+
+def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
+    """Also the only one of the three without a limit, and for the same reason
+    it now needs one."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "flooder"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_ingest_hits", {})
+
+    batch = main.CognitiveBatch(session_id="s1", samples=[])
+    for _ in range(main._INGEST_RATE_LIMIT):
+        main.ingest_cognitive(batch, None)
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.ingest_cognitive(batch, None)
+    assert exc.value.status_code == 429

@@ -445,6 +445,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
+    # Newest *trusted* reading, matching every other heart figure in this
+    # payload. An untrusted latest would be the one number here not subject to
+    # the quality gate, and it is the one rendered largest.
+    latest_heart = next((r for r in heart if r.get("trusted") is True), None)
 
     # Three states per table per day, not two. The cap trims oldest-first, so
     # the oldest day that came back is the day it cut *into*: part of that day
@@ -716,7 +720,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "heart_rate_bpm": (sum(heart_rates) / len(heart_rates)) if heart_rates else None,
             "rmssd_ms": (sum(rmssd_values) / len(rmssd_values)) if rmssd_values else None,
         },
-        "latest": {"cognitive": latest_cognitive, "face": latest_face},
+        # `heart` present only when the channel was read. Absent rather than
+        # null, so a snapshot cannot show an empty heart row that reads as a
+        # sensor recording nothing -- the same rule the tiles follow.
+        "latest": {"cognitive": latest_cognitive, "face": latest_face,
+                   **({"heart": latest_heart} if include_heart else {})},
         "daily": daily,
         "summary": summary,
     }
@@ -1284,6 +1292,7 @@ _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _ingest_hits: dict[str, list[float]] = {}
+_warned_cognitive_push_under_pull = False
 _ingest_hits_lock = threading.Lock()
 # Same sweep as the strategy limiter, and needed more here: entries are
 # otherwise pruned only on that caller's *next* request, so every student who
@@ -2488,6 +2497,19 @@ def _verify_session_owner(session_id: str, user_id: str):
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
     _verify_session_owner(payload.session_id, user["id"])
+    # Accepted in either mode -- rejecting it under `pull` would break mixed
+    # local dev -- but warned about, because under `pull` the in-process poller
+    # is writing this same table from the same sidecar. Both paths active means
+    # every EEG sample lands twice, and `cognitive_signals` has no dedupe key to
+    # catch it the way `heart_signals` does. Valid rows, wrong counts, no error.
+    # Once per process: this endpoint runs at the sample rate and a per-request
+    # log would bury everything else.
+    global _warned_cognitive_push_under_pull
+    if eeg_poller.INGEST_MODE == "pull" and not _warned_cognitive_push_under_pull:
+        _warned_cognitive_push_under_pull = True
+        print("[ingest] /api/signals/cognitive was posted to while INGEST_MODE=pull. "
+              "If the sidecar is pushing *and* the poller is running, every EEG "
+              "sample is being written twice and nothing will catch it.", flush=True)
     rows = [{
         "session_id": payload.session_id,
         "user_id":    user["id"],
@@ -2900,8 +2922,21 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
         if eeg_poller.can_use_device(user["id"], device_id)
         else {"available": False, "reason": "in_use_by_other"}
     )
+    # Under push ingestion this backend has no route to a sidecar, so
+    # `is_alive()` is false forever -- and the frontend polls this every 3
+    # seconds and renders it as "EEG service is down". The student would get the
+    # carefully-worded 409 from /start once and then a continuous contradiction
+    # of it. Same argument as checking the mode before the liveness probe there;
+    # /start was simply the only place it got applied.
+    push = eeg_poller.INGEST_MODE == "push"
     return {
-        "service": eeg_client.is_alive(),
+        # None, not False: "we do not probe a sidecar in this deployment" is not
+        # the same claim as "we probed and it is down", and a consumer that
+        # branches on falsiness would render both identically.
+        "service": None if push else eeg_client.is_alive(),
+        # Carried so a client can say *why* rather than inferring it from a
+        # null, which is the distinction the reporting rules exist to keep.
+        "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
         "poller":  eeg_poller.status(user["id"]),
     }

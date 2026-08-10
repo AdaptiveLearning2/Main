@@ -127,6 +127,12 @@ export default function Adaptive() {
       if (killed) return
       setHeadband(prev => ({
         ...prev,
+        // `service` is null under push ingestion -- this backend does not probe
+        // a sidecar there, so there is no liveness to report. `!!null` is false,
+        // which rendered "offline" every 3 seconds and contradicted the 409 the
+        // start endpoint had just given, which says nothing is wrong with the
+        // headband. Tracked separately so the panel can say which it is.
+        pushMode: s.ingest_mode === 'push',
         available: !!s.service,
         connected: !!s.poller?.running,
         samples:   s.poller?.samples || 0,
@@ -366,7 +372,8 @@ export default function Adaptive() {
             Muse Headband
             {headband.connected && <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● STREAMING</span>}
             {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
-            {!headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
+            {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
+            {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">on your device</span>}
           </p>
           <p className="text-[11px] text-gray-400 mt-0.5">
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
@@ -376,7 +383,9 @@ export default function Adaptive() {
             {headband.phase === 'idle' && (
               headband.connected
                 ? `${headband.samples} samples sent · teacher can see your focus & stress live`
-                : headband.available
+                : headband.pushMode
+                  ? 'Your headband connects through the app on this computer, not through this page.'
+                  : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'
             )}

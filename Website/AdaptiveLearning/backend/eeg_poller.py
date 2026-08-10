@@ -23,6 +23,20 @@ POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 # machine and every session degrades that way with nothing to read. So `push`
 # makes start() refuse loudly instead of starting a thread that will never
 # succeed, and the refusal names the setting.
+#
+# **It binds the poller only. The ingest endpoints are always open.**
+# `/api/signals/*` accepts in either mode, deliberately -- rejecting the push
+# endpoints under `pull` would break the mixed local-dev case where a developer
+# runs the poller and posts a batch by hand.
+#
+# The consequence is worth stating rather than discovering: a deployment left on
+# `pull` whose sidecar *also* pushes writes `cognitive_signals` twice for every
+# sample. The rows are valid and the counts are wrong, silently -- and unlike
+# the heart path there is no dedupe key to catch it, because
+# `heart_session_source_ts_key` has no equivalent on a table that already holds
+# production rows. `main.ingest_cognitive` warns when it is used under `pull`
+# for that reason; `face_signals` and `heart_signals` are unexposed to this,
+# since the poller never writes them.
 INGEST_MODE = (os.getenv("INGEST_MODE", "pull") or "pull").strip().lower()
 _VALID_MODES = ("pull", "push")
 if INGEST_MODE not in _VALID_MODES:

@@ -161,3 +161,40 @@ def test_the_two_face_confidences_stay_separate():
     assert row["emotion_confidence"] == 0.81
     assert row["identity_confidence"] == 0.42
     assert row["emotion_trusted"] is True
+
+
+def test_the_status_endpoint_does_not_contradict_the_409(push_mode, monkeypatch):
+    """The 409 from /start says nothing is wrong with the headband. This is
+    polled every 3 seconds and rendered as "EEG service is down", so returning
+    a flat False under push contradicted it continuously -- the student got the
+    careful sentence once and the opposite reading forever after."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "user-1"})
+    monkeypatch.setattr(main, "eeg_client",
+                        type("C", (), {"is_alive": staticmethod(lambda: False),
+                                       "DEFAULT_DEVICE_ID": "station1",
+                                       "get_muse_status": staticmethod(lambda *_a, **_k: {})}))
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+
+    out = main.eeg_status(None, device_id="station1")
+
+    # None, not False: "we do not probe a sidecar here" is a different claim
+    # from "we probed and it is down".
+    assert out["service"] is None
+    assert out["ingest_mode"] == "push"
+
+
+def test_status_still_reports_liveness_under_pull(monkeypatch):
+    """Otherwise the test above passes for the wrong reason."""
+    monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "user-1"})
+    monkeypatch.setattr(main, "eeg_client",
+                        type("C", (), {"is_alive": staticmethod(lambda: True),
+                                       "DEFAULT_DEVICE_ID": "station1",
+                                       "get_muse_status": staticmethod(lambda *_a, **_k: {})}))
+    monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
+    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+
+    out = main.eeg_status(None, device_id="station1")
+    assert out["service"] is True
+    assert out["ingest_mode"] == "pull"

@@ -213,6 +213,41 @@ def test_isolated_gaps_do_not_distort_the_rate():
     assert record["bpm"] == pytest.approx(RESTING_BPM, abs=3.0)
 
 
+@pytest.mark.parametrize("keep_one_in,effective_hz,accepted", [
+    (4, 16.1, True),
+    (5, 12.9, True),   # the rung review flagged as untested: 20% completeness
+    (6, 10.7, True),   # last rung above the bar
+    (7, 9.2, False),   # first rung below it
+])
+def test_the_gate_sits_where_the_estimate_actually_breaks(keep_one_in, effective_hz, accepted):
+    """The boundary, measured on both sides, on a real recording.
+
+    Also the argument for gating the *rate* rather than `completeness`: at
+    one-in-six the window is 17% measurement and reads 69.5 bpm, because the
+    link is fast enough that a sixth of it still clears Nyquist. A completeness
+    threshold tight enough to catch a slow link would discard that for nothing.
+    """
+    with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
+                   "rt", encoding="utf-8") as fh:
+        frames = [json.loads(line) for line in fh if line.strip()]
+    start = frames[0]["mono_ts_ms"]
+    frames = [f for f in frames if f["mono_ts_ms"] - start <= 45_000]
+
+    adapter = TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
+    for i, frame in enumerate(frames):
+        if i % keep_one_in == 0:
+            adapter._store_optics(frame)
+    window = adapter.optics_window(RATE_WINDOW_SECONDS)
+    record = _build(window)
+
+    assert window.received_rate_hz == pytest.approx(effective_hz, abs=0.3)
+    if accepted:
+        assert record["rejected_by"] is None
+        assert record["bpm"] == pytest.approx(RESTING_BPM, abs=3.0)
+    else:
+        assert record["rejected_by"] == "effective_rate_too_low"
+
+
 def test_light_sample_loss_still_reads_correctly():
     """The gate has to cost windows that are genuinely usable, or it is just a
     stricter version of not working. One in four lost leaves 16Hz, comfortably

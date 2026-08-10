@@ -211,7 +211,13 @@ class _Poller(threading.Thread):
                       f"source={source} bpm={row.get('heart_rate_bpm')}", flush=True)
         except Exception as e:
             self.heart_errors += 1
-            print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: {type(e).__name__}: {e}", flush=True)
+            # Throttled like the success lines, because the retry that makes a
+            # transient failure survivable also makes a *persistent* one repeat:
+            # the block is held for ~10 ticks, so an unreachable table would
+            # otherwise print ten identical lines per reading, for the session.
+            if self.heart_errors <= 3 or self.heart_errors % 10 == 0:
+                print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: "
+                      f"{type(e).__name__}: {e}", flush=True)
 
     def run(self):
         # Not 0.0 at construction: `start()` read consent moments ago, and

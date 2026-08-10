@@ -371,8 +371,16 @@ class OpticsWindow:
     # output.
     received_rate_hz: float | None
     # Fraction of the grid that is measurement rather than interpolation.
-    # Diagnostic, carried onto the row: it is what explains a refusal, or a rate
-    # derived from a partly reconstructed window, after the fact.
+    #
+    # **Diagnostic only, and deliberately not a gate.** It looks like the
+    # natural thing to threshold and is the wrong quantity: what breaks the
+    # estimate is falling below Nyquist for the pulse band, which is an
+    # absolute rate, not a ratio. Measured on the resting fixture (69.4 bpm
+    # intact), completeness 0.17 reads 69.5 because the link is fast enough that
+    # a sixth of it still clears 10 Hz -- a completeness bar tight enough to
+    # catch a slow link would throw that away for nothing. Carried onto the row
+    # because it is what explains a refusal, or a partly reconstructed window,
+    # after the fact.
     completeness: float | None
     # Seconds of history actually held, from the bridge's own stamps.
     span_seconds: float

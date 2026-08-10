@@ -254,3 +254,41 @@ describe('at-home strategies', () => {
     expect(await screen.findByText('Backend unavailable')).toBeInTheDocument()
   })
 })
+
+it('scrubs the new emotion fields too, not just the legacy alias', async () => {
+  // The split gave the payload `emotion_included` and `emotion_distribution`,
+  // and `emotionOn()` reads the first in preference to `face_included`. The
+  // scrub still set only the alias, so the true value from the backend stood:
+  // the Face Attention line, the Dominant Emotion tile and the Emotion Mix pie
+  // all stayed on screen after the switch went off -- with `attention` nulled
+  // underneath them, so the line drew as a flatlined gap rather than vanishing.
+  const splitReport = {
+    ...emptyReport,
+    face_included: true,
+    emotion_included: true,
+    emotion_distribution: { happy: 5, sad: 2 },
+    averages:   { focus: 0.41, stress: 0.22, engagement: 0.33, face_attention: 0.72 },
+    highlights: { dominant_emotion: 'confused' },
+    daily:      [{ day: '2026-07-30', attention: 0.72, cognitive_retrieved: true, face_retrieved: true }],
+    summary: 'This week, average face attention was 72%.',
+  }
+  const pending = new Promise(() => {})   // never resolves: the pre-refetch state is the test
+  let reportCalls = 0
+  apiFetch.mockImplementation((url) => {
+    const u = String(url)
+    if (u.includes('/weekly-report')) return ++reportCalls === 1 ? Promise.resolve(splitReport) : pending
+    if (u.includes('/stats/'))        return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
+    return Promise.resolve([])
+  })
+
+  renderReport()
+  await screen.findByText('Recent Sessions')
+  expect(screen.getByText(/Emotion Mix/i)).toBeInTheDocument()
+
+  await userEvent.click(screen.getByRole('switch'))
+
+  // All three gone immediately, on the payload already in hand.
+  expect(screen.queryByText(/Emotion Mix/i)).not.toBeInTheDocument()
+  expect(screen.queryByText('confused')).not.toBeInTheDocument()
+  expect(screen.getByText(/not included in this report/i)).toBeInTheDocument()
+})

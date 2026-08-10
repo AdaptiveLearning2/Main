@@ -19,6 +19,8 @@ Nothing here does I/O, so both callers can be tested without a sidecar.
 
 from __future__ import annotations
 
+import math
+
 from typing import Any
 
 
@@ -40,7 +42,33 @@ def _ratio(value: Any) -> float | None:
         v = float(value)
     except (TypeError, ValueError):
         return None
+    # `math.isfinite`, not just the clamp. Every comparison against NaN is
+    # False, so `min(1.0, nan)` is 1.0 and `max(0.0, 1.0)` is 1.0 -- a NaN
+    # focus_score would be stored as **100% focus**, which is the same
+    # "disengaged region recorded as full engagement" failure the scale-sniffing
+    # above caused, and it pushes difficulty up. stdlib json parses NaN happily,
+    # so a sidecar can send one. Same rule as `_env_number`'s in main.py.
+    if not math.isfinite(v):
+        return None
     return max(0.0, min(1.0, v / 100.0))
+
+
+def _raw(payload: dict, **derived: Any) -> dict:
+    """The `raw` blob: what the caller supplied, plus what we derived.
+
+    The caller's own `raw` is merged rather than replaced. The ingest endpoints
+    accept one from the client and stored it verbatim before these mappers
+    existed; building a fresh dict here silently dropped it, which is a data
+    loss no test noticed because nothing asserted on a field the endpoint only
+    passed through.
+
+    Derived keys win on a collision -- they describe what this backend observed,
+    and a client should not be able to overwrite that by choosing a key name.
+    Nulls are dropped so an absent field does not read as a recorded null.
+    """
+    merged = dict(payload.get("raw") or {})
+    merged.update({k: v for k, v in derived.items() if v is not None})
+    return merged
 
 
 def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
@@ -124,14 +152,13 @@ def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> d
         # and this is its verdict; recomputing it from `confidence` would put a
         # second, drifting definition of "trusted" in the system.
         "trusted": heart.get("trusted"),
-        "raw": {
-            "device_id": payload.get("device_id"),
-            "confidence": heart.get("confidence"),
-            "rejected_by": heart.get("rejected_by"),
-            "measured_fps": heart.get("measured_fps"),
-            "window_coverage": heart.get("window_coverage"),
-            "ingestion": payload.get("ingestion"),
-        },
+        "raw": _raw(payload,
+                    device_id=payload.get("device_id"),
+                    confidence=heart.get("confidence"),
+                    rejected_by=heart.get("rejected_by"),
+                    measured_fps=heart.get("measured_fps"),
+                    window_coverage=heart.get("window_coverage"),
+                    ingestion=payload.get("ingestion")),
     }
 
 
@@ -157,11 +184,12 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
         "emotion_confidence": face.get("emotion_confidence"),
         "emotion_trusted": face.get("trusted"),
         "attention": face.get("attention"),
+        "gaze_x": face.get("gaze_x"),
+        "gaze_y": face.get("gaze_y"),
         "identity_confidence": face.get("identity_confidence"),
-        "raw": {
-            "device_id": payload.get("device_id"),
-            "rejected_by": face.get("rejected_by"),
-            "degraded": face.get("degraded"),
-            "ingestion": payload.get("ingestion"),
-        },
+        "raw": _raw(payload,
+                    device_id=payload.get("device_id"),
+                    rejected_by=face.get("rejected_by"),
+                    degraded=face.get("degraded"),
+                    ingestion=payload.get("ingestion")),
     }

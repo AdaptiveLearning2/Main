@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 import LLM_topic_decider
 import eeg_client
+import signal_mapping
 import eeg_poller
 
 load_dotenv()
@@ -440,6 +441,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     cog_oldest_day = _oldest(cog, "ts")[:10]
     face_oldest_day = _oldest(face, "ts")[:10]
     ses_oldest_day = _oldest(sessions, "started_at")[:10]
+    heart_oldest_day = _oldest(heart, "ts")[:10]
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
@@ -489,6 +491,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
+        # Per day, like the three above. `heart_ok and not heart_cut` was
+        # table-wide: one heart read over the row cap marked *every* day
+        # unretrieved, so the chart drew nothing even for days that came back
+        # complete. The cap binds per table, so the coverage has to be per day.
+        heart_missing, heart_whole = _coverage(heart_ok, heart_cut, heart_oldest_day, day)
         # Skip only when nothing we actually asked for could be retrieved. With
         # face reporting off there is no face request to fail, so the day hinges
         # on the other two -- otherwise an always-False face_missing would keep
@@ -498,7 +505,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # cap, so a day whose signals were trimmed can still have a session
         # count that was retrieved intact. Dropping the day threw that away and
         # reported the day as absent rather than partial.
-        if cog_missing and (face_missing or not include_emotion) and ses_missing:
+        # Heart included, or a day whose cognitive and session reads failed but
+        # whose heart read succeeded is dropped from `daily` entirely -- and the
+        # heart data that *was* retrieved never reaches the chart.
+        if (cog_missing and (face_missing or not include_emotion)
+                and (heart_missing or not include_heart) and ses_missing):
             continue
         day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
         day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
@@ -507,7 +518,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
         day_heart = [r for r in heart
                      if str(r.get("ts", ""))[:10] == day and r.get("trusted") is True]
-        heart_whole = heart_ok and not heart_cut
+
         daily.append({
             "date": day,
             # Withheld unless the day is whole. A partly-retrieved day averages
@@ -2507,19 +2518,22 @@ def ingest_face(payload: FaceBatch, request: Request):
                 "reason": ("consent unavailable" if not consent.get("retrieved")
                            else "camera not consented")}
 
-    rows = [{
-        "session_id":          payload.session_id,
-        "user_id":             user["id"],
-        "ts":                  s.ts or _utc_now().isoformat(),
-        "emotion":             s.emotion,
-        "attention":           s.attention,
-        "gaze_x":              s.gaze_x,
-        "gaze_y":              s.gaze_y,
-        "identity_confidence": s.identity_confidence,
-        "emotion_confidence":  s.emotion_confidence,
-        "emotion_trusted":     s.emotion_trusted,
-        "raw":                 s.raw,
-    } for s in payload.samples]
+    # Through the shared mapper, not inline. Two copies of this had already
+    # drifted -- the mapper dropped gaze_x/gaze_y that this endpoint wrote --
+    # which is exactly the divergence the module was extracted to prevent, and
+    # it went unnoticed because nothing called it.
+    rows = [r for r in (
+        signal_mapping.map_face_to_face_signal(
+            {"timestamp": s.ts or _utc_now().isoformat(),
+             "face": {"emotion": s.emotion, "attention": s.attention,
+                      "gaze_x": s.gaze_x, "gaze_y": s.gaze_y,
+                      "identity_confidence": s.identity_confidence,
+                      "emotion_confidence": s.emotion_confidence,
+                      "trusted": s.emotion_trusted},
+             "raw": s.raw},
+            payload.session_id, user["id"])
+        for s in payload.samples
+    ) if r is not None]
     # Insert, not upsert: `face_signals` has no dedupe key yet. See
     # 20260809120000 for why that is deferred rather than undecided, and the
     # query to run before adding one.
@@ -2563,19 +2577,18 @@ def ingest_heart(payload: HeartBatch, request: Request):
         reason = ("consent unavailable" if not consent.get("retrieved")
                   else "no consented heart sensor")
 
-    rows = [{
-        "session_id":      payload.session_id,
-        "user_id":         user["id"],
-        "ts":              s.ts or _utc_now().isoformat(),
-        "source":          s.source,
-        "heart_rate_bpm":  s.heart_rate_bpm,
-        "rmssd_ms":        s.rmssd_ms,
-        "sqi":             s.sqi,
-        "stress_score":    s.stress_score,
-        "stress_category": s.stress_category,
-        "trusted":         s.trusted,
-        "raw":             s.raw,
-    } for s in kept]
+    rows = [r for r in (
+        signal_mapping.map_heart_to_heart_signal(
+            {"timestamp": s.ts or _utc_now().isoformat(),
+             "heart": {"source": s.source, "bpm": s.heart_rate_bpm,
+                       "rmssd_ms": s.rmssd_ms, "sqi": s.sqi,
+                       "stress_score": s.stress_score,
+                       "stress_category": s.stress_category,
+                       "trusted": s.trusted},
+             "raw": s.raw},
+            payload.session_id, user["id"])
+        for s in kept
+    ) if r is not None]
 
     written = 0
     if rows:

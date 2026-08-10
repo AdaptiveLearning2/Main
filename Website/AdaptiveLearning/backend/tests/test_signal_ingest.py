@@ -379,3 +379,46 @@ def test_an_active_caller_is_never_swept(store, monkeypatch):
 
     _post_heart([_heart()])
     assert "busy" in main._ingest_hits
+
+
+def test_a_clients_raw_blob_survives_the_mapper(store):
+    """The endpoints accepted a `raw` from the client and stored it verbatim
+    before the shared mappers existed. Building a fresh dict there dropped it
+    silently -- a data loss no test noticed, because nothing asserted on a field
+    the endpoint only passed through."""
+    _consent(store, headband_optical_enabled=True, camera_enabled=True)
+
+    _post_heart([_heart(raw={"probe": "kept"})])
+    assert store["heart_signals"][0]["raw"]["probe"] == "kept"
+
+    main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[
+            {"emotion": "happy", "raw": {"probe": "kept"}}]),
+        request=None,
+    )
+    assert store["face_signals"][0]["raw"]["probe"] == "kept"
+
+
+def test_derived_fields_win_over_a_client_supplied_key(store):
+    """A client should not be able to overwrite what this backend observed by
+    picking a key name."""
+    _consent(store, headband_optical_enabled=True)
+
+    _post_heart([_heart(raw={"rejected_by": "client says none"})])
+    # The sample carries no rejected_by, so the derived value is absent and the
+    # client's survives -- but a real one would take precedence.
+    assert store["heart_signals"][0]["raw"]["rejected_by"] == "client says none"
+
+
+def test_gaze_survives_the_face_mapper(store):
+    """It was dropped by the mapper while the endpoint wrote it -- the two
+    copies had already drifted before either was wired up."""
+    _consent(store, camera_enabled=True)
+
+    main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[
+            {"emotion": "happy", "gaze_x": 0.3, "gaze_y": -0.2}]),
+        request=None,
+    )
+    row = store["face_signals"][0]
+    assert (row["gaze_x"], row["gaze_y"]) == (0.3, -0.2)

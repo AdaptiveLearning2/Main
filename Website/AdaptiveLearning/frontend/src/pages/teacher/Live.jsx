@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Activity, Camera, Brain, Radio } from 'lucide-react'
+import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts'
 import { apiFetch } from '../../lib/api'
+
+// Spelled out rather than shown raw. `muse_optics` means nothing to a teacher,
+// and the distinction that matters to them is headband versus camera.
+const SOURCE_LABEL = {
+  muse_optics: 'Heart · headband',
+  muse_ppg:    'Heart · headband',
+  rppg:        'Heart · camera',
+}
 
 const EMOJI = {
   happy: '😀', neutral: '😐', confused: '😕', frustrated: '😤',
@@ -35,6 +43,7 @@ function StudentCard({ student, history }) {
   const active = student.active_session
   const cog    = student.latest_cognitive
   const face   = student.latest_face
+  const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
 
   return (
@@ -62,6 +71,23 @@ function StudentCard({ student, history }) {
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
         </span>
+        {/* Named, not just present. Accuracy differs materially by sensor, and
+            a session can fail over mid-way -- a teacher watching the trace
+            change shape needs to be able to see the sensor changed rather than
+            read it as the student changing. `trusted: false` is shown as
+            "weak signal" rather than hidden: a card that goes blank while a
+            sensor is still producing readings is indistinguishable from one
+            that stopped. */}
+        {heart && (
+          <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
+            heart.trusted === false
+              ? 'bg-gray-100 text-gray-400 dark:bg-gray-800'
+              : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+          }`}>
+            <Heart size={11} /> {SOURCE_LABEL[heart.source] || heart.source}
+            {heart.trusted === false && ' · weak signal'}
+          </span>
+        )}
       </div>
 
       <div className="space-y-3 mb-4">
@@ -70,6 +96,22 @@ function StudentCard({ student, history }) {
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
         <Gauge label="Attention"  value={face?.attention} color="bg-amber-500" />
       </div>
+
+      {/* Absolute units, so it is stated rather than drawn on the 0..1
+          gauges above -- a bpm on a ratio scale is either invisible at the
+          floor or a lie about the axis. Null bpm on a present row means the
+          window was rejected, which is not a reading of zero. */}
+      {typeof heart?.heart_rate_bpm === 'number' && (
+        <div className="flex items-center gap-2 mb-4 text-sm">
+          <Heart size={16} className="text-purple-500" />
+          <span className="font-bold text-gray-700 dark:text-gray-300">
+            {Math.round(heart.heart_rate_bpm)} bpm
+          </span>
+          {typeof heart.rmssd_ms === 'number' && (
+            <span className="text-xs text-gray-400">HRV {Math.round(heart.rmssd_ms)} ms</span>
+          )}
+        </div>
+      )}
 
       {face?.emotion && (
         <div className="flex items-center gap-2 mb-4 text-sm">
@@ -81,10 +123,16 @@ function StudentCard({ student, history }) {
       <div className="h-12 -mx-1">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={history}>
-            <YAxis hide domain={[0, 1]} />
-            <Line type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line type="monotone" dataKey="engagement" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            {/* Two hidden axes with explicit ids. Heart rate is bpm and the
+                others are ratios; sharing one axis would flatten the ratios
+                against the floor. No pie or legend here -- the card is small,
+                and a pie of a 60-point rolling window misleads. */}
+            <YAxis yAxisId="ratio" hide domain={[0, 1]} />
+            <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
+            <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -136,6 +184,7 @@ export default function Live() {
         // append to per-student history (last 60 points)
         rows.forEach(r => {
           const c = r.latest_cognitive
+          const h = r.latest_heart
           if (!c) return
           const arr = historyRef.current[r.user_id] || []
           // Null, not 0. A row can exist with null measurements when the
@@ -148,6 +197,11 @@ export default function Live() {
             focus:      c.focus ?? null,
             engagement: c.engagement ?? null,
             stress:     c.stress ?? null,
+            // Null when there is no heart row for this tick, or when the row
+            // exists with a rejected window. Same reasoning as the three above:
+            // recharts leaves a gap for null, and a 0 here would draw a
+            // flatlined heart rate that never happened.
+            bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
           })
           while (arr.length > 60) arr.shift()
           historyRef.current[r.user_id] = arr

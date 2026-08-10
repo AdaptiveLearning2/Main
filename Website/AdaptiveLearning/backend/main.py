@@ -2819,12 +2819,18 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
 
     cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
     fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
+    hrt = supabase.table("heart_signals").select("*").eq("session_id", session_id)
     if since:
-        cog = cog.gt("ts", since); fac = fac.gt("ts", since)
+        cog = cog.gt("ts", since); fac = fac.gt("ts", since); hrt = hrt.gt("ts", since)
     cog_data = cog.order("ts").limit(20000).execute().data or []
     fac_data = fac.order("ts").limit(20000).execute().data or []
+    # Third array, same shape of read. `source` rides along on every row because
+    # accuracy differs materially by sensor and the session can fail over
+    # mid-way -- a reader comparing two halves of one trace has to be able to
+    # see the sensor changed rather than inferring a physiological event.
+    hrt_data = hrt.order("ts").limit(20000).execute().data or []
     answers  = supabase.table("session_answers").select("*").eq("session_id", session_id).order("answered_at").execute().data or []
-    return {"cognitive": cog_data, "face": fac_data, "answers": answers}
+    return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
 
 
 # ─── live monitoring (only show truly active sessions) ───────────────────
@@ -2862,7 +2868,7 @@ def class_live(class_id: str, request: Request):
             .order("started_at", desc=True).limit(1).execute().data or []
 
         active = None
-        latest_cog = latest_face = None
+        latest_cog = latest_face = latest_heart = None
 
         if open_sessions:
             sess = open_sessions[0]
@@ -2871,15 +2877,24 @@ def class_live(class_id: str, request: Request):
                 .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
             f = supabase.table("face_signals").select("*") \
                 .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
+            h = supabase.table("heart_signals").select("*") \
+                .eq("session_id", sid2).order("ts", desc=True).limit(1).execute().data
             a = supabase.table("session_answers").select("answered_at") \
                 .eq("session_id", sid2).order("answered_at", desc=True).limit(1).execute().data
 
             latest_cog  = c[0] if c else None
             latest_face = f[0] if f else None
+            # Newest row, trusted or not -- unlike the weekly aggregate, which
+            # takes the newest *trusted* one. A live card showing nothing while
+            # a sensor is producing untrusted readings is indistinguishable from
+            # a sensor that stopped, and the row carries `trusted` so the card
+            # can say which of the two it is.
+            latest_heart = h[0] if h else None
 
             candidates = []
             if latest_cog and latest_cog.get("ts"):       candidates.append(latest_cog["ts"])
             if latest_face and latest_face.get("ts"):     candidates.append(latest_face["ts"])
+            if latest_heart and latest_heart.get("ts"):   candidates.append(latest_heart["ts"])
             if a and a[0].get("answered_at"):             candidates.append(a[0]["answered_at"])
             if sess.get("started_at"):                    candidates.append(sess["started_at"])
             last_activity = max(candidates) if candidates else sess.get("started_at")
@@ -2900,6 +2915,11 @@ def class_live(class_id: str, request: Request):
             "active_session":   active,
             "latest_cognitive": latest_cog,
             "latest_face":      latest_face,
+            # `source` rides along so the card can show which sensor is live.
+            # Accuracy differs materially between them, and a teacher watching a
+            # trace change shape should be able to see that the sensor changed
+            # rather than read it as the student changing.
+            "latest_heart":     latest_heart,
         })
     return out
 

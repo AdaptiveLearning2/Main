@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
-import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap} from 'lucide-react'
+import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
@@ -113,6 +113,16 @@ async function getStudentStats(studentId)
     // aggregate -- not a length that stops at a row cap.
     signalCount: signals.cognitive_samples ?? 0,
     faceSignalCount: signals.face_samples ?? 0,
+    // Absolute units, deliberately not through asPct: bpm and ms are not
+    // ratios, and running them through the percent helper is the single most
+    // likely way this gets broken later.
+    heartRate: typeof signals.heart_rate_bpm === 'number' ? Math.round(signals.heart_rate_bpm) : null,
+    rmssd: typeof signals.rmssd_ms === 'number' ? Math.round(signals.rmssd_ms) : null,
+    heartSamples: signals.heart_samples ?? 0,
+    // From the payload, like faceIncluded below: the server decides this from
+    // stored consent, and "the sensor is off" is a different statement from
+    // "nothing was recorded".
+    heartIncluded: signals.heart_included === true,
     // Whether those counts mean anything. The catch above deliberately keeps a
     // signal-summary outage from costing the academic tiles, which leaves every
     // signal figure at its zero default -- indistinguishable from a student who
@@ -434,6 +444,31 @@ export default function Students() {
                                   ? faceSub(stats.faceSignalCount, 'most frequent', stats.signalsFailed)
                                   : 'reporting off'}
                                 color="violet"
+                              />
+                            </div>
+
+                            {/* Heart in its own row and its own units. Only
+                                when the channel was read: a row of "—" is
+                                indistinguishable from a headband that recorded
+                                nothing, and "Off" says which. */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+                              <StatCard
+                                icon={<Heart size={16} />}
+                                label="Avg Heart Rate"
+                                value={stats.heartIncluded ? (stats.heartRate !== null ? `${stats.heartRate} bpm` : '—') : 'Off'}
+                                sub={stats.heartIncluded
+                                  ? `${stats.heartSamples} readings`
+                                  : 'not recorded'}
+                                color="rose"
+                              />
+                              <StatCard
+                                icon={<Activity size={16} />}
+                                label="Avg HRV"
+                                value={stats.heartIncluded ? (stats.rmssd !== null ? `${stats.rmssd} ms` : '—') : 'Off'}
+                                sub={stats.heartIncluded
+                                  ? 'RMSSD, when measurable'
+                                  : 'not recorded'}
+                                color="amber"
                               />
                             </div>
 

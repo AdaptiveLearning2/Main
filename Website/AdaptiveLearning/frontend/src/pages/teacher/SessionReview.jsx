@@ -4,9 +4,26 @@ import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ReferenceLine, Legend
+  CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
 import { apiFetch } from '../../lib/api'
+
+// Fixed per label, so a colour means the same thing between two sessions --
+// index-based colours would repaint the same emotion differently whenever the
+// set of labels present changed.
+const EMOTION_COLOURS = {
+  neutral: '#94a3b8', happiness: '#10b981', surprise: '#38bdf8',
+  sadness: '#6366f1', anger: '#f43f5e', disgust: '#84cc16',
+  fear: '#a855f7', contempt: '#f59e0b',
+}
+
+// `calibrating` and `unknown` are muted rather than absent: they are states the
+// session was genuinely in, and dropping them would overstate how much of it
+// was categorised.
+const STRESS_COLOURS = {
+  low: '#10b981', moderate: '#f59e0b', high: '#f43f5e',
+  calibrating: '#cbd5e1', unknown: '#94a3b8',
+}
 
 const EMOJI = { happy: '😀', neutral: '😐', confused: '😕', frustrated: '😤', sad: '😢', surprised: '😮', angry: '😠' }
 
@@ -63,6 +80,7 @@ export default function SessionReview() {
 
   const cognitive = Array.isArray(data?.cognitive) ? data.cognitive : []
   const face      = Array.isArray(data?.face)      ? data.face      : []
+  const heart     = Array.isArray(data?.heart)     ? data.heart     : []
   const answers   = Array.isArray(data?.answers)   ? data.answers   : []
 
   // numeric ms x-axis — way more stable than category strings
@@ -78,6 +96,62 @@ export default function SessionReview() {
     })
     .filter(Boolean)
     .sort((a, b) => a.t - b.t)
+
+  // Heart merged into the same rows by nearest timestamp rather than plotted
+  // from its own array: Recharts wants one dataset, and the two channels are
+  // sampled at different rates. Nulls elsewhere, with `connectNulls` on the
+  // line, so a sparse heart series draws as a line rather than as dots.
+  const heartByT = heart
+    .map(h => ({ t: new Date(h.ts).getTime(), h }))
+    .filter(x => Number.isFinite(x.t))
+    .sort((a, b) => a.t - b.t)
+
+  let hi = 0
+  for (const row of series) {
+    while (hi + 1 < heartByT.length && heartByT[hi + 1].t <= row.t) hi++
+    const near = heartByT[hi]
+    // Only if it is actually near. Carrying a reading forward across a gap
+    // would draw a flat heart rate through a stretch where the sensor was off,
+    // which is the "cannot tell no-data from a value" failure on a chart.
+    if (near && Math.abs(near.t - row.t) <= 15_000) {
+      row.heart_rate_bpm = typeof near.h.heart_rate_bpm === 'number' ? near.h.heart_rate_bpm : null
+      row.rmssd_ms = typeof near.h.rmssd_ms === 'number' ? near.h.rmssd_ms : null
+    }
+  }
+
+  const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
+
+  // Where the sensor changed mid-session. Marked rather than spliced: two
+  // sensors' calibrations in one continuous trace reads as a physiological
+  // event that did not happen.
+  const failovers = []
+  for (let i = 1; i < heartByT.length; i++) {
+    if (heartByT[i].h.source && heartByT[i].h.source !== heartByT[i - 1].h.source) {
+      failovers.push({ t: heartByT[i].t, source: heartByT[i].h.source })
+    }
+  }
+
+  // Proportion, which the ribbon below cannot show: it shows sequence. The
+  // bucketing it already does is deliberately not reused here -- a pie of
+  // bucketed samples would weight a 10 s bucket the same as a 2 s one.
+  const emotionSlices = Object.entries(
+    face.reduce((acc, f) => {
+      if (!f.emotion) return acc          // a rejected window is not a reading
+      acc[f.emotion] = (acc[f.emotion] || 0) + 1
+      return acc
+    }, {}),
+  ).map(([name, value]) => ({ name, value }))
+
+  const stressSlices = Object.entries(
+    heart.reduce((acc, h) => {
+      // `calibrating` and `unknown` are kept as slices rather than dropped:
+      // a pie that silently omits them claims a session was entirely
+      // categorised when part of it was not.
+      const key = h.stress_category || 'unknown'
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {}),
+  ).map(([name, value]) => ({ name, value }))
 
   const tMin = series.length ? series[0].t : 0
   const tMax = series.length ? series[series.length - 1].t : 0
@@ -150,15 +224,41 @@ export default function SessionReview() {
                   fontSize={10}
                   minTickGap={50}
                 />
-                <YAxis domain={[0, 1]} fontSize={10} />
+                {/* Two axes with explicit ids. The existing one is ratio-scaled;
+                    bpm (~40-180) and RMSSD (ms) do not belong on it. Adding a
+                    second axis without giving the first an id silently rebinds
+                    every existing series to the new one. */}
+                <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />
+                {hasHeart && (
+                  <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
+                         fontSize={10} />
+                )}
                 <Tooltip
                   labelFormatter={(v) => fmtTime(v)}
                   formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
-                <Line type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
-                <Line type="monotone" dataKey="stress"     stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+                <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
+                <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
+                <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
+
+                {/* Omitted rather than drawn as an all-null line: an empty
+                    legend entry reads as a measurement that flatlined. */}
+                {hasHeart && (
+                  <Line yAxisId="abs" type="monotone" dataKey="heart_rate_bpm" name="Heart rate (bpm)"
+                        stroke="#a855f7" dot={false} connectNulls isAnimationActive={false} />
+                )}
+                {hasHeart && (
+                  <Line yAxisId="abs" type="monotone" dataKey="rmssd_ms" name="RMSSD (ms)"
+                        stroke="#f59e0b" dot={false} connectNulls isAnimationActive={false} />
+                )}
+
+                {/* Sensor changed here. Distinct from the answer markers below
+                    by colour and by being solid. */}
+                {failovers.map((f, i) => (
+                  <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
+                                 stroke="#a855f7" strokeOpacity={0.5} />
+                ))}
 
                 {/* answer markers as vertical reference lines (numeric x is safe) */}
                 {answers.map((a, i) => {
@@ -167,6 +267,7 @@ export default function SessionReview() {
                   return (
                     <ReferenceLine
                       key={i}
+                      yAxisId="ratio"
                       x={x}
                       stroke={a.correct ? '#10b981' : '#f43f5e'}
                       strokeDasharray="3 3"
@@ -208,6 +309,55 @@ export default function SessionReview() {
           </div>
         )}
       </div>
+
+      {/* Proportion beside sequence. The ribbon above shows the order emotions
+          came in; these show how much of the session each accounted for, which
+          the ribbon cannot -- a single bad stretch and a whole bad session look
+          alike scrolling through emojis. Rendered only when there is something
+          to render: an empty pie is a claim about a session that recorded
+          nothing, which an unread channel has not earned. */}
+      {(emotionSlices.length > 0 || stressSlices.length > 0) && (
+        <div className="grid md:grid-cols-2 gap-4">
+          {emotionSlices.length > 0 && (
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Emotion mix</h2>
+              <div className="h-52">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={emotionSlices} dataKey="value" nameKey="name"
+                         innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                      {emotionSlices.map(sl => (
+                        <Cell key={sl.name} fill={EMOTION_COLOURS[sl.name] || '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+          {stressSlices.length > 0 && (
+            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
+              <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Stress</h2>
+              <div className="h-52">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={stressSlices} dataKey="value" nameKey="name"
+                         innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                      {stressSlices.map(sl => (
+                        <Cell key={sl.name} fill={STRESS_COLOURS[sl.name] || '#94a3b8'} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v, n) => [`${v} windows`, n]} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* answers table */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">

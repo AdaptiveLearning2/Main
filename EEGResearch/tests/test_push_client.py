@@ -652,6 +652,27 @@ async def test_a_held_heart_block_is_enqueued_once(client):
 
 
 @pytest.mark.anyio
+async def test_rmssd_gating_fields_are_carried_into_the_enqueued_sample(client):
+    """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates, kept
+    apart from `rejected_by`: a row can carry a good bpm and no RMSSD, and
+    these say which of the two was refused. The enqueue dict was hand-copied
+    field by field and silently dropped both when they were added to
+    `build_heart_record`."""
+    await _started(client)
+    client.submit_payload({
+        "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
+        "features": {},
+        "heart": {"source": "muse_optics", "bpm": 68.2, "rmssd_ms": None,
+                  "beat_coverage": 0.91, "rmssd_rejected_by": "coverage",
+                  "ts": "2026-08-10T10:00:00+00:00"},
+    })
+
+    sample = client._queues["heart"][0]
+    assert sample["beat_coverage"] == 0.91
+    assert sample["rmssd_rejected_by"] == "coverage"
+
+
+@pytest.mark.anyio
 async def test_a_new_heart_reading_is_enqueued_again(client):
     await _started(client)
     for stamp in ("2026-08-10T10:00:00+00:00", "2026-08-10T10:00:10+00:00"):

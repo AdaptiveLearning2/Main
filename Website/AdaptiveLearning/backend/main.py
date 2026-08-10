@@ -2506,15 +2506,17 @@ class HeartSample(BaseModel):
     Phase 4 nothing writes `rppg` -- camera heart rate failed ECG validation --
     but the column stays honest about what the schema permits.
     """
-    ts:              str | None = None
-    source:          str
-    heart_rate_bpm:  float | None = None
-    rmssd_ms:        float | None = None
-    sqi:             float | None = None
-    stress_score:    float | None = None
-    stress_category: str   | None = None
-    trusted:         bool  | None = None
-    raw:             dict  | None = None
+    ts:                 str | None = None
+    source:             str
+    heart_rate_bpm:     float | None = None
+    rmssd_ms:           float | None = None
+    beat_coverage:      float | None = None
+    rmssd_rejected_by:  str   | None = None
+    sqi:                float | None = None
+    stress_score:       float | None = None
+    stress_category:    str   | None = None
+    trusted:            bool  | None = None
+    raw:                dict  | None = None
 
 
 class HeartBatch(BaseModel):
@@ -2768,7 +2770,10 @@ def ingest_heart(payload: HeartBatch, request: Request):
         signal_mapping.map_heart_to_heart_signal(
             {"timestamp": s.ts or _utc_now().isoformat(),
              "heart": {"source": s.source, "bpm": s.heart_rate_bpm,
-                       "rmssd_ms": s.rmssd_ms, "sqi": s.sqi,
+                       "rmssd_ms": s.rmssd_ms,
+                       "beat_coverage": s.beat_coverage,
+                       "rmssd_rejected_by": s.rmssd_rejected_by,
+                       "sqi": s.sqi,
                        "stress_score": s.stress_score,
                        "stress_category": s.stress_category,
                        "trusted": s.trusted},

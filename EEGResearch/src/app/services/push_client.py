@@ -370,6 +370,11 @@ class PushClient:
                 "source": heart.get("source"),
                 "heart_rate_bpm": heart.get("bpm"),
                 "rmssd_ms": heart.get("rmssd_ms"),
+                # RMSSD's own gates, kept apart from `rejected_by` below (which
+                # says whether there is a heart rate at all): a row can carry a
+                # good bpm and no RMSSD, and these say which was refused.
+                "beat_coverage": heart.get("beat_coverage"),
+                "rmssd_rejected_by": heart.get("rmssd_rejected_by"),
                 "sqi": heart.get("sqi"),
                 "stress_score": heart.get("stress_score"),
                 "stress_category": heart.get("stress_category"),

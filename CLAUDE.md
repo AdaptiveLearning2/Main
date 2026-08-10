@@ -451,9 +451,27 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   `len(rows)`: with samples dropped, counting rows reports a rate low by exactly the loss and scales
   every bpm down with it. This is the opposite call to `rgb_window`'s median-of-intervals, and the
   reason is the clock, not preference.
+- **Sample *loss* is gated separately from sample *rate*, and only the second is obvious.** `fs`
+  comes from `seq`, which counts what the headband **sent**, so it reads a healthy 64 Hz no matter
+  how few samples arrived; `window_coverage` is elapsed span, which the survivors still bracket. A
+  window can therefore pass both while being almost entirely `np.interp` output — and interpolation
+  manufactures the smooth periodicity autocorrelation rewards, so the result is a *confident* wrong
+  rate. Measured on the resting fixture (true ~68 bpm): one sample in 32 gave **55.8 bpm at
+  confidence 1.00**, one in 64 gave **44.0**. So `received_rate_hz` — real samples per second of
+  span — carries the same `MIN_SAMPLE_RATE` Nyquist bar, and `completeness` rides on the row.
+  Anything below 10 Hz effective is refused as `effective_rate_too_low`, including windows that
+  happen to still be right: nothing available here separates "sparse but above Nyquist" from
+  "aliased", and a refusal costs one window where an acceptance costs a number on a parent's chart.
 - **25s window, recomputed every 10s, then *held* on the payload.** The 10s step is what
   `MAX_BPM_CHANGE_PER_S` was validated against. Holding is what lets a 1 Hz poller see every reading;
   emitting for one tick would have push record everything and pull record almost nothing.
+  **An EEG no-data tick drops the held block but must not restart the cadence**
+  (`_drop_held_heart_block`, not `_reset_heart`). `drain_samples` raises whenever no EEG sample
+  arrives in its timeout, so flapping contact takes that path repeatedly; restarting the clock there
+  re-stamps the same 25 s of optical signal every tick, and since both writers dedupe on `ts` the
+  unique key cannot collapse those — up to 4 near-identical rows a second. It leaves the tracker
+  alone too: EEG dropping out says nothing about the optical emitters, and the anchor is what
+  catches octave errors.
 - **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
   ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
   client dedupes per `(device, source)`, and the poller upserts on
@@ -499,10 +517,22 @@ well below the 1.20–1.26 that single-channel runs produce.
 the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.
 `eeg_poller.set_heart_consent_check(fn)` is wired from `main` at import; `fn(user_id, source)` is
 built from the same `_consent` + `_permitted_heart_sources` pair the endpoint uses, so the two paths
-cannot disagree about one student. Unwired it denies, a failed read denies, and it is re-read every
-`HEART_CONSENT_RECHECK_SECONDS` so a mid-lesson withdrawal lands without waiting for the session to
-end. Per *source*, not per channel: a student who allowed the headband and refused the camera has
-consented to `muse_optics` and not to `rppg`.
+cannot disagree about one student. Unwired it denies, a failed read denies, and it is re-read on the
+same `CONSENT_RECHECK_SECONDS` cadence as EEG, so a mid-lesson withdrawal lands without waiting for
+the session to end. Per *source*, not per channel: a student who allowed the headband and refused the
+camera has consented to `muse_optics` and not to `rppg`.
+
+**On the pull path, EEG consent gates the heart channel as well — deliberately, and only there.**
+`_record_heart` runs inside the poller loop, and withdrawing `eeg` stops the poller outright, so it
+stops headband heart recording with it. `start()` refuses without EEG consent for the same reason, so
+a student who allows `headband_optical` and declines `eeg` records no heart rate under `pull` at all.
+That is accepted rather than overlooked: it errs the safe way — the path records *less* than consent
+allows, never more — and undoing it means a poller that keeps running with only its cognitive write
+switched off, which is a session reporting EEG stopped while still holding the device. A feature, not
+a fix; raise it as one. **Push is unaffected**, since `/api/signals/heart` checks per source and
+never consults EEG consent, so this is a real difference between the two deployments and the one
+place they are knowingly allowed to differ. Pinned by
+`test_withdrawing_eeg_consent_stops_the_heart_channel_too`.
 
 ### The sidecar's push client does no arithmetic
 
@@ -666,6 +696,20 @@ backfill and an unconfigured student records nothing. `_consent()` fails **close
 and carries `retrieved` so callers can tell "nobody consented" from "we couldn't find out" — the
 opposite of the reporting helpers below, deliberately: a dashboard degrading to empty is fine, a
 consent check degrading to *enabled* records data against a refusal.
+
+**Withdrawal stops future recording and keeps what is already stored.** Decided 2026-08-10: a
+revoked channel records nothing further until consent is given again, and no past row is deleted or
+hidden. Withdrawal is not erasure — a separate question, tracked in #75.
+
+That rule has to hold on **both ingestion paths**, and for a while it did not. `/api/signals/*` has
+called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with
+the **service-role** client, so neither RLS nor the ingest endpoint applies to it, and under
+`INGEST_MODE=pull` a withdrawal stopped nothing. Now: `/api/eeg/start` refuses **403** (not the 409
+push uses — one says this student said no, the other says this deployment does not work that way),
+and a running poller re-reads consent every `CONSENT_RECHECK_SECONDS` so a mid-lesson withdrawal
+lands without waiting for the session to end. `eeg_poller.set_consent_check()` is wired from `main`
+at import and has **no default**: unwired, `start()` raises rather than assuming yes, because an
+unwired deployment that assumes yes is indistinguishable from a wired one.
 
 **Writes only through the backend.** The table has no insert/update/delete policy for anyone, so
 with RLS on, PostgREST cannot write it whatever JWT it carries — including the anon key in the

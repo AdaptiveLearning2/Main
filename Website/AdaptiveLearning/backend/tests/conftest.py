@@ -32,3 +32,19 @@ def _join_poller_threads():
     eeg_poller.stop_all()
     still_running = [p.session_id for p in eeg_poller.live_pollers()]
     assert not still_running, f"poller threads did not stop: {still_running}"
+
+
+@pytest.fixture(autouse=True)
+def _consent_allows_polling():
+    """Wire a permissive consent check for tests that are not about consent.
+
+    `eeg_poller.start` refuses outright when none is wired, which is deliberate:
+    a default of "assume yes" in the module would make an unwired deployment
+    record against a refusal and look identical to a wired one. Tests need a
+    wired one, and the two that matter -- refused, and unwired -- assert the
+    real behaviour explicitly in test_consent_gates_polling.py rather than
+    relying on this.
+    """
+    eeg_poller.set_consent_check(lambda _student_id: True)
+    yield
+    eeg_poller.set_consent_check(None)

@@ -528,6 +528,8 @@ def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, m
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(main, "eeg_client", _StubClient)
+    monkeypatch.setattr(main, "_consent",
+                        lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, _n: _OwnedSession()})())
 

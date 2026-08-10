@@ -166,6 +166,11 @@ def test_debug_blocks_user_b_from_user_as_claimed_station(monkeypatch):
 
 def test_start_rejects_unknown_device_id(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    # The sessions stub answers for one table; /api/eeg/start also reads
+    # signal_consent now. Stubbed to "allowed" so these stay tests of device
+    # handling -- the consent behaviour has its own file.
+    monkeypatch.setattr(main, "_consent",
+                        lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "default"}])
@@ -178,6 +183,11 @@ def test_start_rejects_unknown_device_id(monkeypatch):
 
 def test_start_allows_known_device_id(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    # The sessions stub answers for one table; /api/eeg/start also reads
+    # signal_consent now. Stubbed to "allowed" so these stay tests of device
+    # handling -- the consent behaviour has its own file.
+    monkeypatch.setattr(main, "_consent",
+                        lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "list_devices", lambda: [{"device_id": "station-a"}])
@@ -193,6 +203,11 @@ def test_start_falls_back_to_permissive_when_list_devices_unreachable(monkeypatc
     succeeded -- a transient sidecar glitch) must not block a legitimate
     start; see the comment in eeg_start."""
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    # The sessions stub answers for one table; /api/eeg/start also reads
+    # signal_consent now. Stubbed to "allowed" so these stay tests of device
+    # handling -- the consent behaviour has its own file.
+    monkeypatch.setattr(main, "_consent",
+                        lambda _s: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "list_devices", lambda: [])

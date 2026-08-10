@@ -61,10 +61,13 @@ def poller():
 
 
 @pytest.fixture(autouse=True)
-def _restore_hook():
-    original = eeg_poller._heart_consent_check
+def _restore_hooks():
+    """Both hooks. They are module globals wired once at import, so a test that
+    left one swapped would silently decide the next test's answer."""
+    heart, eeg = eeg_poller._heart_consent_check, eeg_poller._consent_check
     yield
-    eeg_poller.set_heart_consent_check(original)
+    eeg_poller.set_heart_consent_check(heart)
+    eeg_poller.set_consent_check(eeg)
 
 
 def _allow(*sources):
@@ -163,7 +166,7 @@ def test_a_withdrawal_mid_session_stops_the_writes(poller, monkeypatch):
     """A lesson outlives a change of mind, and the poller is the only thing
     enforcing one under pull."""
     p, db = poller
-    monkeypatch.setattr(eeg_poller, "HEART_CONSENT_RECHECK_SECONDS", 0.0)
+    monkeypatch.setattr(eeg_poller, "CONSENT_RECHECK_SECONDS", 0.0)
     _allow("muse_optics")
     p._record_heart(_payload(ts="a"), loops=1)
     assert len(db.writes) == 1
@@ -189,6 +192,73 @@ def test_consent_is_not_read_once_per_reading(poller):
 
     assert len(db.writes) == 4
     assert len(calls) == 1
+
+
+def test_a_failed_write_is_retried_on_the_next_tick(poller):
+    """The block sits on the payload for ~40 more ticks, so a retry is free.
+
+    The stamp used to be claimed before the write, which turned one transient
+    insert error into a permanently lost reading.
+    """
+    p, db = poller
+    _allow("muse_optics")
+
+    class _Failing:
+        def upsert(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            raise RuntimeError("transient")
+
+    p.supabase = type("S", (), {"table": lambda _s, _n: _Failing()})()
+    p._record_heart(_payload(), loops=1)
+    assert p.heart_samples == 0
+    assert p.last_heart_ts is None, "a failed write must not consume the reading"
+
+    p.supabase = db
+    p._record_heart(_payload(), loops=1)
+    assert len(db.writes) == 1
+    assert p.heart_samples == 1
+
+
+def test_a_refusal_consumes_the_reading(poller):
+    """The other direction. A refusal is final for this reading -- nothing about
+    the next tick changes it -- so re-deciding it 40 times would re-log it."""
+    p, _db = poller
+    _allow()
+    p._record_heart(_payload(), loops=1)
+
+    assert p.last_heart_ts == "2026-08-10T10:00:00+00:00"
+
+
+def test_withdrawing_eeg_consent_stops_the_heart_channel_too(monkeypatch):
+    """Deliberate, and pinned here because it is not obvious and is not local.
+
+    `_record_heart` runs inside the poller loop, so the EEG consent gate killing
+    the poller ends headband heart recording as well -- even though
+    `headband_optical` is consented separately. Accepted because it errs the
+    safe way (the pull path records less than consent allows, never more), and
+    documented in CLAUDE.md. If this test goes red because someone decoupled
+    them, that is a feature change and needs the doc updated with it.
+    """
+    import eeg_client
+
+    monkeypatch.setattr(eeg_client, "start_session", lambda device_id=None: {"ok": True})
+    monkeypatch.setattr(eeg_client, "stop_session", lambda device_id=None: {"ok": True})
+    monkeypatch.setattr(eeg_client, "get_state", lambda device_id=None, timeout=2.0: None)
+    monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(eeg_poller, "CONSENT_RECHECK_SECONDS", 0.0)
+    # EEG withdrawn, headband optical still allowed.
+    eeg_poller.set_consent_check(lambda _user_id: False)
+    _allow("muse_optics")
+
+    db = _FakeSupabase()
+    p = eeg_poller._Poller(db, "student-1", "session-1", "station1")
+    p.start()
+    p.join(timeout=2.0)
+
+    assert not p.is_alive(), "the poller should have stopped on the withdrawal"
+    assert db.writes == [], "and recorded nothing on either channel"
 
 
 def test_status_counts_heart_separately(poller):

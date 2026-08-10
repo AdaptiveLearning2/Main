@@ -206,7 +206,8 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
-                    include_emotion: bool = True) -> dict:
+                    include_emotion: bool = True,
+                    consent_retrieved: bool = True) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
@@ -239,7 +240,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
     else:
         rows = res.data or []
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
-    summary = _shape_summary(row, include_heart, include_emotion, retrieved)
+    summary = _shape_summary(row, include_heart, include_emotion, retrieved,
+                             consent_retrieved)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
@@ -250,7 +252,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
     return summary
 
 
-_EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
+_EMPTY_SUMMARY = {"consent_retrieved": True,
+                  "focus": None, "stress": None, "engagement": None,
                   "face_attention": None, "heart_rate_bpm": None,
                   "rmssd_ms": None, "sessions": 0,
                   "cognitive_samples": 0, "face_samples": 0, "heart_samples": 0,
@@ -264,7 +267,7 @@ _EMPTY_SUMMARY = {"focus": None, "stress": None, "engagement": None,
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
-                   retrieved: bool = True) -> dict:
+                   retrieved: bool = True, consent_retrieved: bool = True) -> dict:
     """The summary payload.
 
     `retrieved` is the third thing a caller has to be able to tell apart, after
@@ -281,7 +284,7 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
-                "retrieved": retrieved}
+                "retrieved": retrieved, "consent_retrieved": consent_retrieved}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -314,6 +317,11 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # anyway rather than hardcoded True, so the field is present on every
         # payload and a consumer never has to treat "absent" as a third state.
         "retrieved": retrieved,
+        # `retrieved` is about the aggregate query; this is about the consent
+        # read that decided which channels it could ask for. Both False means
+        # the channel flags are "we could not find out" rather than "declined",
+        # and the parent dashboard is the surface that renders that difference.
+        "consent_retrieved": consent_retrieved,
     }
 
 
@@ -582,12 +590,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if include_heart:
             (measured if heart_ok else unread).append("heart rate")
 
-        def _join(items: list[str]) -> str:
+        def _join(items: list[str], conjunction: str) -> str:
             # "a, b or c" rather than "a or b or c", which reads badly once a
-            # third channel exists.
+            # third channel exists. Takes the conjunction because the two
+            # sentences want different ones -- "no X or Y were recorded" against
+            # "X and Y could not be loaded" -- and having the logic twice meant
+            # the second copy did not get the comma fix.
             if len(items) <= 1:
                 return "".join(items)
-            return ", ".join(items[:-1]) + " or " + items[-1]
+            return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
         def _sentence_case(text: str) -> str:
             # Not .capitalize(), which lowercases the rest and turns "EEG" into
@@ -596,11 +607,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
         parts = []
         if measured:
-            parts.append(f"No {_join(measured)} samples were recorded this week.")
+            parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
         if unread:
-            unread_text = (unread[0] if len(unread) == 1
-                           else ", ".join(unread[:-1]) + " and " + unread[-1])
-            parts.append(_sentence_case(f"{unread_text} data could not be loaded."))
+            parts.append(_sentence_case(
+                f"{_join(unread, 'and')} data could not be loaded."))
         summary = " ".join(parts)
 
     return {
@@ -1041,7 +1051,8 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
     channels = _reportable_channels(student_id, include_face)
     return _signal_summary(student_id, max(1, min(days, 30)),
                            include_heart=channels.heart,
-                           include_emotion=channels.emotion)
+                           include_emotion=channels.emotion,
+                           consent_retrieved=channels.consent_retrieved)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -1466,7 +1477,8 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     """
     channels = _reportable_channels(student_id, include_face)
     summary = _signal_summary(student_id, days, include_heart=channels.heart,
-                              include_emotion=channels.emotion)
+                              include_emotion=channels.emotion,
+                              consent_retrieved=channels.consent_retrieved)
     return {
         "days": days,
         "face_included": summary["face_included"],
@@ -2912,14 +2924,18 @@ def my_children(request: Request, include_face: bool = True):
     child_ids = [lnk["child_id"] for lnk in (links.data or [])]
     channels_by_child = {cid: _reportable_channels(cid, include_face)
                          for cid in child_ids}
-    by_channels: dict[ReportChannels, list[str]] = {}
+    # Keyed on the flags alone, not the whole ReportChannels. `consent_retrieved`
+    # does not change what the RPC is asked for, so including it would split two
+    # children with identical flags into separate round-trips and break the
+    # "at most four groups" bound this relies on.
+    by_channels: dict[tuple[bool, bool], list[str]] = {}
     for cid, ch in channels_by_child.items():
-        by_channels.setdefault(ch, []).append(cid)
+        by_channels.setdefault((ch.heart, ch.emotion), []).append(cid)
 
     summaries: dict | None = {}
-    for ch, group in by_channels.items():
-        part = _signal_summaries(group, include_heart=ch.heart,
-                                 include_emotion=ch.emotion)
+    for (heart_flag, emotion_flag), group in by_channels.items():
+        part = _signal_summaries(group, include_heart=heart_flag,
+                                 include_emotion=emotion_flag)
         if part is None:
             # One failed group fails the whole call, discarding groups that
             # succeeded. Deliberate, and the conservative choice rather than an
@@ -2957,11 +2973,18 @@ def my_children(request: Request, include_face: bool = True):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            "signal_summary": summaries.get(str(cid))
-                              or _shape_summary(None,
+            # Grouping keys on the flags alone, so a child whose consent read
+            # *failed* shares a group with one who genuinely declined both
+            # channels -- same RPC call, different meaning. The RPC path cannot
+            # know which, so it is stamped per child here.
+            "signal_summary": {**summaries[str(cid)],
+                               "consent_retrieved": channels_by_child[cid].consent_retrieved}
+                              if str(cid) in summaries
+                              else _shape_summary(None,
                                                 channels_by_child[cid].heart,
                                                 channels_by_child[cid].emotion,
-                                                summaries_retrieved),
+                                                summaries_retrieved,
+                                                channels_by_child[cid].consent_retrieved),
         })
     return children
 

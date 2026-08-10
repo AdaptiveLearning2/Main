@@ -285,3 +285,55 @@ def test_untrusted_only_weeks_report_a_count_beside_a_null_average(monkeypatch):
     assert report["heart_sources"] == [], (
         "a source whose every sample was rejected was listed as if it worked"
     )
+
+
+def test_the_summary_payload_also_distinguishes_declined_from_unknown(monkeypatch):
+    """The parent dashboard is the surface that renders this, and it reads the
+    summary rather than the weekly report -- so `consent_retrieved` has to reach
+    both. `retrieved` is about the aggregate query; this is about the consent
+    read that decided which channels it could ask for."""
+    fake = _FakeSupabase(_tables(_consent_row()), table_raises={"signal_consent"})
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "teacher-1"})
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+
+    out = main.student_signal_summary(STUDENT, None)
+    assert out["consent_retrieved"] is False
+
+    # A genuine refusal, read successfully, must not look the same.
+    monkeypatch.setattr(main, "supabase",
+                        _FakeSupabase(_tables(_consent_row(headband=False, camera=False))))
+    assert main.student_signal_summary(STUDENT, None)["consent_retrieved"] is True
+
+
+def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
+    """Two children with identical flags but different consent-read outcomes
+    belong in one RPC call -- `consent_retrieved` does not change what is asked
+    for, and keying on it would break the "at most four groups" bound."""
+    calls = []
+
+    def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True):
+        calls.append(sorted(ids))
+        return {str(i): {"face_included": include_emotion} for i in ids}
+
+    outcomes = {"kid-a": main.ReportChannels(False, False, True),    # declined
+                "kid-b": main.ReportChannels(False, False, False)}   # unreadable
+    monkeypatch.setattr(main, "_signal_summaries", _fake_summaries)
+    monkeypatch.setattr(main, "_reportable_channels", lambda cid, want=True: outcomes[cid])
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "parent-1"})
+    monkeypatch.setattr(main, "_profile", lambda _c: {})
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({
+        "parent_child_links": [
+            {"parent_id": "parent-1", "child_id": "kid-a", "created_at": _ts(1)},
+            {"parent_id": "parent-1", "child_id": "kid-b", "created_at": _ts(1)},
+        ],
+        "user_stats": [], "sessions": [], "user_math_performance": [],
+    }))
+
+    children = main.my_children(None)
+
+    assert len(calls) == 1, f"identical flags split into {len(calls)} round-trips"
+    # ...and the distinction survives anyway, stamped per child.
+    by_id = {c["user_id"]: c["signal_summary"] for c in children}
+    assert by_id["kid-a"]["consent_retrieved"] is True
+    assert by_id["kid-b"]["consent_retrieved"] is False

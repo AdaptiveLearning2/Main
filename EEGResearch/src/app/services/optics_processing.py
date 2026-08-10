@@ -56,6 +56,29 @@ MAX_GAP_SECONDS = 1.0
 # waveform's shape rather than only its fundamental. A headband delivering
 # below this is not a slow headband, it is a broken link -- PRESET_1035 runs
 # at ~64 Hz.
+#
+# Applied to **two** rates, and the second one is the one that bites. The link
+# may be running at a healthy 64 Hz while almost none of those samples reach
+# us; `seq` counts what was sent, so `fs` is blind to that by construction, and
+# the grid is then filled by interpolation without anything falling below a
+# threshold. `window_coverage` does not see it either -- it is elapsed span,
+# and the span is whatever the surviving samples bracket.
+#
+# Measured on the resting fixture (watch-confirmed ~68 bpm), decimating a
+# window that reads 69.4 bpm intact:
+#
+#     kept   effective rate   reported            verdict before this gate
+#     1/4    16 Hz            69.4 bpm            correct
+#     1/8     8 Hz            68.9 bpm            correct, but below Nyquist
+#     1/16    4 Hz            69.4 bpm            correct by luck, aliased
+#     1/32    2 Hz            55.8 bpm conf 1.00  accepted, 13 bpm wrong
+#     1/64    1 Hz            44.0 bpm conf 1.00  accepted, 25 bpm wrong
+#
+# The failure is not noisy, it is confident: interpolation manufactures the
+# smooth periodicity autocorrelation is built to reward. Note also that 1/8 and
+# 1/16 are *correct* and still refused -- below Nyquist for the pulse band,
+# nothing here can distinguish them from the aliased cases, and a refusal costs
+# a window while an acceptance costs a number on a parent's chart.
 MIN_SAMPLE_RATE = 10.0
 
 
@@ -85,6 +108,13 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
         # Measured, never nominal. Reported even when it is the reason for the
         # rejection, since "the link is delivering 6 Hz" is the diagnosis.
         "sample_rate_hz": round(window.fs, 2) if window.fs is not None else None,
+        # What arrived, beside what the link was running at. Both, because a row
+        # that records only the second cannot afterwards explain a rate derived
+        # from a window that was largely reconstructed.
+        "received_rate_hz": (round(window.received_rate_hz, 2)
+                             if window.received_rate_hz is not None else None),
+        "completeness": (round(window.completeness, 3)
+                         if window.completeness is not None else None),
         "largest_gap_s": (round(window.largest_gap_seconds, 3)
                           if window.largest_gap_seconds is not None else None),
         "channel_count": window.channel_count or None,
@@ -96,7 +126,9 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
     }
 
     if len(window.channels) == 0:
-        record["rejected_by"] = "no_samples"
+        # The window's own reason in preference to `no_samples`, which says the
+        # headband produced nothing. A discarded window is not that.
+        record["rejected_by"] = window.unusable_reason or "no_samples"
         return record
 
     if record["window_coverage"] < MIN_WINDOW_COVERAGE:
@@ -115,6 +147,13 @@ def build_heart_record(window: OpticsWindow, tracker: HeartRateTracker,
 
     if window.fs < MIN_SAMPLE_RATE:
         record["rejected_by"] = "sample_rate_too_low"
+        return record
+
+    # The same Nyquist bar, applied to what arrived rather than to what was
+    # sent. Everything above this point passes on a window that is 98%
+    # interpolation; see the table beside MIN_SAMPLE_RATE for what that reports.
+    if window.received_rate_hz is None or window.received_rate_hz < MIN_SAMPLE_RATE:
+        record["rejected_by"] = "effective_rate_too_low"
         return record
 
     if window.largest_gap_seconds is not None and window.largest_gap_seconds > MAX_GAP_SECONDS:

@@ -28,10 +28,12 @@ from src.app.services.ppg_processing import HeartRateTracker
 RESTING_BPM = 68.0
 
 
-def _window(samples=1600, fs=64.0, span=None, gap=None, channels=4):
+def _window(samples=1600, fs=64.0, received=64.0, span=None, gap=None,
+            channels=4, unusable=None):
     span = RATE_WINDOW_SECONDS if span is None else span
     data = np.zeros((samples, channels)) if samples else np.empty((0, channels))
-    return OpticsWindow(data, fs, span, gap, channels)
+    completeness = (received / fs) if (fs and received is not None) else None
+    return OpticsWindow(data, fs, received, completeness, span, gap, channels, unusable)
 
 
 def _build(window, tracker=None, since=EMIT_EVERY_SECONDS):
@@ -45,7 +47,7 @@ def test_a_refusal_is_never_a_reading():
     than on the reading writes a null row every tick -- ~14k an hour at 4Hz,
     each one counted as a sample by the aggregates.
     """
-    record = _build(_window(samples=0, fs=None, span=0.0))
+    record = _build(_window(samples=0, fs=None, received=None, span=0.0))
     assert record["source"] == "muse_optics"
     assert record["bpm"] is None
     assert record["trusted"] is False
@@ -62,9 +64,35 @@ def test_an_unmeasured_rate_is_refused_rather_than_assumed():
     """Falling back to the preset's nominal 64Hz is the assumption the
     measurement exists to remove: a link running slow would then report every
     rate high by exactly the shortfall, with full confidence."""
-    record = _build(_window(fs=None))
+    record = _build(_window(fs=None, received=None))
     assert record["rejected_by"] == "unmeasured_sample_rate"
     assert record["sample_rate_hz"] is None
+
+
+def test_a_window_that_is_mostly_interpolation_is_refused():
+    """The gap this opened, measured rather than reasoned about.
+
+    `fs` is read off `seq`, which counts what the headband *sent*, so it is 64Hz
+    whether or not the samples arrived; `window_coverage` is elapsed span, which
+    the surviving samples still bracket. Both stay healthy while the grid fills
+    with `np.interp` output -- and interpolation manufactures the smooth
+    periodicity autocorrelation rewards, so the result was a *confident* wrong
+    rate, not a noisy one.
+    """
+    record = _build(_window(fs=64.0, received=2.0))
+    assert record["rejected_by"] == "effective_rate_too_low"
+    # The link looks fine and the window looks full. Only the third number says
+    # otherwise, which is why it had to be carried separately.
+    assert record["sample_rate_hz"] == 64.0
+    assert record["window_coverage"] >= 1.0
+    assert record["completeness"] == pytest.approx(0.031, abs=0.001)
+
+
+def test_a_corrupt_sample_index_says_so_rather_than_no_samples():
+    """Empty channels alone reach the caller as `no_samples`, which is what a
+    headband that never emitted reports -- the opposite situation."""
+    record = _build(_window(samples=0, unusable="corrupt_sample_index"))
+    assert record["rejected_by"] == "corrupt_sample_index"
 
 
 def test_a_collapsed_link_is_refused_and_says_so():
@@ -123,6 +151,53 @@ def test_a_real_resting_recording_produces_its_known_rate(recorded_window):
     assert record["confidence"] > 0.55
     assert record["channel_count"] == 4
     assert record["sample_rate_hz"] == pytest.approx(64.2, abs=0.5)
+
+
+@pytest.mark.parametrize("keep_one_in,was", [(32, 55.8), (64, 44.0)])
+def test_heavy_sample_loss_is_refused_on_a_real_recording(keep_one_in, was):
+    """The regression, on the fixture that made it visible.
+
+    Decimating a window that reads 69.4 bpm intact used to produce these rates
+    at **confidence 1.00** with `rejected_by: None` and `trusted: True` -- a
+    25 bpm error at one-in-64, shipped as a measurement. Parametrised with the
+    numbers it actually reported so this cannot be quietly re-broken into
+    something merely different.
+    """
+    with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
+                   "rt", encoding="utf-8") as fh:
+        frames = [json.loads(line) for line in fh if line.strip()]
+    start = frames[0]["mono_ts_ms"]
+    frames = [f for f in frames if f["mono_ts_ms"] - start <= 45_000]
+
+    adapter = TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
+    for i, frame in enumerate(frames):
+        if i % keep_one_in == 0:
+            adapter._store_optics(frame)
+    record = _build(adapter.optics_window(RATE_WINDOW_SECONDS))
+
+    assert record["bpm"] is None, f"still reporting a rate (was {was} bpm)"
+    assert record["rejected_by"] == "effective_rate_too_low"
+    assert record["trusted"] is False
+
+
+def test_light_sample_loss_still_reads_correctly():
+    """The gate has to cost windows that are genuinely usable, or it is just a
+    stricter version of not working. One in four lost leaves 16Hz, comfortably
+    above the pulse band, and the rate is unchanged."""
+    with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
+                   "rt", encoding="utf-8") as fh:
+        frames = [json.loads(line) for line in fh if line.strip()]
+    start = frames[0]["mono_ts_ms"]
+    frames = [f for f in frames if f["mono_ts_ms"] - start <= 45_000]
+
+    adapter = TcpMuseBridgeAdapter("127.0.0.1", 8765, 1)
+    for i, frame in enumerate(frames):
+        if i % 4 == 0:
+            adapter._store_optics(frame)
+    record = _build(adapter.optics_window(RATE_WINDOW_SECONDS))
+
+    assert record["rejected_by"] is None
+    assert record["bpm"] == pytest.approx(RESTING_BPM, abs=3.0)
 
 
 def test_every_record_carries_a_parseable_stamp_of_its_own():

@@ -356,7 +356,24 @@ class OpticsWindow:
     # Samples per second, measured across the window. None when it could not be
     # measured, which is not the same as slow; the caller must not substitute a
     # nominal rate, since that assumption is what this measurement removes.
+    #
+    # This is the rate the *headband* is running at, taken from `seq`. It is the
+    # right number for the grid and the wrong one for judging the window, since
+    # it is unchanged by losing 90% of the samples -- see `received_rate_hz`.
     fs: float | None
+    # Samples per second that actually **arrived**. `fs` measures the link's
+    # nominal rate and this measures what survived it; they differ by exactly
+    # the loss, and only this one falls when samples go missing.
+    #
+    # Separate field because the gap between them is invisible in everything
+    # else the window reports. A window can hold a full 25 seconds, have its
+    # largest gap inside tolerance, and still be almost entirely `np.interp`
+    # output.
+    received_rate_hz: float | None
+    # Fraction of the grid that is measurement rather than interpolation.
+    # Diagnostic, carried onto the row: it is what explains a refusal, or a rate
+    # derived from a partly reconstructed window, after the fact.
+    completeness: float | None
     # Seconds of history actually held, from the bridge's own stamps.
     span_seconds: float
     # Longest interval between consecutive samples. Interpolation fills the
@@ -365,6 +382,11 @@ class OpticsWindow:
     # How many optical channels the headband is emitting. Preset-dependent
     # (4, 8 or 16), so carried rather than assumed.
     channel_count: int
+    # Set when the window was discarded for a reason of its own rather than
+    # never having existed. Without it a corrupt sample index is reported as
+    # `no_samples`, which is what a headband that never emitted also reports --
+    # and those want opposite responses.
+    unusable_reason: str | None = None
 
 
 class TcpMuseBridgeAdapter:
@@ -532,9 +554,12 @@ class TcpMuseBridgeAdapter:
         """
         with self._optics_lock:
             if not self._optics:
-                return OpticsWindow(np.empty((0, 0)), None, 0.0, None, 0)
+                return OpticsWindow(np.empty((0, 0)), None, None, None, 0.0, None, 0)
             newest_ts = self._optics[-1][1]
-            width = self._optics[-1][2] and len(self._optics[-1][2])
+            # No emptiness check: `_store_optics` drops a line with no channel
+            # values, so every buffered tuple has at least one. A guard here
+            # would read as load-bearing while being unreachable.
+            width = len(self._optics[-1][2])
             cutoff = -float("inf") if seconds == float("inf") else newest_ts - seconds * 1000.0
             rows: list[tuple[int, float, tuple[float, ...]]] = []
             for row in reversed(self._optics):
@@ -548,7 +573,7 @@ class TcpMuseBridgeAdapter:
             rows.reverse()
 
         if len(rows) < 2:
-            return OpticsWindow(np.empty((0, width)), None, 0.0, None, width)
+            return OpticsWindow(np.empty((0, width)), None, None, None, 0.0, None, width)
 
         seqs = np.array([r[0] for r in rows], dtype=float)
         ts_s = np.array([r[1] for r in rows], dtype=float) / 1000.0
@@ -560,26 +585,49 @@ class TcpMuseBridgeAdapter:
         # then reports a rate lower than the headband is running at -- which
         # scales every derived bpm down by exactly the loss rate, confidently.
         seq_span = float(seqs[-1] - seqs[0])
-        fs = (seq_span / span_s) if span_s > 0 and seq_span > 0 else None
-        if fs is None:
-            return OpticsWindow(np.empty((0, width)), None, span_s, None, width)
+        # Only `span_s` is checked. It genuinely can be zero -- a whole window
+        # of samples delivered in one BLE batch shares one stamp, which is the
+        # very batching that rules these stamps out as a clock. `seq_span`
+        # cannot: `_store_optics` clears on a non-increasing seq, so with two
+        # or more rows it is at least 1, and testing it would suggest otherwise.
+        fs = (seq_span / span_s) if span_s > 0 else None
+        # What actually arrived, over the same span. `fs` is unchanged by loss
+        # -- it is read off `seq`, which counts what the headband *sent* -- so
+        # on its own it cannot tell a full window from one that is mostly
+        # interpolation. Measured on the resting fixture: decimating to one
+        # sample in 32 leaves `fs` at 64.2 Hz and `window_coverage` at 0.995
+        # while the reported rate walks from 69 bpm to 55.8, and to 44.0 at one
+        # in 64 -- both at **confidence 1.00**, because interpolation
+        # manufactures exactly the smooth periodicity the autocorrelation
+        # rewards. That is a confident wrong answer, the worst shape available
+        # here, and this is the number that sees it.
+        received_rate = ((len(rows) - 1) / span_s) if span_s > 0 else None
+        if fs is None or received_rate is None:
+            return OpticsWindow(np.empty((0, width)), None, None, None, span_s, None, width)
+        completeness = min(1.0, received_rate / fs)
 
         largest_gap_s = float(np.max(np.diff(seqs))) / fs
 
         grid_len = int(seq_span) + 1
+        unusable: str | None = None
         if grid_len == len(rows):
             channels = values
         elif grid_len > self.OPTICS_BUFFER_MAXLEN * 4:
-            # A seq jump this large is corruption, not loss. Returning no
-            # samples (with the gap intact, so the caller can still say why)
-            # beats allocating a grid sized from a bad number.
+            # A seq jump this large is corruption, not loss: allocating a grid
+            # sized from a bad number is the one outcome worth refusing
+            # outright. Named, because empty channels alone would reach the
+            # caller as `no_samples` -- identical to a headband that never
+            # emitted, which is the opposite situation and wants the opposite
+            # response.
             channels = np.empty((0, width))
+            unusable = "corrupt_sample_index"
         else:
             grid = np.arange(grid_len, dtype=float) + seqs[0]
             channels = np.column_stack(
                 [np.interp(grid, seqs, values[:, c]) for c in range(width)]
             )
-        return OpticsWindow(channels, fs, span_s, largest_gap_s, width)
+        return OpticsWindow(channels, fs, received_rate, completeness,
+                            span_s, largest_gap_s, width, unusable)
 
     def _try_connect(self) -> bool:
         """Attempt one TCP connection. Returns True on success, False if bridge not up yet."""

@@ -100,6 +100,12 @@ class _Poller(threading.Thread):
         # whether a heart reading has already been recorded.
         self.last_heart_ts   = None
         self.heart_samples   = 0
+        # Its own counter, for the same reason `heart_samples` is separate from
+        # `samples`: folding heart failures into `errors` makes a session whose
+        # EEG writes are fine but whose heart writes all fail look like general
+        # trouble, which is precisely the distinction splitting the counts was
+        # meant to preserve.
+        self.heart_errors    = 0
         self._heart_consent  = False
         self._heart_source   = None
         # None, not 0.0. time.monotonic()'s reference point is undefined, so
@@ -129,7 +135,7 @@ class _Poller(threading.Thread):
         """
         now = time.monotonic()
         if (self._heart_checked_at is not None and source == self._heart_source
-                and now - self._heart_checked_at < HEART_CONSENT_RECHECK_SECONDS):
+                and now - self._heart_checked_at < CONSENT_RECHECK_SECONDS):
             return self._heart_consent
         self._heart_checked_at = now
         self._heart_source = source
@@ -170,15 +176,24 @@ class _Poller(threading.Thread):
         heart_ts = heart.get("ts") or data.get("timestamp")
         if heart_ts == self.last_heart_ts:
             return
-        self.last_heart_ts = heart_ts
 
+        # The stamp is claimed at each point where this reading is *finished
+        # with*, and deliberately not before. A refusal and an unmappable block
+        # are both final -- nothing about the next tick would change them, and
+        # re-deciding them 40 times over would re-log the refusal every tick.
+        # A failed write is the opposite: the block sits on the payload for
+        # ~40 more ticks, so leaving the stamp unclaimed retries it for free on
+        # the next one. Claiming it up front turned one transient insert error
+        # into a permanently lost reading.
         if not self._may_record_heart(source):
+            self.last_heart_ts = heart_ts
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} heart {source} not consented, skipping", flush=True)
             return
 
         row = signal_mapping.map_heart_to_heart_signal(data, self.session_id, self.user_id)
         if row is None:
+            self.last_heart_ts = heart_ts
             return
         try:
             # Upsert, matching `/api/signals/heart`. `heart_session_source_ts_key`
@@ -188,13 +203,15 @@ class _Poller(threading.Thread):
             self.supabase.table("heart_signals").upsert(
                 row, on_conflict="session_id,source,ts", ignore_duplicates=True
             ).execute()
+            # Only now is the reading accounted for. See the note above.
+            self.last_heart_ts = heart_ts
             self.heart_samples += 1
             if self.heart_samples <= 3 or self.heart_samples % 10 == 0:
                 print(f"+++ [eeg-poller] HEART #{self.heart_samples} session={self.session_id[:8]} "
                       f"source={source} bpm={row.get('heart_rate_bpm')}", flush=True)
         except Exception as e:
-            self.errors += 1
-            print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
+            self.heart_errors += 1
+            print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: {type(e).__name__}: {e}", flush=True)
 
     def run(self):
         # Not 0.0 at construction: `start()` read consent moments ago, and
@@ -225,6 +242,21 @@ class _Poller(threading.Thread):
                     still_consented = False
                     print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
                 if not still_consented:
+                    # **This stops the heart channel too, and that is a
+                    # decision rather than an oversight.** `_record_heart` runs
+                    # in this loop, so killing the poller ends headband heart
+                    # recording even though `headband_optical` is consented
+                    # separately -- and `start()` refuses without EEG consent,
+                    # so on the pull path a student who allows the headband and
+                    # declines EEG records no heart rate at all.
+                    #
+                    # Accepted because it errs the safe way: the pull path
+                    # records *less* than consent allows, never more. Undoing it
+                    # means a poller that keeps running with the cognitive write
+                    # switched off, which is a session that reports EEG stopped
+                    # while still holding the device -- a feature, not a fix.
+                    # The push path is unaffected: `/api/signals/heart` checks
+                    # per source and never consults EEG consent.
                     print(f"<<< [eeg-poller] consent withdrawn for session={self.session_id[:8]}, stopping", flush=True)
                     self._stop_event.set()
                     break
@@ -328,12 +360,11 @@ class _Poller(threading.Thread):
         self._stop_event.set()
 
 
-# How often a running poller re-reads heart consent. Not per sample: a reading
-# arrives every ~10s, and a Supabase round trip per reading would put the
-# consent table on the recording path. Not per session either -- a lesson runs
-# longer than a change of mind, and this bounds how long a withdrawal keeps
-# being recorded against.
-HEART_CONSENT_RECHECK_SECONDS = 30.0
+# The heart channel re-reads consent on the same cadence as EEG
+# (CONSENT_RECHECK_SECONDS, below). One constant, because the question it
+# answers is the same one -- how long may a withdrawal keep being recorded
+# against -- and two numbers would imply a difference in that answer that
+# nothing here intends.
 
 # `_consent` lives in `main`, and importing it here would be a cycle, so `main`
 # hands it in at import. Takes the sensor as well as the student: one channel
@@ -606,6 +637,7 @@ def status(user_id: str) -> dict:
                     # or unmeasurable is a normal state, and one combined
                     # number would report it as healthy.
                     "heart_samples": p.heart_samples,
+                    "heart_errors": p.heart_errors,
                     "last_heart_ts": p.last_heart_ts,
                 }
     return {"running": False}

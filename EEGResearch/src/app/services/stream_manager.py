@@ -59,7 +59,11 @@ class DeviceSession:
         # compares each window against the last one *this device* produced.
         self._heart_tracker: HeartRateTracker | None = None
         self._heart_block: dict[str, Any] | None = None
+        # Two clocks, because they answer different questions: when the window
+        # was last *recomputed* (the emit cadence) and when a rate was last
+        # *accepted* (how stale the continuity anchor is).
         self._heart_emitted_at: float | None = None
+        self._heart_accepted_at: float | None = None
         self.latest_payload: dict[str, Any] = {}
         self.samples_processed = 0
         self.errors_seen = 0
@@ -132,29 +136,67 @@ class DeviceSession:
             return self._heart_block
         if self._heart_tracker is None:
             self._heart_tracker = HeartRateTracker()
-        # On the first window there is no previous one; the tracker reads this
-        # only to size how far a rate is allowed to have moved, and the nominal
-        # step is the honest answer for "we have not measured before".
-        since = (EMIT_EVERY_SECONDS if self._heart_emitted_at is None
-                 else now - self._heart_emitted_at)
+        # Time since the last **accepted** rate, not since the last recompute.
+        # The tracker uses it to size how far a heart is allowed to have moved
+        # from its anchor, and the anchor is the last accepted rate -- so
+        # measuring from the recompute holds the allowance at one step's worth
+        # however long the refusals ran, and judges the first good window in a
+        # minute against 30 bpm of movement. It self-corrects within a window or
+        # two either way, but in the direction of discarding good readings.
+        #
+        # On the first window there is no anchor at all; the nominal step is the
+        # honest answer for "nothing measured yet", and the tracker ignores the
+        # value entirely until it has one.
+        since = (EMIT_EVERY_SECONDS if self._heart_accepted_at is None
+                 else now - self._heart_accepted_at)
         self._heart_emitted_at = now
         self._heart_block = build_heart_record(
             window_fn(RATE_WINDOW_SECONDS), self._heart_tracker, since
         )
+        if self._heart_block.get("bpm") is not None:
+            self._heart_accepted_at = now
         return self._heart_block
 
-    def _reset_heart(self) -> None:
-        """Forget the tracked rate and the held block.
+    def _drop_held_heart_block(self) -> None:
+        """Stop publishing the held reading, without restarting the cadence.
 
-        Called wherever the EEG signal is lost or the stream stops, for the
-        same reason `processor.reset()` is: the tracker's anchor and the held
-        block both describe a stretch of signal that has ended, and continuing
-        to publish the block would keep a rate on the dashboard -- and in the
-        database, under fresh timestamps -- for a headband that is off.
+        Called on an EEG no-data tick. The block describes a stretch of signal
+        that may have ended, so publishing it on would keep a rate on the
+        dashboard -- and, under fresh timestamps, in the database -- for a
+        headband that is off.
+
+        **The clock is deliberately left running, and that is the whole point
+        of splitting this from `_reset_heart`.** `drain_samples` raises whenever
+        no EEG sample arrives within its timeout, so flapping electrode contact
+        or a stalled bridge takes this path repeatedly. Clearing
+        `_heart_emitted_at` here made the next good tick recompute immediately
+        and mint a **new `ts`** for materially the same 25 seconds of optical
+        signal; since both writers dedupe on `ts`, `heart_session_source_ts_key`
+        could not collapse those, and a flapping session wrote up to four
+        near-identical rows a second, every one counted as a sample by the
+        aggregates.
+
+        The tracker is left alone too. EEG dropping out says nothing about the
+        optical emitters -- the optics buffer is untouched here, and is cleared
+        only by a real disconnect -- so discarding the continuity anchor would
+        throw away the one test that catches an octave error, on evidence that
+        is not about the heart channel at all. A genuinely stale anchor is
+        already handled: `HeartRateTracker` re-acquires after repeated
+        continuity rejections.
+        """
+        self._heart_block = None
+
+    def _reset_heart(self) -> None:
+        """Forget everything about the heart channel. For `stop()` only.
+
+        The session is over: the tracker's anchor, the held block and the
+        cadence all describe a recording that has ended, and the adapter's
+        optical buffer has been cleared alongside them.
         """
         self._heart_tracker = None
         self._heart_block = None
         self._heart_emitted_at = None
+        self._heart_accepted_at = None
 
     def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
         """The camera equivalent of the EEG payload.
@@ -272,7 +314,11 @@ class DeviceSession:
                 )
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
-                self._reset_heart()
+                # Not `_reset_heart()`. This path is taken on every tick that
+                # reads no EEG sample, which flapping contact does repeatedly;
+                # restarting the cadence there re-stamps the same window every
+                # tick and neither dedupe can collapse the rows. See the method.
+                self._drop_held_heart_block()
                 self.latest_payload = self._no_signal_payload()
                 await asyncio.sleep(period)
                 continue

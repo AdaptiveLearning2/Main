@@ -156,10 +156,19 @@ class ReportChannels(NamedTuple):
     "nobody consented" and "we could not find out" both yield False here, and
     the reporting rules require a surface to tell them apart before it says a
     channel was not requested.
+
+    The `*_revoked_at` timestamps ride along so a surface can say *when* a
+    channel was switched off rather than only that it is. "Not recorded --
+    turned off on 3 August" and a blank tile are very different things to put
+    in front of a parent, and the second one reads as a fault.
     """
     heart: bool
     emotion: bool
     consent_retrieved: bool
+    # Defaulted, so every existing construction site keeps working and a caller
+    # that does not care is not forced to thread them through.
+    heart_revoked_at: str | None = None
+    emotion_revoked_at: str | None = None
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
@@ -191,9 +200,20 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     consent = _consent(student_id)
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
+    # Heart can come from either sensor, so it is off only when *both* are, and
+    # the honest date is the later of the two -- the moment it actually stopped
+    # being recorded, not the moment the first of the pair was switched off.
+    heart_revoked = None
+    if not heart:
+        stamps = [consent.get("headband_optical_revoked_at"),
+                  consent.get("camera_revoked_at")]
+        stamps = [t for t in stamps if t]
+        heart_revoked = max(stamps) if stamps else None
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
-                          consent_retrieved=bool(consent.get("retrieved")))
+                          consent_retrieved=bool(consent.get("retrieved")),
+                          heart_revoked_at=heart_revoked,
+                          emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"))
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -216,7 +236,9 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     include_emotion: bool = True,
-                    consent_retrieved: bool = True) -> dict:
+                    consent_retrieved: bool = True,
+                    emotion_revoked_at: str | None = None,
+                    heart_revoked_at: str | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
@@ -250,7 +272,9 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
         rows = res.data or []
         row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else None)
     summary = _shape_summary(row, include_heart, include_emotion, retrieved,
-                             consent_retrieved)
+                             consent_retrieved,
+                             emotion_revoked_at=emotion_revoked_at,
+                             heart_revoked_at=heart_revoked_at)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
@@ -276,7 +300,9 @@ _EMPTY_SUMMARY = {"consent_retrieved": True,
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
-                   retrieved: bool = True, consent_retrieved: bool = True) -> dict:
+                   retrieved: bool = True, consent_retrieved: bool = True,
+                   emotion_revoked_at: str | None = None,
+                   heart_revoked_at: str | None = None) -> dict:
     """The summary payload.
 
     `retrieved` is the third thing a caller has to be able to tell apart, after
@@ -293,7 +319,9 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
                 "emotion_included": include_emotion, "heart_included": include_heart,
-                "retrieved": retrieved, "consent_retrieved": consent_retrieved}
+                "retrieved": retrieved, "consent_retrieved": consent_retrieved,
+                "emotion_revoked_at": emotion_revoked_at,
+                "heart_revoked_at": heart_revoked_at}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -331,6 +359,12 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # the channel flags are "we could not find out" rather than "declined",
         # and the parent dashboard is the surface that renders that difference.
         "consent_retrieved": consent_retrieved,
+        # When, not just whether. "Not recorded -- turned off on 3 August" is a
+        # different sentence from a blank tile, and the blank one reads as a
+        # fault. Null while the channel is on, so a surface cannot end up
+        # rendering a revocation date next to live data.
+        "emotion_revoked_at": emotion_revoked_at,
+        "heart_revoked_at": heart_revoked_at,
     }
 
 
@@ -367,7 +401,9 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
                           include_emotion: bool = True,
-                          consent_retrieved: bool = True):
+                          consent_retrieved: bool = True,
+                          emotion_revoked_at: str | None = None,
+                          heart_revoked_at: str | None = None):
     """Aggregate a student's recent EEG and facial signals for reporting.
 
     Returns averages, highlights and per-day buckets. Callers must have already
@@ -671,6 +707,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         # is a fault; a surface saying "not requested" about the first would be
         # reporting a database outage as a preference.
         "consent_retrieved": consent_retrieved,
+        "emotion_revoked_at": emotion_revoked_at,
+        "heart_revoked_at": heart_revoked_at,
         # The tally, not just its argmax. Nothing on the frontend could render a
         # pie before this: emotion reached it only as a scalar `dominant_emotion`,
         # so a distribution had to be recomputed from raw rows or not shown. The
@@ -1057,7 +1095,9 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
         **_weekly_signal_report(student_id, max(1, min(days, 30)),
                                 include_heart=channels.heart,
                                 include_emotion=channels.emotion,
-                                consent_retrieved=channels.consent_retrieved),
+                                consent_retrieved=channels.consent_retrieved,
+                                emotion_revoked_at=channels.emotion_revoked_at,
+                                heart_revoked_at=channels.heart_revoked_at),
     }
 
 
@@ -1093,7 +1133,9 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
     return _signal_summary(student_id, max(1, min(days, 30)),
                            include_heart=channels.heart,
                            include_emotion=channels.emotion,
-                           consent_retrieved=channels.consent_retrieved)
+                           consent_retrieved=channels.consent_retrieved,
+                           emotion_revoked_at=channels.emotion_revoked_at,
+                           heart_revoked_at=channels.heart_revoked_at)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")

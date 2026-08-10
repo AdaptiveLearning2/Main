@@ -754,8 +754,12 @@ def test_a_failed_rpc_reports_not_retrieved(monkeypatch):
     out = main._signal_summary("student-1")
     # dominant_emotion is part of the single-student shape on every path,
     # including the ones that never reached a row.
+    # The revocation dates are part of the shape on every path too, and null
+    # here: the channel is not off, the read failed. A surface must not be able
+    # to render "turned off on <date>" off the back of an outage.
     assert out == {**main._EMPTY_SUMMARY, "face_included": True,
-                   "retrieved": False, "dominant_emotion": None}
+                   "retrieved": False, "dominant_emotion": None,
+                   "emotion_revoked_at": None, "heart_revoked_at": None}
 
 
 def test_signal_summary_surfaces_sample_counts(monkeypatch):
@@ -773,7 +777,8 @@ def test_signal_summary_surfaces_sample_counts(monkeypatch):
 def test_signal_summary_returns_empty_shape_when_rpc_yields_nothing(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase({}, rpc_results={}))
     out = main._signal_summary("student-1")
-    assert out == {**main._EMPTY_SUMMARY, "dominant_emotion": None}
+    assert out == {**main._EMPTY_SUMMARY, "dominant_emotion": None,
+                   "emotion_revoked_at": None, "heart_revoked_at": None}
     assert out is not main._EMPTY_SUMMARY, "callers must not share the module-level dict"
 
 

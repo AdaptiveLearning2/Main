@@ -4,7 +4,69 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
 
-const FACE_OFF = 'Off'
+// One string cannot answer for three channels any more, so this is a function
+// of *which* channel and *why* it is not showing a value. The old `FACE_OFF =
+// 'Off'` meant "the viewer switched facial reporting off", which was true when
+// there was one viewer-side switch and is now wrong in three different ways:
+// the channel may be off because the student withdrew it, because the sensor
+// is not present, or because the read failed.
+//
+// The distinction the reporting rules exist for: **never render "no data" for
+// something that was not recorded.** A tile saying "N/A" for a withdrawn
+// channel reports an absence in data that was never collected, and one saying
+// "Off" for a failed read reports a preference that nobody expressed.
+const CHANNEL_STATE = {
+  // Consent: the channel is off, and we know when. `since` is the date the
+  // student or a parent switched it off.
+  revoked: since => (since ? `Off since ${since}` : 'Not recorded'),
+  // The consent read itself failed. Distinct from revoked, because saying "the
+  // student turned this off" when we could not find out is a claim we have not
+  // earned.
+  unknown: () => 'Unavailable',
+  // Consented and present, but this window produced nothing usable -- a
+  // rejected reading, or a baseline still being established.
+  calibrating: () => 'Calibrating',
+  // Consented, but no sensor produced anything at all this period.
+  noSensor: () => 'No sensor',
+}
+
+// Formats an ISO timestamp as a short date, or null when there isn't one --
+// so a caller can tell "off, and here is when" from "off, and we don't know
+// when", rather than printing "Invalid Date" at a parent.
+function shortDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined,
+    { day: 'numeric', month: 'short' })
+}
+
+/**
+ * What to show in a tile for a channel that has no value.
+ *
+ * `on` is whether the channel was read at all, `revokedAt` when it was switched
+ * off, `consentRetrieved` whether we could find out, and `samples` how many
+ * readings the period produced.
+ */
+function offLabel({ on, revokedAt, consentRetrieved, samples }) {
+  if (consentRetrieved === false) return CHANNEL_STATE.unknown()
+  if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
+  // On, and read, but empty. `samples > 0` means readings arrived and none was
+  // usable -- which is the calibrating/rejected case, not an absent sensor.
+  return samples > 0 ? CHANNEL_STATE.calibrating() : CHANNEL_STATE.noSensor()
+}
+
+/**
+ * A rendered value, or the reason there isn't one.
+ *
+ * Every tile goes through here rather than branching on the channel flag
+ * directly. Branching only on "is the channel on" left `pct()`'s own 'N/A'
+ * standing whenever a consented channel produced nothing usable -- which is
+ * the string this whole change exists to stop showing, surviving in the case
+ * the change was least likely to be tested against.
+ */
+function valueOrReason(value, reason) {
+  return (value && value !== 'N/A') ? value : offLabel(reason)
+}
 
 // One colour per FER+ label, fixed rather than positional: a palette assigned by
 // slice order would recolour every emotion whenever the distribution changed,
@@ -140,9 +202,17 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <MiniMetric label="Focus" value={pct(cog.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Stress" value={pct(cog.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(cog.engagement)} icon={Activity} tone="indigo" />
-        {/* "Off" rather than "N/A": the viewer switched facial reporting off,
-            which is a different statement from having no reading. */}
-        <MiniMetric label="Face Attention" value={faceOn ? pct(face.attention) : FACE_OFF} icon={Eye} tone="sky" />
+        {/* Never "N/A" for a channel that was not recorded: that reports an
+            absence in data nobody collected. `offLabel` picks between
+            withdrawn, unavailable, calibrating and no-sensor. */}
+<MiniMetric label="Face Attention"
+                    value={valueOrReason(faceOn && pct(face.attention), {
+                      on: faceOn,
+                      revokedAt: report?.emotion_revoked_at,
+                      consentRetrieved: report?.consent_retrieved,
+                      samples: report?.sample_counts?.face,
+                    })}
+                    icon={Eye} tone="sky" />
         {/* bpm, not a percentage -- the same unit trap the weekly chart gives
             its own axis for. `unit()` never touches the 0..1 path. */}
         {heartShown && (
@@ -234,7 +304,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
-        <MiniMetric label="Face Attention" value={faceOn ? pct(avg.face_attention) : FACE_OFF} icon={Eye} tone="sky" />
+<MiniMetric label="Face Attention"
+                    value={valueOrReason(faceOn && pct(avg.face_attention), {
+                      on: faceOn,
+                      revokedAt: report?.emotion_revoked_at,
+                      consentRetrieved: report?.consent_retrieved,
+                      samples: report?.sample_counts?.face,
+                    })}
+                    icon={Eye} tone="sky" />
         {/* sessions_recorded, not sample_counts.sessions: the latter is rows
             retrieved under the session row cap, so a heavy week showed exactly
             the cap here while the parent dashboard -- which counts in Postgres
@@ -316,9 +393,28 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
       </div>
 
-      {/* Heart, in its own row and its own units. Only rendered when the
-          channel was actually read -- a row of N/A would be indistinguishable
-          from a headband that recorded nothing. */}
+      {/* Three states, and the middle one is the point.
+          - Read: values.
+          - Explicitly not read (`heart_included === false`): the row stays, with
+            *why* in place of the numbers. Dropping it here would tell a parent
+            who switched the sensor off nothing at all, and the plan's rule is
+            that a channel that is off says so and never reads as "no data".
+          - Field absent: a payload predating the split, which had no heart data
+            to describe. The row is omitted, because there is nothing true to
+            say about a channel this payload does not know about. */}
+      {report?.heart_included === false && (
+        <div className="mt-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3 text-sm">
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Heart</p>
+          <p className="font-bold text-gray-900 dark:text-white">
+            {offLabel({
+              on: false,
+              revokedAt: report?.heart_revoked_at,
+              consentRetrieved: report?.consent_retrieved,
+              samples: report?.sample_counts?.heart,
+            })}
+          </p>
+        </div>
+      )}
       {heartShown && (
         <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
@@ -335,9 +431,15 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                 camera one is unvalidated -- a reader comparing two weeks should
                 be able to see the sensor changed. */}
             <p className="font-bold text-gray-900 dark:text-white">
+              {/* Not "N/A": the channel was read, so an empty source list
+                  means no reading arrived, which `offLabel` names. */}
               {(report?.heart_sources || []).length
                 ? report.heart_sources.map(sourceLabel).join(', ')
-                : 'N/A'}
+                : offLabel({
+                    on: true,
+                    consentRetrieved: report?.consent_retrieved,
+                    samples: report?.sample_counts?.heart,
+                  })}
             </p>
           </div>
         </div>

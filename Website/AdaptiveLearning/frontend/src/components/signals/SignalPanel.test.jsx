@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
 
@@ -202,15 +202,20 @@ describe('facial reporting switched off', () => {
   const faceOff = { ...report, face_included: false }
 
   it('labels the weekly face tiles as off rather than missing', () => {
+    // "Off" alone could not say which of three things happened. One string
+    // cannot answer for three channels, and the one it used to give -- "the
+    // viewer switched facial reporting off" -- is no longer even a state that
+    // exists. With no revocation date in the payload it degrades to "Not
+    // recorded", which is still not "no data".
     render(<WeeklySignalReport report={faceOff} />)
-    expect(metric('Face Attention').getByText('Off')).toBeInTheDocument()
+    expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
     expect(metric('Dominant Emotion').getByText('Reporting off')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
   })
 
   it('labels the live face tiles as off rather than missing', () => {
     render(<LiveSignalSummary report={faceOff} />)
-    expect(metric('Face Attention').getByText('Off')).toBeInTheDocument()
+    expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('Reporting off')).toBeInTheDocument()
     expect(metric('Identity Confidence').getByText('Reporting off')).toBeInTheDocument()
   })
@@ -438,4 +443,61 @@ test('the live snapshot omits heart rather than showing an empty tile', () => {
   }} />)
 
   expect(screen.queryByText(/Heart Rate/i)).not.toBeInTheDocument()
+})
+
+
+describe('per-channel off states', () => {
+  // The rule these exist for: never render "no data" for something that was not
+  // recorded. A tile saying "N/A" for a withdrawn channel reports an absence in
+  // data nobody collected; one saying "Off" for a failed read reports a
+  // preference nobody expressed.
+  // Local, since `faceOff` is scoped to the describe above.
+  const base = { ...report, face_included: false, emotion_included: false,
+                 consent_retrieved: true }
+
+  it('says when a channel was switched off', () => {
+    render(<WeeklySignalReport report={{ ...base, emotion_revoked_at: '2026-08-03T09:00:00Z' }} />)
+    expect(metric('Face Attention').getByText((t) => /^Off since /.test(t) && t.includes('Aug'))).toBeInTheDocument()
+  })
+
+  it('does not claim a withdrawal when the consent read failed', () => {
+    // "The student turned this off" is a claim we have not earned when we could
+    // not find out. Distinct state, distinct word.
+    render(<WeeklySignalReport report={{ ...base, consent_retrieved: false }} />)
+    expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
+  })
+
+  it('distinguishes a channel that read nothing from one that read nothing usable', () => {
+    // The average has to be null too: the channel is on and was read, it just
+    // produced nothing usable. With a value present there is nothing for the
+    // reason to replace.
+    const on = { ...report, emotion_included: true, face_included: true,
+                 consent_retrieved: true,
+                 averages: { ...report.averages, face_attention: null } }
+
+    // Readings arrived, none usable: calibrating, not absent.
+    render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 12 } }} />)
+    expect(metric('Face Attention').getByText('Calibrating')).toBeInTheDocument()
+    cleanup()
+
+    // Nothing arrived at all.
+    render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 0 } }} />)
+    expect(metric('Face Attention').getByText('No sensor')).toBeInTheDocument()
+  })
+
+  it('keeps the heart row when the channel is off, with the reason in it', () => {
+    // Dropping the row would tell a parent who switched the sensor off nothing
+    // at all -- the "no data" failure wearing a different shape.
+    render(<WeeklySignalReport report={{ ...base, heart_included: false,
+                                         heart_revoked_at: '2026-08-05T09:00:00Z' }} />)
+    expect(screen.getByText((t) => /^Off since /.test(t) && t.includes('Aug'))).toBeInTheDocument()
+  })
+
+  it('omits the heart row entirely for a payload that predates the channel', () => {
+    // Nothing true to say about a channel this payload does not know about.
+    const { heart_included, ...preSplit } = base
+    render(<WeeklySignalReport report={preSplit} />)
+    expect(screen.queryByText(/Avg Heart Rate/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Heart$/)).not.toBeInTheDocument()
+  })
 })

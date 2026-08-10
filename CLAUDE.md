@@ -681,6 +681,31 @@ manufactures a reason: a channel off for consent reasons still reads "not record
 `_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
 They default to True and are not a privacy boundary; don't build one on them.
 
+### A tile never says "no data" for something that was not recorded
+
+`SignalPanel`'s `offLabel` picks between four states, and every tile goes through
+`valueOrReason` rather than branching on the channel flag itself:
+
+| State | Shown | Because |
+| --- | --- | --- |
+| consent withdrawn | `Off since <date>` | the date comes from `*_revoked_at` on the payload |
+| consent unreadable | `Unavailable` | "the student turned this off" is a claim a failed read has not earned |
+| read, samples arrived, none usable | `Calibrating` | a rejected window or a baseline still forming |
+| read, no samples at all | `No sensor` | consented, but nothing produced anything |
+
+The single `FACE_OFF = 'Off'` this replaces meant "the viewer switched facial
+reporting off" — true when there was one viewer-side switch, and now wrong in
+three ways at once. Branching on the flag alone is the trap: it leaves `pct()`'s
+own `'N/A'` standing whenever a *consented* channel produced nothing usable,
+which is the exact string the rule exists to stop showing, surviving in the case
+least likely to be tested.
+
+A channel that is off keeps its tile. Dropping the row tells a parent who
+switched a sensor off nothing at all — the same failure wearing a different
+shape. The one exception is a payload predating the channel (`heart_included`
+absent rather than `false`): there is nothing true to say about a channel the
+payload does not know about, so the row is omitted.
+
 ## The strategies model pass is optional and bounded
 
 `/api/students/{id}/learning-strategies` always has a deterministic rule-based answer;

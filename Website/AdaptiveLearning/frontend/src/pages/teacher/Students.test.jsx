@@ -359,3 +359,30 @@ it('hides the sensor tiles without changing what it asks for', async () => {
   writeHideSensorData(true)
   expect(readHideSensorData()).toBe(true)
 })
+
+it('actually hides the sensor tiles on screen when the switch is flipped, and leaves the rest', async () => {
+  // The switch used to update state and localStorage and nothing else -- the
+  // stat tiles below it were never gated on it, so flipping it visibly did
+  // nothing. This is the regression test for that: it renders the tiles, not
+  // just the preference.
+  render(<Students />)
+  await expandAda()
+
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+                        'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV',
+                        'Total Accuracy', 'Current Streak']) {
+    expect(screen.getByText(label)).toBeInTheDocument()
+  }
+
+  await userEvent.click(screen.getByRole('switch'))
+
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+                        'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
+    expect(screen.queryByText(label)).not.toBeInTheDocument()
+  }
+  // Not sensor-derived, so unaffected by a display preference over sensor data.
+  expect(screen.getByText('Total Accuracy')).toBeInTheDocument()
+  expect(screen.getByText('Current Streak')).toBeInTheDocument()
+  // Client-side only: hiding these tiles must not have asked the server again.
+  expect(summaryCalls()).toHaveLength(1)
+})

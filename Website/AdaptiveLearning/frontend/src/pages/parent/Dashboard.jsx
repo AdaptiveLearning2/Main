@@ -4,17 +4,12 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
-// pct is shared rather than redefined here: this page had a verbatim copy, and
-// a fix to one of them did not reach the other.
-import { pct, valueOrReason } from '../../components/signals/SignalPanel'
-// Whether a payload in hand was built with the emotion channel in it. The
-// backend sets this from stored consent now -- a parent manages that on the
-// Settings page, not with a per-browser switch here -- and it leaves every face
-// field null, which is indistinguishable from "the camera recorded nothing"
-// without the flag. Absent means a payload from before the split.
-const faceIncluded = (payload) => payload?.emotion_included !== undefined
-  ? payload.emotion_included !== false
-  : payload?.face_included !== false
+// pct, emotionOn are shared rather than redefined here: this page had verbatim
+// copies of both, which is how it kept a fixed weakness in one after the other
+// was patched. emotionOn -- whether a payload in hand was built with the
+// emotion channel in it -- is aliased to faceIncluded, this page's existing
+// name for the same check.
+import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
 // Exactly the values the tiles below can render -- deliberately not every
 // field the summary carries. engagement is absent because this page has no

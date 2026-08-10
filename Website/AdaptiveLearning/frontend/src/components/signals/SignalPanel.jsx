@@ -137,7 +137,7 @@ function unit(value, suffix, digits = 0) {
 // emotion channel; reading the new field first and falling back means a payload
 // from before the split still renders correctly rather than reporting the
 // channel as excluded because the field is absent.
-function emotionOn(report) {
+export function emotionOn(report) {
   if (report?.emotion_included !== undefined) return report.emotion_included !== false
   // The legacy alias, inlined. It used to come from `lib/facePref.js`, which
   // is gone: that module was a viewer-side read filter and stored consent

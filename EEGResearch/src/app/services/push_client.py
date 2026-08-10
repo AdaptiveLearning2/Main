@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from typing import Any
 
@@ -51,6 +52,11 @@ MAX_QUEUE = 600
 # One flush cycle. Long enough that a 4 Hz stream batches rather than trickling,
 # short enough that a teacher's live view is not minutes behind.
 FLUSH_SECONDS = 5.0
+
+# How many batches the shutdown flush will try to clear. MAX_QUEUE / MAX_BATCH
+# is the whole backlog; the cap exists so a backend refusing everything cannot
+# turn a Ctrl-C into a long wait.
+MAX_SHUTDOWN_FLUSHES = MAX_QUEUE // MAX_BATCH
 
 # A backend that is down must not be retried at the flush rate for a whole
 # lesson. Doubles to this ceiling and resets on the first success.
@@ -84,6 +90,10 @@ class PushClient:
         self._task: asyncio.Task | None = None
         self._wake = asyncio.Event()
         self._backoff = 0.0
+        # Monotonic deadline the backoff is actually enforced against. The
+        # backoff alone is only a sleep length, and the wake event can skip the
+        # sleep -- see `_loop`.
+        self._retry_at = 0.0
         self._last_error: str | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -106,6 +116,7 @@ class PushClient:
         self._session_id = session_id
         self._token = token
         self._backoff = 0.0
+        self._retry_at = 0.0
         self._last_error = None
         if not self.running:
             self._task = asyncio.create_task(self._loop())
@@ -126,10 +137,20 @@ class PushClient:
             except asyncio.CancelledError:
                 pass
         if flush and self._token:
-            try:
-                await self._flush_once()
-            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
-                logger.warning("push: final flush failed: %s", exc)
+            # Until empty, not once: `_flush_once` takes at most MAX_BATCH per
+            # channel, so a single call at shutdown delivered 50 samples and
+            # discarded whatever else had backed up. Bounded by attempts as well
+            # as by emptiness, so a backend accepting nothing cannot hold up
+            # exit -- each attempt is capped by the request timeout.
+            for _ in range(MAX_SHUTDOWN_FLUSHES):
+                if not any(self._queues[c] for c in _CHANNELS):
+                    break
+                try:
+                    await self._flush_once()
+                except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                    logger.warning("push: final flush failed, %d sample(s) lost: %s",
+                                   sum(len(self._queues[c]) for c in _CHANNELS), exc)
+                    break
         self._session_id = None
         # Cleared, not merely unused. The whole argument for accepting a
         # student's bearer token in this process is that it lives in memory for
@@ -249,6 +270,14 @@ class PushClient:
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+            # The wake event fires on a full batch, which during an outage is
+            # every few samples -- so waking on it and flushing straight away
+            # made the backoff decorative and retried a dead backend at the
+            # sample rate. The deadline is the authority: the event may make a
+            # flush happen sooner than the *idle interval*, never sooner than
+            # the backoff says.
+            if self._retry_at and time.monotonic() < self._retry_at:
+                continue
             try:
                 await self._flush_once()
             except asyncio.CancelledError:
@@ -259,33 +288,64 @@ class PushClient:
     def _note_failure(self, exc: Exception) -> None:
         self._last_error = str(exc)
         self._backoff = min(BACKOFF_MAX, max(BACKOFF_START, self._backoff * 2))
+        self._retry_at = time.monotonic() + self._backoff
         logger.warning("push: flush failed (%s), backing off %.0fs",
                        exc, self._backoff)
 
     async def _flush_once(self) -> None:
+        """One pass over the channels. A failure in one does not cost the others.
+
+        Each channel is drained *inside* the loop, immediately before its own
+        POST. Draining all three up front and re-raising on the first failure
+        discarded the other two batches outright -- already popped, nothing put
+        them back, and no counter anywhere recorded it. That is the silent loss
+        this module exists to prevent, sitting in its own error path.
+        """
         session_id, token = self._session_id, self._token
         if not session_id or not token:
             return
-        pending = {c: self._take(c) for c in _CHANNELS}
-        if not any(pending.values()):
-            return
+        first_error: Exception | None = None
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            for channel, samples in pending.items():
+            for channel in _CHANNELS:
+                samples = self._take(channel)
                 if not samples:
                     continue
                 try:
                     await self._post(client, channel, session_id, token, samples)
-                except Exception:
-                    # Put them back at the *front*, so a transient failure does
-                    # not reorder a session's samples relative to what follows.
-                    self._queues[channel].extendleft(reversed(samples))
+                except asyncio.CancelledError:
+                    self._restore(channel, samples)
                     raise
+                except Exception as exc:  # noqa: BLE001 - re-raised below
+                    self._restore(channel, samples)
+                    if first_error is None:
+                        first_error = exc
+        if first_error is not None:
+            raise first_error
         self._backoff = 0.0
+        self._retry_at = 0.0
         self._last_error = None
 
     def _take(self, channel: str) -> list[dict[str, Any]]:
         queue = self._queues[channel]
         return [queue.popleft() for _ in range(min(MAX_BATCH, len(queue)))]
+
+    def _restore(self, channel: str, samples: list[dict[str, Any]]) -> None:
+        """Return a failed batch to the front of its queue, counting the loss.
+
+        Front, because these are the oldest and a session's samples must not be
+        reordered relative to whatever arrived while the request was in flight.
+
+        The count is the point: `extendleft` on a `deque(maxlen=...)` silently
+        evicts from the *other* end, so restoring an old batch into a queue that
+        filled during the request throws away the newest samples -- the reverse
+        of the drop-oldest rule stated at the top of this module, and uncounted,
+        which is worse than either.
+        """
+        queue = self._queues[channel]
+        overflow = max(0, len(queue) + len(samples) - (queue.maxlen or 0))
+        if overflow:
+            self._dropped[channel] += overflow
+        queue.extendleft(reversed(samples))
 
     async def _post(self, client: httpx.AsyncClient, channel: str,
                     session_id: str, token: str,

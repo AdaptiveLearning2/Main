@@ -275,3 +275,129 @@ async def test_a_heart_reading_without_a_source_is_dropped_locally(client):
     })
 
     assert client.status()["queued"]["heart"] == 0
+
+
+@pytest.mark.anyio
+async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch):
+    """The batches were drained for all three channels up front, so re-raising
+    on the first failure discarded the other two outright -- popped, never put
+    back, and counted nowhere. Silent loss in the error path of the module
+    written to prevent silent loss."""
+    def responder(url, json, headers):
+        return _Response(status_code=500) if url.endswith("/cognitive") else _Response(
+            body={"ok": True, "inserted": len(json["samples"])})
+
+    fake = _FakeClient(responder=responder)
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("cognitive", {"ts": 0})
+    client.enqueue("heart", {"ts": 0, "source": "muse_optics"})
+    client.enqueue("face", {"ts": 0})
+
+    with pytest.raises(Exception):
+        await client._flush_once()
+
+    status = client.status()
+    assert status["queued"]["cognitive"] == 1, "the failed channel lost its batch"
+    assert status["recorded"]["heart"] == 1, "heart never got sent"
+    assert status["recorded"]["face"] == 1, "face never got sent"
+    assert status["queued"]["heart"] == 0 and status["queued"]["face"] == 0
+
+
+@pytest.mark.anyio
+async def test_restoring_into_a_full_queue_counts_what_it_evicts(client, monkeypatch):
+    """`extendleft` on a maxlen deque silently evicts from the far end -- the
+    *newest* samples, which is the reverse of the drop-oldest rule and
+    uncounted, which is worse than either."""
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    for i in range(MAX_BATCH):
+        client.enqueue("cognitive", {"ts": i})
+
+    # The queue fills while that batch is notionally in flight.
+    taken = client._take("cognitive")
+    for i in range(MAX_QUEUE):
+        client.enqueue("cognitive", {"ts": 1000 + i})
+    before = client.status()["dropped_locally"]["cognitive"]
+
+    client._restore("cognitive", taken)
+
+    dropped = client.status()["dropped_locally"]["cognitive"] - before
+    assert dropped == len(taken), "evictions from the restore went uncounted"
+    assert len(client._queues["cognitive"]) == MAX_QUEUE
+
+
+@pytest.mark.anyio
+async def test_the_backoff_survives_a_full_queue(client):
+    """The wake event fires whenever a batch fills, which during an outage is
+    every few samples. Flushing on it regardless made the backoff decorative and
+    retried a dead backend at the sample rate."""
+    await _started(client)
+    client._note_failure(RuntimeError("backend down"))
+    assert client._retry_at > 0
+
+    # A full batch sets the wake event; the deadline must still hold.
+    for i in range(MAX_BATCH):
+        client.enqueue("cognitive", {"ts": i})
+    assert client._wake.is_set()
+    assert client._retry_at > 0, "the deadline was cleared by a wake"
+
+
+@pytest.mark.anyio
+async def test_shutdown_flushes_the_whole_backlog(client):
+    """`_flush_once` takes at most MAX_BATCH per channel, so one call at
+    shutdown delivered 50 samples and dropped the rest of what had backed up."""
+    await _started(client)
+    for i in range(MAX_BATCH * 3):
+        client.enqueue("cognitive", {"ts": i})
+
+    await client.stop()
+
+    sent = sum(len(c["json"]["samples"]) for c in client._fake.calls)
+    assert sent == MAX_BATCH * 3, f"only {sent} of {MAX_BATCH * 3} were delivered"
+
+
+@pytest.mark.anyio
+async def test_the_emitted_payload_carries_what_the_pull_path_stores():
+    """`bands` and `ingestion` are assembled in `snapshot()` and were never in
+    `latest_payload`, so emitting the raw payload gave push-ingested EEG rows
+    null alpha/beta/theta/delta/gamma while pull-ingested ones -- which read
+    /api/v1/state, i.e. snapshot() -- had them. One deployment silently
+    recording less than the other is the divergence the shared mapping exists to
+    rule out, one layer upstream of it."""
+    from src.app.config import DeviceConfig, get_settings
+    from src.app.services.stream_manager import DeviceSession
+
+    session = DeviceSession("d1", get_settings(),
+                            DeviceConfig(device_id="d1", kind="sim",
+                                         host="127.0.0.1", port=8765))
+    session.latest_payload = session._no_signal_payload()
+
+    seen = []
+    session.on_payload = seen.append
+    session._emit()
+
+    assert "bands" in seen[0], "band powers never reached the push path"
+    assert set(seen[0]["bands"]) == {"delta", "theta", "alpha", "beta", "gamma"}
+
+
+@pytest.mark.anyio
+async def test_a_raising_consumer_does_not_kill_the_sampling_loop():
+    """Losing the local stream to fix up a remote write is strictly worse than
+    losing the remote write."""
+    from src.app.config import DeviceConfig, get_settings
+    from src.app.services.stream_manager import DeviceSession
+
+    session = DeviceSession("d1", get_settings(),
+                            DeviceConfig(device_id="d1", kind="sim",
+                                         host="127.0.0.1", port=8765))
+    session.latest_payload = session._no_signal_payload()
+
+    def boom(_payload):
+        raise RuntimeError("network on fire")
+
+    session.on_payload = boom
+    session._emit()  # must not raise

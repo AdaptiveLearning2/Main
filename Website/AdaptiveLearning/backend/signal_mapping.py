@@ -100,18 +100,23 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
         "theta": b.get("theta"),
         "delta": b.get("delta"),
         "gamma": b.get("gamma"),
-        "raw": {
-            "device_id": eeg.get("device_id"),
-            "channels": eeg.get("channels"),
-            "state": eeg.get("state"),
-            "signal_quality": f.get("signal_quality"),
+        # Through `_raw()` like the other two mappers. Built inline, this dropped
+        # any `raw` the caller supplied -- invisible while the only caller was
+        # the poller, which supplies none, and a silent data loss the moment the
+        # push path started forwarding one.
+        "raw": _raw(
+            eeg,
+            device_id=eeg.get("device_id"),
+            channels=eeg.get("channels"),
+            state=eeg.get("state"),
+            signal_quality=f.get("signal_quality"),
             # Stored alongside signal_quality because it is what distinguishes a
             # row whose measurements were nulled for bad electrode contact from
             # one where the legacy heuristic merely said "poor". Without it, a
             # null-measurement row cannot be explained after the fact.
-            "quality_basis": f.get("quality_basis"),
-            "ingestion": eeg.get("ingestion"),
-        },
+            quality_basis=f.get("quality_basis"),
+            ingestion=eeg.get("ingestion"),
+        ),
     }
 
 

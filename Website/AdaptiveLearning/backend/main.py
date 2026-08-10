@@ -2527,6 +2527,20 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # that a process on the student's machine posts to it.
     _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
+
+    # Consent, like the other two endpoints. The sidecar gates on it already,
+    # but a stale one that kept sending after a student withdrew would otherwise
+    # keep recording EEG, and the withdrawal would look respected from every
+    # surface that reads. This endpoint was the only one of the three without
+    # the check -- survivable when its sole writer was a poller this backend
+    # started, and not once the writer is a process on the student's machine.
+    # `_consent` fails closed, so an unreadable consent row records nothing.
+    consent = _consent(user["id"])
+    if not consent.get("eeg_enabled"):
+        return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
+                "reason": ("consent unavailable" if not consent.get("retrieved")
+                           else "eeg not consented")}
+
     # Accepted in either mode -- rejecting it under `pull` would break mixed
     # local dev -- but warned about when this session is *actually* being
     # double-written: a live poller for it is writing the same table from the
@@ -2558,7 +2572,11 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             return signal_mapping.map_eeg_to_cognitive(
                 {"timestamp": s.ts or _utc_now().isoformat(),
                  "features": s.features or {}, "bands": s.bands or {},
-                 **(s.raw or {})},
+                 # Under `raw`, not spread across the payload. The mapper reads
+                 # named keys off the top level and merges `raw` separately, so
+                 # spreading it let a client shadow `device_id` or `state` --
+                 # and dropped every key the mapper does not know about.
+                 "raw": s.raw},
                 payload.session_id, user["id"])
         return {
             "session_id": payload.session_id,

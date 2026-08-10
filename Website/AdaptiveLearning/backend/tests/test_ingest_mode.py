@@ -232,6 +232,7 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, _n: type("Q", (), {
                             "insert": lambda _q, _r: type("E", (), {
@@ -489,6 +490,7 @@ def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
     which is how one path ends up storing percentages and the other ratios."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -505,6 +507,7 @@ def test_flat_samples_are_still_stored_as_given(monkeypatch):
     """The hand-posted dev shape: already-mapped rows, in table units."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     written = _capture_inserts(monkeypatch)
 
@@ -529,6 +532,7 @@ def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
     it now needs one."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "flooder"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
     _capture_inserts(monkeypatch)
     monkeypatch.setattr(main, "_ingest_hits", {})
@@ -540,3 +544,66 @@ def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         main.ingest_cognitive(batch, None)
     assert exc.value.status_code == 429
+
+
+def test_eeg_samples_are_dropped_when_the_student_has_not_consented(monkeypatch):
+    """The last line of defence, and the one this endpoint was missing.
+
+    The sidecar gates on consent too, but a stale one that kept sending after a
+    withdrawal would otherwise keep recording, and the withdrawal would look
+    respected from every surface that reads."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_consent",
+                        lambda _u: {"eeg_enabled": False, "retrieved": True})
+
+    out = main.ingest_cognitive(main.CognitiveBatch(
+        session_id="s1", samples=[{"focus": 0.5}]), None)
+
+    assert written == []
+    assert out["dropped"] == 1
+    assert out["reason"] == "eeg not consented"
+
+
+def test_an_unreadable_consent_row_records_nothing(monkeypatch):
+    """`_consent` fails closed, unlike the reporting helpers. A dashboard
+    degrading to empty is fine; a consent check degrading to *enabled* records
+    data against a refusal."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"retrieved": False})
+
+    out = main.ingest_cognitive(main.CognitiveBatch(
+        session_id="s1", samples=[{"focus": 0.5}]), None)
+
+    assert written == []
+    assert out["reason"] == "consent unavailable"
+
+
+def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
+    """`map_eeg_to_cognitive` built its `raw` inline and discarded whatever the
+    caller sent -- invisible while the poller, which sends none, was the only
+    caller."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": {"focus_score": 50.0, "signal_quality": "good"},
+         "raw": {"note": "kept", "signal_quality": "spoofed"}},
+    ]), None)
+
+    assert written[0]["raw"]["note"] == "kept"
+    # Derived keys win the collision: a client must not overwrite what was
+    # actually observed by choosing a key name. Only where there *is* a derived
+    # value -- `_raw` drops Nones so an absent field cannot read as a recorded
+    # null, which means a key the sidecar did not populate stays the client's.
+    # That is not a hole to close here: on this path the client *is* the
+    # sidecar, and the endpoint's defences are session ownership and consent.
+    assert written[0]["raw"]["signal_quality"] == "good"

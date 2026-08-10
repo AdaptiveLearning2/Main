@@ -69,7 +69,15 @@ class DeviceSession:
         if self.on_payload is None:
             return
         try:
-            self.on_payload(self.latest_payload)
+            # `snapshot()`, not `latest_payload`. The two are not the same
+            # record: `bands` and `ingestion` are assembled in snapshot() and
+            # were never in latest_payload, so emitting the raw payload gave the
+            # push path EEG rows with null alpha/beta/theta/delta/gamma while
+            # the pull path -- which reads /api/v1/state, i.e. snapshot() --
+            # stored them. One deployment silently recording less than the
+            # other is exactly the divergence the shared mapping was meant to
+            # rule out, reintroduced one layer upstream of it.
+            self.on_payload(self.snapshot())
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.warning("payload consumer failed for device %s: %s: %s",
                            self.device_id, type(exc).__name__, exc)

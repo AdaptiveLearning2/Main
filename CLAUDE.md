@@ -416,7 +416,15 @@ Three properties worth not breaking:
   changing session drops the old queue, since those samples belong to a session the new token may
   not own.
 - **The queue is bounded and drops oldest, counted.** `deque(maxlen=…)` evicts silently, and an
-  uncounted eviction is a signal path losing data with nothing anywhere to say so.
+  uncounted eviction is a signal path losing data with nothing anywhere to say so. That applies to
+  *returning* a failed batch too — `extendleft` evicts from the far end, i.e. the newest — which is
+  why restoring goes through `_restore` rather than straight onto the deque.
+- **A failure in one channel must not cost the others.** Each channel is drained immediately before
+  its own POST, not all three up front; the first version re-raised on the first failure and threw
+  away two already-popped batches.
+- **The sampling hook emits `snapshot()`, not `latest_payload`.** `bands` and `ingestion` are
+  assembled in `snapshot()`, so emitting the raw payload gave push-ingested rows null band powers
+  while pull-ingested ones had them.
 - **Delivery is counted from the backend's `inserted`, not from what was sent.** The endpoint drops
   samples for a sensor the student declined; counting sent would report a healthy session that
   recorded nothing.

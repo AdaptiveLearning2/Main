@@ -47,7 +47,7 @@ function shortDate(iso) {
  * off, `consentRetrieved` whether we could find out, and `samples` how many
  * readings the period produced.
  */
-function offLabel({ on, revokedAt, consentRetrieved, samples }) {
+export function offLabel({ on, revokedAt, consentRetrieved, samples }) {
   if (consentRetrieved === false) return CHANNEL_STATE.unknown()
   if (!on) return CHANNEL_STATE.revoked(shortDate(revokedAt))
   // On, and read, but empty. `samples > 0` means readings arrived and none was
@@ -64,7 +64,7 @@ function offLabel({ on, revokedAt, consentRetrieved, samples }) {
  * the string this whole change exists to stop showing, surviving in the case
  * the change was least likely to be tested against.
  */
-function valueOrReason(value, reason) {
+export function valueOrReason(value, reason) {
   return (value && value !== 'N/A') ? value : offLabel(reason)
 }
 

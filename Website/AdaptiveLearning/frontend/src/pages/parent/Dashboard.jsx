@@ -6,7 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 // pct is shared rather than redefined here: this page had a verbatim copy, and
 // a fix to one of them did not reach the other.
-import { pct } from '../../components/signals/SignalPanel'
+import { pct, valueOrReason } from '../../components/signals/SignalPanel'
 // Whether a payload in hand was built with the emotion channel in it. The
 // backend sets this from stored consent now -- a parent manages that on the
 // Settings page, not with a per-browser switch here -- and it leaves every face
@@ -147,10 +147,21 @@ export default function ParentDashboard() {
                     {[
                       { icon: Brain,    label: 'Weekly Focus',   value: pct(signals.focus),          color: 'text-emerald-600' },
                       { icon: Zap,      label: 'Weekly Stress',  value: pct(signals.stress),         color: 'text-rose-600' },
-                      // "Off" rather than "N/A": the viewer switched facial
-                      // reporting off, which is a different statement from the
-                      // camera having recorded nothing.
-                      { icon: Eye,      label: 'Face Attention', value: faceIncluded(signals) ? pct(signals.face_attention) : 'Off', color: 'text-sky-600' },
+                      // Never a raw "N/A" for a channel that was not recorded,
+                      // and never a raw "N/A" for one that was recorded but
+                      // produced nothing usable this week -- `valueOrReason`
+                      // (SignalPanel.jsx) picks between withdrawn, unavailable,
+                      // calibrating and no-sensor so this tile can't fall back
+                      // to the generic string the rest of the reporting surfaces
+                      // stopped showing.
+                      { icon: Eye,      label: 'Face Attention',
+                        value: valueOrReason(faceIncluded(signals) && pct(signals.face_attention), {
+                          on: faceIncluded(signals),
+                          revokedAt: signals.emotion_revoked_at,
+                          consentRetrieved: signals.consent_retrieved,
+                          samples: signals.face_samples,
+                        }),
+                        color: 'text-sky-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">

@@ -223,9 +223,11 @@ describe('facial recognition switch', () => {
 
 
   it('labels the facial tiles as off rather than missing', async () => {
+    // face_included, not the "Hide sensor data" switch, is what drives these
+    // labels -- that switch now actually hides the sensor tiles (see below),
+    // so clicking it here would hide the very tiles this test reads.
     setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
-    await userEvent.click(await screen.findByRole('switch'))
     await expandAda()
     await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     expect(tile('Dominant Emotion').getByText('Off')).toBeInTheDocument()
@@ -248,7 +250,6 @@ describe('the "nothing recorded" note', () => {
     })
 
     render(<Students />)
-    await userEvent.click(await screen.findByRole('switch'))
     await expandAda()
 
     await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())

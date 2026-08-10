@@ -389,20 +389,24 @@ export default function Students() {
                                 sub={`${stats.totalQuestions} questions`}
                                 color="indigo"
                               />
-                              <StatCard
-                                icon={<Flame size={16} />}
-                                label="Stress Level"
-                                value={stats.stressLevel ?? '—'}
-                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
-                                color="rose"
-                              />
-                              <StatCard
-                                icon={<Target size={16} />}
-                                label="Focus Score"
-                                value={stats.focusScore ?? '—'}
-                                sub={eegSub(stats.signalCount, stats.signalsFailed)}
-                                color="emerald"
-                              />
+                              {!hideSensors && (
+                                <>
+                                  <StatCard
+                                    icon={<Flame size={16} />}
+                                    label="Stress Level"
+                                    value={stats.stressLevel ?? '—'}
+                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    color="rose"
+                                  />
+                                  <StatCard
+                                    icon={<Target size={16} />}
+                                    label="Focus Score"
+                                    value={stats.focusScore ?? '—'}
+                                    sub={eegSub(stats.signalCount, stats.signalsFailed)}
+                                    color="emerald"
+                                  />
+                                </>
+                              )}
                               <StatCard
                                 icon={<Zap size={16} />}
                                 label="Current Streak"
@@ -412,6 +416,11 @@ export default function Students() {
                               />
                             </div>
 
+                            {/* Gated by the teacher's "Hide sensor data" filter
+                                (lib/viewPrefs.js) -- a display preference, not a
+                                privacy control, so it hides these tiles without
+                                changing what was fetched. */}
+                            {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                               <StatCard
                                 icon={<Brain size={16} />}
@@ -446,11 +455,14 @@ export default function Students() {
                                 color="violet"
                               />
                             </div>
+                            )}
 
                             {/* Heart in its own row and its own units. Only
                                 when the channel was read: a row of "—" is
                                 indistinguishable from a headband that recorded
-                                nothing, and "Off" says which. */}
+                                nothing, and "Off" says which. Also gated by
+                                "Hide sensor data" -- see above. */}
+                            {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
                               <StatCard
                                 icon={<Heart size={16} />}
@@ -471,6 +483,7 @@ export default function Students() {
                                 color="amber"
                               />
                             </div>
+                            )}
 
                             {stats.topics.length > 0 && (
                               <div className="mt-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4">

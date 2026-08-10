@@ -3373,14 +3373,24 @@ def my_children(request: Request, include_face: bool = True):
             # *failed* shares a group with one who genuinely declined both
             # channels -- same RPC call, different meaning. The RPC path cannot
             # know which, so it is stamped per child here.
+            # emotion_revoked_at / heart_revoked_at are stamped here for the same
+            # reason consent_retrieved is: `_signal_summaries`' batch RPC groups
+            # children by flag pair, not by revocation date, so it cannot carry a
+            # per-child timestamp. Without this a revoked channel came back with
+            # "emotion_revoked_at": null from this endpoint, degrading a surface
+            # that wants "Off since <date>" to the generic "Not recorded".
             "signal_summary": {**summaries[str(cid)],
-                               "consent_retrieved": channels_by_child[cid].consent_retrieved}
+                               "consent_retrieved": channels_by_child[cid].consent_retrieved,
+                               "emotion_revoked_at": channels_by_child[cid].emotion_revoked_at,
+                               "heart_revoked_at": channels_by_child[cid].heart_revoked_at}
                               if str(cid) in summaries
                               else _shape_summary(None,
                                                 channels_by_child[cid].heart,
                                                 channels_by_child[cid].emotion,
                                                 summaries_retrieved,
-                                                channels_by_child[cid].consent_retrieved),
+                                                channels_by_child[cid].consent_retrieved,
+                                                emotion_revoked_at=channels_by_child[cid].emotion_revoked_at,
+                                                heart_revoked_at=channels_by_child[cid].heart_revoked_at),
         })
     return children
 

@@ -105,14 +105,24 @@ class PushClient:
     async def start(self, session_id: str, token: str) -> None:
         """Begin pushing for one session, with that student's bearer token.
 
-        Restarting for a different session drops whatever is still queued for
-        the old one. That is deliberate: those samples belong to a session this
-        token may no longer own, and posting them would either be rejected by
-        `_verify_session_owner` or -- worse, if the same student -- attribute one
-        session's readings to another.
+        Called again with the **same** session id, this only replaces the token
+        -- the queue is untouched. That is the token-refresh path: Supabase
+        access tokens expire roughly hourly and a lesson can outlast one.
+
+        Called with a **different** session id, the old queue is discarded
+        without being sent. Those samples belong to a session the new token may
+        not own; posting them is either rejected by `_verify_session_owner` or,
+        for the same student, files one session's readings under another.
+
+        Two things that were wrong here. The docstring said "drops", and the
+        code called `stop()`, which flushes -- so the samples were *posted*, and
+        the guard `if self.running` meant a client whose loop had already ended
+        skipped the stop entirely and carried the old queue into the new session
+        to be posted under the new id. Both are now `stop(flush=False)`, taken
+        unconditionally.
         """
-        if self.running and session_id != self._session_id:
-            await self.stop()
+        if session_id != self._session_id:
+            await self.stop(flush=False)
         self._session_id = session_id
         self._token = token
         self._backoff = 0.0
@@ -170,7 +180,17 @@ class PushClient:
         """
         if channel not in self._queues:
             raise ValueError(f"unknown push channel: {channel!r}")
-        if not self.running or not self._token:
+        if not self._token:
+            # No session: nothing is being recorded and nothing was lost. A
+            # sidecar streaming for its local dashboard is not dropping samples,
+            # it simply has nowhere to send them.
+            return
+        if not self.running:
+            # A session *is* open but the loop has ended -- the shutdown-flush
+            # window. These samples were produced for a live session and will
+            # never be sent, which is a loss and has to be counted like any
+            # other. Returning silently here was the one uncounted path left.
+            self._dropped[channel] += 1
             return
         queue = self._queues[channel]
         if len(queue) == queue.maxlen:

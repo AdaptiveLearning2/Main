@@ -9,6 +9,13 @@ import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
+// How long to wait before offering the session to the sidecar again. The
+// student opening the lesson before starting the local app is the ordinary
+// sequence, so this is a normal path rather than an error path -- long enough
+// not to hammer a loopback port, short enough that a lesson does not get far
+// before recording begins.
+const PUSH_RETRY_MS = 5000
+
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 const SHORT  = { angle_relationships: 'Angle Rel.' }
@@ -65,6 +72,9 @@ export default function Adaptive() {
   // down" stay distinguishable -- the same three-state rule the backend's
   // liveness fields follow.
   const [push, setPush]               = useState(null)
+  // Serialises start against stop. Both are async and the effect can tear down
+  // while a start is still in flight, so they are chained rather than raced.
+  const pushHandoff = useRef(Promise.resolve())
 
   // Dev-only EEG debug panel
   const [eegDebug, setEegDebug]       = useState(null)
@@ -173,32 +183,58 @@ export default function Adaptive() {
     if (!sessionId || !headband.pushMode) return
     let killed = false
 
-    startPush(sessionId)
-      .then(() => { if (!killed) setPush({ running: true, reachable: true }) })
-      .catch(err => {
-        // A sidecar that is not running is the ordinary case on a machine with
-        // no headband and no camera, not an error to shout about. Recorded so
-        // the panel can say which, rather than rendering a blank tile that
-        // reads as "nothing happening".
-        if (!killed) setPush({ running: false, reachable: false, error: String(err.message || err) })
-      })
+    // Retried, not attempted once. The sidecar being slower to come up than
+    // this page is the *normal* order of events on a student's machine -- they
+    // open the lesson, then start the local app -- and a single attempt that
+    // failed meant nothing was pushed for the rest of the session while the
+    // panel promised it would "change on its own". So the panel's sentence is
+    // now true: this keeps trying until it lands.
+    let attempt = null
+    const handOver = () => {
+      // Onto the same chain the cleanup's stop goes on, so the two are ordered
+      // rather than racing. Off the chain this would be sequencing only the
+      // stop against nothing, which reads like a fix and is not one.
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => startPush(sessionId))
+        .then(() => {
+          if (!killed) setPush(p => ({ ...(p || {}), running: true, reachable: true, error: null }))
+        })
+        .catch(err => {
+          if (killed) return
+          // A sidecar that is not up is the ordinary case on a machine with no
+          // headband and no camera, not an error to shout about -- but it is
+          // recorded, so the panel can say which rather than rendering a blank
+          // tile that reads as "nothing happening".
+          setPush(p => ({ ...(p || {}), running: false, reachable: false, error: String(err.message || err) }))
+          attempt = setTimeout(handOver, PUSH_RETRY_MS)
+        })
+      return pushHandoff.current
+    }
+    handOver()
 
     // The student's backend token expires roughly hourly and a lesson can run
     // longer. The sidecar holds one token for the session, so without this the
-    // pushes start 401ing partway through a long session and the samples pile
-    // up in a bounded queue until they are dropped. Re-handing the same session
-    // id replaces the token in place and leaves the queue alone.
+    // pushes start 401ing partway through and the samples pile up in a bounded
+    // queue until they are dropped. Re-handing the same session id replaces the
+    // token in place and leaves the queue alone.
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'TOKEN_REFRESHED' && !killed) startPush(sessionId).catch(() => {})
     })
 
     return () => {
       killed = true
+      clearTimeout(attempt)
       sub?.subscription?.unsubscribe()
-      // Flushes the tail and drops the token on the way out. Fire-and-forget:
-      // an unreachable sidecar must not block teardown, and it clears its own
-      // token on shutdown regardless.
-      stopPush().catch(() => {})
+      // Sequenced behind whatever start is in flight, not fired alongside it.
+      // Under StrictMode the effect is torn down and re-run immediately, and a
+      // bare stopPush() could land *after* the remount's startPush -- leaving
+      // the sidecar stopped while the panel showed "RECORDING", which is the
+      // precise lie this whole change exists to prevent.
+      pushHandoff.current = pushHandoff.current
+        .catch(() => {})
+        .then(() => stopPush())
+        .catch(() => {})
       setPush(null)
     }
   }, [sessionId, headband.pushMode])
@@ -209,8 +245,18 @@ export default function Adaptive() {
     if (!sessionId || !headband.pushMode) return
     let killed = false
     const tick = () => pushStatus()
-      .then(d => { if (!killed) setPush(p => ({ ...(p || {}), ...d, reachable: true })) })
-      .catch(() => { if (!killed) setPush(p => ({ ...(p || {}), reachable: false })) })
+      .then(d => {
+        if (killed) return
+        // `enabled: false` means the sidecar is reachable and deliberately not
+        // pushing -- PUSH_ENABLED is off while this backend is in push mode, so
+        // nobody is writing this session at all. Merging a flat
+        // `reachable: true` over the top rendered that as a healthy session,
+        // and also erased the error from a failed handover. Reachability is
+        // about the sidecar; running is about whether anything is being
+        // recorded, and they are not the same claim.
+        setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running }))
+      })
+      .catch(() => { if (!killed) setPush(p => ({ ...(p || {}), reachable: false, running: false })) })
     tick()
     const id = setInterval(tick, 10000)
     return () => { killed = true; clearInterval(id) }
@@ -451,7 +497,7 @@ export default function Adaptive() {
                 that may claim recording. Collapsing "not asked" into "not
                 recording" is how a surface ends up reporting an absence in data
                 that simply had not loaded. */}
-            {headband.pushMode && push && push.reachable === false && (
+            {headband.pushMode && push && (push.reachable === false || push.enabled === false) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
             )}
             {headband.pushMode && push?.reachable && push?.running && (
@@ -467,7 +513,9 @@ export default function Adaptive() {
               headband.connected
                 ? `${headband.samples} samples sent · teacher can see your focus & stress live`
                 : headband.pushMode
-                  ? (push && push.reachable === false
+                  ? (push && push.enabled === false
+                      ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
+                    : push && push.reachable === false
                       ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
                       // Counted from what the backend said it *stored*, not from
                       // what was sent -- it drops samples for a sensor that was

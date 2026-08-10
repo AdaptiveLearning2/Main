@@ -607,3 +607,34 @@ def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
     # That is not a hole to close here: on this path the client *is* the
     # sidecar, and the endpoint's defences are session ownership and consent.
     assert written[0]["raw"]["signal_quality"] == "good"
+
+
+@pytest.mark.parametrize("stopper", ["stop", "stop_for_user", "stop_all"])
+def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
+    """"Bounded by concurrent sessions" is only true if *every* way a poller
+    ends clears its record. `stop()` did it and the other two did not -- the
+    same shape as the bug that moved this set out of `main`, one layer along."""
+    class _P:
+        user_id = "u1"
+        session_id = "s1"
+        samples = 0
+        def is_alive(self): return True
+        def stop(self): pass
+        def join(self, *_a, **_k): pass
+
+    poller = _P()
+    monkeypatch.setattr(eeg_poller, "_active", {"s1": poller})
+    monkeypatch.setattr(eeg_poller, "_warned_double_write", set())
+    monkeypatch.setattr(eeg_poller, "live_pollers", lambda: [poller])
+    eeg_poller.claim_double_write_warning("s1")
+    assert "s1" in eeg_poller._warned_double_write
+
+    if stopper == "stop":
+        eeg_poller.stop("s1")
+    elif stopper == "stop_for_user":
+        eeg_poller.stop_for_user("u1")
+    else:
+        eeg_poller.stop_all(timeout=0.01)
+
+    assert "s1" not in eeg_poller._warned_double_write, \
+        f"{stopper} left the record behind"

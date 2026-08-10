@@ -7,6 +7,8 @@ the session it was granted for, or a client counting what it sent rather than
 what was stored.
 """
 
+import asyncio
+
 import pytest
 
 from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, PushClient
@@ -401,3 +403,66 @@ async def test_a_raising_consumer_does_not_kill_the_sampling_loop():
 
     session.on_payload = boom
     session._emit()  # must not raise
+
+
+@pytest.mark.anyio
+async def test_switching_session_does_not_post_the_old_queue(client):
+    """The docstring said "drops" and the code called `stop()`, which flushes --
+    so those samples were posted after all. They belong to a session the new
+    token may not own."""
+    await _started(client, "s1")
+    client.enqueue("cognitive", {"ts": "old"})
+
+    await client.start("s2", "tok2")
+
+    assert client._fake.calls == [], "the previous session's queue was posted"
+    assert client.status()["queued"]["cognitive"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_stopped_client_does_not_carry_a_queue_into_the_next_session(client):
+    """The guard was `if self.running`, so a client whose loop had already ended
+    skipped the stop entirely -- and the old queue went out under the *new*
+    session id, filing one session's readings under another."""
+    await _started(client, "s1")
+    client.enqueue("cognitive", {"ts": "old"})
+    # The loop ends without a stop(), as a cancelled task would leave it.
+    client._task.cancel()
+    try:
+        await client._task
+    except asyncio.CancelledError:
+        pass
+    assert not client.running
+
+    await client.start("s2", "tok2")
+    client.enqueue("cognitive", {"ts": "new"})
+    await client._flush_once()
+
+    sent = [s["ts"] for c in client._fake.calls for s in c["json"]["samples"]]
+    assert sent == ["new"], f"old session's samples went out as s2: {sent}"
+
+
+@pytest.mark.anyio
+async def test_samples_produced_during_the_shutdown_window_are_counted(client):
+    """A session is open but the loop has ended. Those samples will never be
+    sent, which is a loss, and every other loss on this path is counted."""
+    await _started(client)
+    client._task.cancel()
+    try:
+        await client._task
+    except asyncio.CancelledError:
+        pass
+
+    client.enqueue("cognitive", {"ts": "orphan"})
+
+    assert client.status()["dropped_locally"]["cognitive"] == 1
+
+
+@pytest.mark.anyio
+async def test_no_session_is_not_a_drop():
+    """A sidecar streaming for its local dashboard has nowhere to send samples
+    and is not losing them. Counting that would make the number meaningless."""
+    pc = PushClient("http://backend:8000")
+    pc.enqueue("cognitive", {"ts": 0})
+
+    assert pc.status()["dropped_locally"]["cognitive"] == 0

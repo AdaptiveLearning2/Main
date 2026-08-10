@@ -208,6 +208,20 @@ def is_polling(session_id: str) -> bool:
         return bool(p and p.is_alive())
 
 
+def _forget_warning(session_id: str) -> None:
+    """Evict one session's warning record. Call from **every** stop path.
+
+    This is what makes the set bounded by concurrent sessions rather than by
+    uptime, which is what the comment beside it claims. `stop()` had it and the
+    other two did not, so the claim was true only for the path someone had
+    thought about -- the same shape as the bug that moved this set out of `main`
+    in the first place.
+
+    Caller holds `_lock`; `stop_all` is the exception and says why.
+    """
+    _warned_double_write.discard(session_id)
+
+
 def claim_double_write_warning(session_id: str) -> bool:
     """True once per live-polled session, for logging a double write.
 
@@ -281,10 +295,7 @@ def can_use_device(user_id: str, device_id: str) -> bool:
 
 def stop(session_id: str) -> dict:
     with _lock:
-        # The eviction that makes the warned-set bounded by concurrent sessions
-        # rather than by uptime. A session that is no longer polled cannot be
-        # double-written, so the record of having warned about it is spent.
-        _warned_double_write.discard(session_id)
+        _forget_warning(session_id)
         p = _active.pop(session_id, None)
         if p:
             p.stop()
@@ -299,6 +310,7 @@ def stop_for_user(user_id: str) -> int:
             if p.user_id == user_id:
                 p.stop()
                 _active.pop(sid, None)
+                _forget_warning(sid)
                 stopped += 1
     return stopped
 
@@ -352,6 +364,11 @@ def stop_all(timeout: float = 5.0) -> int:
         # alternative, holding _lock across the joins, would deadlock against
         # the run loop's own _lock use on the way out.
         _active.clear()
+        # The warned-set goes with them. It is keyed by session and every
+        # session just ended, so the whole thing is spent -- and leaving it
+        # populated across a reload would carry one process's records into the
+        # next, which is the unbounded growth the comment beside it denies.
+        _warned_double_write.clear()
     still_running = [p.session_id[:8] for p in live_pollers()]
     if still_running:
         print(f"!!! [eeg-poller] did not stop within {timeout}s: {still_running}", flush=True)

@@ -86,3 +86,35 @@ describe('pushStatus', () => {
     expect(out.recorded.cognitive).toBe(12)
   })
 })
+
+describe('pushStatus, enabled', () => {
+  it('reports enabled:false rather than omitting it', async () => {
+    // A reachable sidecar that is deliberately not pushing (PUSH_ENABLED off
+    // while the backend is in push mode) means nobody is writing this session
+    // at all. The caller has to be able to tell that from a healthy one --
+    // merging a flat `reachable: true` over the top rendered it as normal.
+    mockFetch(async () => ok({ status: 'ok', data: { enabled: false } }))
+
+    const out = await sidecar.pushStatus()
+
+    expect(out.enabled).toBe(false)
+    expect(out.running).toBeUndefined()
+  })
+})
+
+describe('startPush retry', () => {
+  it('can be called again after a failure and succeed', async () => {
+    // The sidecar coming up after the page is the normal sequence on a
+    // student's machine: they open the lesson, then start the local app. A
+    // single attempt meant nothing was pushed for the rest of the session.
+    let calls = 0
+    mockFetch(async () => {
+      calls += 1
+      if (calls === 1) throw new TypeError('Failed to fetch')
+      return ok({ status: 'pushing' })
+    })
+
+    await expect(sidecar.startPush('s')).rejects.toThrow()
+    await expect(sidecar.startPush('s')).resolves.toMatchObject({ status: 'pushing' })
+  })
+})

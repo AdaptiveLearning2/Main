@@ -785,3 +785,92 @@ def test_a_device_claimed_by_another_user_still_reads_that_way_under_pull(monkey
     out = main.eeg_status(None)
 
     assert out["muse"] == {"available": False, "reason": "in_use_by_other"}
+
+
+# ── the quality rules, which used to exist on one path only ─────────────────
+
+_UNWORN = {"timestamp": "t", "features": {"signal_quality": "no_signal",
+                                          "focus_score": 0.0, "calm_score": 0.0,
+                                          "confidence": 0.0}}
+_BAD_CONTACT = {"timestamp": "t", "bands": {"alpha": 0.3},
+                "features": {"signal_quality": "poor", "quality_basis": "contact",
+                             "focus_score": 84.8, "calm_score": 20.0}}
+_LEGACY_POOR = {"timestamp": "t",
+                "features": {"signal_quality": "poor", "quality_basis": "heuristic",
+                             "focus_score": 84.8, "calm_score": 20.0}}
+
+
+def test_an_unworn_headband_produces_no_row():
+    """Zeroed scores from a disconnected headset are not a reading of zero.
+
+    Worse than nulls: aggregates average zeros as real readings and exclude
+    nulls, so a headband on the desk read as sustained zero focus rather than as
+    no data -- the can't-tell-no-data-from-zero failure arriving through the
+    write side, where none of the reporting rules can see it."""
+    assert signal_mapping.map_eeg_to_cognitive(_UNWORN, "s", "u") is None
+
+
+def test_bad_contact_keeps_the_row_and_nulls_the_measurements():
+    """"We were recording but could not measure" is not "no session happened",
+    and `class_live` derives staleness from the newest row's ts -- dropping
+    these would age out a session the student is still working in."""
+    row = signal_mapping.map_eeg_to_cognitive(_BAD_CONTACT, "s", "u")
+
+    assert row is not None
+    assert all(row[c] is None for c in signal_mapping._MEASUREMENT_COLUMNS)
+    # Still explicable after the fact.
+    assert row["raw"]["signal_quality"] == "poor"
+    assert row["raw"]["quality_basis"] == "contact"
+
+
+def test_the_legacy_poor_heuristic_is_not_treated_as_bad_contact():
+    """It reports "poor" for any focused student and says nothing about
+    electrodes. Treating it as bad contact would silently disable collection for
+    a whole session."""
+    row = signal_mapping.map_eeg_to_cognitive(_LEGACY_POOR, "s", "u")
+
+    assert row["focus"] == pytest.approx(0.848)
+
+
+@pytest.mark.parametrize("payload,expected", [(_UNWORN, "no_signal"),
+                                              (_BAD_CONTACT, "contact_poor"),
+                                              (_LEGACY_POOR, "ok")])
+def test_both_paths_read_one_verdict(payload, expected):
+    """The rules were inline in `eeg_poller` and absent from the push path, so
+    the same headband behaved differently depending on the deployment. One
+    function, both callers."""
+    assert signal_mapping.eeg_quality(payload) == expected
+
+
+def test_the_push_endpoint_drops_no_signal_ticks(monkeypatch):
+    """The half that was missing entirely."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    out = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": _UNWORN["features"]},
+        {"features": {"signal_quality": "good", "focus_score": 60.0}},
+    ]), None)
+
+    assert len(written) == 1, "a zeroed row was stored"
+    assert out["inserted"] == 1
+    # Counted, so a caller can tell "sent 2, recorded 1" from "sent 1".
+    assert out["dropped"] == 1
+
+
+def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"features": _BAD_CONTACT["features"], "bands": _BAD_CONTACT["bands"]},
+    ]), None)
+
+    assert written[0]["focus"] is None
+    assert written[0]["alpha"] is None, "a band computed from bad electrodes was stored"

@@ -409,6 +409,23 @@ Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, 
 function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
 storing percentages while the other stores ratios.
 
+**What may be recorded is part of that shared mapping, not of either caller.** `eeg_quality()`
+answers `no_signal` / `contact_poor` / `ok`, and all three mappers return `None` for a channel that
+produced nothing:
+
+- **`no_signal`** — a disconnected headband reports *zeroed* scores. Zeros are worse than nulls:
+  aggregates average them and exclude nulls, so a headband on the desk read as sustained zero focus
+  rather than as no data. That is the can't-tell-no-data-from-zero failure arriving through the
+  *write* side, where none of the reporting rules can see it.
+- **`contact_poor`** — keep the row, null the eight measurement columns. "Recording but unable to
+  measure" is not "no session", and `class_live` derives staleness from the newest row's `ts`.
+  Only `signal_quality == "poor"` **with `quality_basis == "contact"`** counts; the legacy heuristic
+  says "poor" for any focused student.
+
+These rules lived inline in `eeg_poller` and were absent from the push path, so the same unworn
+headband wrote nothing under pull and a zeroed row per tick under push. Anything of this kind
+belongs in the mapper: it is the only place both deployments are guaranteed to read.
+
 ### The sidecar's push client does no arithmetic
 
 `EEGResearch/src/app/services/push_client.py` is the other half, enabled by `PUSH_ENABLED` with

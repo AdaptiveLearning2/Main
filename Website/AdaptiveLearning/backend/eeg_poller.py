@@ -7,6 +7,7 @@ import time
 from typing import Dict
 
 import eeg_client
+import signal_mapping
 
 POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 
@@ -97,51 +98,25 @@ class _Poller(threading.Thread):
 
             if data and data.get("timestamp") and data["timestamp"] != self.last_ts:
                 self.last_ts = data["timestamp"]
-                features = data.get("features") or {}
-                signal_quality = features.get("signal_quality")
-                # Only "poor" backed by the headband's own electrode data means
-                # the electrodes are actually bad. A "poor" from the legacy
-                # calm-based heuristic (older bridge with no HSI/IS_GOOD) says
-                # nothing about contact -- it reports poor for any focused
-                # student -- so treating it as bad contact would silently
-                # disable data collection for an entire session.
-                contact_poor = (
-                    signal_quality == "poor"
-                    and features.get("quality_basis") == "contact"
-                )
+                # Both rules now live in `signal_mapping.eeg_quality`, which
+                # the push path reads too. Inline here, they were pull-only: the
+                # same unworn headband wrote nothing through this loop and a
+                # zeroed row per tick through /api/signals/cognitive.
+                verdict = signal_mapping.eeg_quality(data)
+                row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
 
-                if signal_quality == "no_signal":
-                    # No data at all this cycle (headset disconnected); the
-                    # service reports zeroed scores. Nothing to record.
+                if row is None:
+                    # no_signal: the headset is disconnected and the service
+                    # reports zeroed scores. Nothing to record.
                     if loops <= 3 or loops % 10 == 0:
                         print(f">>> [eeg-poller] loop={loops} no_signal, skipping insert", flush=True)
                 else:
-                    row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
-                    if contact_poor:
-                        # Keep the row so the session's timeline stays intact --
-                        # "we were recording but couldn't measure" is different
-                        # from "no session happened" -- but null the measurements
-                        # rather than persisting numbers computed from electrodes
-                        # the headband says are bad.
-                        #
-                        # Every consumer of these columns must therefore handle
-                        # null. Checked at the time of writing: the teacher live
-                        # view gauges render "-" for null, and
-                        # LLM_topic_decider.get_session_signal_state filters
-                        # `is not None` and bails when nothing usable remains.
-                        #
-                        # Side effect worth knowing: class_live derives session
-                        # staleness from the newest cognitive_signals row's ts.
-                        # Skipping rows entirely would let a badly-seated
-                        # headband age a session out after STALE_AFTER_SEC;
-                        # writing null rows keeps it alive, which is the
-                        # intended behaviour -- the student is still working,
-                        # we just can't measure them -- but it is a change.
-                        for k in ("focus", "stress", "engagement",
-                                  "alpha", "beta", "theta", "delta", "gamma"):
-                            row[k] = None
-                        if loops <= 3 or loops % 10 == 0:
-                            print(f">>> [eeg-poller] loop={loops} poor contact, inserting null measurements", flush=True)
+                    if verdict == "contact_poor" and (loops <= 3 or loops % 10 == 0):
+                        # The mapper has already nulled the measurements; this is
+                        # only the log. Keeping the row keeps the session's
+                        # timeline intact -- see the mapper for why that matters
+                        # to class_live's staleness check.
+                        print(f">>> [eeg-poller] loop={loops} poor contact, inserting null measurements", flush=True)
                     try:
                         res = self.supabase.table("cognitive_signals").insert(row).execute()
                         self.samples += 1

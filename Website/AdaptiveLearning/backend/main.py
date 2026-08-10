@@ -2657,9 +2657,14 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
         }
 
-    rows = [_row(s) for s in payload.samples]
+    # `None` from the mapper is a no-signal tick: a disconnected headband
+    # reporting zeroed scores, which is not a reading of zero. Dropped rather
+    # than stored, and counted, so a caller can tell "sent 50, recorded 0"
+    # from "sent nothing" -- the same distinction the heart endpoint reports.
+    rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
     if rows: supabase.table("cognitive_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows)}
+    return {"ok": True, "inserted": len(rows),
+            "dropped": len(payload.samples) - len(rows)}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):

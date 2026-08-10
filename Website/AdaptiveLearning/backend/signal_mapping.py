@@ -71,12 +71,61 @@ def _raw(payload: dict, **derived: Any) -> dict:
     return merged
 
 
-def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
+# The eight columns that hold measurements. Nulled together, because a row that
+# can vouch for some of them and not others does not arise: they all come from
+# the same electrodes in the same window.
+_MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
+                        "alpha", "beta", "theta", "delta", "gamma")
+
+
+def eeg_quality(eeg: dict) -> str:
+    """What may be stored from this payload: `ok`, `contact_poor`, `no_signal`.
+
+    Lives here rather than in either caller because both paths need it and the
+    answer must not differ between them. It did: the poller had both rules
+    inline and the push path had neither, so the same unworn headband wrote
+    nothing under pull and a zeroed row per tick under push.
+
+    Zeros are worse than nulls and much worse than nothing. Aggregates average
+    them as real readings where nulls are excluded, so a headband sitting on the
+    desk read as *sustained zero focus* rather than as no data -- the
+    can't-tell-no-data-from-zero failure the reporting rules exist to prevent,
+    arriving through the write side where none of those rules can see it.
+    """
+    f = eeg.get("features") or {}
+    quality = f.get("signal_quality")
+    if quality == "no_signal":
+        return "no_signal"
+    # `quality_basis` matters. The legacy heuristic reports "poor" for any
+    # focused student and says nothing about contact, so treating that as bad
+    # electrodes would silently disable collection for a whole session.
+    if quality == "poor" and f.get("quality_basis") == "contact":
+        return "contact_poor"
+    return "ok"
+
+
+def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | None:
     """Sidecar EEG payload to a `cognitive_signals` row.
 
     The sidecar reports focus/calm/confidence on a fixed 0..100 scale; this
     table stores 0..1 ratios.
+
+    `None` when there is no signal -- a disconnected headband, whose zeroed
+    scores are not a reading of zero. Same contract as the heart and face
+    mappers, which already returned None for a channel that produced nothing,
+    and the reason all three now do: a row of zeros is counted as a sample by
+    every aggregate downstream.
+
+    On poor *contact* the row is kept and the measurements are nulled. "We were
+    recording but could not measure" is a different claim from "no session
+    happened", and the timeline matters: `class_live` derives staleness from the
+    newest row's `ts`, so dropping these would age out a session in which the
+    student is still working.
     """
+    verdict = eeg_quality(eeg)
+    if verdict == "no_signal":
+        return None
+
     f = eeg.get("features") or {}
     b = eeg.get("bands") or {}
 
@@ -84,7 +133,7 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
     calm = _ratio(f.get("calm_score"))
     confidence = _ratio(f.get("confidence"))
 
-    return {
+    row = {
         "session_id": session_id,
         "user_id": user_id,
         "ts": eeg.get("timestamp"),
@@ -118,6 +167,14 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
             ingestion=eeg.get("ingestion"),
         ),
     }
+    if verdict == "contact_poor":
+        # Every consumer of these columns has to handle null. Checked when this
+        # rule was written: the teacher live view renders "-", and
+        # LLM_topic_decider.get_session_signal_state filters `is not None` and
+        # bails when nothing usable is left.
+        for column in _MEASUREMENT_COLUMNS:
+            row[column] = None
+    return row
 
 
 def map_heart_to_heart_signal(payload: dict, session_id: str, user_id: str) -> dict | None:

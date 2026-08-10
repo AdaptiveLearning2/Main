@@ -189,7 +189,9 @@ describe('LiveSignalSummary', () => {
   it('survives a report with no latest reading', () => {
     render(<LiveSignalSummary report={{}} />)
     expect(metric('Focus').getByText('N/A')).toBeInTheDocument()
-    expect(metric('Facial Emotion').getByText('No data')).toBeInTheDocument()
+    // Channel on (no flag says otherwise) and read, but nothing came back --
+    // offLabel's no-sensor state, not a generic "no data".
+    expect(metric('Facial Emotion').getByText('No sensor')).toBeInTheDocument()
   })
 })
 
@@ -206,18 +208,21 @@ describe('facial reporting switched off', () => {
     // cannot answer for three channels, and the one it used to give -- "the
     // viewer switched facial reporting off" -- is no longer even a state that
     // exists. With no revocation date in the payload it degrades to "Not
-    // recorded", which is still not "no data".
+    // recorded", which is still not "no data". Dominant Emotion goes through
+    // the same offLabel/valueOrReason path as Face Attention now, rather than
+    // a binary faceOn ? value : "Reporting off" that could not tell a genuine
+    // withdrawal from a failed consent read.
     render(<WeeklySignalReport report={faceOff} />)
     expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
-    expect(metric('Dominant Emotion').getByText('Reporting off')).toBeInTheDocument()
+    expect(metric('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
   })
 
   it('labels the live face tiles as off rather than missing', () => {
     render(<LiveSignalSummary report={faceOff} />)
     expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
-    expect(metric('Facial Emotion').getByText('Reporting off')).toBeInTheDocument()
-    expect(metric('Identity Confidence').getByText('Reporting off')).toBeInTheDocument()
+    expect(metric('Facial Emotion').getByText('Not recorded')).toBeInTheDocument()
+    expect(metric('Identity Confidence').getByText('Not recorded')).toBeInTheDocument()
   })
 
   it('leaves the EEG metrics untouched', () => {
@@ -388,6 +393,11 @@ test('samples recorded but all rejected reads as unusable, not absent', () => {
   }} />)
 
   expect(screen.getByText(/none met the quality threshold/i)).toBeInTheDocument()
+  // Not a raw "N/A": the channel was read (sample_counts.heart is 90), so a
+  // null average here means the samples were rejected, which offLabel calls
+  // Calibrating -- same distinction the Sensor tile already draws.
+  expect(metric('Avg Heart Rate').getByText('Calibrating')).toBeInTheDocument()
+  expect(metric('Avg RMSSD').getByText('Calibrating')).toBeInTheDocument()
 })
 
 test('a failed consent read is not rendered as a refusal', () => {
@@ -465,6 +475,17 @@ describe('per-channel off states', () => {
     // not find out. Distinct state, distinct word.
     render(<WeeklySignalReport report={{ ...base, consent_retrieved: false }} />)
     expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
+    // Dominant Emotion goes through the same faceOn as Face Attention, and a
+    // failed read leaves faceOn false exactly as a withdrawal would -- the
+    // reason it has to go through offLabel too, not a bare faceOn ternary.
+    expect(metric('Dominant Emotion').getByText('Unavailable')).toBeInTheDocument()
+  })
+
+  it('does not claim a withdrawal on the live tiles when the consent read failed', () => {
+    render(<LiveSignalSummary report={{ ...base, consent_retrieved: false }} />)
+    expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
+    expect(metric('Facial Emotion').getByText('Unavailable')).toBeInTheDocument()
+    expect(metric('Identity Confidence').getByText('Unavailable')).toBeInTheDocument()
   })
 
   it('distinguishes a channel that read nothing from one that read nothing usable', () => {

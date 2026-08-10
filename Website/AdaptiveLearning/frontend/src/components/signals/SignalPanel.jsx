@@ -222,14 +222,28 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
       <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Facial Emotion</p>
+          {/* Not a binary faceOn ? value : "Reporting off": a failed consent
+              read also leaves faceOn false, and offLabel is what tells that
+              apart from a genuine withdrawal -- the same reason the Face
+              Attention tile above goes through it rather than branching here. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {faceOn ? (face.emotion || 'No data') : 'Reporting off'}
+            {valueOrReason(faceOn && face.emotion, {
+              on: faceOn,
+              revokedAt: report?.emotion_revoked_at,
+              consentRetrieved: report?.consent_retrieved,
+              samples: report?.sample_counts?.face,
+            })}
           </p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
           <p className="font-bold text-gray-900 dark:text-white">
-            {faceOn ? pct(face.identity_confidence) : 'Reporting off'}
+            {valueOrReason(faceOn && pct(face.identity_confidence), {
+              on: faceOn,
+              revokedAt: report?.emotion_revoked_at,
+              consentRetrieved: report?.consent_retrieved,
+              samples: report?.sample_counts?.face,
+            })}
           </p>
         </div>
       </div>
@@ -387,8 +401,16 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Dominant Emotion</p>
+          {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
+              read also leaves faceOn false, and offLabel is what tells that
+              apart from an actual withdrawal. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
-            {faceOn ? (highlights.dominant_emotion || 'N/A') : 'Reporting off'}
+            {valueOrReason(faceOn && highlights.dominant_emotion, {
+              on: faceOn,
+              revokedAt: report?.emotion_revoked_at,
+              consentRetrieved: report?.consent_retrieved,
+              samples: report?.sample_counts?.face,
+            })}
           </p>
         </div>
       </div>
@@ -419,11 +441,27 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg Heart Rate</p>
-            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.heart_rate_bpm, ' bpm')}</p>
+            {/* Not a raw "N/A": the channel was read (heartShown, above), so an
+                empty average means the week's samples were unusable rather than
+                the sensor never having been asked -- the same distinction the
+                "Sensor" tile below draws for its own field. */}
+            <p className="font-bold text-gray-900 dark:text-white">
+              {valueOrReason(unit(highlights.heart_rate_bpm, ' bpm'), {
+                on: true,
+                consentRetrieved: report?.consent_retrieved,
+                samples: report?.sample_counts?.heart,
+              })}
+            </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg RMSSD</p>
-            <p className="font-bold text-gray-900 dark:text-white">{unit(highlights.rmssd_ms, ' ms')}</p>
+            <p className="font-bold text-gray-900 dark:text-white">
+              {valueOrReason(unit(highlights.rmssd_ms, ' ms'), {
+                on: true,
+                consentRetrieved: report?.consent_retrieved,
+                samples: report?.sample_counts?.heart,
+              })}
+            </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
             <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Sensor</p>

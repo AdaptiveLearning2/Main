@@ -2946,7 +2946,7 @@ def class_live(class_id: str, request: Request):
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
                 eeg_poller.stop(sid2)
-                active = None; latest_cog = None; latest_face = None
+                active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
 

@@ -349,6 +349,14 @@ export default function Adaptive() {
       .catch(() => {
         if (killed) return
         setPush(p => ({ ...(p || {}), reachable: false, running: false }))
+        // A chip claiming a recording that is not happening is worse than no
+        // chip (RecordingIndicator.jsx) -- an unreachable sidecar is recording
+        // nothing, whatever `recording` last said while it was still up.
+        setRecording([])
+        // Cleared alongside it: the next successful poll must treat its count
+        // as a fresh baseline rather than diffing against one from before the
+        // gap, for the same reason the first poll after mount claims nothing.
+        lastRecorded.current = null
         // Unreachable now but reachable before -- the sidecar was restarted or
         // the lesson outlived it. Same recovery.
         recover()

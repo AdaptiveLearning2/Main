@@ -1127,6 +1127,67 @@ def test_missing_class_returns_404_not_500():
     assert exc.value.status_code == 404
 
 
+def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_stale(monkeypatch):
+    """A session with no activity for over ten minutes is marked ended and its
+    cognitive/face readings are nulled, so the teacher's live card stops
+    claiming they are current. heart_signals has to be cleared the same way --
+    a headband that kept producing rows after the rest of the session went
+    quiet must not leave the card showing a live-looking heart rate for a
+    session the backend itself just declared over."""
+    from datetime import datetime, timedelta
+
+    stale_ts = (datetime.utcnow() - timedelta(seconds=700)).isoformat()
+
+    class _Tbl:
+        def __init__(self, name, tables, updates):
+            self._name, self._tables, self._updates = name, tables, updates
+            self._single = False
+            self._update_fields = None
+
+        def select(self, *_a, **_k): return self
+        def eq(self, *_a, **_k): return self
+        def is_(self, *_a, **_k): return self
+        def order(self, *_a, **_k): return self
+        def limit(self, *_a, **_k): return self
+        def single(self): self._single = True; return self
+
+        def update(self, fields, *_a, **_k):
+            self._update_fields = fields
+            return self
+
+        def execute(self):
+            if self._update_fields is not None:
+                self._updates.append((self._name, self._update_fields))
+                return type("R", (), {"data": [self._update_fields]})()
+            rows = self._tables.get(self._name, [])
+            return type("R", (), {"data": (rows[0] if rows else None) if self._single else rows})()
+
+    updates = []
+    tables = {
+        "classes":            [{"teacher_id": "teacher-1"}],
+        "class_memberships":  [{"student_id": "student-1"}],
+        "sessions":           [{"id": "session-1", "started_at": stale_ts}],
+        "cognitive_signals":  [{"ts": stale_ts, "focus": 0.5}],
+        "face_signals":       [{"ts": stale_ts, "emotion": "neutral"}],
+        "heart_signals":      [{"ts": stale_ts, "heart_rate_bpm": 72, "trusted": True}],
+        "session_answers":    [],
+        "profiles":           [{"id": "student-1", "display_name": "Ada", "email": "a@x.com"}],
+    }
+    monkeypatch.setattr(main, "supabase",
+                        type("S", (), {"table": lambda _s, n: _Tbl(n, tables, updates)})())
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda _sid: {"running": False, "samples": 0})
+
+    out = main.class_live("class-1", None)
+
+    assert any(t == "sessions" for t, _ in updates), "the stale session was never marked ended"
+    assert out[0]["latest_cognitive"] is None
+    assert out[0]["latest_face"] is None
+    assert out[0]["latest_heart"] is None, (
+        "a stale session still reported a live-looking heart reading"
+    )
+
+
 # ── facial-recognition opt-out ───────────────────────────────────────────
 
 def test_report_without_face_never_queries_face_signals(monkeypatch):

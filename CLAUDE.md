@@ -359,6 +359,27 @@ FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public';
 ```
 
+## Ingestion is push or pull, and which one is a setting rather than a guess
+
+`eeg_poller` runs **inside the backend** and polls the sidecar over HTTP. That works only because
+`start.ps1` puts both on one machine. The camera breaks it: the sidecar is a per-student local
+process, and a hosted backend has no route to a student's laptop. So the sidecar POSTs to
+`/api/signals/*` with the student's own token instead.
+
+`INGEST_MODE` (`pull`, the default, or `push`) says which is live. **Explicit because the failure is
+silent otherwise** — a poller that cannot reach a sidecar produces no rows, raises nothing, and
+leaves a session looking live: indistinguishable from a headband nobody put on. Deploy the backend
+anywhere but the student's machine and every session degrades that way with nothing to read.
+
+Under `push`, `eeg_poller.start` raises `PushModeError` and `/api/eeg/start` answers 409 naming the
+configuration — checked *before* the liveness probe, because "EEG service is not running on port
+8001" would be true and entirely misleading.
+
+Both paths share `signal_mapping.py`. The mapping used to live in `eeg_client`, which is the pull
+*transport*; the push path would have had to import an HTTP client it never calls to reach a pure
+function, or keep a second copy — and a second copy of a unit conversion is how one path ends up
+storing percentages while the other stores ratios.
+
 ## Two columns are called stress and only one measures it
 
 `cognitive_signals.stress` is `1.0 - calm`, written by `eeg_client.py:175`. There is no `calm`

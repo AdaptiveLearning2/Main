@@ -2835,6 +2835,17 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(403, "Not your session")
     if sess.data.get("ended_at"):
         raise HTTPException(400, "Session already ended")
+    # Answered before the liveness check, deliberately. Under push ingestion
+    # this backend never talks to a sidecar, so "EEG service is not running on
+    # port 8001" would be both true and completely misleading -- it reads as a
+    # broken service when the deployment simply does not work that way.
+    if eeg_poller.INGEST_MODE == "push":
+        raise HTTPException(
+            409,
+            "This deployment uses push ingestion: the sidecar on the student's "
+            "own device posts to /api/signals/* and this endpoint does not "
+            "start a poller. Nothing is wrong with the headband.",
+        )
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID

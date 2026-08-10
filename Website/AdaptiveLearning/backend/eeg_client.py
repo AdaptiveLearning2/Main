@@ -142,60 +142,8 @@ def list_devices() -> list:
         return []
 
 
-def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict:
-    """Convert EEG service payload → cognitive_signals row.
-
-    EEG service produces focus_score, calm_score, confidence on a fixed 0..100
-    scale. Our DB stores focus, engagement, stress (0..1).
-    """
-    f = eeg.get("features") or {}
-    b = eeg.get("bands") or {}
-
-    def norm(v):
-        """Rescale a 0..100 score to 0..1.
-
-        This used to sniff the scale with `if v > 1.5: v /= 100`, which
-        inverted the bottom of the range: SignalProcessor.update always returns
-        ratio * 100.0, so a genuine focus_score of 1.2 (meaning 1.2%) fell
-        under the threshold, skipped the divide, and clamped to 1.0 -- stored
-        as *100%* focus. That is exactly the disengaged region that should be
-        driving difficulty down.
-
-        The producer contract is fixed, so there is nothing to detect: divide
-        unconditionally.
-        """
-        if v is None: return None
-        try:    v = float(v)
-        except: return None
-        return max(0.0, min(1.0, v / 100.0))
-
-    focus      = norm(f.get("focus_score"))
-    calm       = norm(f.get("calm_score"))
-    confidence = norm(f.get("confidence"))
-    stress     = (1.0 - calm) if calm is not None else None
-
-    return {
-        "session_id": session_id,
-        "user_id":    user_id,
-        "ts":         eeg.get("timestamp"),
-        "focus":      focus,
-        "engagement": confidence,
-        "stress":     stress,
-        "alpha":      b.get("alpha"),
-        "beta":       b.get("beta"),
-        "theta":      b.get("theta"),
-        "delta":      b.get("delta"),
-        "gamma":      b.get("gamma"),
-        "raw": {
-            "device_id":       eeg.get("device_id"),
-            "channels":        eeg.get("channels"),
-            "state":           eeg.get("state"),
-            "signal_quality":  f.get("signal_quality"),
-            # Stored alongside signal_quality because it's what distinguishes a
-            # row whose measurements were nulled for bad electrode contact from
-            # one where the legacy heuristic merely said "poor". Without it,
-            # a null-measurement row can't be explained after the fact.
-            "quality_basis":   f.get("quality_basis"),
-            "ingestion":       eeg.get("ingestion"),
-        },
-    }
+# Moved to `signal_mapping`, which both ingestion paths import. Re-exported
+# here so existing callers keep working: this module is the *pull transport*,
+# and the push path should not have to import an HTTP client to reach a pure
+# function. New code should import from signal_mapping directly.
+from signal_mapping import map_eeg_to_cognitive  # noqa: E402,F401

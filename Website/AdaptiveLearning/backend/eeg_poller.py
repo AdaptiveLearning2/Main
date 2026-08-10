@@ -10,6 +10,35 @@ import eeg_client
 
 POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 
+# Which ingestion path is live, stated rather than inferred.
+#
+# `pull` is this poller: it runs inside the backend and polls the sidecar over
+# HTTP, which works only because start.ps1 puts both on one machine. `push` is
+# the sidecar POSTing to /api/signals/* with the student's own token, which is
+# what the camera forces -- a hosted backend has no route to a student's laptop.
+#
+# Explicit because the failure is silent otherwise. A poller that cannot reach
+# the sidecar looks exactly like a headband that never connected: no rows, no
+# error, a live-looking session. Deploy the backend anywhere but the student's
+# machine and every session degrades that way with nothing to read. So `push`
+# makes start() refuse loudly instead of starting a thread that will never
+# succeed, and the refusal names the setting.
+INGEST_MODE = (os.getenv("INGEST_MODE", "pull") or "pull").strip().lower()
+_VALID_MODES = ("pull", "push")
+if INGEST_MODE not in _VALID_MODES:
+    print(f"[eeg-poller] INGEST_MODE={INGEST_MODE!r} is not one of {_VALID_MODES}; "
+          f"falling back to 'pull'", flush=True)
+    INGEST_MODE = "pull"
+
+
+class PushModeError(RuntimeError):
+    """Raised when something asks the poller to run under push ingestion.
+
+    A distinct type rather than a bare RuntimeError so the endpoint can answer
+    with a specific message: this is a configuration statement, not a failure to
+    reach hardware, and the two would otherwise reach a student identically.
+    """
+
 
 class DeviceClaimedError(Exception):
     """Raised when a device is already claimed by another user's live poller."""
@@ -148,6 +177,15 @@ _lock = threading.Lock()
 
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
     print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
+    if INGEST_MODE == "push":
+        # Not a silent no-op. Returning {"running": False} here would be
+        # indistinguishable from a sidecar that is simply not up yet, which is
+        # the confusion this mode setting exists to remove.
+        raise PushModeError(
+            "INGEST_MODE=push: the sidecar posts to /api/signals/* itself, so "
+            "this backend does not poll it. Set INGEST_MODE=pull for a "
+            "co-located deployment (start.ps1, dev, single-machine classroom)."
+        )
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
             print(f"=== already running for this session", flush=True)

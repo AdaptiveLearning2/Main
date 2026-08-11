@@ -176,11 +176,6 @@ _WINDOW_STATES = {
 _WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
 
 
-def _window_records(state: str) -> bool:
-    meaning = _WINDOW_STATES.get(state)
-    return bool(meaning and meaning.records)
-
-
 # How long a successful window read is reused. The window is one row, identical
 # for every student, edited twice a year -- so a read per ingest request is a
 # round trip for an answer that has not changed since the last one.
@@ -952,16 +947,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                 return "".join(items)
             return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
-        def _sentence_case(text: str) -> str:
-            # Not .capitalize(), which lowercases the rest and turns "EEG" into
-            # "Eeg".
-            return text[:1].upper() + text[1:]
-
         parts = []
         if measured:
             parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
         if unread:
-            parts.append(_sentence_case(
+            parts.append(_as_sentence(
                 f"{_join(unread, 'and')} data could not be loaded."))
         summary = " ".join(parts)
 
@@ -2529,7 +2519,21 @@ def _poller_may_record_eeg(student_id: str) -> bool:
     return False
 
 
+def _poller_may_record_eeg_reason(student_id: str) -> str:
+    """Why `eeg_poller.start()`'s own recheck refused, for its exception text.
+
+    `start()` calls `_consent_check` first and only reaches this on refusal, so
+    it is a second `_may_record` read of a answer that just came back False --
+    accepted for a start()-time error message, which is not a hot path.
+    Without this, `start()`'s race-closing refusal always blamed consent, even
+    when the real cause was a closed school year.
+    """
+    gate = _may_record(student_id)
+    return _as_sentence(_not_recording_reason(gate, "eeg not consented"))
+
+
 eeg_poller.set_consent_check(_poller_may_record_eeg)
+eeg_poller.set_consent_reason_check(_poller_may_record_eeg_reason)
 
 
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:

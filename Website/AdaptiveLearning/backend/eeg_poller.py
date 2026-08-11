@@ -593,6 +593,12 @@ CONSENT_RECHECK_SECONDS = 20.0
 # because it keeps the dependency pointing one way, `main` -> `eeg_poller`.
 _consent_check = None
 
+# Optional. `_consent_check` only returns a bool, which cannot say *why* --
+# withdrawn consent and a closed school year both read as False. When wired,
+# start() uses this for the message it raises instead of a fixed sentence that
+# always blames consent.
+_consent_reason_check = None
+
 
 def set_consent_check(fn) -> None:
     """Register how this module asks whether a student still consents to EEG.
@@ -603,6 +609,16 @@ def set_consent_check(fn) -> None:
     """
     global _consent_check
     _consent_check = fn
+
+
+def set_consent_reason_check(fn) -> None:
+    """Register how this module asks *why* recording is not permitted.
+
+    Optional -- unwired, start() falls back to a consent-only message. `fn`
+    takes a student id and returns a human-readable sentence.
+    """
+    global _consent_reason_check
+    _consent_reason_check = fn
 
 
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
@@ -626,10 +642,11 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
             "than assume consent -- see set_consent_check()."
         )
     if not _consent_check(user_id):
-        raise ConsentError(
+        reason = _consent_reason_check(user_id) if _consent_reason_check else None
+        raise ConsentError(reason or (
             "EEG recording is switched off for this student. A parent can turn "
             "it back on in Settings."
-        )
+        ))
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
             print(f"=== already running for this session", flush=True)

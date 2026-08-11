@@ -181,28 +181,41 @@ def test_the_line_palette_matches_the_session_charts():
     )
 
 
-def test_the_two_chart_surfaces_are_known_to_disagree():
-    """Pinning a **defect**, not a rule.
+def test_the_two_chart_surfaces_agree_on_shared_series():
+    """One colour, one meaning, across both places a line is drawn.
 
-    `SignalPanel.jsx` draws `focus` in #10b981, which is the colour
-    `SessionReview.jsx` uses for `engagement`. So one green line means focus on
-    the weekly panel and engagement on session review, and a parent reading both
-    screens is being shown the same colour for two different things.
+    They disagreed: `SignalPanel.jsx` drew `focus` in #10b981, which is
+    `SessionReview.jsx`'s colour for `engagement`. A parent reading the weekly
+    panel and then session review was shown one green line meaning two different
+    things. `SignalPanel` moved, because the archive re-renders the *session*
+    charts and so those are the reference.
 
-    That predates this module and is not its to fix -- picking the survivor is a
-    design decision about two shipped surfaces. It is pinned here because the
-    archive had to choose a side, and a silent later "tidy-up" that aligned the
-    two would change what an already-written SVG means without anyone noticing.
-    When it is fixed, this test should fail and be deleted deliberately.
+    This replaces a test that merely pinned the collision. Asserting agreement
+    is the stronger shape: it fails if either surface drifts, not just if the
+    known one does.
     """
     panel = _jsx_line_strokes(
         _JSX.parents[2] / "components" / "signals" / "SignalPanel.jsx")
-    assert panel.get("focus") == "#10b981"
-    assert cr.SERIES_COLOURS["focus"] == "#6366f1"
-    assert cr.SERIES_COLOURS["engagement"] == panel.get("focus"), (
-        "the known collision changed shape -- re-check which surface the "
-        "archive should mirror before updating this"
+    session = _jsx_line_strokes(_JSX)
+
+    shared = set(panel) & set(session)
+    assert shared, "no series in common -- one of the files stopped drawing lines"
+    disagreements = {k: (session[k], panel[k]) for k in shared
+                     if session[k] != panel[k]}
+    assert not disagreements, (
+        f"{disagreements} -- same series, different colour on the two surfaces "
+        "(SessionReview, SignalPanel). One colour must not mean two things."
     )
+
+    # And no colour is reused for two different series across the pair, which is
+    # the collision that made the original bug invisible: both files were
+    # internally consistent.
+    combined = {**session, **panel}
+    by_colour: dict = {}
+    for series, colour in combined.items():
+        by_colour.setdefault(colour, []).append(series)
+    clashes = {c: sorted(v) for c, v in by_colour.items() if len(v) > 1}
+    assert not clashes, f"one colour used for several series: {clashes}"
 
 
 def test_every_named_chart_is_one_this_module_can_draw():

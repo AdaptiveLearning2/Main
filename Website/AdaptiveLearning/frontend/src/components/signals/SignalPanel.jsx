@@ -367,7 +367,13 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               {/* Distinct colours per series -- all three were "currentColor",
                   which rendered them identically and made the chart unreadable.
                   Matches the MiniMetric tones above. */}
-              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#10b981" strokeWidth={2} dot={false} name="Focus" />
+              {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
+                  which is the colour that file uses for *engagement* -- so one
+                  green line meant focus on this panel and engagement on session
+                  review, and a parent reading both was shown one colour for two
+                  things. The archived SVGs re-render the session charts, so
+                  those are the reference and this is the side that moved. */}
+              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={false} name="Focus" />
               <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={false} name="Stress" />
               {/* Omitted entirely with facial reporting off, rather than drawn
                   as an all-null series -- an empty legend entry reads as a

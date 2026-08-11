@@ -30,7 +30,9 @@ import math
 
 # ── palette ────────────────────────────────────────────────────────────────
 #
-# Mirrors `frontend/src/pages/teacher/SessionReview.jsx`. Fixed per label rather
+# Mirrors `frontend/src/pages/teacher/SessionReview.jsx`, and `SignalPanel.jsx`
+# agrees with it -- `test_the_two_chart_surfaces_agree_on_shared_series` fails if
+# either drifts, or if one colour comes to mean two series. Fixed per label rather
 # than assigned by position: an index-based palette recolours every emotion
 # whenever the set present changes, so the same week viewed twice would look
 # like different data -- and an archive is exactly the thing someone compares

@@ -758,6 +758,34 @@ deliberate.** A wrong boundary while recording collects data nobody agreed to; a
 while reporting moves a chart column by a few hours. Refusing to report over a config typo is the
 larger harm, so the gate fails closed and the report degrades.
 
+### The daily rollup is written as sessions close, never at expiry
+
+`signal_daily_rollup` holds one row per student per school day per channel
+(`cognitive|heart|emotion`), written by `_rollup_session_days` at the end of `end_session`. Writing
+it continuously is what keeps it from being a race against the end-of-year delete — generating it at
+expiry would make the one job that destroys data also the first to read it. The delete job (not yet
+written) refuses to delete a day with no rollup row, so a broken writer cannot become silent
+permanent loss on a fixed date.
+
+**The aggregation is a Postgres function (`rollup_signal_day`), not backend code**, because a day
+holds thousands of samples and the reporting path caps its reads — averaging a capped subset in
+Python would be quietly wrong, and this is the copy that survives the delete. It **recomputes**
+rather than accumulates, so closing two sessions on one day, or replaying a close, converges;
+an incremental writer would have to be exactly-once, which nothing here can promise.
+
+`_rollup_session_days` **never raises**: it runs last in `end_session`, after the writes that matter,
+because a failed summary must not cost a student their session record and stats update. It rolls up
+every school day the session touched (two if it crossed local midnight), bounded so a corrupt
+`started_at` cannot spin.
+
+Averages are over **trusted rows only** for heart and emotion, matching what the weekly report
+publishes — an untrusted reading is one the quality gate rejected, and averaging it here would
+smuggle it past that gate permanently. `heart_sources` deliberately includes untrusted sources: its
+job is to explain a change in the numbers, and a sensor whose readings were all rejected is exactly
+such an explanation. `trusted_sample_count` is defined per channel (cognitive has no trust flag, so
+it counts rows that produced a measurement rather than the nulled ones a poor-contact headband
+writes).
+
 There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
 edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`
 are revoked outright, so only `service_role` and the dashboard reach it. Both are needed: RLS never

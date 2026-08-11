@@ -323,6 +323,48 @@ def _school_day(ts, tz: ZoneInfo) -> str:
     return parsed.astimezone(tz).date().isoformat()
 
 
+def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
+    """Recompute the daily rollup for the school days this session touched.
+
+    Called as a session closes. Writing the rollup continuously is what keeps it
+    from ever being a race against the end-of-year delete -- generating it at
+    expiry would mean the one job that destroys data also being the first to
+    read it.
+
+    **Never raises.** A session close that failed because a derived summary
+    could not be written would lose the student's `user_stats` update and their
+    session record, which is a worse outcome than a rollup that is one day
+    stale -- and the writer is idempotent, so the next close on that day
+    repairs it. The delete job's completeness check is the backstop that stops
+    a persistently broken rollup becoming data loss.
+
+    Usually one day. A session that runs past local midnight touches two, and
+    recomputing both is cheaper than reasoning about which one moved.
+    """
+    tz = _school_timezone()
+    try:
+        first = _parse_ts(started_at) or _utc_now()
+        last = _parse_ts(ended_at) or _utc_now()
+        day = first.astimezone(tz).date()
+        end_day = last.astimezone(tz).date()
+        # Bounded, so a session with a corrupt `started_at` cannot spin here.
+        # A lesson does not span a week; anything claiming to is bad data, and
+        # rolling up the days around the close is the useful half of it.
+        if (end_day - day).days > 7:
+            print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day}, "
+                  "rolling up the closing day only")
+            day = end_day
+        while day <= end_day:
+            supabase.rpc("rollup_signal_day", {
+                "p_user_id": user_id,
+                "p_day": day.isoformat(),
+                "p_timezone": tz.key,
+            }).execute()
+            day += timedelta(days=1)
+    except Exception as e:
+        print(f"[rollup] {user_id[:8]}: {e}")
+
+
 def _may_record(student_id: str) -> dict:
     """Consent **and** the retention window, which are different questions.
 
@@ -1369,6 +1411,12 @@ def end_session(session_id: str = Path(...), request: Request = None):
             "best_streak":      0,
             "last_session_at":  datetime.utcnow().isoformat(),
         }).execute()
+
+    # Last, and after the writes that matter. The rollup is derived data and
+    # `_rollup_session_days` swallows its own failures, so it cannot cost the
+    # session record or the stats update -- but ordering it here means it also
+    # sees the `ended_at` this endpoint just wrote.
+    _rollup_session_days(user["id"], data.get("started_at"), _utc_now().isoformat())
     return {"ok": True}
 
 @app.get("/api/sessions")

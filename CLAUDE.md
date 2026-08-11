@@ -230,8 +230,13 @@ agreement restricts derivative works, weights published by a third party under M
 obligations -- a question between those authors and RLAP's, which we cannot settle by reading a
 repo. **`.pure` weights, trained on PURE, avoid the question entirely**, and that is the cheaper path
 for a commercial product used by children than obtaining an agreement in order to interpret it.
-Whether `RhythmMamba.pure` is actually published needs checking against the model zoo; the README
-states the suffixes exist without saying which apply to which architecture.
+
+`RhythmMamba.pure.weights.h5` **is published** -- confirmed in `rppg/weights/`, which ships both
+suffixes for every architecture except one. The exception matters: **`FacePhys` is `.rlap` only, and
+is the package default** (`rppg.Model()` with no argument gives `FacePhys.rlap`). So the model that
+comes for free is the one with no RLAP-free alternative, and naming the model explicitly is what
+keeps that choice deliberate. The vendored scripts in `FacialRecg/` already name
+`RhythmMamba.rlap`; the suffix, not the architecture, is the part to revisit.
 
 So what stands between here and a camera heart rate is engineering and evidence, not permission:
 the confidence gate below is inapplicable to a single-channel source and would have to be designed

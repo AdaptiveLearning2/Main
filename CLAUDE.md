@@ -711,6 +711,62 @@ under `/api/teacher/` when parents legitimately read it too, and don't gate on
 Access-control tests live in `Website/AdaptiveLearning/backend/tests/test_access_control.py` and
 run in CI.
 
+## Recording needs consent **and** an open school year
+
+`retention_window` is a single-row table (`starts_on`, `ends_on`, `timezone`) holding the school
+year. Outside it nothing is recorded whatever consent says, and on `ends_on` the per-sample rows
+are deleted — that job is a later change; this is the gate.
+
+**It fails closed in four different ways, and they are named separately.** `_retention_window()`
+answers `open`, `before_year`, `after_year`, `unconfigured` or `unreadable`, and only the first
+records. An unset window is not an open-ended licence — same default as consent — and a typo'd
+timezone denies rather than falling back to UTC, because a fallback moves every boundary by hours
+while looking like it worked, on a value edited by hand twice a year. "The year hasn't started" and
+"the year is over" reach a parent as different sentences; `_not_recording_reason` puts the window
+reason ahead of the consent one, or a closed year sends someone to the consent screen to fix a
+setting that is fine. `_poller_status` follows the same order, with its own machine-readable
+`stopped_reason` vocabulary (`school_year_ended`, …) — a poller that is not running with consent
+intact and nothing saying why is the silent quiet week arriving through the status endpoint.
+
+**Never read the raw `*_enabled` flags to decide whether to record.** `_permitted_heart_sources`
+takes a `_may_record` result and reads its composed `record_*` flags; hand it a bare `_consent`
+dict and it returns no sources at all, which is the safe direction for that mistake.
+`test_every_recording_site_gates_on_the_window` lists the six sites and fails if one calls
+`_consent(` directly — the same exhaustiveness pattern as `_MODE_AWARE`, and for the same reason.
+
+**The window gates recording only. Don't put it in `_consent()`.** That helper is read by the
+reporting surfaces, the consent screen and the poller status, none of which should change answer
+because term ended: gating there would report every channel off on the last day of school, so a
+parent could not read the history that survives until the delete job runs — and it would read as a
+withdrawal, a claim about a decision nobody made. `_may_record()` composes the two and is what the
+six recording sites call (the poller's two checks, the three `/api/signals/*` endpoints, and
+`/api/eeg/start`); `_consent()` stays pure and its raw flags ride along beside the `record_*` ones
+so a caller can still tell "they agreed but the year is over" from "they said no".
+
+**The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's
+day buckets. The last day of school ends at local midnight; against a UTC clock it ends
+mid-afternoon or runs into the next day depending which side of the meridian the school is on.
+
+Bucketing goes through `_school_day(ts, tz)`, never `str(ts)[:10]` — PostgREST returns UTC, so
+slicing put a 4pm Californian lesson on the next day of a parent's chart. `_weekly_signal_report`
+resolves `since` to midnight of the earliest *school* day too: `now - 7 days` in UTC starts after
+that day begins wherever the school is behind UTC, so the oldest column silently averaged only part
+of itself.
+
+**`_school_timezone()` defaults to UTC where `_retention_window()` denies, and that asymmetry is
+deliberate.** A wrong boundary while recording collects data nobody agreed to; a wrong boundary
+while reporting moves a chart column by a few hours. Refusing to report over a config typo is the
+larger harm, so the gate fails closed and the report degrades.
+
+There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
+edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`
+are revoked outright, so only `service_role` and the dashboard reach it. Both are needed: RLS never
+filters `TRUNCATE`.
+
+Tests: `backend/tests/test_retention_window.py`. Every other test file gets an open year from the
+autouse `_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording
+nothing, for a reason unrelated to what they assert.
+
 ## Consent — `signal_consent` decides what may be recorded
 
 Three channels, named for the **sensor** rather than the signal derived from it: `eeg`,

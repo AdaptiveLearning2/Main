@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
 from typing import NamedTuple
@@ -118,8 +119,298 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _iso_days_ago(days: int = 7) -> str:
-    return (_utc_now() - timedelta(days=days)).isoformat()
+# ── the school-year retention window ────────────────────────────────────────
+#
+# Every state a caller can be in, named. `open` is the only one that records.
+#
+# Five rather than a boolean for the same reason the reporting payloads carry
+# three: "recording has not started yet", "the year is over" and "nobody has
+# configured a year" are different sentences to put in front of a parent, and a
+# surface that collapses them into "off" tells a student their consent was
+# ignored. `unreadable` is separate again -- it is the one state that is our
+# fault rather than a fact about the school.
+WINDOW_OPEN = "open"
+WINDOW_BEFORE = "before_year"
+WINDOW_AFTER = "after_year"
+WINDOW_UNCONFIGURED = "unconfigured"
+WINDOW_UNREADABLE = "unreadable"
+
+class _WindowMeaning(NamedTuple):
+    """What a window state means, in the three places that need to know."""
+    records: bool
+    # Shown to a person. Lowercase, because the ingest endpoints embed it in a
+    # `reason` field beside "eeg not consented" and friends.
+    reason: str | None
+    # Rendered by the frontend, which picks its own copy from the key.
+    stopped_reason: str | None
+
+
+# **One table.** These three facts about a state were three separate structures
+# kept in step by hand, and the failure mode is silent: a sixth state added to
+# only two of them would deny correctly and then explain itself as nothing at
+# all, or explain itself and quietly record. Adding a row here is now the whole
+# change, and `test_every_window_state_has_a_meaning` fails if a constant is
+# declared without one.
+_WINDOW_STATES = {
+    WINDOW_OPEN: _WindowMeaning(True, None, None),
+    WINDOW_BEFORE: _WindowMeaning(
+        False, "recording has not started for this school year",
+        "school_year_not_started"),
+    WINDOW_AFTER: _WindowMeaning(
+        False, "the school year has ended", "school_year_ended"),
+    WINDOW_UNCONFIGURED: _WindowMeaning(
+        False, "no school year is configured, so nothing is recorded",
+        "school_year_unconfigured"),
+    WINDOW_UNREADABLE: _WindowMeaning(
+        False, "could not check the school year, so nothing was recorded",
+        "school_year_unknown"),
+}
+
+# Derived, not maintained. A state absent from the table above denies, because
+# `.get` returns None and an unknown state is not evidence that recording is
+# allowed -- the same fail-closed direction as everything else here.
+_WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
+
+
+# How long a successful window read is reused. The window is one row, identical
+# for every student, edited twice a year -- so a read per ingest request is a
+# round trip for an answer that has not changed since the last one.
+#
+# **Why this may be cached when `_consent` may not.** Consent is per-student and
+# a withdrawal has to land mid-lesson: caching it would record against a refusal
+# for the length of the TTL, which is the exact failure the consent rules exist
+# to prevent. The window is a pair of dates that move twice a year, so the only
+# staleness it can produce is up to `_RETENTION_TTL_SECONDS` of recording just
+# after local midnight on the day the year ends. That is bounded, it is the same
+# order as the poller's own re-check interval, and it costs nothing anyone can
+# perceive -- where a stale consent answer costs a student their decision.
+#
+# A plain constant, not `_env_number`: that rule covers settings read from the
+# environment, and this is not one. There is no deployment that wants a
+# different value -- shorter buys nothing, and longer only extends the one
+# staleness described above.
+_RETENTION_TTL_SECONDS = 30.0
+_retention_cached: tuple[float, dict] | None = None
+_retention_lock = threading.Lock()
+
+
+def _retention_cache_clear() -> None:
+    """Drop the cached window. For tests, and for anything that edits the row."""
+    global _retention_cached
+    with _retention_lock:
+        _retention_cached = None
+
+
+def _retention_window() -> dict:
+    """The configured school year, and today's position in it.
+
+    Fails **closed**, like `_consent` and unlike the reporting helpers: an
+    unreadable or unconfigured window records nothing. An unset date is not an
+    open-ended licence, and the failure would otherwise be invisible, because
+    recording looks identical whether or not anyone meant it to happen.
+
+    Returns `state` plus the raw dates, so a caller can say *when* recording
+    starts or stopped rather than only that it is not happening.
+
+    The comparison is made in the school's own timezone, not UTC. "The last day
+    of school" ends at local midnight, and against a UTC clock it would end
+    somewhere in the middle of the afternoon or run several hours into the next
+    day, depending which side of the meridian the school is on.
+    """
+    global _retention_cached
+    now = time.monotonic()
+    with _retention_lock:
+        cached = _retention_cached
+    if cached and now < cached[0]:
+        # Recomputed rather than returned whole: the *state* depends on today's
+        # date, and a cached "open" that outlived the last day of school would
+        # be the one staleness that matters. Only the row is reused.
+        return _resolve_window(cached[1])
+
+    try:
+        rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
+    except Exception as e:
+        print(f"[retention:read] {e}")
+        # Failures are deliberately not cached. Denial is the safe direction, so
+        # holding one costs nothing in correctness -- but it would keep denying
+        # for the TTL after the database came back, and a transient blip should
+        # not outlive itself.
+        return {"state": WINDOW_UNREADABLE, "starts_on": None, "ends_on": None,
+                "timezone": None}
+    if not rows:
+        return {"state": WINDOW_UNCONFIGURED, "starts_on": None, "ends_on": None,
+                "timezone": None}
+
+    with _retention_lock:
+        _retention_cached = (now + _RETENTION_TTL_SECONDS, rows[0])
+    return _resolve_window(rows[0])
+
+
+def _resolve_window(row: dict) -> dict:
+    """Today's position in a window row. Split out so the cache stores the row
+    and not the verdict -- the row is what is stable, the verdict is a fact
+    about right now."""
+    name = row.get("timezone") or "UTC"
+    try:
+        tz = ZoneInfo(name)
+    except Exception:
+        # A typo'd zone denies rather than falling back to UTC. Falling back
+        # would move every boundary by hours while looking like it worked, and
+        # this value is edited by hand twice a year -- exactly the cadence at
+        # which a silent wrong answer survives longest. Loud and closed.
+        print(f"[retention:tz] unknown timezone {name!r} -- recording denied")
+        return {"state": WINDOW_UNREADABLE, "starts_on": row.get("starts_on"),
+                "ends_on": row.get("ends_on"), "timezone": name}
+
+    today = _utc_now().astimezone(tz).date()
+    starts, ends = row.get("starts_on"), row.get("ends_on")
+    try:
+        starts_d = date.fromisoformat(str(starts))
+        ends_d = date.fromisoformat(str(ends))
+    except (TypeError, ValueError):
+        print(f"[retention:dates] unparseable window {starts!r}..{ends!r}")
+        return {"state": WINDOW_UNREADABLE, "starts_on": starts, "ends_on": ends,
+                "timezone": name}
+
+    if today < starts_d:
+        state = WINDOW_BEFORE
+    elif today > ends_d:
+        # Inclusive of `ends_on`: the last day of school is a school day. The
+        # delete job runs *on* that date, so the final day records and is then
+        # reduced to its rollup like every other -- it is not a day that both
+        # records and is deleted, because the deletion is of per-sample detail.
+        state = WINDOW_AFTER
+    else:
+        state = WINDOW_OPEN
+    return {"state": state, "starts_on": starts, "ends_on": ends, "timezone": name}
+
+
+def _school_timezone() -> ZoneInfo:
+    """The school's zone, for bucketing report days. Defaults to UTC.
+
+    **The opposite default to `_retention_window`, deliberately.** There, an
+    unreadable or typo'd zone denies recording, because getting a boundary wrong
+    means recording outside the window -- data collected that nobody agreed to.
+    Here the same failure means a day boundary is a few hours off on a chart,
+    and denying would blank a parent's dashboard entirely. A wrong bucket is a
+    smaller harm than no report, so this degrades where the gate refuses.
+
+    Read fresh per report, like `_consent`: the window is a single row and the
+    read is cheap, and a cached zone would keep bucketing against the old one
+    for the life of the process after someone corrects a typo.
+    """
+    try:
+        return ZoneInfo(_retention_window().get("timezone") or "UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _school_day(ts, tz: ZoneInfo) -> str:
+    """The calendar day `ts` falls on *at the school*, as YYYY-MM-DD.
+
+    Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
+    by UTC midnight -- which is mid-afternoon the previous day in Los Angeles
+    and mid-morning the next in Sydney. A late-afternoon lesson therefore landed
+    on the wrong day of a parent's chart, and the last day of a school week
+    could show sessions that happened on the Saturday.
+
+    Empty string for anything unparseable, which no day matches, so a bad
+    timestamp drops out of every bucket rather than silently joining one.
+    """
+    parsed = _parse_ts(ts)
+    if parsed is None:
+        return ""
+    return parsed.astimezone(tz).date().isoformat()
+
+
+def _may_record(student_id: str) -> dict:
+    """Consent **and** the retention window, which are different questions.
+
+    Deliberately not folded into `_consent`. That helper answers "what did this
+    family agree to", and it is read by the reporting surfaces, the consent
+    screen itself and the poller status -- none of which should change their
+    answer because the school year ended. Gating inside it would report every
+    channel as off on the last day of term, so a parent could not read the
+    history this phase explicitly keeps until the delete job runs, and a student
+    opening the consent screen in August would be shown three switches off that
+    nobody had touched.
+
+    So the window composes with consent at the recording sites instead. Both
+    fail closed and the reasons stay separate: `window_state` says why nothing
+    is being recorded when every flag is true.
+    """
+    consent = _consent(student_id)
+    window = _retention_window()
+    recording = window["state"] not in _WINDOW_DENIED
+    return {**consent,
+            "window_state": window["state"],
+            "window_starts_on": window["starts_on"],
+            "window_ends_on": window["ends_on"],
+            # The per-channel flags a recording caller should read. Consent is
+            # left untouched above so a caller that needs the raw answer still
+            # has it -- these are the conjunction.
+            "record_eeg": recording and bool(consent.get("eeg_enabled")),
+            "record_headband_optical": recording and bool(
+                consent.get("headband_optical_enabled")),
+            "record_camera": recording and bool(consent.get("camera_enabled"))}
+
+
+def _as_sentence(text: str) -> str:
+    """A reason string as a standalone sentence.
+
+    The reasons are written lowercase and unpunctuated because their main home
+    is an ingest response's `reason` field, sitting beside "eeg not consented".
+    An HTTP error detail is read on its own, so it needs a capital and a stop.
+    Named rather than inlined at its one call site: `x[0].upper() + x[1:]`
+    applied to shared text is the kind of thing that gets copied to a second
+    caller and then a third with a different idea of punctuation.
+    """
+    if not text:
+        return text
+    return text[0].upper() + text[1:] + ("" if text.endswith((".", "!", "?")) else ".")
+
+
+def _window_reason(state: str) -> str | None:
+    """Why this window state does not record, or None when it does.
+
+    The window reason wins over the consent one wherever both could apply: when
+    the year has not started, *no* channel is recording, and reporting "eeg not
+    consented" would send a parent to the consent screen to fix something that
+    is not broken there.
+    """
+    meaning = _WINDOW_STATES.get(state)
+    return meaning.reason if meaning else None
+
+
+def _window_stopped_reason(state: str) -> str | None:
+    """The machine-readable form, for the frontend to pick its own copy from."""
+    meaning = _WINDOW_STATES.get(state)
+    return meaning.stopped_reason if meaning else None
+
+
+def _not_recording_reason(gate: dict, declined: str,
+                          unavailable: str = "consent unavailable") -> str:
+    """Why this channel is not recording. Window first, then consent.
+
+    Both sentences come from the caller whole, not as fragments to interpolate:
+    the sites word them differently ("eeg not consented" against "no consented
+    heart sensor"), and composing them here produced "no consented heart sensor
+    not consented".
+
+    `unavailable` is a parameter for the same reason `declined` is --
+    `/api/eeg/start` says "Could not check whether EEG recording is allowed, so
+    it was not started", which is a better sentence than "consent unavailable"
+    in front of someone who just pressed a button. It used to get that by
+    hand-rolling this precedence inline, which is one edit away from the four
+    sites disagreeing about whether a closed year outranks an unreadable
+    consent row.
+    """
+    window = _window_reason(gate.get("window_state"))
+    if window:
+        return window
+    if not gate.get("retrieved"):
+        return unavailable
+    return declined
 
 
 def _topic_breakdown(student_id: str):
@@ -432,7 +723,22 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     None, and `heart_included` / `emotion_included` tell the caller that means
     "not requested" rather than "nothing recorded".
     """
-    since = _iso_days_ago(days)
+    tz = _school_timezone()
+    # The oldest instant any bucket below can need: midnight at the start of the
+    # earliest school day in range, expressed in UTC for the query.
+    #
+    # Not `now - days` in UTC, which is what this used to be: where the
+    # school is behind UTC the earliest school day starts *before* it -- so the
+    # oldest day on every chart was quietly missing its first few hours and
+    # averaged only the rest. Silent, and worst on the day a reader is most
+    # likely to compare against the one before it.
+    school_today = _utc_now().astimezone(tz).date()
+    # `datetime.min.time()`, not `time.min`: `time` here is the stdlib *module*
+    # (imported at the top for monotonic clocks), so `time.min` is an
+    # AttributeError rather than midnight.
+    since = datetime.combine(school_today - timedelta(days=days - 1),
+                             datetime.min.time(),
+                             tzinfo=tz).astimezone(timezone.utc).isoformat()
 
     def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None, bool]:
         """Rows (newest first), whether the server withheld any, the total, and
@@ -499,10 +805,29 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
     truncated = cog_cut or face_cut or heart_cut or ses_cut
-    cog_oldest_day = _oldest(cog, "ts")[:10]
-    face_oldest_day = _oldest(face, "ts")[:10]
-    ses_oldest_day = _oldest(sessions, "started_at")[:10]
-    heart_oldest_day = _oldest(heart, "ts")[:10]
+    # Compared against the school days built below, so they have to be school
+    # days too -- `_coverage` does `day < oldest_day` as a string, which is only
+    # chronological while both sides are the same calendar.
+    cog_oldest_day = _school_day(_oldest(cog, "ts"), tz)
+    face_oldest_day = _school_day(_oldest(face, "ts"), tz)
+    ses_oldest_day = _school_day(_oldest(sessions, "started_at"), tz)
+    heart_oldest_day = _school_day(_oldest(heart, "ts"), tz)
+
+    # Bucketed once, not re-derived per day. `_school_day` parses a timestamp
+    # and converts a zone; asking it for every row on each of `days` iterations
+    # is O(days x rows) where the string slice it replaced was free. At the row
+    # caps in play that is tens of thousands of parses per report, for an answer
+    # that cannot change between iterations.
+    def _by_school_day(rows: list, ts_col: str) -> dict:
+        out: dict[str, list] = {}
+        for r in rows:
+            out.setdefault(_school_day(r.get(ts_col), tz), []).append(r)
+        return out
+
+    cog_by_day = _by_school_day(cog, "ts")
+    face_by_day = _by_school_day(face, "ts")
+    heart_by_day = _by_school_day(heart, "ts")
+    sessions_by_day = _by_school_day(sessions, "started_at")
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
@@ -552,7 +877,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     daily = []
     for i in range(days - 1, -1, -1):
-        day = (_utc_now() - timedelta(days=i)).date().isoformat()
+        day = (school_today - timedelta(days=i)).isoformat()
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
@@ -576,13 +901,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
             continue
-        day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
-        day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        day_cog = cog_by_day.get(day, [])
+        day_face = face_by_day.get(day, [])
         # Trusted only, matching the week's averages. A day whose every sample
         # was rejected is then a null beside a `heart_retrieved` of True --
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
-        day_heart = [r for r in heart
-                     if str(r.get("ts", ""))[:10] == day and r.get("trusted") is True]
+        day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
 
         daily.append({
             "date": day,
@@ -598,7 +922,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # `sessions_retrieved` is what tells the two apart. A count is the
             # clearest case for withholding a partial day -- half a day's rows
             # give exactly half the sessions, with no hint that it is half.
-            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
+            "sessions": len(sessions_by_day.get(day, []))
                         if ses_whole else None,
             # **Absolute units**, unlike every other series here, which are 0..1
             # ratios rendered as percentages. A consumer applying the same
@@ -690,16 +1014,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                 return "".join(items)
             return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
-        def _sentence_case(text: str) -> str:
-            # Not .capitalize(), which lowercases the rest and turns "EEG" into
-            # "Eeg".
-            return text[:1].upper() + text[1:]
-
         parts = []
         if measured:
             parts.append(f"No {_join(measured, 'or')} samples were recorded this week.")
         if unread:
-            parts.append(_sentence_case(
+            parts.append(_as_sentence(
                 f"{_join(unread, 'and')} data could not be loaded."))
         summary = " ".join(parts)
 
@@ -1374,13 +1693,19 @@ _ingest_sweep_at = time.monotonic()
 _INGEST_SWEEP_EVERY = 60.0
 _INGEST_SWEEP_ABOVE = 1024
 
-# Which heart sources each consent flag permits. One flag per *sensor*, so a
-# student who allowed the headband and declined the camera has consented to
-# muse_optics and muse_ppg and not to rppg. Rejecting per source rather than
-# per channel is the entire reason heart_signals carries `source` at all.
-_HEART_SOURCES_BY_CONSENT = {
-    "headband_optical_enabled": ("muse_optics", "muse_ppg"),
-    "camera_enabled":           ("rppg",),
+# Which heart sources each sensor permits. One entry per *sensor*, so a student
+# who allowed the headband and declined the camera has consented to muse_optics
+# and muse_ppg and not to rppg. Rejecting per source rather than per channel is
+# the entire reason heart_signals carries `source` at all.
+#
+# Keyed on `_may_record`'s composed `record_*` flags, not on the raw
+# `*_enabled` consent flags. Consent alone is not permission to record -- the
+# school year has to be open too -- and keying on the raw flags meant every
+# caller had to remember to check the window itself, which is exactly the
+# duplication that produced two hand-written copies of that check.
+_HEART_SOURCES_BY_RECORD_FLAG = {
+    "record_headband_optical": ("muse_optics", "muse_ppg"),
+    "record_camera":           ("rppg",),
 }
 
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
@@ -2244,7 +2569,38 @@ def _consent(student_id: str) -> dict:
 # The poller writes `cognitive_signals` directly with the service-role client,
 # so neither RLS nor the ingest endpoint's gate applies to it. This is what
 # subjects it to the same consent rule as the push path.
-eeg_poller.set_consent_check(lambda student_id: bool(_consent(student_id).get("eeg_enabled")))
+def _poller_may_record_eeg(student_id: str) -> bool:
+    """The poller's recurring permission check, and the log that says why not.
+
+    The poller takes a bool, so it cannot distinguish a withdrawal from a closed
+    school year or from a failed read of either -- and its own line used to
+    assert "consent withdrawn" for all of them, which names a decision the
+    family may never have made. This is the site that knows, so this is the site
+    that logs it.
+    """
+    gate = _may_record(student_id)
+    if gate["record_eeg"]:
+        return True
+    print(f"<<< [eeg-poller] {student_id[:8]}: "
+          f"{_not_recording_reason(gate, 'eeg not consented')}", flush=True)
+    return False
+
+
+def _poller_may_record_eeg_reason(student_id: str) -> str:
+    """Why `eeg_poller.start()`'s own recheck refused, for its exception text.
+
+    `start()` calls `_consent_check` first and only reaches this on refusal, so
+    it is a second `_may_record` read of a answer that just came back False --
+    accepted for a start()-time error message, which is not a hot path.
+    Without this, `start()`'s race-closing refusal always blamed consent, even
+    when the real cause was a closed school year.
+    """
+    gate = _may_record(student_id)
+    return _as_sentence(_not_recording_reason(gate, "eeg not consented"))
+
+
+eeg_poller.set_consent_check(_poller_may_record_eeg)
+eeg_poller.set_consent_reason_check(_poller_may_record_eeg_reason)
 
 
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
@@ -2648,11 +3004,22 @@ def _rate_limit_ingest(user_id: str):
         _ingest_hits[user_id] = hits
 
 
-def _permitted_heart_sources(consent: dict) -> set[str]:
-    """The sources this student's consent covers. Empty means record nothing."""
+def _permitted_heart_sources(gate: dict) -> set[str]:
+    """The sources this student may currently be recorded from.
+
+    Takes a `_may_record` result and reads its `record_*` flags -- consent AND
+    the school year, already composed -- not the raw consent flags beside them.
+    Both call sites previously took the raw ones and then re-checked the window
+    by hand, which is two copies of a rule that `_may_record` had already
+    applied and returned.
+
+    A raw `_consent` dict has no `record_*` keys, so passing one yields the
+    empty set: nothing recorded. That is the safe direction for a mistake here,
+    and `test_a_raw_consent_dict_permits_nothing` pins it.
+    """
     allowed: set[str] = set()
-    for flag, sources in _HEART_SOURCES_BY_CONSENT.items():
-        if consent.get(flag):
+    for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items():
+        if gate.get(flag):
             allowed.update(sources)
     return allowed
 
@@ -2665,13 +3032,15 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
     check reaches it, so under `INGEST_MODE=pull` this is the only enforcement
     there is.
 
-    Built from `_consent` and `_permitted_heart_sources`, the same two calls
-    `/api/signals/heart` makes, rather than a second read of the same table:
+    Built from `_may_record` and `_permitted_heart_sources`, the same two calls
+    `/api/signals/heart` makes, rather than a second read of the same tables:
     the two ingestion paths giving different answers about one student is the
-    failure this whole arrangement exists to prevent. `_consent` already fails
-    closed on a read error, so no denial is added here.
+    failure this whole arrangement exists to prevent. Both halves of
+    `_may_record` already fail closed, so no denial is added here -- and because
+    `_permitted_heart_sources` reads the composed `record_*` flags, the school
+    year is applied without this function mentioning it.
     """
-    return source in _permitted_heart_sources(_consent(student_id))
+    return source in _permitted_heart_sources(_may_record(student_id))
 
 
 eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
@@ -2703,11 +3072,13 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # the check -- survivable when its sole writer was a poller this backend
     # started, and not once the writer is a process on the student's machine.
     # `_consent` fails closed, so an unreadable consent row records nothing.
-    consent = _consent(user["id"])
-    if not consent.get("eeg_enabled"):
+    # ...and outside the school year nothing records whatever consent says.
+    # Both fail closed, and the reason says which one refused: "the year has
+    # ended" sends nobody to the consent screen to fix a setting that is fine.
+    consent = _may_record(user["id"])
+    if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
-                "reason": ("consent unavailable" if not consent.get("retrieved")
-                           else "eeg not consented")}
+                "reason": _not_recording_reason(consent, "eeg not consented")}
 
     # Accepted in either mode -- rejecting it under `pull` would break mixed
     # local dev -- but warned about when this session is *actually* being
@@ -2793,11 +3164,10 @@ def ingest_face(payload: FaceBatch, request: Request):
     # that kept sending after a student withdrew would otherwise keep recording,
     # and the withdrawal would look respected from every surface that reads.
     # `_consent` fails closed, so an unreadable consent row records nothing.
-    consent = _consent(user["id"])
-    if not consent.get("camera_enabled"):
+    consent = _may_record(user["id"])
+    if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
-                "reason": ("consent unavailable" if not consent.get("retrieved")
-                           else "camera not consented")}
+                "reason": _not_recording_reason(consent, "camera not consented")}
 
     # Through the shared mapper, not inline. Two copies of this had already
     # drifted -- the mapper dropped gaze_x/gaze_y that this endpoint wrote --
@@ -2842,7 +3212,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
     _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
 
-    consent = _consent(user["id"])
+    consent = _may_record(user["id"])
     allowed = _permitted_heart_sources(consent)
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
@@ -2854,8 +3224,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
     # that is down looks exactly like a student who said no.
     reason = None
     if not allowed:
-        reason = ("consent unavailable" if not consent.get("retrieved")
-                  else "no consented heart sensor")
+        reason = _not_recording_reason(consent, "no consented heart sensor")
 
     rows = [r for r in (
         signal_mapping.map_heart_to_heart_signal(
@@ -3100,15 +3469,33 @@ def _poller_status(user_id: str) -> dict:
     status = eeg_poller.status(user_id)
     if status.get("running"):
         return status
-    consent = _consent(user_id)
-    if not consent.get("retrieved"):
+    # The window first, and for the same reason the ingest reasons order it
+    # that way: outside the school year *nothing* is recording, so reporting
+    # "consent_withdrawn" -- or worse, nothing at all -- describes a decision
+    # the family never made. A poller that is not running with consent intact
+    # and no reason attached is precisely the silent quiet week this module's
+    # reporting rules exist to stop, and a closed year was reaching it that way.
+    #
+    # `_may_record` rather than a window read and a consent read placed in the
+    # right order by hand: it is the same conjunction the recording sites use,
+    # and re-deriving it here is how the two would come to disagree about which
+    # answer wins. It carries the raw consent flags alongside the composed
+    # ones, which is what lets this still report a withdrawal *by name* rather
+    # than only "not recording".
+    gate = _may_record(user_id)
+    stopped = _window_stopped_reason(gate["window_state"])
+    if stopped:
+        return {**status, "stopped_reason": stopped,
+                "window_starts_on": gate["window_starts_on"],
+                "window_ends_on": gate["window_ends_on"]}
+    if not gate.get("retrieved"):
         # Unknown, not "withdrawn". The reporting three-state rule again: a
         # failed read is not a refusal, and saying so wrongly to a parent is
         # worse than saying nothing.
         return {**status, "stopped_reason": "consent_unknown"}
-    if not consent.get("eeg_enabled"):
+    if not gate.get("eeg_enabled"):
         return {**status, "stopped_reason": "consent_withdrawn",
-                "revoked_at": consent.get("eeg_revoked_at")}
+                "revoked_at": gate.get("eeg_revoked_at")}
     return status
 
 
@@ -3338,14 +3725,18 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     # And before the poller exists at all. Historical rows stay; nothing new is
     # written until consent is given. `_consent` fails closed, so an unreadable
     # row refuses rather than records.
-    consent = _consent(user["id"])
-    if not consent.get("eeg_enabled"):
-        raise HTTPException(
-            403,
-            "EEG recording is switched off for this student."
-            if consent.get("retrieved")
-            else "Could not check whether EEG recording is allowed, so it was not started.",
-        )
+    consent = _may_record(user["id"])
+    if not consent["record_eeg"]:
+        # 403 for all of these, and the body says which. Not 409: that one
+        # means "this deployment does not work that way", and a closed school
+        # year is a fact about the school, not about the deployment.
+        #
+        # Same helper as the three ingest endpoints, so the precedence -- window
+        # ahead of consent -- is decided once. Only the wording is local.
+        raise HTTPException(403, _as_sentence(_not_recording_reason(
+            consent,
+            "EEG recording is switched off for this student.",
+            "Could not check whether EEG recording is allowed, so it was not started.")))
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
@@ -3360,6 +3751,16 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
+    except eeg_poller.ConsentError as e:
+        # `_may_record` passed a moment ago and `start()` checks again, so this
+        # is the gap between them: a withdrawal, or the school year ending,
+        # between the two. Rare, and it surfaced as a raw 500 -- an outcome that
+        # reads as a broken server for what is actually the system working.
+        #
+        # Also the unwired-check case, which raises the same class. That is a
+        # misconfigured deployment rather than a decision about this student, so
+        # it must not be reported as one: the message comes from the exception.
+        raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
         # Covers two distinct causes with one message deliberately: a live
         # poller already recording for someone else, or someone else's

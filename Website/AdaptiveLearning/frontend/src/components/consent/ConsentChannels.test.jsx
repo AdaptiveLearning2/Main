@@ -17,6 +17,21 @@ const ALL_ON = {
   },
 }
 
+// What a failed read actually looks like. `_consent()` fails **closed**, so it
+// is not an error shape or a truncated one -- it is a complete, plausible
+// payload in which every channel is off and none carries a date. That is what
+// makes it dangerous to render, and why `{...ALL_ON, retrieved: false}` proved
+// nothing: those channels are on, so no switch could have misreported them.
+const READ_FAILED = {
+  student_id: 'stu-1',
+  retrieved: false,
+  channels: {
+    eeg: { enabled: false, revoked_at: null, revoked_by: null },
+    headband_optical: { enabled: false, revoked_at: null, revoked_by: null },
+    camera: { enabled: false, revoked_at: null, revoked_by: null },
+  },
+}
+
 const CAMERA_OFF = {
   ...ALL_ON,
   channels: {
@@ -55,11 +70,26 @@ describe('reading', () => {
     // `retrieved: false` is "we could not find out", which is not "the student
     // withdrew". Telling a parent the second when the first is true is the
     // three-state failure the reporting rules exist to stop.
-    apiFetch.mockResolvedValue({ ...ALL_ON, retrieved: false })
+    apiFetch.mockResolvedValue(READ_FAILED)
 
     render(<ConsentChannels studentId="stu-1" role="parent" />)
 
     expect(await screen.findByText(/Could not load these settings/)).toBeInTheDocument()
+    // The banner was never the whole claim. Drawn beside the fail-closed
+    // payload it read as three deliberately withdrawn channels.
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('does not tell a student a parent must restore what nobody switched off', async () => {
+    // The student view is where this did the most damage: three locked switches
+    // and a sentence about a decision that was never made.
+    apiFetch.mockResolvedValue(READ_FAILED)
+
+    render(<ConsentChannels studentId="stu-1" role="student" />)
+
+    expect(await screen.findByText(/Could not load these settings/)).toBeInTheDocument()
+    expect(screen.queryByText(/A parent can turn this back on for you/)).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 })
 

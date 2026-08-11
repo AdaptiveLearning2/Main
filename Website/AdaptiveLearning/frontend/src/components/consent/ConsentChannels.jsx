@@ -109,12 +109,23 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const load = useCallback((keepError = null) => {
     return apiFetch(`/api/consent/${studentId}`)
       .then(c => {
-        setChannels(c.channels)
         // `retrieved: false` means the read itself failed. Rendering that as
         // "everything is off" would tell a parent their child's channels are
         // disabled when we simply could not find out — the same three-state
         // distinction the reporting surfaces keep.
-        setError(c.retrieved === false
+        //
+        // Which is why the banner alone was not enough. `_consent()` fails
+        // **closed**, so a failed read does not arrive as an error shape or a
+        // partial one — it is a complete, plausible payload with all three
+        // channels `enabled: false` and no `revoked_at` on any of them. Setting
+        // it drew the banner *and* three off switches; for `role="student"`,
+        // three locked ones reading "A parent can turn this back on for you",
+        // which is a claim about a decision nobody made, during what may be a
+        // few seconds of outage. Holding `channels` at null is what makes the
+        // early return below the entire render.
+        const failed = c.retrieved === false
+        setChannels(failed ? null : c.channels)
+        setError(failed
           ? 'Could not load these settings. Nothing has been changed.'
           : keepError)
       })

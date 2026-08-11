@@ -446,3 +446,56 @@ def test_a_day_with_only_heart_data_is_not_dropped(monkeypatch):
 
     assert days, "the day was dropped despite a successful heart read"
     assert days[0]["heart_rate_bpm"] == 71.0
+
+
+def _revoked(headband_at, camera_at):
+    """Both heart sensors off, each with its own revocation stamp."""
+    return _tables({"user_id": STUDENT, "eeg_enabled": True,
+                    "headband_optical_enabled": False, "camera_enabled": False,
+                    "headband_optical_revoked_at": headband_at,
+                    "camera_revoked_at": camera_at})
+
+
+def test_the_heart_revocation_date_is_the_later_of_the_two_sensors(monkeypatch):
+    """Heart comes from either sensor, so it stopped being recorded when the
+    *second* one went off, not the first."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _revoked("2026-08-01T10:00:00+00:00", "2026-08-05T09:00:00+00:00")))
+
+    channels = main._reportable_channels(STUDENT)
+
+    assert channels.heart is False
+    assert channels.heart_revoked_at == "2026-08-05T09:00:00+00:00"
+
+
+def test_the_later_instant_wins_when_only_the_spelling_separates_them(monkeypatch):
+    """Compared as instants, not as text.
+
+    Both stamps are written by `_utc_now().isoformat()` today, so lexical order
+    happens to agree -- but that is a property of the writer, not of the column,
+    and PostgREST is free to hand back either spelling.
+
+    The two below are half a second apart on the same second, which is what
+    makes this a test rather than a restatement: every character up to the
+    fractional part is identical, so the comparison is decided by `.` (0x2E)
+    against `Z` (0x5A). Lexically `Z` wins and the *earlier* instant is
+    reported. Pick timestamps whose dates differ and a string max gets the right
+    answer for the wrong reason -- the first version of this test did exactly
+    that and passed against the bug it was written for.
+    """
+    later   = "2026-08-05T09:00:00.500000+00:00"   # the true maximum
+    earlier = "2026-08-05T09:00:00Z"               # wins a string comparison
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_revoked(later, earlier)))
+
+    assert main._reportable_channels(STUDENT).heart_revoked_at == later
+
+
+def test_an_unparseable_stamp_does_not_outrank_a_real_one(monkeypatch):
+    """A bad value has to lose. Sorting it high would replace a correct date
+    with a string no surface can render."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _revoked("not-a-timestamp", "2026-08-01T10:00:00+00:00")))
+
+    channels = main._reportable_channels(STUDENT)
+
+    assert channels.heart_revoked_at == "2026-08-01T10:00:00+00:00"

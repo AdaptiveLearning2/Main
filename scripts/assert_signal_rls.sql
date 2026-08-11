@@ -714,5 +714,65 @@ BEGIN
     END IF;
 END $$;
 
+-- ── `sessions` is read-only to clients ──────────────────────────────────────
+--
+-- The table has a `sessions: own` policy with no `FOR` clause, so `FOR ALL`.
+-- That is fine as long as the *grant* is SELECT: RLS narrows which rows a
+-- command touches, never which commands exist. With `authenticated=arwd` on
+-- top of it -- which is what Supabase's default privileges hand out, and what
+-- this table carried until `20260817000000` -- a student could rewrite any
+-- column of their own sessions through PostgREST.
+--
+-- `chart_paths` is the sharp end and the reason this was found: a path pointed
+-- at another child's chart object, then signed by an endpoint that had just
+-- correctly confirmed the caller owns the session. The endpoint no longer
+-- trusts it, but `started_at`/`ended_at` drive the rollup's day bucketing and
+-- the expiry cutoff, and a DELETE here cascades all three signal tables.
+
+DO $$
+DECLARE
+    owner_id uuid;
+    sess     uuid;
+BEGIN
+    SELECT i.owner_id, i.sess_id INTO owner_id, sess FROM _ids i;
+
+    IF has_table_privilege('anon', 'public.sessions', 'SELECT') THEN
+        RAISE EXCEPTION 'anon holds SELECT on sessions';
+    END IF;
+
+    -- The half that keeps the rest honest: the grant is narrowed, not removed,
+    -- so a check for "cannot write" must not be passing because the role cannot
+    -- reach the table at all.
+    IF NOT has_table_privilege('authenticated', 'public.sessions', 'SELECT') THEN
+        RAISE EXCEPTION
+            'authenticated lost SELECT on sessions, so the write checks below '
+            'prove nothing about the grant being the narrow one intended';
+    END IF;
+
+    IF has_table_privilege('authenticated', 'public.sessions', 'UPDATE')
+       OR has_table_privilege('authenticated', 'public.sessions', 'INSERT')
+       OR has_table_privilege('authenticated', 'public.sessions', 'DELETE') THEN
+        RAISE EXCEPTION
+            'authenticated can write sessions -- a student can rewrite their '
+            'own chart_paths, timestamps, or cascade-delete their signal rows';
+    END IF;
+
+    -- And it holds in practice, not just in the ACL. A student updating their
+    -- *own* row is exactly what the FOR ALL policy permits, so this fails on
+    -- the privilege or it does not fail at all.
+    SET LOCAL ROLE authenticated;
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', owner_id, 'role', 'authenticated')::text,
+                       true);
+    BEGIN
+        UPDATE public.sessions
+           SET chart_paths = '{"cognitive_timeline": "someone-else/x.svg"}'::jsonb
+         WHERE id = sess;
+        RAISE EXCEPTION 'a student rewrote chart_paths on their own session';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    RESET ROLE;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

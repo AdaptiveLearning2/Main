@@ -287,6 +287,205 @@ def test_archiving_reads_no_more_rows_than_session_review_does():
     assert f"limit({chart_archive._ROW_CAP})" in source
 
 
+# ── reading them back ───────────────────────────────────────────────────────
+
+class _SigningStorage(_Storage):
+    """Signs anything it was given, and refuses anything it was not.
+
+    Modelling the refusal is the point: an object recorded on `chart_paths` and
+    absent from the bucket is a fault, and the endpoint has to report it as one
+    rather than as a channel that recorded nothing."""
+
+    def create_signed_url(self, path, expires_in):
+        if path not in self.uploaded:
+            raise RuntimeError("Object not found")
+        self.signed = getattr(self, "signed", [])
+        self.signed.append((path, expires_in))
+        return {"signedURL": f"https://storage.test/{path}?token=x&exp={expires_in}",
+                "signedUrl": f"https://storage.test/{path}?token=x&exp={expires_in}"}
+
+
+class _SigningClient(_Client):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._storage = _SigningStorage()
+
+
+def test_signing_separates_nothing_recorded_from_nothing_readable():
+    """The property the whole payload shape exists for. A null and a missing
+    object both leave a blank tile, and only one of them is the truth about the
+    session -- a bucket half-emptied by hand would otherwise read as a term in
+    which nobody wore a headband."""
+    client = _SigningClient(cognitive=COG)
+    paths = chart_archive.archive_session(client, SESSION, USER)
+    # Recorded, but the object is not there.
+    paths["heart_rate"] = f"{USER}/{SESSION}/heart_rate.svg"
+
+    urls, missing = chart_archive.signed_chart_urls(client, paths, USER, SESSION)
+
+    assert urls["cognitive_timeline"].startswith("https://storage.test/")
+    assert urls["emotion_pie"] is None          # channel produced nothing
+    assert missing == ["heart_rate"]            # object should exist and does not
+    assert "heart_rate" not in urls
+
+
+def test_a_tampered_path_cannot_reach_another_students_object():
+    """`chart_paths` is ordinary jsonb on `sessions`, and `sessions` carries a
+    `FOR ALL` own-row policy, so before the accompanying migration a student
+    could PATCH their own row through PostgREST and point it at another child's
+    object. Signing what is stored would then hand it over -- through an
+    endpoint whose access check had just correctly confirmed they own *this*
+    session.
+
+    So presence is all the stored value decides; the path is derived. The
+    migration revokes the write as well, but this must hold without it: a grant
+    is one migration away from being widened back, and the endpoint is the layer
+    that cannot be.
+    """
+    victim = "99999999-8888-7777-6666-555555555555"
+    client = _SigningClient(cognitive=COG)
+    chart_archive.archive_session(client, SESSION, USER)
+    # What the attacker's own session row now claims.
+    tampered = {"cognitive_timeline": f"{victim}/their-session/cognitive_timeline.svg"}
+
+    urls, missing = chart_archive.signed_chart_urls(client, tampered, USER, SESSION)
+
+    assert victim not in urls.get("cognitive_timeline", "")
+    assert urls["cognitive_timeline"].startswith(
+        f"https://storage.test/{USER}/{SESSION}/")
+    assert missing == []
+
+
+def test_a_chart_never_attempted_appears_in_neither_half():
+    """An absent key is a session closed before Phase 8 shipped. Reporting it as
+    a null would claim that channel was on and drew nothing."""
+    client = _SigningClient()
+
+    urls, missing = chart_archive.signed_chart_urls(client, {}, USER, SESSION)
+
+    assert urls == {} and missing == []
+
+
+def test_signed_urls_are_short_lived():
+    """There is no revocation: a signed URL stays valid until it expires,
+    whatever happens to consent in between, so the TTL is the only bound on a
+    leaked one."""
+    client = _SigningClient(cognitive=COG)
+    paths = chart_archive.archive_session(client, SESSION, USER)
+
+    chart_archive.signed_chart_urls(client, paths, USER, SESSION)
+
+    assert client.bucket.signed == [
+        (paths["cognitive_timeline"], chart_archive.SIGNED_URL_TTL_SECONDS)]
+    assert chart_archive.SIGNED_URL_TTL_SECONDS <= 900
+
+
+# ── the endpoint ────────────────────────────────────────────────────────────
+
+class _SessionsClient(_SigningClient):
+    """Adds the `sessions` row the endpoint reads before it signs anything."""
+
+    def __init__(self, row, **kw):
+        super().__init__(**kw)
+        self._row = row
+
+    def table(self, name):
+        if name == "sessions":
+            row = self._row
+
+            class _T:
+                def select(self, *_a, **_k):
+                    return self
+
+                def eq(self, *_a, **_k):
+                    return self
+
+                def single(self):
+                    return self
+
+                def execute(self):
+                    if row is None:
+                        raise RuntimeError("no such row")
+                    return type("R", (), {"data": row})()
+
+            return _T()
+        return super().table(name)
+
+
+def _charts(monkeypatch, row, viewer="viewer", **kw):
+    import main
+
+    client = _SessionsClient(row, **kw)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": viewer})
+    monkeypatch.setattr(main, "supabase", client)
+    return main.session_charts(SESSION, None), client
+
+
+def test_the_endpoint_checks_the_relationship_not_the_role(monkeypatch):
+    """The only thing between a caller and another child's charts. Unlike the
+    rows next door, these objects sit in a bucket with no policies at all, so
+    there is no second line of defence if this check is wrong."""
+    import main
+
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "a-stranger"})
+    monkeypatch.setattr(main, "supabase",
+                        _SessionsClient({"user_id": USER, "chart_paths": {}}))
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.session_charts(SESSION, None)
+    assert exc.value.status_code == 403
+
+
+def test_a_session_that_was_never_archived_says_so(monkeypatch):
+    """Column-NULL, and no storage call at all. `archived: false` is a different
+    fact from four nulls, and a viewer must not be told a student recorded
+    nothing when the archive simply never ran."""
+    import main
+
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    payload, client = _charts(monkeypatch,
+                              {"user_id": USER, "chart_paths": None})
+
+    assert payload["archived"] is False
+    assert payload["charts"] == {} and payload["unavailable"] == []
+    assert not hasattr(client.bucket, "signed")
+
+
+def test_the_endpoint_returns_a_url_per_recorded_chart(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *_a: None)
+    # Archive with the plain client, then read back through one that serves the
+    # sessions row -- the same objects, reached the way the endpoint reaches
+    # them, rather than a hand-written path map that could agree with nothing.
+    archiver = _SigningClient(cognitive=COG)
+    paths = chart_archive.archive_session(archiver, SESSION, USER)
+    client = _SessionsClient({"user_id": USER, "chart_paths": paths})
+    client._storage = archiver._storage
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", client)
+
+    payload = main.session_charts(SESSION, None)
+
+    assert payload["archived"] is True
+    assert payload["charts"]["cognitive_timeline"].startswith("https://")
+    assert payload["charts"]["heart_rate"] is None
+    assert payload["expires_in"] == chart_archive.SIGNED_URL_TTL_SECONDS
+
+
+def test_an_unreadable_session_row_is_a_404_not_an_empty_payload(monkeypatch):
+    """Matching the endpoint next door. Degrading to "no charts" here would
+    report an absence the read never established."""
+    import main
+
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main, "supabase", _SessionsClient(None))
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.session_charts(SESSION, None)
+    assert exc.value.status_code == 404
+
+
 # ── every close site archives ───────────────────────────────────────────────
 
 def test_every_session_close_schedules_an_archive():

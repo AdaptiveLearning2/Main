@@ -3593,6 +3593,62 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
 
 
+@app.get("/api/signals/session/{session_id}/charts")
+def session_charts(session_id: str, request: Request):
+    """Short-lived signed URLs for a closed session's archived charts.
+
+    The same access rule as the endpoint above, and for a stronger reason. Those
+    are rows, which RLS would still filter if this check were wrong; these are
+    objects in a bucket with no policies at all, so `_verify_can_view_student`
+    is the only thing between a caller and another child's charts.
+
+    Signed and short-lived rather than public. A public object URL cannot be
+    un-shared once it has travelled, and a signed one cannot be revoked either
+    -- which is why the TTL is small. Consent withdrawn a minute after a URL is
+    issued does not reach back and invalidate it.
+
+    The payload keeps the states apart that a bare map of URLs would collapse:
+
+    | Field | Meaning |
+    | --- | --- |
+    | `archived: false` | the archive never ran -- closed before Phase 8, or the job failed |
+    | `charts[name]: null` | that channel produced nothing to draw |
+    | `name in unavailable` | a path was recorded and the object could not be read |
+
+    A tile rendering "no charts" has to consult all three, the same rule the
+    reporting helpers follow -- an absence must not look like a quiet term.
+    There is deliberately no `retrieved` flag: unlike those helpers this one
+    raises rather than degrading to an empty payload, matching the endpoint
+    above, and a flag that is never false is a state that does not exist.
+    """
+    user = get_user(request)
+    try:
+        sess = supabase.table("sessions").select("user_id, chart_paths") \
+            .eq("id", session_id).single().execute()
+    except Exception:
+        raise HTTPException(404, "Session not found")
+    if not sess.data:
+        raise HTTPException(404, "Session not found")
+    _verify_can_view_student(user, sess.data["user_id"])
+
+    paths = sess.data.get("chart_paths")
+    if paths is None:
+        # Column-NULL is its own answer and needs no storage call: the archive
+        # never ran for this session. Distinct from `{}` and from four nulls.
+        return {"archived": False, "charts": {}, "unavailable": [],
+                "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+
+    # The session's own owner and id, not anything read out of `chart_paths`.
+    # That column is writable by the student through PostgREST, so a path taken
+    # from it is attacker-controlled: pointed at another child's object, it
+    # would be signed by an endpoint that had just correctly confirmed the
+    # caller owns *this* session. Presence is all it decides.
+    urls, unavailable = chart_archive.signed_chart_urls(
+        supabase, paths, sess.data["user_id"], session_id)
+    return {"archived": True, "charts": urls, "unavailable": unavailable,
+            "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
+
+
 # ─── live monitoring (only show truly active sessions) ───────────────────
 
 # Small and dedicated rather than reused from _strategy_pool: that pool's

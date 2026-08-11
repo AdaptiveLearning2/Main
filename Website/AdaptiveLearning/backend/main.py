@@ -119,10 +119,6 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _iso_days_ago(days: int = 7) -> str:
-    return (_utc_now() - timedelta(days=days)).isoformat()
-
-
 # ── the school-year retention window ────────────────────────────────────────
 #
 # Every state a caller can be in, named. `open` is the only one that records.
@@ -731,7 +727,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     # The oldest instant any bucket below can need: midnight at the start of the
     # earliest school day in range, expressed in UTC for the query.
     #
-    # Not `_iso_days_ago(days)`. That is `now - days` in UTC, and where the
+    # Not `now - days` in UTC, which is what this used to be: where the
     # school is behind UTC the earliest school day starts *before* it -- so the
     # oldest day on every chart was quietly missing its first few hours and
     # averaged only the rest. Silent, and worst on the day a reader is most
@@ -817,6 +813,22 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     ses_oldest_day = _school_day(_oldest(sessions, "started_at"), tz)
     heart_oldest_day = _school_day(_oldest(heart, "ts"), tz)
 
+    # Bucketed once, not re-derived per day. `_school_day` parses a timestamp
+    # and converts a zone; asking it for every row on each of `days` iterations
+    # is O(days x rows) where the string slice it replaced was free. At the row
+    # caps in play that is tens of thousands of parses per report, for an answer
+    # that cannot change between iterations.
+    def _by_school_day(rows: list, ts_col: str) -> dict:
+        out: dict[str, list] = {}
+        for r in rows:
+            out.setdefault(_school_day(r.get(ts_col), tz), []).append(r)
+        return out
+
+    cog_by_day = _by_school_day(cog, "ts")
+    face_by_day = _by_school_day(face, "ts")
+    heart_by_day = _by_school_day(heart, "ts")
+    sessions_by_day = _by_school_day(sessions, "started_at")
+
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
     # Newest *trusted* reading, matching every other heart figure in this
@@ -889,13 +901,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
             continue
-        day_cog = [r for r in cog if _school_day(r.get("ts"), tz) == day]
-        day_face = [r for r in face if _school_day(r.get("ts"), tz) == day]
+        day_cog = cog_by_day.get(day, [])
+        day_face = face_by_day.get(day, [])
         # Trusted only, matching the week's averages. A day whose every sample
         # was rejected is then a null beside a `heart_retrieved` of True --
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
-        day_heart = [r for r in heart
-                     if _school_day(r.get("ts"), tz) == day and r.get("trusted") is True]
+        day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
 
         daily.append({
             "date": day,
@@ -911,8 +922,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # `sessions_retrieved` is what tells the two apart. A count is the
             # clearest case for withholding a partial day -- half a day's rows
             # give exactly half the sessions, with no hint that it is half.
-            "sessions": len([r for r in sessions
-                             if _school_day(r.get("started_at"), tz) == day])
+            "sessions": len(sessions_by_day.get(day, []))
                         if ses_whole else None,
             # **Absolute units**, unlike every other series here, which are 0..1
             # ratios rendered as percentages. A consumer applying the same

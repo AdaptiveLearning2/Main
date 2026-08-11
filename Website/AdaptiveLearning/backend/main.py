@@ -295,9 +295,9 @@ def _school_timezone() -> ZoneInfo:
     and denying would blank a parent's dashboard entirely. A wrong bucket is a
     smaller harm than no report, so this degrades where the gate refuses.
 
-    Read fresh per report, like `_consent`: the window is a single row and the
-    read is cheap, and a cached zone would keep bucketing against the old one
-    for the life of the process after someone corrects a typo.
+    Shares `_retention_window`'s cache, so a corrected timezone typo can take
+    up to `_RETENTION_TTL_SECONDS` to reach a report -- a bounded lag, not the
+    unbounded one a process-lifetime cache here would add on top of it.
     """
     try:
         return ZoneInfo(_retention_window().get("timezone") or "UTC")
@@ -601,7 +601,13 @@ def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: 
     """
     return supabase.rpc(name, {**params,
                                "p_include_heart": include_heart,
-                               "p_include_emotion": include_emotion}).execute()
+                               "p_include_emotion": include_emotion,
+                               # School timezone, not UTC: `_weekly_signal_report`
+                               # buckets its "this week" the same way, and these
+                               # RPCs backed the headline tiles on the same page
+                               # while still cutting off in UTC -- two numbers
+                               # computed against different week boundaries.
+                               "p_timezone": _retention_window().get("timezone") or "UTC"}).execute()
 
 
 def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,

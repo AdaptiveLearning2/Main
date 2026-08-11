@@ -768,6 +768,15 @@ deliberate.** A wrong boundary while recording collects data nobody agreed to; a
 while reporting moves a chart column by a few hours. Refusing to report over a config typo is the
 larger harm, so the gate fails closed and the report degrades.
 
+There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
+edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`
+are revoked outright, so only `service_role` and the dashboard reach it. Both are needed: RLS never
+filters `TRUNCATE`.
+
+Tests: `backend/tests/test_retention_window.py`. Every other test file gets an open year from the
+autouse `_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording
+nothing, for a reason unrelated to what they assert.
+
 ### The daily rollup is written as sessions close, never at expiry
 
 `signal_daily_rollup` holds one row per student per school day per channel
@@ -796,14 +805,10 @@ such an explanation. `trusted_sample_count` is defined per channel (cognitive ha
 it counts rows that produced a measurement rather than the nulled ones a poor-contact headband
 writes).
 
-There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
-edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`
-are revoked outright, so only `service_role` and the dashboard reach it. Both are needed: RLS never
-filters `TRUNCATE`.
-
-Tests: `backend/tests/test_retention_window.py`. Every other test file gets an open year from the
-autouse `_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording
-nothing, for a reason unrelated to what they assert.
+Its access rules differ from `retention_window`'s above: the rollup carries a **read-your-own
+`SELECT` policy** and `authenticated` keeps `SELECT`, matching the per-sample tables it summarises.
+There is no insert/update/delete policy for anyone, so with RLS on, PostgREST cannot write it
+whatever JWT it carries — the only correct writer is `rollup_signal_day`.
 
 ## Consent — `signal_consent` decides what may be recorded
 

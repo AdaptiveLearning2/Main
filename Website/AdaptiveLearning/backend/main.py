@@ -2828,19 +2828,6 @@ def _consent(student_id: str) -> dict:
 # The poller writes `cognitive_signals` directly with the service-role client,
 # so neither RLS nor the ingest endpoint's gate applies to it. This is what
 # subjects it to the same consent rule as the push path.
-# Why the last refusal happened, per student, written by the check below and
-# read by the one after it. `eeg_poller.start()` asks for the bool and then, on
-# refusal, for the sentence -- and the alternative to remembering it is reading
-# `_may_record` a second time, which is both an extra round trip on every
-# refused start *and* a second answer that can disagree with the first one it
-# is supposed to be explaining.
-#
-# Bounded by construction: one entry per student, replaced on each refusal and
-# removed as soon as it is read.
-_last_refusal: dict[str, str] = {}
-_last_refusal_lock = threading.Lock()
-
-
 def _poller_may_record_eeg(student_id: str) -> bool:
     """The poller's recurring permission check, and the log that says why not.
 
@@ -2859,8 +2846,6 @@ def _poller_may_record_eeg(student_id: str) -> bool:
     # "Eeg not consented." The ingest endpoints keep the lowercase form in their
     # machine-ish `reason` field; this path is read by a person.
     reason = _as_sentence(_not_recording_reason(gate, "EEG not consented"))
-    with _last_refusal_lock:
-        _last_refusal[student_id] = reason
     print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
     return False
 
@@ -2868,19 +2853,23 @@ def _poller_may_record_eeg(student_id: str) -> bool:
 def _poller_may_record_eeg_reason(student_id: str) -> str:
     """Why `eeg_poller.start()`'s own recheck refused, for its exception text.
 
-    Reuses what the bool check just worked out. `start()` calls that first and
-    only reaches this on refusal, so the answer is a few microseconds old --
-    where re-reading `_may_record` would cost a second round trip and could
-    return a *different* verdict from the one being explained, which is the
-    worst of both.
+    Reads `_may_record` again rather than reusing what the bool check just
+    computed. That is a second round trip, and it is the right trade: the only
+    caller is `start()` refusing, which is an error path taken once per attempt.
 
-    Falls back to a fresh read if there is nothing remembered, so an unwired or
-    reordered caller still gets a true sentence rather than a stale one.
+    Passing the reason along instead needs somewhere to put it, and a cache
+    keyed by student is not that somewhere -- the poller's own recheck loop
+    refuses for the same student on its own schedule, so a value written by one
+    refusal can be read by another. A shared mutable answer to "why did *this*
+    call refuse" is a race whichever way it is keyed, for a sentence that only
+    ever reaches a log line and a 403 body.
+
+    The two reads can in principle disagree, and the disagreement is benign in
+    the direction that matters: `start()` has already refused on the bool, so
+    the worst case is a refusal explained by a reason that became true a moment
+    later. It never records against a refusal, and it never refuses a student
+    who is permitted.
     """
-    with _last_refusal_lock:
-        remembered = _last_refusal.pop(student_id, None)
-    if remembered:
-        return remembered
     gate = _may_record(student_id)
     return _as_sentence(_not_recording_reason(gate, "EEG not consented"))
 

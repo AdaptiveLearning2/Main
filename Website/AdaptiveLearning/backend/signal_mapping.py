@@ -251,10 +251,10 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
 
     None when there is no face block, for the same reason as above.
 
-    `emotion_confidence` and `identity_confidence` are both carried and are not
-    interchangeable: one is how sure the classifier is of the expression, the
-    other how sure it is whose face this is. The fusion rule reads only the
-    first, and read the second by mistake once.
+    `emotion_confidence` keeps its qualified name though it is now the only
+    confidence here -- a bare `confidence` re-opens an ambiguity that already
+    cost one silent bug. `signal_fusion.face_channel` has the account; #86 and
+    `20260812000000` have why the sibling column is gone.
     """
     face = payload.get("face")
     if not face:
@@ -270,7 +270,6 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
         "attention": face.get("attention"),
         "gaze_x": face.get("gaze_x"),
         "gaze_y": face.get("gaze_y"),
-        "identity_confidence": face.get("identity_confidence"),
         "raw": _raw(payload,
                     device_id=payload.get("device_id"),
                     rejected_by=face.get("rejected_by"),

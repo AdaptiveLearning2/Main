@@ -189,16 +189,24 @@ def face_channel(
 ) -> ChannelState:
     """The facial channel, which is only ever allowed to withhold.
 
-    Named `emotion_confidence`, not `confidence`, because `face_signals` carries
-    **two** confidences and they answer different questions:
-    `identity_confidence` is how sure we are whose face this is, and
-    `emotion_confidence` is how sure we are of the expression. Only the second
-    one belongs here, and an earlier revision passed the first -- so a clearly
-    identified face with a garbage FER+ label withheld a difficulty increase,
-    while a well-classified expression on a poorly identified face was thrown
-    away. Both silent. The migration that added the column predicted exactly
-    this ("an unqualified name leaves a reader a 50/50 guess about which one it
-    gates"), so the parameter is named for the column rather than the concept.
+    Named `emotion_confidence`, not `confidence`, and it keeps that name now
+    that it is the only confidence `face_signals` carries.
+
+    This is where the reason lives, because this is where the bug was.
+    `identity_confidence` -- how sure we are whose face this is, against how
+    sure we are of the expression -- sat beside it, and an earlier revision
+    passed the wrong one here: a clearly identified face with a garbage FER+
+    label withheld a difficulty increase, while a well-classified expression on
+    a poorly identified face was thrown away. Both silent. The migration that
+    added the column predicted exactly this ("an unqualified name leaves a
+    reader a 50/50 guess about which one it gates"), so the parameter is named
+    for the column rather than the concept.
+
+    #86 retired that column, so the specific confusion is gone and the name is
+    what stops it returning. Why it was retired rather than implemented is a
+    scope decision, recorded in CLAUDE.md and `20260812000000` -- not repeated
+    here, or at the three other sites that only need to know the name is
+    deliberate.
 
     Returns "negative" or "neutral", never "stressed" -- the vocabulary is
     deliberately different from the other two so that no later edit can wire it

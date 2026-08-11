@@ -170,23 +170,24 @@ def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
     assert decider.get_session_signal_state(SESSION, USER).label == "stressed"
 
 
-def test_the_emotion_gate_reads_emotion_confidence_not_identity_confidence(monkeypatch):
-    """`face_signals` carries two confidences answering different questions.
+def test_a_low_confidence_emotion_does_not_withhold_the_increase(monkeypatch):
+    """The gate is `emotion_confidence`, and a bad FER+ label must not act.
 
-    Reading `identity_confidence` -- how sure we are whose face this is -- let a
-    clearly-identified face with a garbage FER+ label withhold a difficulty
-    increase, and threw away a well-classified expression on a poorly-identified
-    face. Both silent. The migration that added the column predicted the mix-up.
+    This began as a two-confidence test: `face_signals` also carried
+    `identity_confidence` -- how sure we are whose face this is -- and reading it
+    here let a clearly-identified face with a garbage label withhold an
+    increase, while discarding a well-classified expression on a poorly
+    identified face. Both silent. #86 retired that column, so the mix-up is no
+    longer expressible and the fixture no longer sets it; what remains is the
+    property the mix-up was violating, which is worth keeping on its own.
     """
     fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
                     face=[{"session_id": SESSION, "emotion": "sad",
-                           "emotion_confidence": 0.05, "emotion_trusted": True,
-                           "identity_confidence": 0.99}])
+                           "emotion_confidence": 0.05, "emotion_trusted": True}])
 
     state = decider.get_session_signal_state(SESSION, USER)
     assert state.label == "focused", (
-        "a low-confidence emotion withheld the increase -- identity_confidence "
-        "is being read instead of emotion_confidence"
+        "a low-confidence emotion withheld the increase"
     )
     assert "face_signals" in fake.table_calls
 

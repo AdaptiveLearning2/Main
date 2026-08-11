@@ -205,7 +205,11 @@ def test_face_ingestion_stores_both_emotion_fields(store):
     row = store["face_signals"][0]
     assert row["emotion_confidence"] == 0.81
     assert row["emotion_trusted"] is True
-    assert row["identity_confidence"] == 0.4, "the two confidences must not be conflated"
+    # Sent by the caller and deliberately not stored: #86 retired the column,
+    # and Pydantic drops unknown fields rather than erroring. Asserted because a
+    # row still carrying the key would fail the INSERT against the migrated
+    # table, and the failure would be at the database rather than here.
+    assert "identity_confidence" not in row
 
 
 def test_consent_failing_to_read_records_nothing(store, monkeypatch):

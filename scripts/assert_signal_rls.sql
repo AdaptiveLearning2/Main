@@ -1,4 +1,5 @@
--- RLS and CHECK assertions for the signal tables, run against a real stack.
+-- RLS, CHECK and column-shape assertions for the signal tables, run against a
+-- real stack.
 --
 -- These cannot live in the backend test suite. Those tests drive `main.py` with
 -- a fake Supabase client, which is the right shape for testing the *code* --
@@ -16,6 +17,74 @@
 -- job instead of scrolling past in the log.
 
 BEGIN;
+
+-- ── column shape ────────────────────────────────────────────────────────────
+--
+-- First, and deliberately: these need none of the fixtures below and must not
+-- be gated behind them. `ON_ERROR_STOP=1` aborts the whole script on the first
+-- failure, so with these at the bottom a broken fixture INSERT -- a new NOT
+-- NULL on profiles, say -- would take the cheapest and most robust checks in
+-- the file down with it, and the schema would go unverified while the job
+-- failed for an unrelated reason.
+--
+-- Not RLS, but the same argument: a rule that exists only in prose is enforced
+-- by nobody. These are about which columns are *supposed* to be there, in both
+-- directions, and Postgres is the only place that question can be answered.
+--
+-- The Python side has a matching guard
+-- (`test_the_three_unproduced_face_columns_are_kept_on_purpose`), and it checks
+-- the mapper rather than the database -- so a migration dropping these columns
+-- would sail past it. This is the half that catches that.
+
+DO $$
+DECLARE
+    missing text;
+    present int;
+BEGIN
+    -- attention, gaze_x and gaze_y have no producer and must survive anyway.
+    --
+    -- They are mechanically indistinguishable from identity_confidence, which
+    -- was just retired: unwritten since 20260625000000, rendering as "No
+    -- sensor" on every surface. What separates them is a decision -- identity
+    -- was out of scope (#86), these are waiting on the landmark model that is
+    -- Phase 11 -- and a cleanup that could not see the difference would drop
+    -- all four and be green everywhere else.
+    FOR missing IN
+        SELECT t.c FROM unnest(ARRAY['attention', 'gaze_x', 'gaze_y']) AS t(c)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'face_signals'
+              AND column_name = t.c)
+    LOOP
+        RAISE EXCEPTION
+            'face_signals.% was dropped. It has no producer yet -- that is '
+            'Phase 11 of the plan, not dead weight. Retiring it needs the same '
+            'scope decision identity_confidence got in #86; if that has '
+            'happened, delete this assertion deliberately rather than making '
+            'it pass.', missing;
+    END LOOP;
+
+    -- And the retired one stays retired. Asserted in the opposite direction
+    -- because the failure it catches is not a bad migration but a bad
+    -- *environment*: a rollback, or a stack rebuilt from a dump predating
+    -- 20260812000000, would restore the column silently. The backend no longer
+    -- writes it, so it would sit there NULL and re-open the two-confidence
+    -- ambiguity that signal_fusion.face_channel documents having been bitten by.
+    SELECT count(*) INTO present
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'face_signals'
+      AND column_name = 'identity_confidence';
+    IF present > 0 THEN
+        RAISE EXCEPTION
+            'face_signals.identity_confidence is back. It was retired in #86 '
+            'as out of scope -- identifying a child by face is a different '
+            'purpose from what the camera consent asks about -- so it needs '
+            'its own consent channel before it needs a column. If this is a '
+            'rollback, the schema is older than the code.';
+    END IF;
+END $$;
 
 -- ── fixtures ────────────────────────────────────────────────────────────────
 --

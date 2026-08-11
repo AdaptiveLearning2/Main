@@ -195,9 +195,8 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
     )
 
-    # `emotion_confidence`, not `identity_confidence`. The table carries both and
-    # they answer different questions -- whose face this is, versus how sure we
-    # are of the expression. Only the second gates an emotion reading.
+    # Selected by explicit name rather than `*`, which is what keeps the
+    # confidence this gate reads unambiguous. See `signal_fusion.face_channel`.
     face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
                         session_id) if consent["face"] else []
     newest_face = face_rows[0] if face_rows else {}

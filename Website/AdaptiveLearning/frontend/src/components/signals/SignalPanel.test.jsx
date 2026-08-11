@@ -13,7 +13,7 @@ const report = {
   sample_counts: { cognitive: 120, face: 40, sessions: 5 },
   latest: {
     cognitive: { focus: 0.72, stress: 0.31, engagement: 0.64 },
-    face: { attention: 0.85, emotion: 'happy', identity_confidence: 0.93 },
+    face: { attention: 0.85, emotion: 'happy' },
   },
   daily: [
     { date: '2026-07-20', focus: 0.7, stress: 0.3, attention: 0.8, cognitive_retrieved: true, face_retrieved: true },
@@ -183,7 +183,8 @@ describe('LiveSignalSummary', () => {
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Stress').getByText('31%')).toBeInTheDocument()
     expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
-    expect(metric('Identity Confidence').getByText('93%')).toBeInTheDocument()
+    // No Identity Confidence tile: #86 retired the column it read.
+    expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
 
   it('survives a report with no latest reading', () => {
@@ -222,7 +223,6 @@ describe('facial reporting switched off', () => {
     render(<LiveSignalSummary report={faceOff} />)
     expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('Not recorded')).toBeInTheDocument()
-    expect(metric('Identity Confidence').getByText('Not recorded')).toBeInTheDocument()
   })
 
   it('leaves the EEG metrics untouched', () => {
@@ -485,7 +485,6 @@ describe('per-channel off states', () => {
     render(<LiveSignalSummary report={{ ...base, consent_retrieved: false }} />)
     expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('Unavailable')).toBeInTheDocument()
-    expect(metric('Identity Confidence').getByText('Unavailable')).toBeInTheDocument()
   })
 
   it('distinguishes a channel that read nothing from one that read nothing usable', () => {

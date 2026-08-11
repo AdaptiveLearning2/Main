@@ -398,5 +398,84 @@ BEGIN
     RESET ROLE;
 END $$;
 
+-- ── the end-of-year delete ──────────────────────────────────────────────────
+--
+-- The one job here that destroys data, so its refusal is asserted rather than
+-- trusted: a day with no rollup row must survive. Without that, a bug in the
+-- rollup writer turns into silent permanent loss on a fixed date, and the rows
+-- it takes are the only copy.
+
+DO $$
+DECLARE
+    uid uuid; sess uuid; result jsonb; survivors int;
+BEGIN
+    SELECT owner_id, sess_id INTO uid, sess FROM _ids;
+
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES ('2025-09-01', '2026-06-30', 'America/Los_Angeles');
+
+    -- Two expired days for this student; only the first is summarised.
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus)
+    VALUES (sess, uid, '2026-03-10T18:00:00Z', 0.5),
+           (sess, uid, '2026-03-11T18:00:00Z', 0.5);
+    INSERT INTO public.signal_daily_rollup
+        (user_id, day, channel, avg_focus, sample_count, trusted_sample_count)
+    VALUES (uid, DATE '2026-03-10', 'cognitive', 0.5, 1, 1);
+
+    result := public.expire_signal_rows();
+
+    IF (result->>'cutoff')::date <> DATE '2026-06-30' THEN
+        RAISE EXCEPTION 'cutoff was %, expected the finished year''s ends_on',
+            result->>'cutoff';
+    END IF;
+
+    SELECT count(*) INTO survivors
+    FROM public.cognitive_signals
+    WHERE user_id = uid AND (ts AT TIME ZONE 'America/Los_Angeles')::date
+                            = DATE '2026-03-11';
+    IF survivors = 0 THEN
+        RAISE EXCEPTION
+            'the delete job removed a day with no rollup row. That day had no '
+            'summary, so its per-sample rows were the only copy -- this is the '
+            'one failure mode in the retention design with no recovery.';
+    END IF;
+
+    SELECT count(*) INTO survivors
+    FROM public.cognitive_signals
+    WHERE user_id = uid AND (ts AT TIME ZONE 'America/Los_Angeles')::date
+                            = DATE '2026-03-10';
+    IF survivors <> 0 THEN
+        RAISE EXCEPTION
+            'a summarised expired day was not deleted -- the job is not '
+            'expiring anything, so the refusal above passes for the wrong reason';
+    END IF;
+END $$;
+
+-- An unconfigured window deletes nothing. Same fail-closed direction as the
+-- recording gate: a school that has not said when its year runs does not have
+-- data that has expired.
+DO $$
+DECLARE
+    uid uuid; sess uuid; result jsonb; remaining int;
+BEGIN
+    SELECT owner_id, sess_id INTO uid, sess FROM _ids;
+    DELETE FROM public.retention_window;
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus)
+    VALUES (sess, uid, '2020-01-01T12:00:00Z', 0.5);
+
+    result := public.expire_signal_rows();
+
+    IF result->>'cutoff' IS NOT NULL THEN
+        RAISE EXCEPTION 'an unconfigured window produced a cutoff of %',
+            result->>'cutoff';
+    END IF;
+    SELECT count(*) INTO remaining FROM public.cognitive_signals
+    WHERE user_id = uid AND ts < '2021-01-01';
+    IF remaining = 0 THEN
+        RAISE EXCEPTION 'rows were deleted with no retention window configured';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

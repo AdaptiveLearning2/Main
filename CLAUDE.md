@@ -777,6 +777,31 @@ Tests: `backend/tests/test_retention_window.py`. Every other test file gets an o
 autouse `_school_year_is_open` fixture in `conftest.py` — without it they would pass by recording
 nothing, for a reason unrelated to what they assert.
 
+### The end-of-year delete refuses days nothing summarised
+
+`expire_signal_rows()` removes per-sample rows from `cognitive_signals`,
+`face_signals` and `heart_signals`; `sessions`, `session_answers`, `user_stats` and
+`user_math_performance` stay, because academic history is not signal data.
+
+**It skips any student-day with no `signal_daily_rollup` row**, per channel, and reports the count
+it skipped. That check is the whole safety property: without it a bug in the rollup writer becomes
+silent permanent loss on a fixed date, since the rows it takes are the only copy. With it, a broken
+writer degrades to data that does not expire — visible and fixable. Asserted in
+`scripts/assert_signal_rls.sql`, which runs against a real stack in CI.
+
+**The cutoff is derived, never "today's date".** Days before `starts_on` always expire; once today
+in the school's timezone reaches `ends_on`, everything up to and including it expires too. So the
+job is idempotent and self-healing: a missed run completes on the next one, and a repeat deletes
+nothing new. That is what makes a same-day delete with no grace period acceptable. No window
+configured means no cutoff and nothing deleted — the same fail-closed direction as recording.
+
+Scheduled daily at 03:30 UTC via `pg_cron` rather than on one date, because scheduling a single day
+would turn a missed run into a year of silence. `cron.schedule` upserts on the job name, so
+re-running the migration re-points the job instead of creating a second one that would delete twice.
+
+Storage does **not** cascade. `sessions.chart_paths` is what would tell the job which objects to
+remove and is Phase 8; until that lands there are no archived charts to orphan.
+
 ### The daily rollup is written as sessions close, never at expiry
 
 `signal_daily_rollup` holds one row per student per school day per channel

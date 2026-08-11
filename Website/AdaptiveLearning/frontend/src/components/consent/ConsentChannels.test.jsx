@@ -164,6 +164,44 @@ describe('the parent can switch on', () => {
     // The third call is a re-read, not a second write.
     expect(apiFetch.mock.calls[2][1]).toBeUndefined()
   })
+
+  it('does not promise nothing changed when the reload after a conflict fails', async () => {
+    // The two halves of a conflict point opposite ways: someone else's change
+    // landed, and this parent's did not. If the reload cannot tell us the
+    // resulting state, the first-load wording ("Nothing has been changed") is
+    // false in both directions at once -- and it is the wording this path used
+    // to fall through to.
+    const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
+    apiFetch.mockResolvedValueOnce(CAMERA_OFF)
+             .mockRejectedValueOnce(conflict)
+             .mockResolvedValueOnce(READ_FAILED)
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+
+    expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing has been changed/)).not.toBeInTheDocument()
+    // And the switches go with it: what was on screen is not merely unverified,
+    // it is the state the 409 told us had been superseded.
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('says the same when the reload after a conflict throws', async () => {
+    // A thrown read and `retrieved: false` leave us knowing exactly the same
+    // thing. The raw 'Network down' would not tell a parent the part that
+    // matters, which is that their change did not apply.
+    const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
+    apiFetch.mockResolvedValueOnce(CAMERA_OFF)
+             .mockRejectedValueOnce(conflict)
+             .mockRejectedValueOnce(new Error('Network down'))
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+
+    expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
+    expect(screen.queryByText(/Network down/)).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
 })
 
 describe('copy', () => {

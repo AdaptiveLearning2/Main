@@ -1,0 +1,175 @@
+"""Report days are the school's days, not UTC's.
+
+`_weekly_signal_report` buckets rows into calendar days. It used to do that by
+slicing `str(ts)[:10]`, which is UTC because that is what PostgREST returns --
+so a lesson at 4pm in California landed on the *next* day of a parent's chart,
+and one at 8am in Sydney landed on the previous one. The same column that gates
+recording (`retention_window.timezone`) is what resolves it.
+
+The trap in testing this is that a UTC-configured school makes every assertion
+pass whether or not the fix exists, which is exactly the state the rest of the
+suite is in. Every test here therefore uses a zone with a real offset and pins
+`now`, so the school's date and UTC's date genuinely differ.
+"""
+
+import os
+from datetime import datetime, timezone
+
+os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
+
+import pytest  # noqa: E402
+
+import main  # noqa: E402
+from tests.test_access_control import _FakeSupabase  # noqa: E402
+
+STUDENT = "student-1"
+
+# 03:00 UTC on 12 June 2026. In Los Angeles (UTC-7 in June) that is 20:00 on the
+# **11th** -- an ordinary evening, and the previous calendar day.
+NOW_UTC = datetime(2026, 6, 12, 3, 0, tzinfo=timezone.utc)
+LA = "America/Los_Angeles"
+
+
+@pytest.fixture
+def at_three_am_utc(monkeypatch):
+    monkeypatch.setattr(main, "_utc_now", lambda: NOW_UTC)
+
+
+def _school(monkeypatch, tz):
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_OPEN, "starts_on": "2000-01-01",
+        "ends_on": "2099-12-31", "timezone": tz})
+
+
+def _consent_row():
+    return {"user_id": STUDENT, "eeg_enabled": True,
+            "headband_optical_enabled": True, "camera_enabled": True}
+
+
+def _tables(cog=(), sessions=()):
+    return {"signal_consent": [_consent_row()],
+            "cognitive_signals": list(cog),
+            "face_signals": [], "heart_signals": [],
+            "sessions": list(sessions)}
+
+
+def _day(report, date_str):
+    return next((d for d in report["daily"] if d["date"] == date_str), None)
+
+
+# ── the bug, directly ────────────────────────────────────────────────────────
+
+def test_an_evening_lesson_lands_on_the_local_day(monkeypatch, at_three_am_utc):
+    """20:00 on the 11th in California, not 03:00 on the 12th in UTC.
+
+    This is the whole finding: a parent looking at Thursday saw a session that
+    happened on Wednesday evening, and Wednesday looked emptier than it was.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.8}])))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert _day(report, "2026-06-11")["focus"] == 0.8, (
+        "the evening lesson was bucketed by UTC midnight, a day late"
+    )
+    assert _day(report, "2026-06-12") is None, "there is no 12th in the school's week yet"
+
+
+def test_the_same_row_buckets_differently_under_a_different_school(monkeypatch,
+                                                                  at_three_am_utc):
+    """The control that makes the test above mean something.
+
+    One row, one instant, two schools: it is Wednesday in California and
+    already Friday in Auckland. If both answered the same, the timezone would
+    not be reaching the bucketing at all.
+    """
+    rows = _tables(cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.8}])
+
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(rows))
+    la_days = [d["date"] for d in main._weekly_signal_report(STUDENT)["daily"]
+               if d["focus"] is not None]
+
+    _school(monkeypatch, "Pacific/Auckland")
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(rows))
+    nz_days = [d["date"] for d in main._weekly_signal_report(STUDENT)["daily"]
+               if d["focus"] is not None]
+
+    assert la_days == ["2026-06-11"]
+    assert nz_days == ["2026-06-12"]
+
+
+def test_the_week_ends_on_the_schools_today(monkeypatch, at_three_am_utc):
+    """The last bucket is the school's current day. Built from UTC it ran a day
+    ahead, so every chart carried a trailing empty column that read as a day
+    with no activity rather than as a day that has not happened."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables()))
+
+    days = [d["date"] for d in main._weekly_signal_report(STUDENT)["daily"]]
+
+    assert days[-1] == "2026-06-11"
+    assert days[0] == "2026-06-05", "seven school days, ending today"
+
+
+# ── the fetch window has to reach back far enough ───────────────────────────
+
+def test_the_query_starts_at_the_first_school_days_midnight(monkeypatch,
+                                                            at_three_am_utc):
+    """`now - 7 days` in UTC starts *after* the earliest school day begins when
+    the school is behind UTC, so the oldest day on the chart silently lost its
+    first hours and averaged only the rest."""
+    _school(monkeypatch, LA)
+    fake = _FakeSupabase(_tables())
+    monkeypatch.setattr(main, "supabase", fake)
+
+    report = main._weekly_signal_report(STUDENT)
+
+    # Midnight on 5 June in Los Angeles is 07:00 UTC on the 5th.
+    assert report["since"].startswith("2026-06-05T07:00")
+    oldest_day = report["daily"][0]["date"]
+    since = main._parse_ts(report["since"])
+    from zoneinfo import ZoneInfo
+    assert since.astimezone(ZoneInfo(LA)).date().isoformat() == oldest_day
+    assert since.astimezone(ZoneInfo(LA)).hour == 0, (
+        "the oldest day starts mid-morning, so its early rows were never fetched"
+    )
+
+
+# ── degradation, in the opposite direction to the recording gate ────────────
+
+@pytest.mark.parametrize("window", [
+    {"state": main.WINDOW_UNREADABLE, "timezone": None},
+    {"state": main.WINDOW_UNCONFIGURED, "timezone": None},
+    {"state": main.WINDOW_OPEN, "timezone": "Mars/Olympus_Mons"},
+])
+def test_an_unusable_timezone_still_produces_a_report(monkeypatch, window):
+    """Deliberately unlike `_retention_window`, which denies on exactly these.
+
+    A wrong boundary while *recording* means data collected against a refusal.
+    A wrong boundary while *reporting* means a chart column is a few hours off.
+    Refusing here would blank a parent's dashboard over a config typo, which is
+    the larger harm -- so this degrades to UTC and says nothing.
+    """
+    monkeypatch.setattr(main, "_retention_window", lambda: window)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables()))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert len(report["daily"]) == 7
+    assert main._school_timezone().key == "UTC"
+
+
+def test_an_unparseable_timestamp_joins_no_day(monkeypatch, at_three_am_utc):
+    """Dropped from every bucket rather than silently landing in one. A row
+    that cannot be placed in time is not evidence about any particular day."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_tables(
+        cog=[{"user_id": STUDENT, "ts": "not-a-timestamp", "focus": 0.9}])))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert all(d["focus"] is None for d in report["daily"])

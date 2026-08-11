@@ -743,11 +743,20 @@ six recording sites call (the poller's two checks, the three `/api/signals/*` en
 `/api/eeg/start`); `_consent()` stays pure and its raw flags ride along beside the `record_*` ones
 so a caller can still tell "they agreed but the year is over" from "they said no".
 
-**The timezone is the school's, not UTC.** The last day of school ends at local midnight; against a
-UTC clock it ends mid-afternoon or runs into the next day depending which side of the meridian the
-school is on. The same column is meant to drive the weekly report's day buckets, which still slice
-`ts[:10]` in UTC — that is a known live bug and the next change in this phase, not a convention to
-copy.
+**The timezone is the school's, not UTC**, for both the window boundaries and the weekly report's
+day buckets. The last day of school ends at local midnight; against a UTC clock it ends
+mid-afternoon or runs into the next day depending which side of the meridian the school is on.
+
+Bucketing goes through `_school_day(ts, tz)`, never `str(ts)[:10]` — PostgREST returns UTC, so
+slicing put a 4pm Californian lesson on the next day of a parent's chart. `_weekly_signal_report`
+resolves `since` to midnight of the earliest *school* day too: `now - 7 days` in UTC starts after
+that day begins wherever the school is behind UTC, so the oldest column silently averaged only part
+of itself.
+
+**`_school_timezone()` defaults to UTC where `_retention_window()` denies, and that asymmetry is
+deliberate.** A wrong boundary while recording collects data nobody agreed to; a wrong boundary
+while reporting moves a chart column by a few hours. Refusing to report over a config typo is the
+larger harm, so the gate fails closed and the report degrades.
 
 There is **no admin role** (`profiles.role` is CHECKed to `student|teacher|parent`), so the row is
 edited through the dashboard SQL editor. RLS is on with **no policies** and `anon`/`authenticated`

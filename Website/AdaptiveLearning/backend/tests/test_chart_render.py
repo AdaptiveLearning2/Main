@@ -149,6 +149,62 @@ def test_the_archive_palette_matches_the_live_charts(name, mapping):
     )
 
 
+def _jsx_line_strokes(path: Path) -> dict:
+    """`dataKey` -> `stroke` for every `<Line>` in a chart file.
+
+    These are not a `const NAME = {...}` object, so the map above cannot reach
+    them: they are inline attributes on Recharts elements, sometimes wrapped
+    across lines. That is exactly why they were the palette this module's drift
+    test missed -- and the one its own new line chart depends on.
+    """
+    source = path.read_text(encoding="utf-8")
+    found = {}
+    for element in re.findall(r"<Line [^>]*?/>", source, re.S):
+        key = re.search(r'dataKey="([^"]+)"', element)
+        stroke = re.search(r'stroke="(#[0-9a-fA-F]{3,8})"', element)
+        if key and stroke:
+            found[key.group(1)] = stroke.group(1)
+    return found
+
+
+def test_the_line_palette_matches_the_session_charts():
+    """The gap the const-parsing test above could not see.
+
+    `SessionReview.jsx` is the reference deliberately: the archive is per
+    session, so the per-session charts are what an archived SVG is a re-render
+    *of*. See the cross-file test below for why that choice has to be stated
+    rather than assumed.
+    """
+    assert _jsx_line_strokes(_JSX) == cr.SERIES_COLOURS, (
+        "line colours differ between SessionReview.jsx and chart_render.py. "
+        "The archive is a re-render, so nothing else keeps these in step."
+    )
+
+
+def test_the_two_chart_surfaces_are_known_to_disagree():
+    """Pinning a **defect**, not a rule.
+
+    `SignalPanel.jsx` draws `focus` in #10b981, which is the colour
+    `SessionReview.jsx` uses for `engagement`. So one green line means focus on
+    the weekly panel and engagement on session review, and a parent reading both
+    screens is being shown the same colour for two different things.
+
+    That predates this module and is not its to fix -- picking the survivor is a
+    design decision about two shipped surfaces. It is pinned here because the
+    archive had to choose a side, and a silent later "tidy-up" that aligned the
+    two would change what an already-written SVG means without anyone noticing.
+    When it is fixed, this test should fail and be deleted deliberately.
+    """
+    panel = _jsx_line_strokes(
+        _JSX.parents[2] / "components" / "signals" / "SignalPanel.jsx")
+    assert panel.get("focus") == "#10b981"
+    assert cr.SERIES_COLOURS["focus"] == "#6366f1"
+    assert cr.SERIES_COLOURS["engagement"] == panel.get("focus"), (
+        "the known collision changed shape -- re-check which surface the "
+        "archive should mirror before updating this"
+    )
+
+
 def test_every_named_chart_is_one_this_module_can_draw():
     """`CHART_NAMES` is what `chart_paths` on the session row will hold, so a
     name here with no renderer is a path promising a file nobody writes."""

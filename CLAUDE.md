@@ -216,9 +216,22 @@ behind a per-requester Data Usage Agreement, and that conflated two things.** Ch
 `KegangWangCCNU/open-rppg` -- the `rppg` import in `FacialRecg/` -- says "the source code and tools
 in this repository are released under the MIT License" and ships pretrained models and configs, with
 `.rlap`/`.pure` marking training protocols. It disclaims that the weights are "derived from academic
-research ... subject to the license terms specified in their original publications", so the paper's
-terms are the open question, not access. A DUA governs the **RLAP dataset**, which is needed to
-retrain or to evaluate on RLAP -- not to run inference with weights that are already published.
+research ... subject to the license terms specified in their original publications", so the terms are
+the open question, not access.
+
+The DUA is real but it is on the **dataset**: `KegangWangCCNU/RLAP-dataset` grants access by emailing
+the authors a signed agreement and returns a 14-day download link. You need that to *train on* or
+*evaluate against* RLAP. You do not need it to run inference with weights someone else trained and
+published.
+
+**What is genuinely unresolved is whether that agreement reaches derived weights.** Its terms are in
+a PDF behind the request, so nobody here has read them, and `.rlap` means "trained on RLAP". If the
+agreement restricts derivative works, weights published by a third party under MIT may still carry
+obligations -- a question between those authors and RLAP's, which we cannot settle by reading a
+repo. **`.pure` weights, trained on PURE, avoid the question entirely**, and that is the cheaper path
+for a commercial product used by children than obtaining an agreement in order to interpret it.
+Whether `RhythmMamba.pure` is actually published needs checking against the model zoo; the README
+states the suffixes exist without saying which apply to which architecture.
 
 So what stands between here and a camera heart rate is engineering and evidence, not permission:
 the confidence gate below is inapplicable to a single-channel source and would have to be designed

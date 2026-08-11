@@ -918,9 +918,28 @@ picture of what the reviewer was shown rather than a number outliving its eviden
 in `file_options` must be the **string** `"true"` — storage-py passes those through as HTTP
 headers, so a bool arrives as `True` and a replayed close 409s instead of overwriting.
 
-**Storage does not cascade.** Deleting a session or a profile leaves its SVGs in the bucket, and
-`expire_signal_rows` does not touch them either. `chart_paths` is what says which objects to
-remove; wiring that up is Phase 8 part 3, and until it lands "delete my data" is a half-truth.
+**Reading them back is `GET /api/signals/session/{id}/charts`**, which resolves whose session it is,
+applies `_verify_can_view_student`, and issues a signed URL per recorded chart with a 300s TTL.
+Three states stay apart in the payload, and a surface saying "no charts" has to consult all three:
+`archived: false` (the archive never ran), `charts[name]: null` (that channel drew nothing), and
+`name in unavailable` (a path was recorded and the object could not be read). It has deliberately
+**no `retrieved` flag** — unlike the reporting helpers it raises rather than degrading, so a flag
+that is never false would be a state that does not exist.
+
+**A signed URL cannot be revoked.** It stays valid until it expires whatever happens to consent in
+between, so the TTL is the only bound on a leaked one — that is the argument for keeping it short,
+not convenience. A *public* bucket would be worse in kind rather than degree: a URL that has been
+shared cannot be un-shared by any policy added later.
+
+**Storage does not cascade, and nothing deletes an object today.** Deleting a session or a profile
+leaves its SVGs in the bucket. There is no delete endpoint in `main.py` at all, so there is nothing
+to hook — erasure is #75, and `chart_paths` is what will tell it which objects to remove.
+
+**The archived charts deliberately survive `expire_signal_rows`.** The plan says in one place that
+the expiry job removes them; that is wrong and the plan contradicts itself two paragraphs later.
+Deleting per-sample rows on `ends_on` with no grace period is only defensible *because* the rollup
+and these SVGs survive — they are the human-readable record of the year. A job that took both would
+remove the thing that makes its own schedule safe.
 
 ## Consent — `signal_consent` decides what may be recorded
 

@@ -884,6 +884,44 @@ Its access rules differ from `retention_window`'s above: the rollup carries a **
 There is no insert/update/delete policy for anyone, so with RLS on, PostgREST cannot write it
 whatever JWT it carries — the only correct writer is `rollup_signal_day`.
 
+### Archived charts are the other thing that survives the delete
+
+At every session close, `chart_archive.schedule()` renders the session's four charts to standalone
+SVG (`chart_render.py`) and uploads them to the private `session-charts` bucket. With the rollup,
+these are what is left of a school year once `expire_signal_rows` has run.
+
+**Off the request path, and it never raises.** A storage failure must not cost a student their
+session close — the session row, their stats and the rollup are all written by then. So the work
+goes to a two-worker pool and `schedule()` swallows even a submit failure. That makes the log the
+only place a failure can surface, and it *has* to surface: the window in which an archive can still
+be rebuilt closes on `ends_on`.
+
+**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live`. Each
+one also writes the rollup, and `test_every_session_close_schedules_an_archive` derives the list
+from that rather than keeping its own: a fourth site added later would otherwise leave sessions
+whose raw rows expire with no picture behind them, and nothing would say so.
+
+**`chart_paths` has four states and no column default.** A path, `null` for a channel that produced
+nothing, an absent key for a chart never attempted, and column-NULL for a session the archive never
+ran on. `'{}'::jsonb` would claim every pre-Phase-8 session was archived and found nothing — the
+absence-as-data failure again, and `scripts/assert_signal_rls.sql` fails if a default appears.
+
+**Nothing has a policy on `storage.objects`, deliberately.** RLS is on and no policy grants any
+role anything, so only `service_role` — the backend — reads or writes. Not even the student the
+chart is *about*: an object is fetched by URL, not filtered by a query, so the access decision
+belongs in the backend where the relationship checks are, handed out as a short-lived signed URL.
+The bucket is private for the reason no policy can fix later: a public object URL, once pasted
+anywhere, cannot be un-shared. All of that is asserted against a real stack in CI.
+
+Two smaller traps: the archive draws **untrusted rows too**, unlike the rollup, because it is a
+picture of what the reviewer was shown rather than a number outliving its evidence; and `upsert`
+in `file_options` must be the **string** `"true"` — storage-py passes those through as HTTP
+headers, so a bool arrives as `True` and a replayed close 409s instead of overwriting.
+
+**Storage does not cascade.** Deleting a session or a profile leaves its SVGs in the bucket, and
+`expire_signal_rows` does not touch them either. `chart_paths` is what says which objects to
+remove; wiring that up is Phase 8 part 3, and until it lands "delete my data" is a half-truth.
+
 ## Consent — `signal_consent` decides what may be recorded
 
 Three channels, named for the **sensor** rather than the signal derived from it: `eeg`,

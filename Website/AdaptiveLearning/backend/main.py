@@ -11,6 +11,7 @@ from supabase import create_client
 from typing import NamedTuple
 
 import LLM_topic_decider
+import chart_archive
 import eeg_client
 import signal_mapping
 import eeg_poller
@@ -48,7 +49,10 @@ async def _lifespan(app: FastAPI):
         try:
             _shutdown_strategy_pool()
         finally:
-            _shutdown_live_signals_pool()
+            try:
+                _shutdown_live_signals_pool()
+            finally:
+                chart_archive.shutdown_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -1544,6 +1548,11 @@ def start_session(payload: StartSessionRequest, request: Request):
         # the case this sweep exists for -- left a day with raw rows and no
         # summary, and once the delete job runs that day is simply gone.
         _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
+        # And archived, for the same reason the rollup is: this is the sweep
+        # that closes the session of a student who shut the tab, so it is the
+        # only close many sessions ever get. Off the request path -- a storage
+        # failure here would otherwise stop a student *starting* a new session.
+        chart_archive.schedule(supabase, s["id"], user["id"])
 
 
     obj  = {
@@ -1628,6 +1637,11 @@ def end_session(session_id: str = Path(...), request: Request = None):
     # where a fresh one rolls up a day the stored session does not claim and
     # skips the day it is actually recorded on.
     _rollup_session_days(user["id"], data.get("started_at"), ended)
+    # After the rollup, and off the request path entirely. Both are derived, but
+    # they fail differently: the rollup is a synchronous RPC that swallows its
+    # own errors, while this one reads three tables and makes four network calls
+    # to object storage, which is not work to hold a request open for.
+    chart_archive.schedule(supabase, session_id, user["id"])
     return {"ok": True}
 
 @app.get("/api/sessions")
@@ -3706,6 +3720,11 @@ def class_live(class_id: str, request: Request):
                 # student: this runs on a teacher's request, and the rollup
                 # belongs to whoever the data is about.
                 _rollup_session_days(sid, sess.get("started_at"), now.isoformat())
+                # Third and last close site. Missing one leaves sessions whose
+                # raw rows expire on `ends_on` with no picture behind them, and
+                # nothing would say so -- `chart_paths` would simply be NULL,
+                # which reads as "closed before this shipped".
+                chart_archive.schedule(supabase, sid2, sid)
                 # sid, not the teacher reading this view -- the reservation
                 # (#34), like the poller, belongs to the student whose stale
                 # session this is.

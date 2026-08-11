@@ -186,6 +186,30 @@ def test_release_reservation_with_device_id_ignores_a_different_users_claim():
     assert not eeg_poller.reserve_device("user-c", "station-a")  # still user-a's
 
 
+def test_stop_releases_a_reservation_even_with_no_poller_to_pop():
+    """The gap across three call sites (end_session, start_session's stale
+    cleanup, class_live's stale sweep): a user who scanned/connected and gave
+    up before ever reaching /start holds a reservation with nothing in
+    _active for it, so stop() needs an explicit user_id to find it."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.stop("session-that-never-started", "user-a")
+    assert eeg_poller.reserve_device("user-b", "station-a")
+
+
+def test_stop_falls_back_to_the_popped_pollers_own_user_id():
+    """A caller that omits user_id (there currently are none in main.py, but
+    the parameter is optional) must still release whatever the popped
+    poller's own user held -- the pre-existing behaviour, now driven by
+    p.user_id when no explicit user_id is given."""
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.reserve_device("user-a", "station-b")  # a second, unrelated hold
+    eeg_poller.stop("session-1")
+    # station-b was never touched by session-1's own device (station-a), but
+    # it belongs to the same user_id the popped poller carried -- proving the
+    # fallback actually read p.user_id rather than silently doing nothing.
+    assert eeg_poller.reserve_device("user-c", "station-b")
+
+
 def test_stop_all_joins_every_poller_and_empties_the_registry():
     """stop_all is what keeps a printing daemon thread out of interpreter
     shutdown, where a print against an already-held stdout lock aborts the

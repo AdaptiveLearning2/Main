@@ -681,14 +681,36 @@ def can_use_device(user_id: str, device_id: str) -> bool:
         return True
 
 
-def stop(session_id: str) -> dict:
+def stop(session_id: str, user_id: str | None = None) -> dict:
+    """Stop this session's poller if one exists, and release its user's
+    pre-claim reservation regardless of whether one did.
+
+    user_id matters exactly when there is no poller to pop: a user who
+    scanned or connected but gave up before reaching /start holds a
+    reservation with nothing in _active for it, so a caller that only
+    released a *popped poller's* user_id would silently skip the release on
+    every path that ends a session or pairing attempt without one -- which
+    was the actual gap across three call sites (this function had no way to
+    fix it locally until this parameter existed). Every caller here already
+    has the right user_id in scope: the student ending their own session, or
+    -- for the teacher-facing stale-session sweep -- the student the session
+    belongs to, not the teacher reading it.
+
+    Reservations are released outside the lock this function otherwise holds,
+    since release_reservation takes its own; p.stop() is fine to leave inside
+    it, since _Poller.stop() only sets an Event and does no I/O.
+    """
     with _lock:
         _forget_warning(session_id)
         p = _active.pop(session_id, None)
         if p:
             p.stop()
-            return {"running": False, "samples": p.samples}
-        return {"running": False, "samples": 0}
+    release_for = user_id or (p.user_id if p else None)
+    if release_for is not None:
+        release_reservation(release_for)
+    if p:
+        return {"running": False, "samples": p.samples}
+    return {"running": False, "samples": 0}
 
 
 def stop_for_user(user_id: str) -> int:

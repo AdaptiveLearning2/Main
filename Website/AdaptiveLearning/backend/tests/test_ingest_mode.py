@@ -343,6 +343,7 @@ def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
         def stop(self):
             pass
         samples = 0
+        user_id = "u1"
 
     monkeypatch.setattr(eeg_poller, "_active", {"s1": _LivePoller()})
     monkeypatch.setattr(eeg_poller, "_warned_double_write", set())

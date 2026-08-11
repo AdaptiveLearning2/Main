@@ -443,3 +443,22 @@ def test_muse_disconnect_does_not_reserve_the_station(monkeypatch):
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-free"}) == {"ok": True}
+
+
+def test_muse_disconnect_releases_the_callers_own_reservation(monkeypatch):
+    """The other half of #34's leftover gap: a user who scanned/connected and
+    then disconnects instead of pairing is giving up on the station exactly
+    as explicitly as calling /api/eeg/stop -- without a release here, the
+    station stayed locked to them for up to the TTL after they visibly moved
+    on, even though they still owned the reservation and can_use_device let
+    the disconnect through."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-x"})
+
+    main.eeg_muse_disconnect(request=None, body={"device_id": "station-x"})
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-x"}) == {"ok": True}

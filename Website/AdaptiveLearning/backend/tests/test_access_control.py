@@ -1176,7 +1176,10 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, n: _Tbl(n, tables, updates)})())
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
-    monkeypatch.setattr(main.eeg_poller, "stop", lambda _sid: {"running": False, "samples": 0})
+    stop_calls = []
+    monkeypatch.setattr(main.eeg_poller, "stop",
+                        lambda sid, uid=None: stop_calls.append((sid, uid))
+                        or {"running": False, "samples": 0})
 
     out = main.class_live("class-1", None)
 
@@ -1185,6 +1188,13 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     assert out[0]["latest_face"] is None
     assert out[0]["latest_heart"] is None, (
         "a stale session still reported a live-looking heart reading"
+    )
+    # eeg_poller.stop releases a pre-claim reservation (#34) by user_id, and
+    # the only user_id in scope here that can answer "whose reservation" is
+    # the student's -- the teacher reading this view never held one.
+    assert stop_calls == [("session-1", "student-1")], (
+        "the stale-session sweep must release the student's reservation, "
+        "not the teacher's (or none at all)"
     )
 
 

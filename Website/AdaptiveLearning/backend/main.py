@@ -959,7 +959,10 @@ def start_session(payload: StartSessionRequest, request: Request):
     stale_open = supabase.table("sessions").select("id") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
-        eeg_poller.stop(s["id"])
+        # Also releases any pre-claim reservation (#34) left behind by a
+        # scan/connect that never reached /start -- a stale session left this
+        # way is exactly the "gave up mid-pairing" case that leaves one.
+        eeg_poller.stop(s["id"], user["id"])
         supabase.table("sessions").update(
             {"ended_at": _utc_now().isoformat()}
         ).eq("id", s["id"]).execute()
@@ -1005,7 +1008,8 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
     user = get_user(request)
-    eeg_poller.stop(session_id)  # auto-stop EEG poller
+    # Also releases user["id"]'s pre-claim reservation (#34), if any.
+    eeg_poller.stop(session_id, user["id"])  # auto-stop EEG poller
     sess = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
     if not sess.data:
         raise HTTPException(404, "Session not found")
@@ -3040,7 +3044,10 @@ def class_live(class_id: str, request: Request):
                 supabase.table("sessions").update({
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
-                eeg_poller.stop(sid2)
+                # sid, not the teacher reading this view -- the reservation
+                # (#34), like the poller, belongs to the student whose stale
+                # session this is.
+                eeg_poller.stop(sid2, sid)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
@@ -3200,6 +3207,16 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     # endpoint has to guard against.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    # Releases the caller's *own* reservation on this device, if they hold
+    # one -- harmless (a no-op) if they don't, same as /api/eeg/stop. A
+    # student who scanned/connected and then disconnects instead of pairing
+    # is giving up on this station exactly as explicitly as calling /stop
+    # would be; without this the station stayed locked to them for up to
+    # RESERVATION_TTL_SECONDS after they had visibly moved on. Scoped by
+    # device_id, unlike /stop's release -- disconnect always names one, so
+    # there is no reason to drop a different reservation this caller might
+    # be holding elsewhere.
+    eeg_poller.release_reservation(user["id"], device_id)
     _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
@@ -3350,13 +3367,12 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
         .eq("id", payload.session_id).single().execute()
     if not sess.data or sess.data["user_id"] != user["id"]:
         raise HTTPException(403, "Not your session")
-    out = eeg_poller.stop(payload.session_id)
-    # Unconditional, not just when a live poller existed: a user who only got
-    # as far as scan/connect (#34's pre-claim reservation, never promoted to
-    # a poller) still holds a claim on the station, and /stop is the signal
-    # they're done with it. release_reservation is scoped to this user's own
-    # holdings, so it's harmless when there's nothing to release.
-    eeg_poller.release_reservation(user["id"])
+    # eeg_poller.stop releases user["id"]'s reservation too, unconditionally
+    # -- not just when a live poller existed. A user who only got as far as
+    # scan/connect (#34's pre-claim reservation, never promoted to a poller)
+    # still holds a claim on the station, and /stop is the signal they're
+    # done with it.
+    out = eeg_poller.stop(payload.session_id, user["id"])
     return {"ok": True, **out}
 
 @app.get("/api/eeg/status")

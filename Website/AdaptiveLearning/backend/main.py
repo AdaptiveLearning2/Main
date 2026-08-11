@@ -254,19 +254,40 @@ _WINDOW_REASONS = {
 }
 
 
-def _not_recording_reason(gate: dict, declined: str) -> str:
+# The same precedence as `_WINDOW_REASONS`, as machine-readable reasons rather
+# than sentences: this one is rendered by the frontend, which picks its own
+# copy. Separate table because the audiences differ -- a stopped_reason is a
+# key, and a reason string is a sentence someone reads.
+_WINDOW_STOPPED_REASONS = {
+    WINDOW_BEFORE: "school_year_not_started",
+    WINDOW_AFTER: "school_year_ended",
+    WINDOW_UNCONFIGURED: "school_year_unconfigured",
+    WINDOW_UNREADABLE: "school_year_unknown",
+}
+
+
+def _not_recording_reason(gate: dict, declined: str,
+                          unavailable: str = "consent unavailable") -> str:
     """Why this channel is not recording. Window first, then consent.
 
-    `declined` is the whole sentence for the consent-refused case, not a
-    fragment to interpolate: the three call sites word it differently ("eeg not
-    consented" against "no consented heart sensor") and composing it here
-    produced "no consented heart sensor not consented".
+    Both sentences come from the caller whole, not as fragments to interpolate:
+    the sites word them differently ("eeg not consented" against "no consented
+    heart sensor"), and composing them here produced "no consented heart sensor
+    not consented".
+
+    `unavailable` is a parameter for the same reason `declined` is --
+    `/api/eeg/start` says "Could not check whether EEG recording is allowed, so
+    it was not started", which is a better sentence than "consent unavailable"
+    in front of someone who just pressed a button. It used to get that by
+    hand-rolling this precedence inline, which is one edit away from the four
+    sites disagreeing about whether a closed year outranks an unreadable
+    consent row.
     """
     window = _WINDOW_REASONS.get(gate.get("window_state"))
     if window:
         return window
     if not gate.get("retrieved"):
-        return "consent unavailable"
+        return unavailable
     return declined
 
 
@@ -1522,13 +1543,19 @@ _ingest_sweep_at = time.monotonic()
 _INGEST_SWEEP_EVERY = 60.0
 _INGEST_SWEEP_ABOVE = 1024
 
-# Which heart sources each consent flag permits. One flag per *sensor*, so a
-# student who allowed the headband and declined the camera has consented to
-# muse_optics and muse_ppg and not to rppg. Rejecting per source rather than
-# per channel is the entire reason heart_signals carries `source` at all.
-_HEART_SOURCES_BY_CONSENT = {
-    "headband_optical_enabled": ("muse_optics", "muse_ppg"),
-    "camera_enabled":           ("rppg",),
+# Which heart sources each sensor permits. One entry per *sensor*, so a student
+# who allowed the headband and declined the camera has consented to muse_optics
+# and muse_ppg and not to rppg. Rejecting per source rather than per channel is
+# the entire reason heart_signals carries `source` at all.
+#
+# Keyed on `_may_record`'s composed `record_*` flags, not on the raw
+# `*_enabled` consent flags. Consent alone is not permission to record -- the
+# school year has to be open too -- and keying on the raw flags meant every
+# caller had to remember to check the window itself, which is exactly the
+# duplication that produced two hand-written copies of that check.
+_HEART_SOURCES_BY_RECORD_FLAG = {
+    "record_headband_optical": ("muse_optics", "muse_ppg"),
+    "record_camera":           ("rppg",),
 }
 
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
@@ -2392,8 +2419,24 @@ def _consent(student_id: str) -> dict:
 # The poller writes `cognitive_signals` directly with the service-role client,
 # so neither RLS nor the ingest endpoint's gate applies to it. This is what
 # subjects it to the same consent rule as the push path.
-eeg_poller.set_consent_check(
-    lambda student_id: bool(_may_record(student_id)["record_eeg"]))
+def _poller_may_record_eeg(student_id: str) -> bool:
+    """The poller's recurring permission check, and the log that says why not.
+
+    The poller takes a bool, so it cannot distinguish a withdrawal from a closed
+    school year or from a failed read of either -- and its own line used to
+    assert "consent withdrawn" for all of them, which names a decision the
+    family may never have made. This is the site that knows, so this is the site
+    that logs it.
+    """
+    gate = _may_record(student_id)
+    if gate["record_eeg"]:
+        return True
+    print(f"<<< [eeg-poller] {student_id[:8]}: "
+          f"{_not_recording_reason(gate, 'eeg not consented')}", flush=True)
+    return False
+
+
+eeg_poller.set_consent_check(_poller_may_record_eeg)
 
 
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
@@ -2797,11 +2840,22 @@ def _rate_limit_ingest(user_id: str):
         _ingest_hits[user_id] = hits
 
 
-def _permitted_heart_sources(consent: dict) -> set[str]:
-    """The sources this student's consent covers. Empty means record nothing."""
+def _permitted_heart_sources(gate: dict) -> set[str]:
+    """The sources this student may currently be recorded from.
+
+    Takes a `_may_record` result and reads its `record_*` flags -- consent AND
+    the school year, already composed -- not the raw consent flags beside them.
+    Both call sites previously took the raw ones and then re-checked the window
+    by hand, which is two copies of a rule that `_may_record` had already
+    applied and returned.
+
+    A raw `_consent` dict has no `record_*` keys, so passing one yields the
+    empty set: nothing recorded. That is the safe direction for a mistake here,
+    and `test_a_raw_consent_dict_permits_nothing` pins it.
+    """
     allowed: set[str] = set()
-    for flag, sources in _HEART_SOURCES_BY_CONSENT.items():
-        if consent.get(flag):
+    for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items():
+        if gate.get(flag):
             allowed.update(sources)
     return allowed
 
@@ -2820,10 +2874,7 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
     failure this whole arrangement exists to prevent. `_consent` already fails
     closed on a read error, so no denial is added here.
     """
-    gate = _may_record(student_id)
-    if gate["window_state"] in _WINDOW_DENIED:
-        return False
-    return source in _permitted_heart_sources(gate)
+    return source in _permitted_heart_sources(_may_record(student_id))
 
 
 eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
@@ -2996,11 +3047,7 @@ def ingest_heart(payload: HeartBatch, request: Request):
     _verify_session_owner(payload.session_id, user["id"])
 
     consent = _may_record(user["id"])
-    # Outside the window every source is refused, not just the unconsented
-    # ones -- otherwise a student who consented to both sensors would still
-    # record all summer.
-    allowed = (set() if consent["window_state"] in _WINDOW_DENIED
-               else _permitted_heart_sources(consent))
+    allowed = _permitted_heart_sources(consent)
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
 
@@ -3256,6 +3303,18 @@ def _poller_status(user_id: str) -> dict:
     status = eeg_poller.status(user_id)
     if status.get("running"):
         return status
+    # The window first, and for the same reason the ingest reasons order it
+    # that way: outside the school year *nothing* is recording, so reporting
+    # "consent_withdrawn" -- or worse, nothing at all -- describes a decision
+    # the family never made. A poller that is not running with consent intact
+    # and no reason attached is precisely the silent quiet week this module's
+    # reporting rules exist to stop, and a closed year was reaching it that way.
+    window = _retention_window()
+    stopped = _WINDOW_STOPPED_REASONS.get(window["state"])
+    if stopped:
+        return {**status, "stopped_reason": stopped,
+                "window_starts_on": window["starts_on"],
+                "window_ends_on": window["ends_on"]}
     consent = _consent(user_id)
     if not consent.get("retrieved"):
         # Unknown, not "withdrawn". The reporting three-state rule again: a
@@ -3499,14 +3558,14 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         # 403 for all of these, and the body says which. Not 409: that one
         # means "this deployment does not work that way", and a closed school
         # year is a fact about the school, not about the deployment.
-        window = _WINDOW_REASONS.get(consent["window_state"])
-        raise HTTPException(
-            403,
-            f"{window[0].upper()}{window[1:]}." if window else
-            "EEG recording is switched off for this student."
-            if consent.get("retrieved")
-            else "Could not check whether EEG recording is allowed, so it was not started.",
-        )
+        #
+        # Same helper as the three ingest endpoints, so the precedence -- window
+        # ahead of consent -- is decided once. Only the wording is local.
+        detail = _not_recording_reason(
+            consent,
+            "EEG recording is switched off for this student.",
+            "Could not check whether EEG recording is allowed, so it was not started.")
+        raise HTTPException(403, detail[0].upper() + detail[1:])
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID

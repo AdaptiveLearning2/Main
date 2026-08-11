@@ -724,7 +724,15 @@ timezone denies rather than falling back to UTC, because a fallback moves every 
 while looking like it worked, on a value edited by hand twice a year. "The year hasn't started" and
 "the year is over" reach a parent as different sentences; `_not_recording_reason` puts the window
 reason ahead of the consent one, or a closed year sends someone to the consent screen to fix a
-setting that is fine.
+setting that is fine. `_poller_status` follows the same order, with its own machine-readable
+`stopped_reason` vocabulary (`school_year_ended`, …) — a poller that is not running with consent
+intact and nothing saying why is the silent quiet week arriving through the status endpoint.
+
+**Never read the raw `*_enabled` flags to decide whether to record.** `_permitted_heart_sources`
+takes a `_may_record` result and reads its composed `record_*` flags; hand it a bare `_consent`
+dict and it returns no sources at all, which is the safe direction for that mistake.
+`test_every_recording_site_gates_on_the_window` lists the six sites and fails if one calls
+`_consent(` directly — the same exhaustiveness pattern as `_MODE_AWARE`, and for the same reason.
 
 **The window gates recording only. Don't put it in `_consent()`.** That helper is read by the
 reporting surfaces, the consent screen and the poller status, none of which should change answer

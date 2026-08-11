@@ -246,3 +246,107 @@ def test_the_reason_names_the_window_before_the_channel(monkeypatch):
     assert main._not_recording_reason(
         {"window_state": main.WINDOW_OPEN, "retrieved": True},
         "no consented heart sensor") == "no consented heart sensor"
+
+
+# ── every recording site is gated, checked together ─────────────────────────
+#
+# The negative above proves reading is *not* gated. This is the other half, and
+# it exists because the first version of this file had only the negative: it
+# would have passed with the window wired into nothing at all.
+#
+# By source rather than by behaviour, deliberately. Driving each of these to a
+# refusal needs six different fixtures -- a poller, a session owner, a rate
+# limiter, a live sidecar -- and the thing worth pinning is not that they refuse
+# today but that none of them reads consent *without* the window. That is a
+# property of the call, so the call is what is inspected. Same argument as
+# `_MODE_AWARE` in test_ingest_mode.py, which lists the endpoints that must know
+# the ingest mode after five review rounds found them one at a time.
+
+_RECORDING_SITES = (
+    "_poller_may_record_eeg",   # the poller's recurring EEG permission check
+    "_heart_consent_for_poller",  # and its per-source heart check
+    "ingest_cognitive",
+    "ingest_face",
+    "ingest_heart",
+    "eeg_start",
+)
+
+
+@pytest.mark.parametrize("name", _RECORDING_SITES)
+def test_every_recording_site_gates_on_the_window(name):
+    """A site that calls `_consent` directly records all summer.
+
+    Consent is necessary and not sufficient: `_may_record` is the conjunction,
+    and reading the raw flags skips the school year silently -- no error, no
+    empty result, just rows written outside the window that the delete job will
+    then be asked to reason about.
+    """
+    import inspect
+    source = inspect.getsource(getattr(main, name))
+    assert "_may_record(" in source, (
+        f"{name} writes signal rows but does not consult _may_record -- it is "
+        "gated on consent alone, so it records outside the school year"
+    )
+    # `_consent(` with a paren: the word appears in prose and in variable names
+    # all over these functions, and only the call is the mistake.
+    assert "_consent(" not in source, (
+        f"{name} calls _consent directly. Use _may_record, which composes it "
+        "with the retention window; the raw flags are on its result if a "
+        "caller genuinely needs to tell 'they agreed' from 'may record now'."
+    )
+
+
+def test_a_raw_consent_dict_permits_nothing():
+    """The safe direction for the mistake the test above catches.
+
+    `_permitted_heart_sources` reads `record_*`, so handing it a bare `_consent`
+    result yields no sources rather than every consented one -- a caller that
+    forgets the window records nothing instead of recording all year.
+    """
+    raw_consent = {"headband_optical_enabled": True, "camera_enabled": True,
+                   "retrieved": True}
+    assert main._permitted_heart_sources(raw_consent) == set()
+
+    permitted = main._permitted_heart_sources(
+        {"record_headband_optical": True, "record_camera": False})
+    assert permitted == {"muse_optics", "muse_ppg"}
+
+
+# ── the poller's status says why, rather than going quiet ───────────────────
+
+@pytest.mark.parametrize("state,expected", [
+    (main.WINDOW_BEFORE, "school_year_not_started"),
+    (main.WINDOW_AFTER, "school_year_ended"),
+    (main.WINDOW_UNCONFIGURED, "school_year_unconfigured"),
+    (main.WINDOW_UNREADABLE, "school_year_unknown"),
+])
+def test_a_closed_year_explains_why_the_poller_is_not_running(monkeypatch, state, expected):
+    """Otherwise it is a poller that is simply not running, with consent intact
+    and nothing attached saying why -- the silent quiet week, arriving through
+    the status endpoint."""
+    monkeypatch.setattr(main.eeg_poller, "status", lambda _u: {"running": False})
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": state, "starts_on": "2026-09-01", "ends_on": "2027-06-30",
+        "timezone": "UTC"})
+    monkeypatch.setattr(main, "_consent", lambda _s: {
+        "eeg_enabled": True, "retrieved": True})
+
+    status = main._poller_status(STUDENT)
+
+    assert status["stopped_reason"] == expected
+    # And the dates ride along, so a surface can say *when* rather than only
+    # that recording is off.
+    assert status["window_starts_on"] == "2026-09-01"
+
+
+def test_the_window_outranks_consent_in_the_status_too(monkeypatch):
+    """Same precedence as the refusal messages. A withdrawal reported during a
+    closed year sends a parent to a screen where nothing is wrong."""
+    monkeypatch.setattr(main.eeg_poller, "status", lambda _u: {"running": False})
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_AFTER, "starts_on": "2026-09-01",
+        "ends_on": "2027-06-30", "timezone": "UTC"})
+    monkeypatch.setattr(main, "_consent", lambda _s: {
+        "eeg_enabled": False, "retrieved": True, "eeg_revoked_at": "2026-10-01"})
+
+    assert main._poller_status(STUDENT)["stopped_reason"] == "school_year_ended"

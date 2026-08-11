@@ -173,3 +173,94 @@ def test_an_unparseable_timestamp_joins_no_day(monkeypatch, at_three_am_utc):
     report = main._weekly_signal_report(STUDENT)
 
     assert all(d["focus"] is None for d in report["daily"])
+
+
+# ── the rollup is what the report reads once the raw rows are gone ──────────
+
+def _rollup(day, channel, **cols):
+    base = {"user_id": STUDENT, "day": day, "channel": channel,
+            "sample_count": 0, "trusted_sample_count": 0}
+    return {**base, **cols}
+
+
+def _with_rollup(cog=(), rollup=()):
+    return {**_tables(cog=cog), "signal_daily_rollup": list(rollup)}
+
+
+def test_a_day_with_no_raw_rows_falls_back_to_its_rollup(monkeypatch, at_three_am_utc):
+    """After the delete job runs this is the only path there is.
+
+    The day is chosen on what is *present* rather than by comparing it against
+    the retention window: the two agree, because the job only deletes days
+    outside the window, but presence cannot drift from reality where a second
+    copy of the boundary arithmetic can.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.42,
+                        sample_count=1200, trusted_sample_count=1100)])))
+
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-09")
+
+    assert day["focus"] == 0.42
+    assert day["cognitive_from_rollup"] is True
+    assert day["cognitive_retrieved"] is True, "a summarised day was retrieved"
+    assert day["cognitive_samples"] == 1200, (
+        "the count is what keeps a thin day visibly thin after the detail is gone"
+    )
+
+
+def test_raw_rows_win_over_a_rollup_for_the_same_day(monkeypatch, at_three_am_utc):
+    """Full fidelity where it still exists. The rollup is a fallback, not a
+    cache -- preferring it would quietly answer today's chart from yesterday's
+    summary."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
+        rollup=[_rollup("2026-06-11", "cognitive", avg_focus=0.1,
+                        sample_count=99)])))
+
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-11")
+
+    assert day["focus"] == 0.9
+    assert day["cognitive_from_rollup"] is False
+    assert day["cognitive_samples"] == 1
+
+
+def test_a_summarised_day_is_marked_as_one(monkeypatch, at_three_am_utc):
+    """Reduced fidelity, named.
+
+    A day averaged from its own samples and a day averaged once and then
+    deleted answer the same question to different precision. A chart that mixes
+    them without saying so invites a comparison that is not sound.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.42)])))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert _day(report, "2026-06-11")["cognitive_from_rollup"] is False
+    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
+    # Every day carries the flag, so a consumer never reads "field absent" as a
+    # third state -- the same rule the retrieved flags follow.
+    assert all("cognitive_from_rollup" in d for d in report["daily"])
+
+
+def test_a_failed_rollup_read_is_reported_rather_than_read_as_absence(monkeypatch,
+                                                                      at_three_am_utc):
+    """Once the raw rows are gone the rollup *is* the history, so a failed read
+    means the week is unreadable -- not that it was quiet. That is the one claim
+    this read is least entitled to make."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _with_rollup(), table_raises={"signal_daily_rollup"}))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert report["retrieved"]["rollup"] is False
+    # And the rest of the report still came back: one broken read does not
+    # blank a dashboard.
+    assert report["retrieved"]["cognitive"] is True
+    assert len(report["daily"]) == 7

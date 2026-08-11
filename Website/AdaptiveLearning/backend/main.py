@@ -374,14 +374,28 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
             print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day} "
                   f"({span}d), rolling up the closing day only")
             day = end_day
+        failures = 0
         while day <= end_day:
-            supabase.rpc("rollup_signal_day", {
-                "p_user_id": user_id,
-                "p_day": day.isoformat(),
-                "p_timezone": tz.key,
-            }).execute()
+            # Per day, not per span. One try around the loop meant a failure on
+            # the first day of a two-day session also skipped the second -- and
+            # the second is the closing day, the one this call exists for. The
+            # days are independent recomputations; nothing about one failing
+            # says the next will.
+            try:
+                supabase.rpc("rollup_signal_day", {
+                    "p_user_id": user_id,
+                    "p_day": day.isoformat(),
+                    "p_timezone": tz.key,
+                }).execute()
+            except Exception as e:
+                failures += 1
+                print(f"[rollup] {user_id[:8]} {day}: {e}")
             day += timedelta(days=1)
+        if failures:
+            print(f"[rollup] {user_id[:8]}: {failures} day(s) not rolled up")
     except Exception as e:
+        # This one covers the date arithmetic and the timezone read, which are
+        # shared by every day and cannot be retried per day.
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
@@ -892,6 +906,26 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             out.setdefault(_school_day(r.get(ts_col), tz), []).append(r)
         return out
 
+    # The rollup, for days whose per-sample rows are gone. One query for the
+    # range, keyed on (day, channel).
+    #
+    # Its own `retrieved` flag, like every other read here. Once the delete job
+    # has run the rollup *is* the history, so a failed read means the week is
+    # unreadable rather than empty -- the one claim it is least entitled to
+    # make, and exactly the confusion the reporting rules exist to stop.
+    rollup_by: dict[tuple[str, str], dict] = {}
+    rollup_ok = True
+    try:
+        for r in (supabase.table("signal_daily_rollup").select("*")
+                  .eq("user_id", student_id)
+                  .gte("day", (school_today - timedelta(days=days - 1)).isoformat())
+                  .lte("day", school_today.isoformat())
+                  .execute().data or []):
+            rollup_by[(str(r.get("day")), r.get("channel"))] = r
+    except Exception as e:
+        print(f"[weekly_report:rollup] {student_id}: {e}")
+        rollup_ok = False
+
     cog_by_day = _by_school_day(cog, "ts")
     face_by_day = _by_school_day(face, "ts")
     heart_by_day = _by_school_day(heart, "ts")
@@ -969,21 +1003,46 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
             continue
+        # Raw rows where they still exist, the rollup where they do not.
+        #
+        # Decided on what is present rather than by comparing the day against
+        # the retention window. The two agree -- the delete job only removes
+        # days outside the window -- but presence cannot drift from reality,
+        # where a second copy of the boundary arithmetic can, and would be
+        # wrong on exactly the day the window moved.
+        #
+        # A rollup also wins over a *partial* raw day: it is a complete summary,
+        # where a capped read is a fraction presented as a whole.
+        def _rolled(channel, raw_rows, whole):
+            row = rollup_by.get((day, channel))
+            return row if row is not None and (not raw_rows or not whole) else None
+
         day_cog = cog_by_day.get(day, [])
         day_face = face_by_day.get(day, [])
+        cog_roll = _rolled("cognitive", day_cog, cog_whole)
+        face_roll = _rolled("emotion", day_face, face_whole) if include_emotion else None
         # Trusted only, matching the week's averages. A day whose every sample
         # was rejected is then a null beside a `heart_retrieved` of True --
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
         day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
+        heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole)
+                      if include_heart else None)
 
         daily.append({
             "date": day,
             # Withheld unless the day is whole. A partly-retrieved day averages
             # only the fraction that survived the cap, which reads exactly like
             # a measurement of the whole day.
-            "focus": _avg([r.get("focus") for r in day_cog]) if cog_whole else None,
-            "stress": _avg([r.get("stress") for r in day_cog]) if cog_whole else None,
-            "engagement": _avg([r.get("engagement") for r in day_cog]) if cog_whole else None,
+            # `.get` on the rollup row, like every raw row here: a column
+            # missing from a summary must not 500 the whole report. This is the
+            # read that runs after the detail is gone, so it is the last thing
+            # that should be brittle about a shape.
+            "focus": (cog_roll.get("avg_focus") if cog_roll else
+                      _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
+            "stress": (cog_roll.get("avg_stress") if cog_roll else
+                       _avg([r.get("stress") for r in day_cog]) if cog_whole else None),
+            "engagement": (cog_roll.get("avg_engagement") if cog_roll else
+                           _avg([r.get("engagement") for r in day_cog]) if cog_whole else None),
             "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
             # None rather than 0, on the same reasoning as the metrics above: a
             # day the cap kept us from reading did not have zero sessions, and
@@ -996,10 +1055,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # ratios rendered as percentages. A consumer applying the same
             # scaling to these would draw a 72 bpm day at 7200% -- so they are
             # named for the unit and the frontend gives them their own axis.
-            "heart_rate_bpm": _avg([r.get("heart_rate_bpm") for r in day_heart])
-                              if heart_whole else None,
-            "rmssd_ms": _avg([r.get("rmssd_ms") for r in day_heart])
-                        if heart_whole else None,
+            "heart_rate_bpm": (heart_roll.get("avg_heart_rate_bpm") if heart_roll else
+                               _avg([r.get("heart_rate_bpm") for r in day_heart])
+                               if heart_whole else None),
+            "rmssd_ms": (heart_roll.get("avg_rmssd_ms") if heart_roll else
+                         _avg([r.get("rmssd_ms") for r in day_heart])
+                         if heart_whole else None),
             # False means "we did not fetch this day in full", which a null
             # metric alone cannot distinguish from "nothing was recorded". It
             # covers the days the cap never reached, the single day it cut
@@ -1007,10 +1068,31 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # None means "not requested" -- face reporting is off, so there was
             # no retrieval to succeed or fail, and the consumers that count
             # `=== false` must not treat the opt-out as a retrieval failure.
-            "cognitive_retrieved": cog_whole,
-            "face_retrieved": face_whole if include_emotion else None,
-            "heart_retrieved": heart_whole if include_heart else None,
+            # A rollup-sourced day *was* retrieved, and completely: the summary
+            # covers the whole day even where the raw read was capped or gone.
+            "cognitive_retrieved": True if cog_roll else cog_whole,
+            "face_retrieved": (None if not include_emotion else
+                               True if face_roll else face_whole),
+            "heart_retrieved": (None if not include_heart else
+                                True if heart_roll else heart_whole),
             "sessions_retrieved": ses_whole,
+
+            # **Reduced fidelity, named.** A day averaged from its own samples
+            # and a day averaged once and then deleted answer the same question
+            # to different precision, and a chart that mixes them without saying
+            # so invites a comparison that is not sound. Per channel, because
+            # the delete job works per day and a mixed day is possible.
+            "cognitive_from_rollup": bool(cog_roll),
+            "face_from_rollup": bool(face_roll),
+            "heart_from_rollup": bool(heart_roll),
+
+            # How much is behind each figure, uniformly: raw days count rows,
+            # rollup days carry the count from when the rows still existed.
+            # This keeps a thin day visibly thin after the detail is gone --
+            # without it four samples and four thousand look identical.
+            "cognitive_samples": (cog_roll.get("sample_count") or 0) if cog_roll else len(day_cog),
+            "face_samples": (face_roll.get("sample_count") or 0) if face_roll else len(day_face),
+            "heart_samples": (heart_roll.get("sample_count") or 0) if heart_roll else len(day_heart),
         })
 
     # Only trusted heart samples are averaged. An untrusted one carries a rate;
@@ -1136,6 +1218,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "face": face_ok if include_emotion else None,
             "heart": heart_ok if include_heart else None,
             "sessions": ses_ok,
+            # The fallback source, reported like the others.
+            "rollup": rollup_ok,
         },
         "sample_counts": {"cognitive": len(cog), "face": len(face),
                           # Rows retrieved, not rows averaged. A week of nothing
@@ -1356,16 +1440,24 @@ def start_session(payload: StartSessionRequest, request: Request):
     # without this a student who closes the tab without actually ending the session
     # leaves a stale open session behind.
 
-    stale_open = supabase.table("sessions").select("id") \
+    # `started_at` too: the rollup below needs the day the session began, or a
+    # session that ran past local midnight only summarises the day it was swept.
+    stale_open = supabase.table("sessions").select("id, started_at") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
         # Also releases any pre-claim reservation (#34) left behind by a
         # scan/connect that never reached /start -- a stale session left this
         # way is exactly the "gave up mid-pairing" case that leaves one.
         eeg_poller.stop(s["id"], user["id"])
+        stale_ended = _utc_now().isoformat()
         supabase.table("sessions").update(
-            {"ended_at": _utc_now().isoformat()}
+            {"ended_at": stale_ended}
         ).eq("id", s["id"]).execute()
+        # Closed by timeout rather than by /end, and it still needs its rollup.
+        # Only the /end endpoint called this, so a student who closed the tab --
+        # the case this sweep exists for -- left a day with raw rows and no
+        # summary, and once the delete job runs that day is simply gone.
+        _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
 
 
     obj  = {
@@ -1414,7 +1506,11 @@ def end_session(session_id: str = Path(...), request: Request = None):
     if not sess.data:
         raise HTTPException(404, "Session not found")
     data = sess.data
-    supabase.table("sessions").update({"ended_at": datetime.utcnow().isoformat()}).eq("id", session_id).execute()
+    # Named, and `_utc_now` rather than the naive deprecated `datetime.utcnow`:
+    # this value is now read back by the rollup, which converts it to a school
+    # day, and a naive stamp has no zone to convert from.
+    ended = _utc_now().isoformat()
+    supabase.table("sessions").update({"ended_at": ended}).eq("id", session_id).execute()
 
     total_q = data.get("questions_answered") or 0
     correct = data.get("correct_answers")    or 0
@@ -1442,7 +1538,10 @@ def end_session(session_id: str = Path(...), request: Request = None):
     # `_rollup_session_days` swallows its own failures, so it cannot cost the
     # session record or the stats update -- but ordering it here means it also
     # sees the `ended_at` this endpoint just wrote.
-    _rollup_session_days(user["id"], data.get("started_at"), _utc_now().isoformat())
+    # `ended`, not a fresh reading: they differ only across local midnight,
+    # where a fresh one rolls up a day the stored session does not claim and
+    # skips the day it is actually recorded on.
+    _rollup_session_days(user["id"], data.get("started_at"), ended)
     return {"ok": True}
 
 @app.get("/api/sessions")
@@ -3501,6 +3600,10 @@ def class_live(class_id: str, request: Request):
                 supabase.table("sessions").update({
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
+                # Same reason as the sweep in start_session. `sid` is the
+                # student: this runs on a teacher's request, and the rollup
+                # belongs to whoever the data is about.
+                _rollup_session_days(sid, sess.get("started_at"), now.isoformat())
                 # sid, not the teacher reading this view -- the reservation
                 # (#34), like the poller, belongs to the student whose stale
                 # session this is.

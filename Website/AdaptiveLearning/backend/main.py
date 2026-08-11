@@ -3144,10 +3144,23 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
+        # This attempt never reached the bridge, so it is not evidence of an
+        # active pairing flow worth protecting -- but reserve_device above
+        # already claimed the station, and nothing else on this path was
+        # ever going to release it. Held through the fall of the TTL, a
+        # single failed request would lock a physical station out from under
+        # a *different* user who could otherwise actually pair with it,
+        # including in the ordinary case where the sidecar is merely
+        # restarting. release_reservation is scoped to this caller, so it
+        # cannot drop a claim that belongs to someone else.
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
         return eeg_client.muse_refresh(device_id)
     except Exception as e:
+        # Same reasoning as the liveness check above: a bridge error is a
+        # failed attempt, not a reason to keep the station locked for it.
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(502, f"Bridge error: {e}")
 
 @app.post("/api/eeg/muse/connect")
@@ -3163,10 +3176,14 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
+        # See eeg_muse_refresh above -- a failed attempt must release the
+        # claim it just made, not squat the station for its TTL.
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
         return eeg_client.muse_connect(name, device_id)
     except Exception as e:
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(502, f"Bridge error: {e}")
 
 @app.post("/api/eeg/muse/disconnect")
@@ -3182,10 +3199,14 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
+        # See eeg_muse_refresh above -- a failed attempt must release the
+        # claim it just made, not squat the station for its TTL.
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
         return eeg_client.muse_disconnect(device_id)
     except Exception as e:
+        eeg_poller.release_reservation(user["id"])
         raise HTTPException(502, f"Bridge error: {e}")
 
 @app.get("/api/eeg/devices")

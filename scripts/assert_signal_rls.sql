@@ -243,6 +243,21 @@ BEGIN
             'authenticated lacks SELECT on cognitive_signals -- the RLS '
             'assertion below would pass for the wrong reason';
     END IF;
+    -- The sequence USAGE grant 20260805110000 gave authenticated to insert
+    -- into these two tables has no reason to survive 20260811000000 revoking
+    -- the INSERT it existed for. Not RLS -- a leftover grant a later
+    -- migration could otherwise silently re-justify by adding INSERT back
+    -- without anyone noticing USAGE had quietly been there the whole time.
+    IF has_sequence_privilege('authenticated', 'public.face_signals_id_seq', 'USAGE') THEN
+        RAISE EXCEPTION
+            'authenticated still holds USAGE on face_signals_id_seq with no '
+            'INSERT left to justify it';
+    END IF;
+    IF has_sequence_privilege('authenticated', 'public.cognitive_signals_id_seq', 'USAGE') THEN
+        RAISE EXCEPTION
+            'authenticated still holds USAGE on cognitive_signals_id_seq with '
+            'no INSERT left to justify it';
+    END IF;
 END $$;
 
 DO $$

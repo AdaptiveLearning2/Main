@@ -31,6 +31,16 @@ REVOKE ALL ON TABLE "public"."face_signals" FROM "authenticated";
 GRANT SELECT ON TABLE "public"."cognitive_signals" TO "authenticated";
 GRANT SELECT ON TABLE "public"."face_signals" TO "authenticated";
 
+-- 20260805110000 left authenticated's sequence USAGE grant in place
+-- "deliberately: it needs USAGE to insert into the tables above that have
+-- serial keys" -- true when it wrote that, and no longer true for these two
+-- now that authenticated cannot INSERT into either table at all. Not a hole
+-- on its own (PostgREST has no path to a bare nextval() call, same footnote
+-- as the TRUNCATE one above), but a grant with no remaining justification is
+-- exactly what the next ACL audit shouldn't have to puzzle out.
+REVOKE ALL ON SEQUENCE "public"."cognitive_signals_id_seq" FROM "authenticated";
+REVOKE ALL ON SEQUENCE "public"."face_signals_id_seq" FROM "authenticated";
+
 -- The bare FOR ALL policies are what let the revoked grant matter again the
 -- next time someone widens it "just for now" -- with no WITH CHECK, Postgres
 -- reuses the USING expression as the insert/update check, so re-adding INSERT

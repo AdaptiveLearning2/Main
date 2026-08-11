@@ -199,6 +199,63 @@ def test_two_users_racing_an_unclaimed_station_the_second_is_blocked(monkeypatch
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
 
 
+def test_a_failed_refresh_releases_its_reservation_instead_of_squatting(monkeypatch):
+    """reserve_device claims the station before the endpoint knows whether the
+    attempt will actually go anywhere. A request that never reaches the
+    bridge (sidecar down) is not evidence of active pairing worth protecting
+    -- squatting the claim for it would lock a *different* user out of a
+    station neither of them is doing anything with."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: False)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-race"})
+    assert exc_info.value.status_code == 503
+
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
+
+
+def test_a_bridge_error_on_connect_releases_its_reservation(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+
+    def _explode(name, device_id):
+        raise RuntimeError("bridge unreachable")
+    monkeypatch.setattr(eeg_client, "muse_connect", _explode)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    body = {"name": "MuseS-1234", "device_id": "station-race"}
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_connect(request=None, body=body)
+    assert exc_info.value.status_code == 502
+
+    monkeypatch.setattr(eeg_client, "muse_connect", lambda name, device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_connect(request=None, body=body) == {"ok": True}
+
+
+def test_a_successful_scan_still_holds_its_reservation_through_a_later_failure(monkeypatch):
+    """The release above must not overreach: it is scoped to the caller who
+    just failed, not to every reservation the module knows about."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
+
+    # A second, unrelated user's failed attempt on a *different* station must
+    # not touch user-a's still-active claim on station-a.
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: False)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException):
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-b"})
+
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-c"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
+    assert exc_info.value.status_code == 403
+
+
 def test_stop_releases_the_reservation_for_another_user(monkeypatch):
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})

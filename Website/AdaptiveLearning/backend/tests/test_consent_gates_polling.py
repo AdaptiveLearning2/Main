@@ -88,6 +88,13 @@ def test_the_poller_refuses_when_no_check_is_wired(monkeypatch):
 def test_the_poller_refuses_a_withdrawn_student(monkeypatch):
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(eeg_poller, "_consent_check", lambda _u: False)
+    # The reason hook too. Unstubbed, `start()` refuses and then asks the real
+    # `main` callback for the message, which reads `_may_record` against a real
+    # Supabase client -- the test still passed, because that read fails fast
+    # here and a failed read is also a refusal. Passing for a reason unrelated
+    # to the thing under test is the failure mode, not the network call.
+    monkeypatch.setattr(eeg_poller, "_consent_reason_check",
+                        lambda _u: "EEG recording is switched off for this student.")
 
     with pytest.raises(eeg_poller.ConsentError):
         eeg_poller.start(None, "u1", "s1", "default")

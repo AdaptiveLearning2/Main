@@ -173,3 +173,181 @@ def test_an_unparseable_timestamp_joins_no_day(monkeypatch, at_three_am_utc):
     report = main._weekly_signal_report(STUDENT)
 
     assert all(d["focus"] is None for d in report["daily"])
+
+
+# ── the rollup is what the report reads once the raw rows are gone ──────────
+
+def _rollup(day, channel, **cols):
+    base = {"user_id": STUDENT, "day": day, "channel": channel,
+            "sample_count": 0, "trusted_sample_count": 0}
+    return {**base, **cols}
+
+
+def _with_rollup(cog=(), rollup=()):
+    return {**_tables(cog=cog), "signal_daily_rollup": list(rollup)}
+
+
+def test_a_day_with_no_raw_rows_falls_back_to_its_rollup(monkeypatch, at_three_am_utc):
+    """After the delete job runs this is the only path there is.
+
+    The day is chosen on what is *present* rather than by comparing it against
+    the retention window: the two agree, because the job only deletes days
+    outside the window, but presence cannot drift from reality where a second
+    copy of the boundary arithmetic can.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.42,
+                        sample_count=1200, trusted_sample_count=1100)])))
+
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-09")
+
+    assert day["focus"] == 0.42
+    assert day["cognitive_from_rollup"] is True
+    assert day["cognitive_retrieved"] is True, "a summarised day was retrieved"
+    assert day["cognitive_samples"] == 1200, (
+        "the count is what keeps a thin day visibly thin after the detail is gone"
+    )
+
+
+def test_raw_rows_win_over_a_rollup_for_the_same_day(monkeypatch, at_three_am_utc):
+    """Full fidelity where it still exists. The rollup is a fallback, not a
+    cache -- preferring it would quietly answer today's chart from yesterday's
+    summary."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
+        rollup=[_rollup("2026-06-11", "cognitive", avg_focus=0.1,
+                        sample_count=99)])))
+
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-11")
+
+    assert day["focus"] == 0.9
+    assert day["cognitive_from_rollup"] is False
+    assert day["cognitive_samples"] == 1
+
+
+def test_a_summarised_day_is_marked_as_one(monkeypatch, at_three_am_utc):
+    """Reduced fidelity, named.
+
+    A day averaged from its own samples and a day averaged once and then
+    deleted answer the same question to different precision. A chart that mixes
+    them without saying so invites a comparison that is not sound.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 0.9}],
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.42)])))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert _day(report, "2026-06-11")["cognitive_from_rollup"] is False
+    assert _day(report, "2026-06-09")["cognitive_from_rollup"] is True
+    # Every day carries the flag, so a consumer never reads "field absent" as a
+    # third state -- the same rule the retrieved flags follow.
+    assert all("cognitive_from_rollup" in d for d in report["daily"])
+
+
+def test_a_failed_rollup_read_is_reported_rather_than_read_as_absence(monkeypatch,
+                                                                      at_three_am_utc):
+    """Once the raw rows are gone the rollup *is* the history, so a failed read
+    means the week is unreadable -- not that it was quiet. That is the one claim
+    this read is least entitled to make."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _with_rollup(), table_raises={"signal_daily_rollup"}))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert report["retrieved"]["rollup"] is False
+    # And the rest of the report still came back: one broken read does not
+    # blank a dashboard.
+    assert report["retrieved"]["cognitive"] is True
+    assert len(report["daily"]) == 7
+
+
+def test_the_weeks_headline_figures_include_summarised_days(monkeypatch,
+                                                            at_three_am_utc):
+    """The chart and the numbers above it have to agree.
+
+    `daily` fell back to the rollup while `averages` and `highlights` were
+    computed only from rows still in the raw tables -- so once the delete job
+    runs, a week whose detail is gone renders a full chart above an empty
+    summary. Two answers to one question, on one screen.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.4,
+                        avg_stress=0.2, avg_engagement=0.6,
+                        sample_count=100, trusted_sample_count=100),
+                _rollup("2026-06-10", "heart", avg_heart_rate_bpm=80.0,
+                        heart_sources=["muse_optics"],
+                        sample_count=50, trusted_sample_count=50),
+                _rollup("2026-06-10", "emotion",
+                        emotion_counts={"happy": 7, "neutral": 2},
+                        sample_count=9, trusted_sample_count=9)])))
+
+    report = main._weekly_signal_report(STUDENT)
+
+    assert report["averages"]["focus"] == 0.4
+    assert report["averages"]["engagement"] == 0.6
+    assert report["highlights"]["heart_rate_bpm"] == 80.0
+    assert report["highlights"]["dominant_emotion"] == "happy"
+    assert report["heart_sources"] == ["muse_optics"], (
+        "the only surviving record that the sensor changed"
+    )
+
+
+def test_the_week_weights_days_by_how_much_they_hold(monkeypatch, at_three_am_utc):
+    """Sum and count, not a mean of daily means.
+
+    Days differ in length. Averaging the averages weights a four-sample day
+    like a four-thousand-sample one, which is how a single quiet evening can
+    drag a week's figure around.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=1.0,
+                        sample_count=900, trusted_sample_count=900),
+                _rollup("2026-06-10", "cognitive", avg_focus=0.0,
+                        sample_count=100, trusted_sample_count=100)])))
+
+    # 900 samples at 1.0 and 100 at 0.0 is 0.9, not the 0.5 a mean of means gives.
+    assert main._weekly_signal_report(STUDENT)["averages"]["focus"] == 0.9
+
+
+def test_raw_and_summarised_days_combine_into_one_mean(monkeypatch, at_three_am_utc):
+    """The state during the term after the delete job first runs: part of the
+    week still has its samples, part has only a summary."""
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_with_rollup(
+        cog=[{"user_id": STUDENT, "ts": NOW_UTC.isoformat(), "focus": 1.0}],
+        rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.0,
+                        sample_count=3, trusted_sample_count=3)])))
+
+    # One raw sample at 1.0, three summarised at 0.0 -> 0.25.
+    assert main._weekly_signal_report(STUDENT)["averages"]["focus"] == 0.25
+
+
+def test_a_failed_raw_read_is_not_papered_over_by_the_rollup(monkeypatch,
+                                                             at_three_am_utc):
+    """"No rows" and "the query failed" are not the same evidence.
+
+    Only the first means the detail is gone. The rollup is written as sessions
+    close, so on a failed read it may be *stale* -- today's lags the session in
+    progress -- and serving it as complete would present old numbers as current
+    with `retrieved` vouching for them.
+    """
+    _school(monkeypatch, LA)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        _with_rollup(rollup=[_rollup("2026-06-09", "cognitive", avg_focus=0.4,
+                                     sample_count=10, trusted_sample_count=10)]),
+        table_raises={"cognitive_signals"}))
+
+    day = _day(main._weekly_signal_report(STUDENT), "2026-06-09")
+
+    assert day["cognitive_from_rollup"] is False
+    assert day["cognitive_retrieved"] is False, (
+        "a failed live read was reported as a complete day"
+    )
+    assert day["focus"] is None

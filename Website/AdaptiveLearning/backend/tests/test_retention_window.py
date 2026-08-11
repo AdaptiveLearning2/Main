@@ -284,7 +284,8 @@ _SIGNAL_TABLES = ("cognitive_signals", "face_signals", "heart_signals")
 # and the poller does the writing. Nothing in their source can reveal them, so
 # these stay explicit -- a short list of exceptions beside a derived rule, which
 # is a different thing from a list standing in for the rule.
-_GATING_CALLBACKS = ("_poller_may_record_eeg", "_heart_consent_for_poller")
+_GATING_CALLBACKS = ("_poller_may_record_eeg", "_poller_may_record_eeg_reason",
+                     "_heart_consent_for_poller")
 
 
 def _writes_signal_rows(source: str) -> bool:
@@ -410,3 +411,35 @@ def test_the_window_outranks_consent_in_the_status_too(monkeypatch):
         "eeg_enabled": False, "retrieved": True, "eeg_revoked_at": "2026-10-01"})
 
     assert main._poller_status(STUDENT)["stopped_reason"] == "school_year_ended"
+
+
+def test_every_window_state_has_a_meaning():
+    """The safety net `_WINDOW_STATES` is commented as having.
+
+    Three facts about a state -- whether it records, its sentence, its
+    machine-readable stop reason -- used to live in three structures kept in
+    step by hand. They are one table now, and the comment there promises this
+    test catches a constant declared without a row in it. It did not exist; a
+    sixth state would have been denied by `_WINDOW_DENIED` (which is derived,
+    so it cannot miss one) and then explained itself as nothing at all, which
+    is the silent half of the failure the table was meant to end.
+    """
+    declared = {v for k, v in vars(main).items()
+                if k.startswith("WINDOW_") and isinstance(v, str)}
+    assert declared, "the constants moved; this test is no longer looking at them"
+
+    missing = declared - set(main._WINDOW_STATES)
+    assert not missing, (
+        f"{sorted(missing)} declared without a row in _WINDOW_STATES -- it would "
+        "deny (that part is derived) and then explain itself as nothing"
+    )
+
+    for state, meaning in main._WINDOW_STATES.items():
+        if meaning.records:
+            assert meaning.reason is None and meaning.stopped_reason is None, (
+                f"{state} records, so it has no reason to give"
+            )
+        else:
+            assert meaning.reason and meaning.stopped_reason, (
+                f"{state} denies without saying why"
+            )

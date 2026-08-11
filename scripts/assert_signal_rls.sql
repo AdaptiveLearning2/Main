@@ -587,5 +587,132 @@ BEGIN
     END IF;
 END $$;
 
+-- ── the archived charts (Phase 8) ───────────────────────────────────────────
+--
+-- The objects are pictures of a named child's cognitive and physiological
+-- signals, and they outlive the rows they are drawn from -- the end-of-year
+-- delete above takes the per-sample detail and leaves these. So this is the
+-- copy with the longest exposure, and the two things guarding it are both
+-- database state that no test with a fake client can see.
+
+DO $$
+DECLARE
+    owner_id  uuid;
+    other_id  uuid;
+    is_public boolean;
+    visible   int;
+    policies  int;
+BEGIN
+    SELECT i.owner_id, i.other_id INTO owner_id, other_id FROM _ids i;
+
+    -- 1. The bucket is private. This one is not an RLS property and cannot be
+    --    asserted through storage.objects at all: a public bucket serves every
+    --    object over HTTP to anyone holding the URL, without a row-level check
+    --    ever running. And a URL travels -- once one is pasted into a message,
+    --    no policy added later can un-share it.
+    SELECT b.public INTO is_public
+      FROM storage.buckets b WHERE b.id = 'session-charts';
+    IF is_public IS NULL THEN
+        RAISE EXCEPTION
+            'the session-charts bucket does not exist, so every archive upload '
+            'fails -- silently, in the out-of-band path where nothing is waiting';
+    END IF;
+    IF is_public THEN
+        RAISE EXCEPTION 'the session-charts bucket is public';
+    END IF;
+
+    -- 2. No policy on storage.objects. With RLS on and nothing granting a role
+    --    anything, every command is denied for everyone who is not BYPASSRLS --
+    --    which is service_role, which is the backend, which is the only reader
+    --    and the only writer. A permissive policy for `authenticated` added
+    --    later would be a second access path that has to agree with
+    --    `_verify_can_view_student` forever, for no caller that exists.
+    SELECT count(*) INTO policies
+      FROM pg_policy WHERE polrelid = 'storage.objects'::regclass;
+    IF policies <> 0 THEN
+        RAISE EXCEPTION
+            'storage.objects has % policy/policies -- charts are now reachable '
+            'without going through the signed-URL endpoint', policies;
+    END IF;
+
+    INSERT INTO storage.objects (bucket_id, name, owner_id)
+    VALUES ('session-charts', owner_id || '/sess/heart_rate.svg', owner_id::text);
+
+    -- The negative control the check below needs. With no policy, SELECT
+    -- returns zero rows whether or not the object is there, so "the owner sees
+    -- nothing" would pass just as happily against an empty table -- the same
+    -- trap as the heart_signals block above, arriving from the other side.
+    SELECT count(*) INTO visible
+      FROM storage.objects WHERE bucket_id = 'session-charts';
+    IF visible <> 1 THEN
+        RAISE EXCEPTION 'the fixture object was not stored; the checks below '
+                        'would pass for the wrong reason';
+    END IF;
+
+    SET LOCAL ROLE authenticated;
+
+    -- 3. Not even the student the object is *about*. This is the one place the
+    --    archive deliberately differs from the tables it summarises: those
+    --    carry a read-your-own policy, and these do not, because an object is
+    --    fetched by URL rather than filtered by a query -- so the access
+    --    decision has to happen in the backend, where the relationship checks
+    --    live, and be handed out as a short-lived signed URL.
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', owner_id, 'role', 'authenticated')::text,
+                       true);
+    SELECT count(*) INTO visible
+      FROM storage.objects WHERE bucket_id = 'session-charts';
+    IF visible <> 0 THEN
+        RAISE EXCEPTION
+            'a student read % chart object(s) straight from storage, bypassing '
+            'the signed-URL endpoint', visible;
+    END IF;
+
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', other_id, 'role', 'authenticated')::text,
+                       true);
+    SELECT count(*) INTO visible
+      FROM storage.objects WHERE bucket_id = 'session-charts';
+    IF visible <> 0 THEN
+        RAISE EXCEPTION
+            'an unrelated authenticated user read % chart object(s)', visible;
+    END IF;
+
+    -- And cannot write one. An attacker-supplied SVG under a student's prefix
+    -- would be served by the signed-URL endpoint as that student's chart.
+    BEGIN
+        INSERT INTO storage.objects (bucket_id, name)
+        VALUES ('session-charts', other_id || '/sess/emotion_pie.svg');
+        RAISE EXCEPTION 'an authenticated user wrote a chart object';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+
+    RESET ROLE;
+END $$;
+
+-- `sessions.chart_paths` has no default, and that is load-bearing rather than
+-- an omission. `'{}'::jsonb` would claim every session closed before Phase 8 was
+-- archived and found nothing to draw -- an absence reported as data, which is
+-- the failure this schema has spent nine phases avoiding. Column-NULL means the
+-- archive never ran; `{"heart_rate": null, ...}` means it ran and that channel
+-- had nothing.
+DO $$
+DECLARE
+    has_default boolean;
+BEGIN
+    SELECT a.atthasdef INTO has_default
+      FROM pg_attribute a
+     WHERE a.attrelid = 'public.sessions'::regclass
+       AND a.attname = 'chart_paths' AND NOT a.attisdropped;
+    IF has_default IS NULL THEN
+        RAISE EXCEPTION 'sessions.chart_paths is missing';
+    END IF;
+    IF has_default THEN
+        RAISE EXCEPTION
+            'sessions.chart_paths has a default, so a session that was never '
+            'archived is indistinguishable from one archived with nothing to draw';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

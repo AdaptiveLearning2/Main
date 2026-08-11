@@ -305,8 +305,8 @@ def _school_timezone() -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def _school_day(ts, tz: ZoneInfo) -> str:
-    """The calendar day `ts` falls on *at the school*, as YYYY-MM-DD.
+def _school_date(ts, tz: ZoneInfo) -> date | None:
+    """The calendar day `ts` falls on *at the school*. None if unparseable.
 
     Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
     by UTC midnight -- which is mid-afternoon the previous day in Los Angeles
@@ -314,13 +314,25 @@ def _school_day(ts, tz: ZoneInfo) -> str:
     on the wrong day of a parent's chart, and the last day of a school week
     could show sessions that happened on the Saturday.
 
+    The `date` form exists because the rollup writer does arithmetic on it
+    (stepping from a session's first day to its last); `_school_day` below is
+    the same derivation as a string, for bucketing. One conversion, two shapes,
+    so the report and the rollup cannot come to disagree about which day a
+    reading belongs to -- which is the whole reason the rollup can answer the
+    report's questions after the raw rows are gone.
+    """
+    parsed = _parse_ts(ts)
+    return None if parsed is None else parsed.astimezone(tz).date()
+
+
+def _school_day(ts, tz: ZoneInfo) -> str:
+    """`_school_date` as YYYY-MM-DD, for bucketing.
+
     Empty string for anything unparseable, which no day matches, so a bad
     timestamp drops out of every bucket rather than silently joining one.
     """
-    parsed = _parse_ts(ts)
-    if parsed is None:
-        return ""
-    return parsed.astimezone(tz).date().isoformat()
+    resolved = _school_date(ts, tz)
+    return "" if resolved is None else resolved.isoformat()
 
 
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
@@ -343,16 +355,24 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """
     tz = _school_timezone()
     try:
-        first = _parse_ts(started_at) or _utc_now()
-        last = _parse_ts(ended_at) or _utc_now()
-        day = first.astimezone(tz).date()
-        end_day = last.astimezone(tz).date()
-        # Bounded, so a session with a corrupt `started_at` cannot spin here.
-        # A lesson does not span a week; anything claiming to is bad data, and
-        # rolling up the days around the close is the useful half of it.
-        if (end_day - day).days > 7:
-            print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day}, "
-                  "rolling up the closing day only")
+        now = _utc_now()
+        day = _school_date(started_at, tz) or _school_date(now, tz)
+        end_day = _school_date(ended_at, tz) or _school_date(now, tz)
+        # Two ways a session's stamps can be nonsense, and neither may end in
+        # doing nothing quietly.
+        #
+        # Forward: a corrupt `started_at` years back would step a day at a time
+        # to today. Inverted: `started_at` *after* `ended_at` -- clock skew, or
+        # a bad write -- makes the loop condition false from the start, so it
+        # ran zero times and logged nothing, which is the silent no-op this
+        # guard was written to prevent and did not.
+        #
+        # Both fall back to the closing day, which is the one a close can
+        # actually have changed.
+        span = (end_day - day).days
+        if span < 0 or span > 7:
+            print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day} "
+                  f"({span}d), rolling up the closing day only")
             day = end_day
         while day <= end_day:
             supabase.rpc("rollup_signal_day", {

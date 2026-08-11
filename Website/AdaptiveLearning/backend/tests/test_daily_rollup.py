@@ -88,6 +88,20 @@ def test_an_implausible_span_does_not_loop(rpc):
     assert rpc.days == ["2026-06-11"], "fell back to the closing day only"
 
 
+def test_an_inverted_span_still_rolls_up_the_closing_day(rpc):
+    """The silent half of the same guard.
+
+    A `started_at` later than `ended_at` -- clock skew, or a bad write -- made
+    the loop condition false from the start, so it ran zero times and logged
+    nothing. A session that just closed always has one day worth recomputing,
+    and doing nothing quietly is the outcome this whole helper is shaped to
+    avoid.
+    """
+    main._rollup_session_days(USER, "2026-06-12T03:00:00Z", "2026-06-10T03:00:00Z")
+
+    assert rpc.days == ["2026-06-09"], "an inverted range rolled up nothing"
+
+
 def test_a_failed_rollup_does_not_reach_the_caller(monkeypatch):
     """The whole reason this is called last and swallows.
 

@@ -448,6 +448,22 @@ def _reservation_owner(device_id: str) -> str | None:
     return user_id
 
 
+def _live_poller_owner(device_id: str) -> str | None:
+    """The user_id of the live poller currently holding device_id, or None.
+
+    Caller holds _lock. Shared by start(), reserve_device() and
+    can_use_device() -- all three answer the same question, "who, if anyone,
+    currently owns this device via a live poller", and previously each
+    carried its own copy of the scan. Three copies is how can_use_device and
+    start() could have quietly disagreed about a claim; a fourth copy for
+    reserve_device would only have made that more likely, not less.
+    """
+    for p in _active.values():
+        if p.device_id == device_id and p.is_alive():
+            return p.user_id
+    return None
+
+
 def reserve_device(user_id: str, device_id: str) -> bool:
     """Claim or refresh device_id's pre-claim reservation for user_id.
 
@@ -464,9 +480,9 @@ def reserve_device(user_id: str, device_id: str) -> bool:
     close.
     """
     with _lock:
-        for p in _active.values():
-            if p.device_id == device_id and p.is_alive():
-                return p.user_id == user_id
+        owner = _live_poller_owner(device_id)
+        if owner is not None:
+            return owner == user_id
         owner = _reservation_owner(device_id)
         if owner is not None and owner != user_id:
             return False
@@ -591,10 +607,10 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
         # -- that's just the user switching sessions/devices -- but a live
         # poller some other user still owns must block us instead of quietly
         # sharing the stream.
-        for sid, p in _active.items():
-            if p.device_id == device_id and p.user_id != user_id and p.is_alive():
-                print(f"=== device claimed by another user (session={sid[:8]})", flush=True)
-                raise DeviceClaimedError(device_id)
+        live_owner = _live_poller_owner(device_id)
+        if live_owner is not None and live_owner != user_id:
+            print(f"=== device claimed by another user (device={device_id})", flush=True)
+            raise DeviceClaimedError(device_id)
         # A caller that never went through reserve_device -- skipping the
         # scan/connect UI and hitting /start directly with a known device_id
         # -- must not be able to walk around someone else's in-progress
@@ -644,9 +660,9 @@ def can_use_device(user_id: str, device_id: str) -> bool:
     genuinely free station before their own poller has started.
     """
     with _lock:
-        for p in _active.values():
-            if p.device_id == device_id and p.is_alive():
-                return p.user_id == user_id
+        owner = _live_poller_owner(device_id)
+        if owner is not None:
+            return owner == user_id
         owner = _reservation_owner(device_id)
         if owner is not None:
             return owner == user_id

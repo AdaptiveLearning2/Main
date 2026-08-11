@@ -507,9 +507,17 @@ def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monke
     """Not "EEG service not running on port 8001", which is what all three said.
 
     Under push the sidecar owns the headband and lives on the student's own
-    device, so there is no bridge here to scan, connect or disconnect with."""
+    device, so there is no bridge here to scan, connect or disconnect with.
+
+    No can_use_device/reserve_device mock needed: main.py now checks
+    _refuse_under_push before reserve_device precisely so a push-mode call
+    never touches the (mutating) reservation registry at all -- see the
+    comment in eeg_muse_refresh. This test would catch a regression on that
+    ordering, since an unmocked reserve_device call against real global state
+    would still pass here on its own (clean state, single caller) and mask
+    the real risk, which is a reservation with no way to be released under
+    push. Assert on the exception, not on whether a mock fired."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(main, "eeg_client", _StubClient)
     monkeypatch.setattr(main, "supabase",
                         type("S", (), {"table": lambda _s, _n: _OwnedSession()})())
@@ -520,13 +528,21 @@ def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monke
     assert exc.value.status_code == 409, f"{endpoint} still answers 503"
     assert "port 8001" not in str(exc.value.detail)
     assert "push ingestion" in str(exc.value.detail)
+    # The assertion this test's docstring promises: nothing got as far as
+    # claiming a reservation nobody under push could ever release.
+    assert eeg_poller._reservations == {}
 
 
 @pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE_RAISING))
 def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, monkeypatch):
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
+    # Real reserve_device, not a stub: eeg_muse_refresh/connect/disconnect
+    # call it directly now (#34), and eeg_start checks live pollers and
+    # _reservations itself without going through either helper -- so no
+    # mock here is actually load-bearing for any of the four endpoints in
+    # this table. Left unmocked deliberately so this stays true if that
+    # changes; state is clean per-test (see conftest.py's stop_all()).
     monkeypatch.setattr(main, "eeg_client", _StubClient)
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})

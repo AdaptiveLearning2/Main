@@ -3123,6 +3123,17 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
+    # Before reserve_device, not after -- unlike the can_use_device it
+    # replaced, reserve_device *mutates* the reservation registry. Under push
+    # there is no /api/eeg/start to ever consult or clear it (start() raises
+    # PushModeError before touching _reservations), so a reservation claimed
+    # here would sit until its own TTL with no legitimate way to release it
+    # early -- and a hosted push deployment has many students potentially
+    # sharing one DEFAULT_DEVICE_ID, so that is a real cross-student 403, not
+    # a hypothetical one. Station contention is a pull-deployment concept
+    # (one backend, shared physical stations) and meaningless under push, so
+    # refusing first costs nothing real.
+    _refuse_under_push("scan for headbands")
     # A station with a live poller is that poller's owner's in-progress
     # session -- another user rescanning/reconnecting it (or, on the
     # disconnect handler below, killing it outright) is per-victim griefing,
@@ -3132,7 +3143,6 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     # starts, not just where it gets checked.
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
-    _refuse_under_push("scan for headbands")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -3148,10 +3158,10 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     device_id = body.get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not name:
         raise HTTPException(400, "Device name required")
-    # See eeg_muse_refresh above.
+    # See eeg_muse_refresh above -- before reserve_device, not after.
+    _refuse_under_push("connect to a headband")
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
-    _refuse_under_push("connect to a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:
@@ -3166,10 +3176,11 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     # See eeg_muse_refresh above -- this is the handler where the
     # unguarded gap mattered most (a stranger disconnecting someone else's
-    # live session), so it's guarded the same way for consistency.
+    # live session), so it's guarded the same way for consistency. Before
+    # reserve_device, not after -- same reason as eeg_muse_refresh.
+    _refuse_under_push("disconnect a headband")
     if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
-    _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
     try:

@@ -321,7 +321,7 @@ def test_signing_separates_nothing_recorded_from_nothing_readable():
     # Recorded, but the object is not there.
     paths["heart_rate"] = f"{USER}/{SESSION}/heart_rate.svg"
 
-    urls, missing = chart_archive.signed_chart_urls(client, paths)
+    urls, missing = chart_archive.signed_chart_urls(client, paths, USER, SESSION)
 
     assert urls["cognitive_timeline"].startswith("https://storage.test/")
     assert urls["emotion_pie"] is None          # channel produced nothing
@@ -329,12 +329,39 @@ def test_signing_separates_nothing_recorded_from_nothing_readable():
     assert "heart_rate" not in urls
 
 
+def test_a_tampered_path_cannot_reach_another_students_object():
+    """`chart_paths` is ordinary jsonb on `sessions`, and `sessions` carries a
+    `FOR ALL` own-row policy, so before the accompanying migration a student
+    could PATCH their own row through PostgREST and point it at another child's
+    object. Signing what is stored would then hand it over -- through an
+    endpoint whose access check had just correctly confirmed they own *this*
+    session.
+
+    So presence is all the stored value decides; the path is derived. The
+    migration revokes the write as well, but this must hold without it: a grant
+    is one migration away from being widened back, and the endpoint is the layer
+    that cannot be.
+    """
+    victim = "99999999-8888-7777-6666-555555555555"
+    client = _SigningClient(cognitive=COG)
+    chart_archive.archive_session(client, SESSION, USER)
+    # What the attacker's own session row now claims.
+    tampered = {"cognitive_timeline": f"{victim}/their-session/cognitive_timeline.svg"}
+
+    urls, missing = chart_archive.signed_chart_urls(client, tampered, USER, SESSION)
+
+    assert victim not in urls.get("cognitive_timeline", "")
+    assert urls["cognitive_timeline"].startswith(
+        f"https://storage.test/{USER}/{SESSION}/")
+    assert missing == []
+
+
 def test_a_chart_never_attempted_appears_in_neither_half():
     """An absent key is a session closed before Phase 8 shipped. Reporting it as
     a null would claim that channel was on and drew nothing."""
     client = _SigningClient()
 
-    urls, missing = chart_archive.signed_chart_urls(client, {})
+    urls, missing = chart_archive.signed_chart_urls(client, {}, USER, SESSION)
 
     assert urls == {} and missing == []
 
@@ -346,7 +373,7 @@ def test_signed_urls_are_short_lived():
     client = _SigningClient(cognitive=COG)
     paths = chart_archive.archive_session(client, SESSION, USER)
 
-    chart_archive.signed_chart_urls(client, paths)
+    chart_archive.signed_chart_urls(client, paths, USER, SESSION)
 
     assert client.bucket.signed == [
         (paths["cognitive_timeline"], chart_archive.SIGNED_URL_TTL_SECONDS)]

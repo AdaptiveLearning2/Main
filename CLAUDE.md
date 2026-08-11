@@ -358,6 +358,14 @@ that table keeps `INSERT`/`UPDATE`. `math_topics` and `questions` have `USING (t
 policies, so `anon` keeps `SELECT` on those two and nothing else anywhere. Tables written only by
 the backend get `SELECT` for `authenticated` and nothing more.
 
+`sessions` was the one that had been missed, until `20260817000000`. It kept `authenticated=arwd`
+next to a `FOR ALL` own policy, so a student could rewrite any column of their own sessions through
+PostgREST. Found via `chart_paths` — a path pointed at another child's chart object and then signed
+— but `started_at`/`ended_at` drive the rollup's day bucketing and the expiry cutoff, and a DELETE
+there cascades all three signal tables. **RLS narrows which rows a command touches, never which
+commands exist**, so an own-row policy is not a substitute for withholding the grant. Nothing in
+`frontend/src` reads or writes `sessions` directly; they reach the browser through the backend.
+
 ### When adding a function
 
 Revoke from the named roles, then grant only what the caller needs:
@@ -925,6 +933,15 @@ Three states stay apart in the payload, and a surface saying "no charts" has to 
 `name in unavailable` (a path was recorded and the object could not be read). It has deliberately
 **no `retrieved` flag** — unlike the reporting helpers it raises rather than degrading, so a flag
 that is never false would be a state that does not exist.
+
+**The object path is derived there, never read out of `chart_paths`.** That column is ordinary
+jsonb on `sessions`, which carries a `FOR ALL` own-row policy — so before `20260817000000` a student
+could PATCH their own session row through PostgREST and point it at another child's object, and the
+endpoint would sign it, having just correctly confirmed they own *this* session. The stored value
+records **which** charts exist; it is not an address. That migration revokes the write as well, but
+the endpoint must hold without it — a grant is one migration away from being widened back. The
+consequence is that changing `object_path`'s scheme means migrating the objects, which was already
+true.
 
 **A signed URL cannot be revoked.** It stays valid until it expires whatever happens to consent in
 between, so the TTL is the only bound on a leaked one — that is the argument for keeping it short,

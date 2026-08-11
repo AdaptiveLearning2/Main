@@ -212,8 +212,22 @@ def archive_session(client, session_id: str, user_id: str) -> dict:
 SIGNED_URL_TTL_SECONDS = 300
 
 
-def signed_chart_urls(client, chart_paths) -> tuple[dict, list]:
+def signed_chart_urls(client, chart_paths, user_id: str,
+                      session_id: str) -> tuple[dict, list]:
     """`({chart: url | None}, [charts recorded but unreadable])`.
+
+    **The path is derived here, never taken from `chart_paths`.** That column is
+    ordinary jsonb on `sessions`, and `sessions` carries a `FOR ALL` own-row
+    policy, so a student can PATCH their own row through PostgREST and put any
+    string they like in it -- including another student's object path. Signing
+    what is stored would hand them a URL to it, through an endpoint whose access
+    check had just correctly confirmed they own *the session*. The stored value
+    is a record of **which** charts exist; it is not an address to be trusted.
+
+    So `chart_paths` is read for presence only: a truthy value means "this chart
+    was rendered and uploaded", and where it points is not consulted. The
+    consequence is that changing `object_path`'s scheme means migrating the
+    objects -- which was already true, and is noted there.
 
     Signed rather than public, and issued per request rather than stored. These
     are charts of a named child's cognitive and physiological signals; a public
@@ -240,10 +254,11 @@ def signed_chart_urls(client, chart_paths) -> tuple[dict, list]:
     for name in chart_render.CHART_NAMES:
         if name not in (chart_paths or {}):
             continue
-        path = chart_paths[name]
-        if not path:
+        if not chart_paths[name]:
             urls[name] = None
             continue
+        # Presence, above, is all the stored value is allowed to decide.
+        path = object_path(user_id, session_id, name)
         try:
             signed = storage.create_signed_url(path, SIGNED_URL_TTL_SECONDS)
         except Exception as e:

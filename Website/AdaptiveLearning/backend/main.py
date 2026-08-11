@@ -3638,7 +3638,13 @@ def session_charts(session_id: str, request: Request):
         return {"archived": False, "charts": {}, "unavailable": [],
                 "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
-    urls, unavailable = chart_archive.signed_chart_urls(supabase, paths)
+    # The session's own owner and id, not anything read out of `chart_paths`.
+    # That column is writable by the student through PostgREST, so a path taken
+    # from it is attacker-controlled: pointed at another child's object, it
+    # would be signed by an endpoint that had just correctly confirmed the
+    # caller owns *this* session. Presence is all it decides.
+    urls, unavailable = chart_archive.signed_chart_urls(
+        supabase, paths, sess.data["user_id"], session_id)
     return {"archived": True, "charts": urls, "unavailable": unavailable,
             "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 

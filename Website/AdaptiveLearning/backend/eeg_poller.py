@@ -501,11 +501,25 @@ def release_reservation(user_id: str, device_id: str | None = None) -> None:
     dropped both; see test_a_successful_scan_still_holds_its_reservation_
     through_a_later_failure_on_another_device for the case that caught it.
 
-    Without device_id: drop every reservation user_id holds. This is what
-    /api/eeg/stop needs -- EegSessionRequest carries session_id, not
-    device_id, so stop() cannot name the one device to release, and a user is
-    only ever supposed to be mid-pairing with one station at a time, so
-    clearing all of them is clearing at most one that matters.
+    Without device_id: drop every reservation user_id holds. This is a real
+    tradeoff, not a harmless simplification -- a user genuinely can hold more
+    than one at once (test_the_same_users_failed_attempt_on_one_device_spares_
+    their_other builds exactly that), so ending one session this way can
+    release a different, still-live reservation the same user holds
+    elsewhere. Accepted because the alternative needs information this
+    module does not have: reservations are keyed by device_id -> user_id with
+    no session_id, and the endpoints that create them (muse/refresh, connect,
+    disconnect -- see main.py) are never told one; `Adaptive.jsx` calls them
+    with only a device_id. Scoping this properly means threading session_id
+    through those three endpoints and their frontend callers, which is a
+    real change, not a bug fix, and hasn't been made. Until it is, every
+    caller here (stop(), and therefore end_session, start_session's stale
+    cleanup, class_live's sweep, and /api/eeg/stop) accepts an early release
+    of at most one unrelated, concurrently-held reservation as the cost of
+    reliably releasing the one that actually mattered -- a low-severity,
+    time-bounded (RESERVATION_TTL_SECONDS) cost, not a security gap: it can
+    only make a station available sooner than ideal, never deny one to its
+    rightful holder.
     """
     with _lock:
         if device_id is not None:

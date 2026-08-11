@@ -403,6 +403,92 @@ _active: Dict[str, _Poller] = {}
 _warned_double_write: set[str] = set()
 _lock = threading.Lock()
 
+# Pre-claim pairing window (#34). can_use_device's own docstring used to say a
+# station with no live poller is "open to anyone" -- true and necessary, since
+# a user has to scan and connect before their own poller can exist, but it left
+# a gap: two users targeting the same unclaimed station could each read its
+# live snapshot or issue control commands (scan/connect/disconnect) until one
+# of them won the eeg_poller.start() claim. That claim is the *end* of
+# pairing, not the start of it, so ownership has to begin earlier -- at the
+# first scan/connect/disconnect a user makes on an unclaimed device.
+#
+# TTL'd rather than held indefinitely: an abandoned scan (tab closed mid-way,
+# /start never called) would otherwise brick a physical station for anyone
+# else, which is exactly the contention pairing exists to resolve. 30s is a
+# reasoned default, not a measured one -- long enough to cover a ~12s
+# Bluetooth scan (PR #8) plus a subsequent connect attempt, short enough that
+# an abandoned pairing reopens the station well within a lesson. It is
+# sliding (refreshed on every reserve_device call from the same user), so an
+# active pairing flow that runs longer than one window doesn't expire out
+# from under the user still driving it.
+RESERVATION_TTL_SECONDS = 30.0
+
+# device_id -> (user_id, reserved_at). Same _lock as _active: a reservation
+# and a poller-claim are two stages of the same ownership question, and
+# checking them under different locks would let one race past the other.
+_reservations: Dict[str, tuple] = {}
+
+
+def _reservation_owner(device_id: str) -> str | None:
+    """The user_id currently holding device_id's reservation, or None.
+
+    Caller holds _lock. An expired entry is dropped here rather than by a
+    background sweep -- the registry has one entry per physical station and
+    is read on every can_use_device call, so pruning lazily on read is
+    enough; a timer thread would be one more thing stop_all has to join, for
+    a dict this small.
+    """
+    entry = _reservations.get(device_id)
+    if entry is None:
+        return None
+    user_id, reserved_at = entry
+    if time.monotonic() - reserved_at >= RESERVATION_TTL_SECONDS:
+        del _reservations[device_id]
+        return None
+    return user_id
+
+
+def reserve_device(user_id: str, device_id: str) -> bool:
+    """Claim or refresh device_id's pre-claim reservation for user_id.
+
+    Called from the three control endpoints -- refresh/connect/disconnect --
+    the actions that mean "I am now pairing this station", rather than from
+    read-only status/debug polling. A bystander's periodic status check must
+    not itself claim a station out from under someone about to pair it.
+
+    Returns False when a *live poller* already owns the device (the
+    stronger, later-stage claim start() enforces) or another user's
+    reservation on it hasn't expired. The check and the claim happen under
+    one lock so two users calling this for the same unclaimed device can't
+    both observe "free" before either commits -- the exact race #34 exists to
+    close.
+    """
+    with _lock:
+        for p in _active.values():
+            if p.device_id == device_id and p.is_alive():
+                return p.user_id == user_id
+        owner = _reservation_owner(device_id)
+        if owner is not None and owner != user_id:
+            return False
+        _reservations[device_id] = (user_id, time.monotonic())
+        return True
+
+
+def release_reservation(user_id: str) -> None:
+    """Drop every reservation user_id currently holds.
+
+    Called from /api/eeg/stop regardless of whether a live poller existed for
+    the session -- a user who scanned/connected but never reached /start
+    still holds a pre-claim reservation, and /stop is the signal they're done
+    with the station. Scoped by user_id rather than a device_id the caller may
+    not know (EegSessionRequest carries session_id, not device_id): one call
+    clears whatever this user is holding, matching stop_for_user's scoping.
+    """
+    with _lock:
+        for device_id, entry in list(_reservations.items()):
+            if entry[0] == user_id:
+                del _reservations[device_id]
+
 
 def is_polling(session_id: str) -> bool:
     """Whether this backend has a live poller for that session.
@@ -509,6 +595,16 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
             if p.device_id == device_id and p.user_id != user_id and p.is_alive():
                 print(f"=== device claimed by another user (session={sid[:8]})", flush=True)
                 raise DeviceClaimedError(device_id)
+        # A caller that never went through reserve_device -- skipping the
+        # scan/connect UI and hitting /start directly with a known device_id
+        # -- must not be able to walk around someone else's in-progress
+        # pairing on that station. Same exception as the live-poller case
+        # above; main.py's handler already reads generically enough to cover
+        # both (see its 409 message).
+        owner = _reservation_owner(device_id)
+        if owner is not None and owner != user_id:
+            print(f"=== device reserved by another user, not yet polling (device={device_id})", flush=True)
+            raise DeviceClaimedError(device_id)
         for sid, p in list(_active.items()):
             if p.user_id == user_id:
                 print(f"=== stopping previous poller for same user (session={sid[:8]})", flush=True)
@@ -523,6 +619,11 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
         p = _Poller(supabase, user_id, session_id, device_id)
         p.start()
         _active[session_id] = p
+        # The reservation's job ends here -- can_use_device checks live
+        # pollers first, so a stale entry would never be consulted, but
+        # leaving it costs a slot in the dict for no reason for up to
+        # RESERVATION_TTL_SECONDS after ownership moved to something stronger.
+        _reservations.pop(device_id, None)
         return {"running": True, "already": False}
 
 
@@ -531,18 +632,25 @@ def can_use_device(user_id: str, device_id: str) -> bool:
 
     A station with a *live* poller belongs to that poller's user -- its stream
     is that student's in-progress biometric data, not shared classroom data --
-    so only the owner may touch it. An unclaimed station (no live poller) is
-    open to anyone, which is what lets a user scan/pair a free station before
-    their own poller has started. start()'s claim guard ensures at most one
+    so only the owner may touch it. start()'s claim guard ensures at most one
     user ever holds a given device_id, so the first live match is decisive; a
     dead-but-not-yet-reaped poller doesn't count (is_alive()), matching the
     rest of this module.
+
+    Below that, a station someone else has *reserved* (mid-scan/connect, no
+    poller yet -- see reserve_device) is theirs until the reservation expires.
+    Only once neither a live poller nor an unexpired reservation names an
+    owner is a station open to anyone, which is what lets a user scan/pair a
+    genuinely free station before their own poller has started.
     """
     with _lock:
         for p in _active.values():
             if p.device_id == device_id and p.is_alive():
                 return p.user_id == user_id
-    return True
+        owner = _reservation_owner(device_id)
+        if owner is not None:
+            return owner == user_id
+        return True
 
 
 def stop(session_id: str) -> dict:
@@ -621,6 +729,13 @@ def stop_all(timeout: float = 5.0) -> int:
         # populated across a reload would carry one process's records into the
         # next, which is the unbounded growth the comment beside it denies.
         _warned_double_write.clear()
+        # And any pre-claim reservation. A restarting process holds nothing --
+        # every physical station should come back open to pairing rather than
+        # locked to whoever last touched it before the restart. Tests rely on
+        # this too: it's what stops a reservation from one test file leaking
+        # into the next through the same autouse stop_all() every test's
+        # teardown already calls.
+        _reservations.clear()
     still_running = [p.session_id[:8] for p in live_pollers()]
     if still_running:
         print(f"!!! [eeg-poller] did not stop within {timeout}s: {still_running}", flush=True)

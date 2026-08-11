@@ -162,6 +162,59 @@ def test_debug_blocks_user_b_from_user_as_claimed_station(monkeypatch):
     assert out == {"available": False, "reason": "in_use_by_other"}
 
 
+# ── the pre-claim pairing window (#34), exercised end to end ─────────────
+#
+# The tests above cover a station a live poller already owns. This is the gap
+# that guard deliberately didn't close: the few seconds between two users
+# both reaching for the same *unclaimed* station, before either has a poller.
+# Real registry throughout, same reasoning as the block above -- this proves
+# the endpoint wiring, not just eeg_poller.reserve_device in isolation.
+
+def test_two_users_racing_an_unclaimed_station_the_second_is_blocked(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+
+    # user-a scans first and wins the station.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
+
+    # user-b, racing a moment later, is refused -- not just on a second
+    # refresh, but on reading the station too. Before #34 this read the
+    # station's live snapshot freely, since no live poller existed yet to
+    # trip can_use_device.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-race"})
+    assert exc_info.value.status_code == 403
+
+    monkeypatch.setattr(eeg_client, "get_muse_status", lambda device_id=None: {"available": True, "ingestion": {}})
+    out = main.eeg_status(request=None, device_id="station-race")
+    assert out["muse"] == {"available": False, "reason": "in_use_by_other"}
+    assert main.eeg_debug(request=None, device_id="station-race") == {
+        "available": False, "reason": "in_use_by_other",
+    }
+
+    # user-a, meanwhile, can keep interacting with the station they reserved.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
+
+
+def test_stop_releases_the_reservation_for_another_user(monkeypatch):
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-race"})
+
+    # user-a gave up on pairing without ever reaching /start -- no live
+    # poller exists for eeg_poller.stop to find, but the reservation from the
+    # scan above is still theirs to release.
+    monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
+    main.eeg_stop(main.EegSessionRequest(session_id="session-1"), request=None)
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-race"}) == {"ok": True}
+
+
 # ── /api/eeg/start: device_id validation ─────────────────────────────────
 
 def test_start_rejects_unknown_device_id(monkeypatch):

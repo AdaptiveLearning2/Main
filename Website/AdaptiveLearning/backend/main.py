@@ -3126,10 +3126,11 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     # A station with a live poller is that poller's owner's in-progress
     # session -- another user rescanning/reconnecting it (or, on the
     # disconnect handler below, killing it outright) is per-victim griefing,
-    # not just an unwanted side effect. See can_use_device's docstring for
-    # the unclaimed-station pairing window this doesn't (and isn't meant to)
-    # close.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    # not just an unwanted side effect. reserve_device (#34) also claims the
+    # pre-claim pairing window: a scan is the first interaction with an
+    # unclaimed station, so it is where that station's TTL'd reservation
+    # starts, not just where it gets checked.
+    if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     _refuse_under_push("scan for headbands")
     if not eeg_client.is_alive():
@@ -3148,7 +3149,7 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     if not name:
         raise HTTPException(400, "Device name required")
     # See eeg_muse_refresh above.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     _refuse_under_push("connect to a headband")
     if not eeg_client.is_alive():
@@ -3166,7 +3167,7 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     # See eeg_muse_refresh above -- this is the handler where the
     # unguarded gap mattered most (a stranger disconnecting someone else's
     # live session), so it's guarded the same way for consistency.
-    if not eeg_poller.can_use_device(user["id"], device_id):
+    if not eeg_poller.reserve_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
     _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
@@ -3298,10 +3299,16 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
     except eeg_poller.DeviceClaimedError:
+        # Covers two distinct causes with one message deliberately: a live
+        # poller already recording for someone else, or someone else's
+        # reservation from an in-progress scan/connect that hasn't reached
+        # /start yet (#34). Both resolve the same way from here -- wait for
+        # the other user to finish or disconnect -- so a caller does not need
+        # to know which one it hit.
         raise HTTPException(
             409,
-            "This headband is already recording for another user. "
-            "Ask them to disconnect before pairing here.",
+            "This headband is already in use by another user. Ask them to "
+            "disconnect, or wait a few seconds and try again.",
         )
     return {"ok": True, **out}
 
@@ -3312,7 +3319,14 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
         .eq("id", payload.session_id).single().execute()
     if not sess.data or sess.data["user_id"] != user["id"]:
         raise HTTPException(403, "Not your session")
-    return {"ok": True, **eeg_poller.stop(payload.session_id)}
+    out = eeg_poller.stop(payload.session_id)
+    # Unconditional, not just when a live poller existed: a user who only got
+    # as far as scan/connect (#34's pre-claim reservation, never promoted to
+    # a poller) still holds a claim on the station, and /stop is the signal
+    # they're done with it. release_reservation is scoped to this user's own
+    # holdings, so it's harmless when there's nothing to release.
+    eeg_poller.release_reservation(user["id"])
+    return {"ok": True, **out}
 
 @app.get("/api/eeg/status")
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):

@@ -69,6 +69,18 @@ export const CHANNELS = [
   },
 ]
 
+// The read failed and nothing was in flight, so the stored decision is whatever
+// it was. Safe to promise.
+const NOTHING_CHANGED = 'Could not load these settings. Nothing has been changed.'
+
+// The read failed *after* a 409, and the two halves of that are opposite:
+// someone else's change did land, and the parent's did not. Saying "nothing has
+// been changed" here would be false in both directions at once, which is why
+// this is a separate string rather than a suffix on the one above.
+const CONFLICT_UNREADABLE =
+  'Someone else changed these settings, so your change was not applied. '
+  + 'They could not be reloaded just now — please try again in a moment.'
+
 function formatDate(iso) {
   if (!iso) return null
   const d = new Date(iso)
@@ -102,23 +114,49 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const [saving, setSaving]     = useState(null)
   const [confirming, setConfirming] = useState(null)
 
-  // Returns its promise, and takes the message to leave in place. A reload
-  // triggered by a conflict would otherwise clear the very error that caused
-  // it -- the read succeeds, so `setError(null)` fires and the parent is told
-  // nothing went wrong while their change silently did not apply.
-  const load = useCallback((keepError = null) => {
+  // Returns its promise, and takes the conflict message to leave in place. A
+  // reload triggered by a conflict would otherwise clear the very error that
+  // caused it -- the read succeeds, so `setError(null)` fires and the parent is
+  // told nothing went wrong while their change silently did not apply.
+  const load = useCallback((conflict = null) => {
+    // No current state to show, whichever way the read failed.
+    //
+    // Dropping the switches matters most on the conflict path, where what is on
+    // screen is not merely unverified but *known superseded* -- the 409 is what
+    // told us so. Leaving it up would show a parent the one state we have
+    // positive evidence is wrong, under a banner saying we had reloaded.
+    //
+    // The message has to change with it. `NOTHING_CHANGED` is true of a first
+    // load and false after a conflict: something did change, which is why we
+    // are here, and the parent's own click is the thing that did not apply.
+    const failed = () => {
+      setChannels(null)
+      setError(conflict ? CONFLICT_UNREADABLE : NOTHING_CHANGED)
+    }
     return apiFetch(`/api/consent/${studentId}`)
       .then(c => {
-        setChannels(c.channels)
         // `retrieved: false` means the read itself failed. Rendering that as
         // "everything is off" would tell a parent their child's channels are
         // disabled when we simply could not find out — the same three-state
         // distinction the reporting surfaces keep.
-        setError(c.retrieved === false
-          ? 'Could not load these settings. Nothing has been changed.'
-          : keepError)
+        //
+        // Which is why the banner alone was not enough. `_consent()` fails
+        // **closed**, so a failed read does not arrive as an error shape or a
+        // partial one — it is a complete, plausible payload with all three
+        // channels `enabled: false` and no `revoked_at` on any of them. Setting
+        // it drew the banner *and* three off switches; for `role="student"`,
+        // three locked ones reading "A parent can turn this back on for you",
+        // which is a claim about a decision nobody made, during what may be a
+        // few seconds of outage.
+        if (c.retrieved === false) return failed()
+        setChannels(c.channels)
+        setError(conflict)
       })
-      .catch(e => setError(String(e.message || e)))
+      // A thrown read leaves us knowing exactly what `retrieved: false` does,
+      // so it gets the same treatment. The raw message is kept only where there
+      // is nothing better to say: after a conflict, "Failed to fetch" is not
+      // the thing the parent needs to know.
+      .catch(e => (conflict ? failed() : setError(String(e.message || e))))
   }, [studentId])
 
   useEffect(() => { load() }, [load])

@@ -17,6 +17,21 @@ const ALL_ON = {
   },
 }
 
+// What a failed read actually looks like. `_consent()` fails **closed**, so it
+// is not an error shape or a truncated one -- it is a complete, plausible
+// payload in which every channel is off and none carries a date. That is what
+// makes it dangerous to render, and why `{...ALL_ON, retrieved: false}` proved
+// nothing: those channels are on, so no switch could have misreported them.
+const READ_FAILED = {
+  student_id: 'stu-1',
+  retrieved: false,
+  channels: {
+    eeg: { enabled: false, revoked_at: null, revoked_by: null },
+    headband_optical: { enabled: false, revoked_at: null, revoked_by: null },
+    camera: { enabled: false, revoked_at: null, revoked_by: null },
+  },
+}
+
 const CAMERA_OFF = {
   ...ALL_ON,
   channels: {
@@ -55,11 +70,26 @@ describe('reading', () => {
     // `retrieved: false` is "we could not find out", which is not "the student
     // withdrew". Telling a parent the second when the first is true is the
     // three-state failure the reporting rules exist to stop.
-    apiFetch.mockResolvedValue({ ...ALL_ON, retrieved: false })
+    apiFetch.mockResolvedValue(READ_FAILED)
 
     render(<ConsentChannels studentId="stu-1" role="parent" />)
 
     expect(await screen.findByText(/Could not load these settings/)).toBeInTheDocument()
+    // The banner was never the whole claim. Drawn beside the fail-closed
+    // payload it read as three deliberately withdrawn channels.
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('does not tell a student a parent must restore what nobody switched off', async () => {
+    // The student view is where this did the most damage: three locked switches
+    // and a sentence about a decision that was never made.
+    apiFetch.mockResolvedValue(READ_FAILED)
+
+    render(<ConsentChannels studentId="stu-1" role="student" />)
+
+    expect(await screen.findByText(/Could not load these settings/)).toBeInTheDocument()
+    expect(screen.queryByText(/A parent can turn this back on for you/)).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 })
 
@@ -133,6 +163,44 @@ describe('the parent can switch on', () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(3))
     // The third call is a re-read, not a second write.
     expect(apiFetch.mock.calls[2][1]).toBeUndefined()
+  })
+
+  it('does not promise nothing changed when the reload after a conflict fails', async () => {
+    // The two halves of a conflict point opposite ways: someone else's change
+    // landed, and this parent's did not. If the reload cannot tell us the
+    // resulting state, the first-load wording ("Nothing has been changed") is
+    // false in both directions at once -- and it is the wording this path used
+    // to fall through to.
+    const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
+    apiFetch.mockResolvedValueOnce(CAMERA_OFF)
+             .mockRejectedValueOnce(conflict)
+             .mockResolvedValueOnce(READ_FAILED)
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+
+    expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing has been changed/)).not.toBeInTheDocument()
+    // And the switches go with it: what was on screen is not merely unverified,
+    // it is the state the 409 told us had been superseded.
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('says the same when the reload after a conflict throws', async () => {
+    // A thrown read and `retrieved: false` leave us knowing exactly the same
+    // thing. The raw 'Network down' would not tell a parent the part that
+    // matters, which is that their change did not apply.
+    const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
+    apiFetch.mockResolvedValueOnce(CAMERA_OFF)
+             .mockRejectedValueOnce(conflict)
+             .mockRejectedValueOnce(new Error('Network down'))
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await userEvent.click(await screen.findByRole('switch', { name: 'Camera' }))
+
+    expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
+    expect(screen.queryByText(/Network down/)).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 })
 

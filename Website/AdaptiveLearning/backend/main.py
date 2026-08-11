@@ -211,7 +211,21 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
         stamps = [consent.get("headband_optical_revoked_at"),
                   consent.get("camera_revoked_at")]
         stamps = [t for t in stamps if t]
-        heart_revoked = max(stamps) if stamps else None
+        # Ordered as instants, not as text -- `_parse_ts` for the reason it
+        # already documents. Both stamps come from `_utc_now().isoformat()`
+        # today, so lexical order happens to agree, but that is a property of
+        # the writer rather than of the column: `Z` denotes the same instant and
+        # sorts before every digit, so one value arriving that way hands back
+        # the earlier date. The cost is telling a parent recording stopped on
+        # the day the *first* of the two sensors went off, while the other was
+        # still running.
+        #
+        # An unparseable stamp sorts below every real one, so it can only win
+        # when it is all there is; `_parse_ts` logs it either way.
+        heart_revoked = max(
+            stamps,
+            key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
+            default=None)
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
                           consent_retrieved=bool(consent.get("retrieved")),
@@ -2893,7 +2907,7 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # reporting surfaces -- the weekly report, the signal summaries and the
     # children endpoint, all of which render the switch -- and session review,
     # this endpoint's only caller, does not. See the scope note in
-    # frontend/src/lib/facePref.js; adding the parameter here without putting
+    # frontend/src/lib/viewPrefs.js; adding the parameter here without putting
     # the switch on that page would make the control silently change a view it
     # is absent from.
     user = get_user(request)
@@ -2992,7 +3006,7 @@ def class_live(class_id: str, request: Request):
     the switch, and the live monitor does not. It is built around whether the
     camera is currently working -- the attention gauge, the current emotion and
     a camera-on badge -- which a reporting-window preference has no sensible
-    reading on. See the scope note in frontend/src/lib/facePref.js.
+    reading on. See the scope note in frontend/src/lib/viewPrefs.js.
     """
     user = get_user(request)
     # Was: `owner != user AND role != "teacher"` -- which only rejected callers

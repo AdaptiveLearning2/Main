@@ -446,22 +446,21 @@ def _as_sentence(text: str) -> str:
     return text[0].upper() + text[1:] + ("" if text.endswith((".", "!", "?")) else ".")
 
 
-def _window_reason(state: str) -> str | None:
-    """Why this window state does not record, or None when it does.
+# An unknown state has no meaning to report, and both callers treat that as
+# "nothing to say about the window" -- which is right: the denial itself comes
+# from `_WINDOW_DENIED`, and a state missing from the table is denied there.
+_NO_MEANING = _WindowMeaning(False, None, None)
+
+
+def _window_meaning(state: str) -> _WindowMeaning:
+    """What a window state means. One accessor; the callers pick a field.
 
     The window reason wins over the consent one wherever both could apply: when
     the year has not started, *no* channel is recording, and reporting "eeg not
     consented" would send a parent to the consent screen to fix something that
     is not broken there.
     """
-    meaning = _WINDOW_STATES.get(state)
-    return meaning.reason if meaning else None
-
-
-def _window_stopped_reason(state: str) -> str | None:
-    """The machine-readable form, for the frontend to pick its own copy from."""
-    meaning = _WINDOW_STATES.get(state)
-    return meaning.stopped_reason if meaning else None
+    return _WINDOW_STATES.get(state) or _NO_MEANING
 
 
 def _not_recording_reason(gate: dict, declined: str,
@@ -481,7 +480,7 @@ def _not_recording_reason(gate: dict, declined: str,
     sites disagreeing about whether a closed year outranks an unreadable
     consent row.
     """
-    window = _window_reason(gate.get("window_state"))
+    window = _window_meaning(gate.get("window_state")).reason
     if window:
         return window
     if not gate.get("retrieved"):
@@ -2742,6 +2741,19 @@ def _consent(student_id: str) -> dict:
 # The poller writes `cognitive_signals` directly with the service-role client,
 # so neither RLS nor the ingest endpoint's gate applies to it. This is what
 # subjects it to the same consent rule as the push path.
+# Why the last refusal happened, per student, written by the check below and
+# read by the one after it. `eeg_poller.start()` asks for the bool and then, on
+# refusal, for the sentence -- and the alternative to remembering it is reading
+# `_may_record` a second time, which is both an extra round trip on every
+# refused start *and* a second answer that can disagree with the first one it
+# is supposed to be explaining.
+#
+# Bounded by construction: one entry per student, replaced on each refusal and
+# removed as soon as it is read.
+_last_refusal: dict[str, str] = {}
+_last_refusal_lock = threading.Lock()
+
+
 def _poller_may_record_eeg(student_id: str) -> bool:
     """The poller's recurring permission check, and the log that says why not.
 
@@ -2749,27 +2761,41 @@ def _poller_may_record_eeg(student_id: str) -> bool:
     school year or from a failed read of either -- and its own line used to
     assert "consent withdrawn" for all of them, which names a decision the
     family may never have made. This is the site that knows, so this is the site
-    that logs it.
+    that records it, for the log here and for `start()`'s exception text.
     """
     gate = _may_record(student_id)
     if gate["record_eeg"]:
         return True
-    print(f"<<< [eeg-poller] {student_id[:8]}: "
-          f"{_not_recording_reason(gate, 'eeg not consented')}", flush=True)
+    # "EEG", not "eeg": this string is also rendered as a standalone sentence in
+    # a 403 body, and `_as_sentence` capitalises the first letter without
+    # knowing which words are acronyms -- so a lowercase literal came out as
+    # "Eeg not consented." The ingest endpoints keep the lowercase form in their
+    # machine-ish `reason` field; this path is read by a person.
+    reason = _as_sentence(_not_recording_reason(gate, "EEG not consented"))
+    with _last_refusal_lock:
+        _last_refusal[student_id] = reason
+    print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
     return False
 
 
 def _poller_may_record_eeg_reason(student_id: str) -> str:
     """Why `eeg_poller.start()`'s own recheck refused, for its exception text.
 
-    `start()` calls `_consent_check` first and only reaches this on refusal, so
-    it is a second `_may_record` read of a answer that just came back False --
-    accepted for a start()-time error message, which is not a hot path.
-    Without this, `start()`'s race-closing refusal always blamed consent, even
-    when the real cause was a closed school year.
+    Reuses what the bool check just worked out. `start()` calls that first and
+    only reaches this on refusal, so the answer is a few microseconds old --
+    where re-reading `_may_record` would cost a second round trip and could
+    return a *different* verdict from the one being explained, which is the
+    worst of both.
+
+    Falls back to a fresh read if there is nothing remembered, so an unwired or
+    reordered caller still gets a true sentence rather than a stale one.
     """
+    with _last_refusal_lock:
+        remembered = _last_refusal.pop(student_id, None)
+    if remembered:
+        return remembered
     gate = _may_record(student_id)
-    return _as_sentence(_not_recording_reason(gate, "eeg not consented"))
+    return _as_sentence(_not_recording_reason(gate, "EEG not consented"))
 
 
 eeg_poller.set_consent_check(_poller_may_record_eeg)
@@ -3660,7 +3686,7 @@ def _poller_status(user_id: str) -> dict:
     # ones, which is what lets this still report a withdrawal *by name* rather
     # than only "not recording".
     gate = _may_record(user_id)
-    stopped = _window_stopped_reason(gate["window_state"])
+    stopped = _window_meaning(gate["window_state"]).stopped_reason
     if stopped:
         return {**status, "stopped_reason": stopped,
                 "window_starts_on": gate["window_starts_on"],

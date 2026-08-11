@@ -263,14 +263,15 @@ class _Poller(threading.Thread):
                     # while still holding the device -- a feature, not a fix.
                     # The push path is unaffected: `/api/signals/heart` checks
                     # per source and never consults EEG consent.
-                    # Says "not permitted", not "withdrawn". The check is a
-                    # bool, so this loop cannot tell a withdrawal from a closed
-                    # school year or a failed read of either -- and it used to
-                    # assert the first, which is the one that names a decision
-                    # the family made. The wired check logs which; this logs
-                    # that it stopped.
-                    print(f"<<< [eeg-poller] recording no longer permitted for "
-                          f"session={self.session_id[:8]}, stopping", flush=True)
+                    # One line, and it does not say *why*. The check is a bool,
+                    # so this loop cannot tell a withdrawal from a closed school
+                    # year or a failed read of either -- it used to assert the
+                    # first, which is the one naming a decision the family made.
+                    # The wired check already logged the reason a moment ago
+                    # (with the student id); this only records that the poller
+                    # stopped, and which session, which that line does not have.
+                    print(f"<<< [eeg-poller] stopping session={self.session_id[:8]}: "
+                          "recording no longer permitted", flush=True)
                     self._stop_event.set()
                     break
 

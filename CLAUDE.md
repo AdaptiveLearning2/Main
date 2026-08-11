@@ -544,10 +544,20 @@ well below the 1.20–1.26 that single-channel runs produce.
 **The poller's heart write is consent-gated, and that gate is the only one there is.** It writes with
 the service-role client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches it.
 `eeg_poller.set_heart_consent_check(fn)` is wired from `main` at import; `fn(user_id, source)` is
-built from the same `_consent` + `_permitted_heart_sources` pair the endpoint uses, so the two paths
-cannot disagree about one student. Unwired it denies, a failed read denies, and it is re-read on the
-same `CONSENT_RECHECK_SECONDS` cadence as EEG, so a mid-lesson withdrawal lands without waiting for
-the session to end. Per *source*, not per channel: a student who allowed the headband and refused the
+built from the same `_may_record` + `_permitted_heart_sources` pair the endpoint uses, so the two
+paths cannot disagree about one student — and because `_permitted_heart_sources` reads the composed
+`record_*` flags, the school year applies without either site mentioning it. Unwired it denies, a
+failed read denies, and it is re-read on the same `CONSENT_RECHECK_SECONDS` cadence as EEG, so a
+mid-lesson withdrawal lands without waiting for the session to end.
+
+**`set_consent_check` returns a bool, so it cannot say *why*.** A withdrawal, a closed school year
+and a failed read of either all arrive as `False`, and the poller's own log used to assert the first
+of them. `set_consent_reason_check(fn)` is the optional companion that supplies the sentence for
+`start()`'s refusal and the log line; it is wired to `_poller_may_record_eeg_reason`, which reuses
+what the bool check just computed rather than re-reading `_may_record` — a second read would cost
+another round trip on every refused start and could return a different verdict from the one it is
+explaining. Unwired, `start()` falls back to a consent-only message, so a test that stubs
+`_consent_check` must stub this too or it reaches a real database. Per *source*, not per channel: a student who allowed the headband and refused the
 camera has consented to `muse_optics` and not to `rppg`.
 
 **On the pull path, EEG consent gates the heart channel as well — deliberately, and only there.**

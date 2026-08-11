@@ -208,8 +208,22 @@ of this rule said that and it overreached. Three spatial averages per frame is a
 what a frame contains, and a learned model over per-pixel, multi-region input has far more to work
 with. The reference implementation this project started from reports ~95% accuracy on its best
 tests using RhythmMamba over full video, which is not in conflict with the result above because it
-is a different method on different information. What blocks it here is the licence -- those
-weights are behind a per-requester Data Usage Agreement -- not physics.
+is a different method on different information. What blocks it here is not physics.
+
+**Nor, on inspection, is it the licence -- an earlier version of this rule said the weights were
+behind a per-requester Data Usage Agreement, and that conflated two things.** Checked 2026-08-11:
+`zizheng-guo/RhythmMamba` (Zou et al., AAAI 2025) is MIT and ships a `PreTrainedModels` folder, and
+`KegangWangCCNU/open-rppg` -- the `rppg` import in `FacialRecg/` -- says "the source code and tools
+in this repository are released under the MIT License" and ships pretrained models and configs, with
+`.rlap`/`.pure` marking training protocols. It disclaims that the weights are "derived from academic
+research ... subject to the license terms specified in their original publications", so the paper's
+terms are the open question, not access. A DUA governs the **RLAP dataset**, which is needed to
+retrain or to evaluate on RLAP -- not to run inference with weights that are already published.
+
+So what stands between here and a camera heart rate is engineering and evidence, not permission:
+the confidence gate below is inapplicable to a single-channel source and would have to be designed
+and *measured* against a reference, and `open-rppg` is 0.1.1, owns the whole signal chain, and pulls
+in JAX and Keras -- a heavy install for software that ships to a student's laptop.
 
 The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
 to a single-channel source.** Its three terms were built for the headband's four contact

@@ -289,6 +289,44 @@ def _resolve_window(row: dict) -> dict:
     return {"state": state, "starts_on": starts, "ends_on": ends, "timezone": name}
 
 
+def _school_timezone() -> ZoneInfo:
+    """The school's zone, for bucketing report days. Defaults to UTC.
+
+    **The opposite default to `_retention_window`, deliberately.** There, an
+    unreadable or typo'd zone denies recording, because getting a boundary wrong
+    means recording outside the window -- data collected that nobody agreed to.
+    Here the same failure means a day boundary is a few hours off on a chart,
+    and denying would blank a parent's dashboard entirely. A wrong bucket is a
+    smaller harm than no report, so this degrades where the gate refuses.
+
+    Read fresh per report, like `_consent`: the window is a single row and the
+    read is cheap, and a cached zone would keep bucketing against the old one
+    for the life of the process after someone corrects a typo.
+    """
+    try:
+        return ZoneInfo(_retention_window().get("timezone") or "UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _school_day(ts, tz: ZoneInfo) -> str:
+    """The calendar day `ts` falls on *at the school*, as YYYY-MM-DD.
+
+    Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
+    by UTC midnight -- which is mid-afternoon the previous day in Los Angeles
+    and mid-morning the next in Sydney. A late-afternoon lesson therefore landed
+    on the wrong day of a parent's chart, and the last day of a school week
+    could show sessions that happened on the Saturday.
+
+    Empty string for anything unparseable, which no day matches, so a bad
+    timestamp drops out of every bucket rather than silently joining one.
+    """
+    parsed = _parse_ts(ts)
+    if parsed is None:
+        return ""
+    return parsed.astimezone(tz).date().isoformat()
+
+
 def _may_record(student_id: str) -> dict:
     """Consent **and** the retention window, which are different questions.
 
@@ -689,7 +727,22 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     None, and `heart_included` / `emotion_included` tell the caller that means
     "not requested" rather than "nothing recorded".
     """
-    since = _iso_days_ago(days)
+    tz = _school_timezone()
+    # The oldest instant any bucket below can need: midnight at the start of the
+    # earliest school day in range, expressed in UTC for the query.
+    #
+    # Not `_iso_days_ago(days)`. That is `now - days` in UTC, and where the
+    # school is behind UTC the earliest school day starts *before* it -- so the
+    # oldest day on every chart was quietly missing its first few hours and
+    # averaged only the rest. Silent, and worst on the day a reader is most
+    # likely to compare against the one before it.
+    school_today = _utc_now().astimezone(tz).date()
+    # `datetime.min.time()`, not `time.min`: `time` here is the stdlib *module*
+    # (imported at the top for monotonic clocks), so `time.min` is an
+    # AttributeError rather than midnight.
+    since = datetime.combine(school_today - timedelta(days=days - 1),
+                             datetime.min.time(),
+                             tzinfo=tz).astimezone(timezone.utc).isoformat()
 
     def _fetch(table: str, ts_col: str, limit: int) -> tuple[list, bool, int | None, bool]:
         """Rows (newest first), whether the server withheld any, the total, and
@@ -756,10 +809,13 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
     truncated = cog_cut or face_cut or heart_cut or ses_cut
-    cog_oldest_day = _oldest(cog, "ts")[:10]
-    face_oldest_day = _oldest(face, "ts")[:10]
-    ses_oldest_day = _oldest(sessions, "started_at")[:10]
-    heart_oldest_day = _oldest(heart, "ts")[:10]
+    # Compared against the school days built below, so they have to be school
+    # days too -- `_coverage` does `day < oldest_day` as a string, which is only
+    # chronological while both sides are the same calendar.
+    cog_oldest_day = _school_day(_oldest(cog, "ts"), tz)
+    face_oldest_day = _school_day(_oldest(face, "ts"), tz)
+    ses_oldest_day = _school_day(_oldest(sessions, "started_at"), tz)
+    heart_oldest_day = _school_day(_oldest(heart, "ts"), tz)
 
     latest_cognitive = cog[0] if cog else None
     latest_face = face[0] if face else None
@@ -809,7 +865,7 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
     daily = []
     for i in range(days - 1, -1, -1):
-        day = (_utc_now() - timedelta(days=i)).date().isoformat()
+        day = (school_today - timedelta(days=i)).isoformat()
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
@@ -833,13 +889,13 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
             continue
-        day_cog = [r for r in cog if str(r.get("ts", ""))[:10] == day]
-        day_face = [r for r in face if str(r.get("ts", ""))[:10] == day]
+        day_cog = [r for r in cog if _school_day(r.get("ts"), tz) == day]
+        day_face = [r for r in face if _school_day(r.get("ts"), tz) == day]
         # Trusted only, matching the week's averages. A day whose every sample
         # was rejected is then a null beside a `heart_retrieved` of True --
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
         day_heart = [r for r in heart
-                     if str(r.get("ts", ""))[:10] == day and r.get("trusted") is True]
+                     if _school_day(r.get("ts"), tz) == day and r.get("trusted") is True]
 
         daily.append({
             "date": day,
@@ -855,7 +911,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # `sessions_retrieved` is what tells the two apart. A count is the
             # clearest case for withholding a partial day -- half a day's rows
             # give exactly half the sessions, with no hint that it is half.
-            "sessions": len([r for r in sessions if str(r.get("started_at", ""))[:10] == day])
+            "sessions": len([r for r in sessions
+                             if _school_day(r.get("started_at"), tz) == day])
                         if ses_whole else None,
             # **Absolute units**, unlike every other series here, which are 0..1
             # ratios rendered as percentages. A consumer applying the same

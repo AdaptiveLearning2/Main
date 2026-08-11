@@ -959,7 +959,10 @@ def start_session(payload: StartSessionRequest, request: Request):
     stale_open = supabase.table("sessions").select("id") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
-        eeg_poller.stop(s["id"])
+        # Also releases any pre-claim reservation (#34) left behind by a
+        # scan/connect that never reached /start -- a stale session left this
+        # way is exactly the "gave up mid-pairing" case that leaves one.
+        eeg_poller.stop(s["id"], user["id"])
         supabase.table("sessions").update(
             {"ended_at": _utc_now().isoformat()}
         ).eq("id", s["id"]).execute()
@@ -1005,7 +1008,8 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
     user = get_user(request)
-    eeg_poller.stop(session_id)  # auto-stop EEG poller
+    # Also releases user["id"]'s pre-claim reservation (#34), if any.
+    eeg_poller.stop(session_id, user["id"])  # auto-stop EEG poller
     sess = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
     if not sess.data:
         raise HTTPException(404, "Session not found")
@@ -3040,7 +3044,10 @@ def class_live(class_id: str, request: Request):
                 supabase.table("sessions").update({
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
-                eeg_poller.stop(sid2)
+                # sid, not the teacher reading this view -- the reservation
+                # (#34), like the poller, belongs to the student whose stale
+                # session this is.
+                eeg_poller.stop(sid2, sid)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
@@ -3118,26 +3125,56 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
+def _reserve_and_call(user_id: str, device_id: str, fn, *args):
+    """Claim device_id's pre-claim reservation, then run the bridge call.
+
+    Shared by muse/refresh and muse/connect -- the two actions that *start* a
+    pairing attempt, and so are what reserve_device (#34) exists to protect.
+    muse/disconnect does not go through here; see its own comment for why it
+    checks ownership instead of claiming it.
+
+    reserve_device claims before knowing whether fn will actually succeed, so
+    every path that ends the request without a working bridge call releases
+    what it just claimed -- scoped to *this* device_id, not every reservation
+    the caller holds, so a failure here can't drop a different, still-valid
+    reservation the same user holds on another station (the bug two review
+    rounds fixed one call site at a time before this was pulled out into one
+    place).
+    """
+    if not eeg_poller.reserve_device(user_id, device_id):
+        raise HTTPException(403, "Station in use by another user")
+    if not eeg_client.is_alive():
+        eeg_poller.release_reservation(user_id, device_id)
+        raise HTTPException(503, "EEG service not running on port 8001")
+    try:
+        return fn(*args)
+    except Exception as e:
+        eeg_poller.release_reservation(user_id, device_id)
+        raise HTTPException(502, f"Bridge error: {e}")
+
+
 @app.post("/api/eeg/muse/refresh")
 def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
-    # A station with a live poller is that poller's owner's in-progress
-    # session -- another user rescanning/reconnecting it (or, on the
-    # disconnect handler below, killing it outright) is per-victim griefing,
-    # not just an unwanted side effect. See can_use_device's docstring for
-    # the unclaimed-station pairing window this doesn't (and isn't meant to)
-    # close.
-    if not eeg_poller.can_use_device(user["id"], device_id):
-        raise HTTPException(403, "Station in use by another user")
+    # Before _reserve_and_call, not after -- unlike the can_use_device it
+    # replaced, reserve_device *mutates* the reservation registry. Under push
+    # there is no /api/eeg/start to ever consult or clear it (start() raises
+    # PushModeError before touching _reservations), so a reservation claimed
+    # here would sit until its own TTL with no legitimate way to release it
+    # early -- and a hosted push deployment has many students potentially
+    # sharing one DEFAULT_DEVICE_ID, so that is a real cross-student 403, not
+    # a hypothetical one. Station contention is a pull-deployment concept
+    # (one backend, shared physical stations) and meaningless under push, so
+    # refusing first costs nothing real.
     _refuse_under_push("scan for headbands")
-    if not eeg_client.is_alive():
-        raise HTTPException(503, "EEG service not running on port 8001")
-    try:
-        return eeg_client.muse_refresh(device_id)
-    except Exception as e:
-        raise HTTPException(502, f"Bridge error: {e}")
+    # A station with a live poller is that poller's owner's in-progress
+    # session -- another user rescanning it is per-victim griefing, not just
+    # an unwanted side effect. reserve_device (#34) also claims the pre-claim
+    # pairing window: a scan is the first interaction with an unclaimed
+    # station, so it is where that station's TTL'd reservation starts.
+    return _reserve_and_call(user["id"], device_id, eeg_client.muse_refresh, device_id)
 
 @app.post("/api/eeg/muse/connect")
 def eeg_muse_connect(request: Request, body: dict = Body(...)):
@@ -3147,27 +3184,39 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
     device_id = body.get("device_id") or eeg_client.DEFAULT_DEVICE_ID
     if not name:
         raise HTTPException(400, "Device name required")
-    # See eeg_muse_refresh above.
-    if not eeg_poller.can_use_device(user["id"], device_id):
-        raise HTTPException(403, "Station in use by another user")
+    # See eeg_muse_refresh above -- before _reserve_and_call, not after.
     _refuse_under_push("connect to a headband")
-    if not eeg_client.is_alive():
-        raise HTTPException(503, "EEG service not running on port 8001")
-    try:
-        return eeg_client.muse_connect(name, device_id)
-    except Exception as e:
-        raise HTTPException(502, f"Bridge error: {e}")
+    return _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id)
 
 @app.post("/api/eeg/muse/disconnect")
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     """Tell the native bridge to disconnect from the current headband."""
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
-    # See eeg_muse_refresh above -- this is the handler where the
-    # unguarded gap mattered most (a stranger disconnecting someone else's
-    # live session), so it's guarded the same way for consistency.
+    # can_use_device, not reserve_device -- deliberately the one control
+    # endpoint that does not claim a fresh reservation. Disconnect is a
+    # teardown action, not the start of a pairing attempt: calling it against
+    # a station nobody currently owns has no victim and no intent to pair, so
+    # there is nothing there worth protecting with a 30s exclusive hold. Using
+    # reserve_device here (an earlier version of this fix did) meant a
+    # disconnect against a free station claimed it anyway, indefinitely
+    # renewable by repeating the call -- a station made unusable by the same
+    # kind of action #34 exists to keep available. can_use_device still
+    # blocks a stranger from disconnecting someone else's live-polled or
+    # actively-reserved station, which is the actual griefing case this
+    # endpoint has to guard against.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
+    # Releases the caller's *own* reservation on this device, if they hold
+    # one -- harmless (a no-op) if they don't, same as /api/eeg/stop. A
+    # student who scanned/connected and then disconnects instead of pairing
+    # is giving up on this station exactly as explicitly as calling /stop
+    # would be; without this the station stayed locked to them for up to
+    # RESERVATION_TTL_SECONDS after they had visibly moved on. Scoped by
+    # device_id, unlike /stop's release -- disconnect always names one, so
+    # there is no reason to drop a different reservation this caller might
+    # be holding elsewhere.
+    eeg_poller.release_reservation(user["id"], device_id)
     _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service not running on port 8001")
@@ -3298,10 +3347,16 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
     except eeg_poller.DeviceClaimedError:
+        # Covers two distinct causes with one message deliberately: a live
+        # poller already recording for someone else, or someone else's
+        # reservation from an in-progress scan/connect that hasn't reached
+        # /start yet (#34). Both resolve the same way from here -- wait for
+        # the other user to finish or disconnect -- so a caller does not need
+        # to know which one it hit.
         raise HTTPException(
             409,
-            "This headband is already recording for another user. "
-            "Ask them to disconnect before pairing here.",
+            "This headband is already in use by another user. Ask them to "
+            "disconnect, or wait a few seconds and try again.",
         )
     return {"ok": True, **out}
 
@@ -3312,7 +3367,13 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
         .eq("id", payload.session_id).single().execute()
     if not sess.data or sess.data["user_id"] != user["id"]:
         raise HTTPException(403, "Not your session")
-    return {"ok": True, **eeg_poller.stop(payload.session_id)}
+    # eeg_poller.stop releases user["id"]'s reservation too, unconditionally
+    # -- not just when a live poller existed. A user who only got as far as
+    # scan/connect (#34's pre-claim reservation, never promoted to a poller)
+    # still holds a claim on the station, and /stop is the signal they're
+    # done with it.
+    out = eeg_poller.stop(payload.session_id, user["id"])
+    return {"ok": True, **out}
 
 @app.get("/api/eeg/status")
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):

@@ -24,9 +24,11 @@ def _clean_state(monkeypatch):
     monkeypatch.setattr(eeg_client, "get_state", lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: None)
     monkeypatch.setattr(eeg_poller, "POLL_INTERVAL", 0.01)
     eeg_poller._active.clear()
+    eeg_poller._reservations.clear()
     yield
     for sid in list(eeg_poller._active):
         eeg_poller.stop(sid)
+    eeg_poller._reservations.clear()
 
 
 class _FakeSupabase:
@@ -78,6 +80,134 @@ def test_can_use_device_blocks_other_user_on_live_station():
     assert eeg_poller.can_use_device("user-a", "station-a")      # owner
     assert not eeg_poller.can_use_device("user-b", "station-a")  # stranger
     assert eeg_poller.can_use_device("user-b", "station-b")      # unclaimed
+
+
+# ── pre-claim reservations (#34) ─────────────────────────────────────────────
+#
+# eeg_poller.start()'s claim guard only ever recognised an owner once a poller
+# existed, leaving the scan/connect window before it open to anyone who knew
+# the device_id. reserve_device narrows that window to whoever reserves first.
+
+def test_reserve_device_first_caller_wins_unclaimed_station():
+    assert eeg_poller.reserve_device("user-a", "station-a")
+    assert not eeg_poller.reserve_device("user-b", "station-a")
+    # And the loser is genuinely locked out of both halves of the gap #34
+    # describes -- reading and controlling -- not just re-reservation.
+    assert not eeg_poller.can_use_device("user-b", "station-a")
+
+
+def test_reserve_device_is_idempotent_and_refreshable_for_the_same_user():
+    assert eeg_poller.reserve_device("user-a", "station-a")
+    # A second scan, or a connect attempt following the scan -- both are the
+    # same user continuing to pair, not a second claimant.
+    assert eeg_poller.reserve_device("user-a", "station-a")
+    assert eeg_poller.can_use_device("user-a", "station-a")
+
+
+def test_can_use_device_respects_an_unexpired_reservation():
+    eeg_poller.reserve_device("user-a", "station-a")
+    assert eeg_poller.can_use_device("user-a", "station-a")       # reserver
+    assert not eeg_poller.can_use_device("user-b", "station-a")   # stranger
+    assert eeg_poller.can_use_device("user-b", "station-b")       # untouched
+
+
+def test_reservation_expires_and_reopens_the_station(monkeypatch):
+    """An abandoned scan (tab closed mid-pairing, /stop never called) must not
+    permanently lock a physical station -- that is the exact contention
+    reservations exist to resolve, just moved one level earlier."""
+    monkeypatch.setattr(eeg_poller, "RESERVATION_TTL_SECONDS", 0.05)
+    assert eeg_poller.reserve_device("user-a", "station-a")
+    assert not eeg_poller.reserve_device("user-b", "station-a")
+    time.sleep(0.08)
+    assert eeg_poller.reserve_device("user-b", "station-a")
+    assert eeg_poller.can_use_device("user-b", "station-a")
+    assert not eeg_poller.can_use_device("user-a", "station-a")
+
+
+def test_a_live_poller_outranks_a_reservation():
+    """The stronger, later-stage claim always wins -- a reservation is only
+    ever consulted once no live poller answers the question first."""
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    # user-b never gets far enough to hold a reservation on a live station.
+    assert not eeg_poller.reserve_device("user-b", "station-a")
+
+
+def test_start_refuses_a_station_someone_else_has_reserved():
+    """Closes the residual gap where a caller skips the scan/connect UI and
+    hits /start directly: reserve_device's claim must bind /start too, or a
+    stranger could walk straight around someone else's in-progress pairing."""
+    assert eeg_poller.reserve_device("user-a", "station-a")
+    with pytest.raises(eeg_poller.DeviceClaimedError):
+        eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-a")
+
+
+def test_start_by_the_reserving_user_succeeds_and_clears_the_reservation():
+    eeg_poller.reserve_device("user-a", "station-a")
+    out = eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    assert out["running"]
+    # Ownership has moved to something stronger than a reservation; the entry
+    # would never be consulted again while the poller lives, but leaving it
+    # behind is a slot in the registry doing nothing until its TTL passes.
+    assert "station-a" not in eeg_poller._reservations
+
+
+def test_release_reservation_frees_the_station_for_another_user():
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.release_reservation("user-a")
+    assert eeg_poller.reserve_device("user-b", "station-a")
+
+
+def test_release_reservation_only_touches_the_calling_users_holdings():
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.reserve_device("user-b", "station-b")
+    eeg_poller.release_reservation("user-a")
+    assert "station-a" not in eeg_poller._reservations
+    assert not eeg_poller.reserve_device("user-c", "station-b")  # untouched
+
+
+def test_release_reservation_with_device_id_spares_the_users_other_holdings():
+    """The scoping main.py's control endpoints rely on: a failed request on
+    one device must release only that device's claim, not every reservation
+    the same user happens to be holding elsewhere."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.reserve_device("user-a", "station-b")
+    eeg_poller.release_reservation("user-a", "station-a")
+    assert "station-a" not in eeg_poller._reservations
+    assert not eeg_poller.reserve_device("user-c", "station-b")  # untouched
+
+
+def test_release_reservation_with_device_id_ignores_a_different_users_claim():
+    """A device_id-scoped release must still check ownership -- it is not a
+    blunt "delete this key" -- or one user's failed call could evict a
+    different user's unrelated, currently-valid reservation on the same
+    device by naming it."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.release_reservation("user-b", "station-a")
+    assert not eeg_poller.reserve_device("user-c", "station-a")  # still user-a's
+
+
+def test_stop_releases_a_reservation_even_with_no_poller_to_pop():
+    """The gap across three call sites (end_session, start_session's stale
+    cleanup, class_live's stale sweep): a user who scanned/connected and gave
+    up before ever reaching /start holds a reservation with nothing in
+    _active for it, so stop() needs an explicit user_id to find it."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.stop("session-that-never-started", "user-a")
+    assert eeg_poller.reserve_device("user-b", "station-a")
+
+
+def test_stop_falls_back_to_the_popped_pollers_own_user_id():
+    """A caller that omits user_id (there currently are none in main.py, but
+    the parameter is optional) must still release whatever the popped
+    poller's own user held -- the pre-existing behaviour, now driven by
+    p.user_id when no explicit user_id is given."""
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    eeg_poller.reserve_device("user-a", "station-b")  # a second, unrelated hold
+    eeg_poller.stop("session-1")
+    # station-b was never touched by session-1's own device (station-a), but
+    # it belongs to the same user_id the popped poller carried -- proving the
+    # fallback actually read p.user_id rather than silently doing nothing.
+    assert eeg_poller.reserve_device("user-c", "station-b")
 
 
 def test_stop_all_joins_every_poller_and_empties_the_registry():

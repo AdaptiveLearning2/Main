@@ -221,5 +221,113 @@ BEGIN
     RESET ROLE;
 END $$;
 
+-- ── the same, for face_signals and cognitive_signals ────────────────────────
+--
+-- These two shipped with a bare FOR ALL "own" policy and a full DML grant to
+-- authenticated -- unlike heart_signals, which was built later and knowingly
+-- did not repeat it. #47: "is this my row" is not "have I consented", and with
+-- no WITH CHECK the FOR ALL policy let an authenticated client insert straight
+-- past signal_consent. 20260811000000 narrows the grant to SELECT and the
+-- policy to FOR SELECT, matching heart_signals exactly, so these three blocks
+-- mirror the heart_signals ones above rather than introducing a new shape.
+
+DO $$
+BEGIN
+    IF NOT has_table_privilege('authenticated', 'public.face_signals', 'SELECT') THEN
+        RAISE EXCEPTION
+            'authenticated lacks SELECT on face_signals -- the RLS assertion '
+            'below would pass for the wrong reason';
+    END IF;
+    IF NOT has_table_privilege('authenticated', 'public.cognitive_signals', 'SELECT') THEN
+        RAISE EXCEPTION
+            'authenticated lacks SELECT on cognitive_signals -- the RLS '
+            'assertion below would pass for the wrong reason';
+    END IF;
+    -- The sequence USAGE grant 20260805110000 gave authenticated to insert
+    -- into these two tables has no reason to survive 20260811000000 revoking
+    -- the INSERT it existed for. Not RLS -- a leftover grant a later
+    -- migration could otherwise silently re-justify by adding INSERT back
+    -- without anyone noticing USAGE had quietly been there the whole time.
+    IF has_sequence_privilege('authenticated', 'public.face_signals_id_seq', 'USAGE') THEN
+        RAISE EXCEPTION
+            'authenticated still holds USAGE on face_signals_id_seq with no '
+            'INSERT left to justify it';
+    END IF;
+    IF has_sequence_privilege('authenticated', 'public.cognitive_signals_id_seq', 'USAGE') THEN
+        RAISE EXCEPTION
+            'authenticated still holds USAGE on cognitive_signals_id_seq with '
+            'no INSERT left to justify it';
+    END IF;
+END $$;
+
+DO $$
+DECLARE
+    owner_id  uuid;
+    other_id  uuid;
+    sess      uuid;
+    visible   int;
+BEGIN
+    SELECT i.owner_id, i.other_id, i.sess_id
+      INTO owner_id, other_id, sess FROM _ids i;
+
+    INSERT INTO public.face_signals (session_id, user_id, emotion)
+    VALUES (sess, owner_id, 'neutral');
+    INSERT INTO public.cognitive_signals (session_id, user_id)
+    VALUES (sess, owner_id);
+
+    -- Impersonate an unrelated logged-in user.
+    SET LOCAL ROLE authenticated;
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', other_id, 'role', 'authenticated')::text,
+                       true);
+
+    SELECT count(*) INTO visible FROM public.face_signals;
+    IF visible <> 0 THEN
+        RAISE EXCEPTION 'an unrelated authenticated user saw % face rows', visible;
+    END IF;
+    SELECT count(*) INTO visible FROM public.cognitive_signals;
+    IF visible <> 0 THEN
+        RAISE EXCEPTION 'an unrelated authenticated user saw % cognitive rows', visible;
+    END IF;
+
+    -- And the owner *can* see their own rows -- the half that makes the half
+    -- above mean anything; see the identical note on the heart_signals block.
+    PERFORM set_config('request.jwt.claims',
+                       json_build_object('sub', owner_id, 'role', 'authenticated')::text,
+                       true);
+    SELECT count(*) INTO visible FROM public.face_signals;
+    IF visible = 0 THEN
+        RAISE EXCEPTION
+            'the owner cannot see their own face rows -- the RLS policy is '
+            'missing or too strict, and the stranger check above is therefore '
+            'passing for the wrong reason';
+    END IF;
+    SELECT count(*) INTO visible FROM public.cognitive_signals;
+    IF visible = 0 THEN
+        RAISE EXCEPTION
+            'the owner cannot see their own cognitive rows -- the RLS policy '
+            'is missing or too strict, and the stranger check above is '
+            'therefore passing for the wrong reason';
+    END IF;
+
+    -- And cannot write one either -- this is the gap #47 closes. Before
+    -- 20260811000000 both of these INSERTs succeeded: the bare FOR ALL policy
+    -- checked only "is this my own row", never consent.
+    BEGIN
+        INSERT INTO public.face_signals (session_id, user_id, emotion)
+        VALUES (sess, owner_id, 'happy');
+        RAISE EXCEPTION 'an authenticated user inserted a face row';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+    BEGIN
+        INSERT INTO public.cognitive_signals (session_id, user_id)
+        VALUES (sess, owner_id);
+        RAISE EXCEPTION 'an authenticated user inserted a cognitive row';
+    EXCEPTION WHEN insufficient_privilege THEN NULL;
+    END;
+
+    RESET ROLE;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

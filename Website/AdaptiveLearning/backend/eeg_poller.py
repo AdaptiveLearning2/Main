@@ -490,20 +490,32 @@ def reserve_device(user_id: str, device_id: str) -> bool:
         return True
 
 
-def release_reservation(user_id: str) -> None:
-    """Drop every reservation user_id currently holds.
+def release_reservation(user_id: str, device_id: str | None = None) -> None:
+    """Drop user_id's reservation, scoped as narrowly as the caller can manage.
 
-    Called from /api/eeg/stop regardless of whether a live poller existed for
-    the session -- a user who scanned/connected but never reached /start
-    still holds a pre-claim reservation, and /stop is the signal they're done
-    with the station. Scoped by user_id rather than a device_id the caller may
-    not know (EegSessionRequest carries session_id, not device_id): one call
-    clears whatever this user is holding, matching stop_for_user's scoping.
+    With device_id: drop only that device's entry, and only if it is still
+    user_id's. This is what the three control endpoints need on a failed
+    request -- a bridge error scanning station B must not release a *different*
+    reservation the same user still legitimately holds on station A. An
+    unscoped release used to run from every failure branch and would have
+    dropped both; see test_a_successful_scan_still_holds_its_reservation_
+    through_a_later_failure_on_another_device for the case that caught it.
+
+    Without device_id: drop every reservation user_id holds. This is what
+    /api/eeg/stop needs -- EegSessionRequest carries session_id, not
+    device_id, so stop() cannot name the one device to release, and a user is
+    only ever supposed to be mid-pairing with one station at a time, so
+    clearing all of them is clearing at most one that matters.
     """
     with _lock:
-        for device_id, entry in list(_reservations.items()):
-            if entry[0] == user_id:
+        if device_id is not None:
+            entry = _reservations.get(device_id)
+            if entry is not None and entry[0] == user_id:
                 del _reservations[device_id]
+            return
+        for did, entry in list(_reservations.items()):
+            if entry[0] == user_id:
+                del _reservations[did]
 
 
 def is_polling(session_id: str) -> bool:

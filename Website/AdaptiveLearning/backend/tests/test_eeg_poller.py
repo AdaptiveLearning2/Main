@@ -165,6 +165,27 @@ def test_release_reservation_only_touches_the_calling_users_holdings():
     assert not eeg_poller.reserve_device("user-c", "station-b")  # untouched
 
 
+def test_release_reservation_with_device_id_spares_the_users_other_holdings():
+    """The scoping main.py's control endpoints rely on: a failed request on
+    one device must release only that device's claim, not every reservation
+    the same user happens to be holding elsewhere."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.reserve_device("user-a", "station-b")
+    eeg_poller.release_reservation("user-a", "station-a")
+    assert "station-a" not in eeg_poller._reservations
+    assert not eeg_poller.reserve_device("user-c", "station-b")  # untouched
+
+
+def test_release_reservation_with_device_id_ignores_a_different_users_claim():
+    """A device_id-scoped release must still check ownership -- it is not a
+    blunt "delete this key" -- or one user's failed call could evict a
+    different user's unrelated, currently-valid reservation on the same
+    device by naming it."""
+    eeg_poller.reserve_device("user-a", "station-a")
+    eeg_poller.release_reservation("user-b", "station-a")
+    assert not eeg_poller.reserve_device("user-c", "station-a")  # still user-a's
+
+
 def test_stop_all_joins_every_poller_and_empties_the_registry():
     """stop_all is what keeps a printing daemon thread out of interpreter
     shutdown, where a print against an already-held stdout lock aborts the

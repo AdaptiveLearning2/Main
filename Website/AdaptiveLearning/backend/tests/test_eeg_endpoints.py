@@ -256,6 +256,34 @@ def test_a_successful_scan_still_holds_its_reservation_through_a_later_failure(m
     assert exc_info.value.status_code == 403
 
 
+def test_the_same_users_failed_attempt_on_one_device_spares_their_other(monkeypatch):
+    """The narrower failure mode the cross-user test above can't catch: one
+    user legitimately holding two reservations at once, where a release
+    scoped only to user_id -- not device_id -- would drop both on a failure
+    that only concerned one of them."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
+
+    def _explode(name, device_id):
+        raise RuntimeError("bridge unreachable")
+    monkeypatch.setattr(eeg_client, "muse_connect", _explode)
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_connect(request=None, body={"name": "Muse-1", "device_id": "station-b"})
+    assert exc_info.value.status_code == 502
+
+    # station-a's reservation must have survived the station-b failure.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-d"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-a"})
+    assert exc_info.value.status_code == 403
+    # station-b, meanwhile, is genuinely free again -- the failed connect
+    # released only what it had just claimed.
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-b"}) == {"ok": True}
+
+
 def test_stop_releases_the_reservation_for_another_user(monkeypatch):
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
@@ -398,3 +426,20 @@ def test_muse_disconnect_allows_unclaimed_station(monkeypatch):
     monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
     monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
     assert main.eeg_muse_disconnect(request=None, body={"device_id": "station-unclaimed"}) == {"ok": True}
+
+
+def test_muse_disconnect_does_not_reserve_the_station(monkeypatch):
+    """Unlike refresh/connect, disconnect is a teardown action, not the start
+    of a pairing attempt -- calling it against a free station must not claim
+    it. An earlier version of this fix used reserve_device here too, which
+    meant a disconnect against nobody's station locked it out from under
+    anyone else for the TTL, indefinitely renewable by repeating the call."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_disconnect", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_disconnect(request=None, body={"device_id": "station-free"})
+
+    assert "station-free" not in eeg_poller._reservations
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(request=None, body={"device_id": "station-free"}) == {"ok": True}

@@ -195,10 +195,8 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
     )
 
-    # `emotion_confidence` by name, not a bare `confidence`. The table carried a
-    # second one (`identity_confidence`, how sure we are whose face this is)
-    # until #86 retired it, and the fusion rule had already read the wrong one
-    # once. Selecting by explicit name is what keeps that from recurring.
+    # Selected by explicit name rather than `*`, which is what keeps the
+    # confidence this gate reads unambiguous. See `signal_fusion.face_channel`.
     face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
                         session_id) if consent["face"] else []
     newest_face = face_rows[0] if face_rows else {}

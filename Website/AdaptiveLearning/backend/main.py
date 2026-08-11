@@ -2565,13 +2565,9 @@ class FaceSample(BaseModel):
     attention:           float | None = None
     gaze_x:              float | None = None
     gaze_y:              float | None = None
-    # One confidence now. There used to be two -- `identity_confidence` (how
-    # sure we are whose face this is) beside this one (how sure we are of the
-    # expression) -- and the pair caused a real silent bug in the fusion rule,
-    # which read the wrong one. Face identity was never implemented and was
-    # retired in #86: it is biometric identification of children, a different
-    # purpose from what the camera consent asks for, so it needs its own consent
-    # channel and its own copy rather than a model. The qualified name stays.
+    # One confidence now, and still qualified: the sibling it was named against
+    # (`identity_confidence`) is gone, but the name is what keeps the ambiguity
+    # from returning. See `signal_fusion.face_channel`.
     emotion_confidence:  float | None = None
     emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None

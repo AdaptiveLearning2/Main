@@ -252,13 +252,9 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
     None when there is no face block, for the same reason as above.
 
     `emotion_confidence` keeps its qualified name though it is now the only
-    confidence here. It used to sit beside `identity_confidence` -- how sure we
-    are whose face this is, against how sure we are of the expression -- and the
-    fusion rule read the wrong one of the pair, silently. Face identity was
-    never implemented and was retired in #86 as out of scope: identifying
-    children by face is a different purpose from what the camera consent asks
-    for, so it would need its own consent channel, not just a model. A bare
-    `confidence` would re-open the ambiguity the moment anything else lands.
+    confidence here -- a bare `confidence` re-opens an ambiguity that already
+    cost one silent bug. `signal_fusion.face_channel` has the account; #86 and
+    `20260812000000` have why the sibling column is gone.
     """
     face = payload.get("face")
     if not face:

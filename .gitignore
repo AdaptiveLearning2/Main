@@ -84,3 +84,16 @@ __pycache__/
 # want to check in, and a directory-wide rule would silently make that
 # impossible.
 .claude/settings.local.json
+
+# Serena's per-machine index and project config. Unlike the rule directly above,
+# this is the whole directory: every file in it is written by the tool, none of
+# it is project source, and there is nothing in there a checkout would want.
+# `.serena/project.yml` looks shareable and is not -- it is regenerated per
+# machine, so committing it means merge conflicts over a file nobody edits.
+#
+# Here rather than only in each developer's global ignore file, because a global
+# rule covers a file only until something tracks it: `.serena/` was committed
+# once on a feature branch and no ignore rule anywhere would have stopped that.
+# This entry is what makes the rule travel with the checkout instead of
+# depending on every clone being configured the same way.
+.serena/

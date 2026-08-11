@@ -912,6 +912,25 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     # has run the rollup *is* the history, so a failed read means the week is
     # unreadable rather than empty -- the one claim it is least entitled to
     # make, and exactly the confusion the reporting rules exist to stop.
+    # What the rollup contributes to the *week's* figures, gathered as the day
+    # loop resolves each day's source.
+    #
+    # Without this the headline numbers and the chart beneath them disagree the
+    # moment the delete job runs: `daily` falls back to the rollup while
+    # `averages` and `highlights` are computed only from the rows still in the
+    # raw tables, so a week whose detail is gone shows a full chart above an
+    # empty summary -- two answers to one question on one screen.
+    #
+    # (sum, n) per metric rather than a mean of daily means: days differ in
+    # length, and averaging averages weights a four-sample day like a
+    # four-thousand-sample one. The rollup stores both, so the true sum is
+    # recoverable.
+    rolled_totals: dict[str, list] = {k: [0.0, 0] for k in
+                                      ("focus", "stress", "engagement",
+                                       "heart_rate_bpm", "rmssd_ms")}
+    rolled_emotions: dict[str, int] = {}
+    rolled_sources: set[str] = set()
+
     rollup_by: dict[tuple[str, str], dict] = {}
     rollup_ok = True
     try:
@@ -1012,19 +1031,33 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         #
         # A rollup also wins over a *partial* raw day: it is a complete summary,
         # where a capped read is a fraction presented as a whole.
-        def _rolled(channel, raw_rows, whole):
+        def _rolled(channel, raw_rows, whole, read_ok):
+            """The rollup row to use for this day, or None to use the raw rows.
+
+            `read_ok` is the difference between "the query ran and this day has
+            no rows" and "the query failed". Only the first is evidence that the
+            detail is gone. On a failure the rollup may be *stale* -- it is
+            written as sessions close, so today's lags the session in progress
+            -- and serving it as a complete day would present old numbers as
+            current, with `retrieved` saying they are sound. A capped read is
+            different again: there the rollup is strictly better, because a
+            complete summary beats a fraction presented as a whole.
+            """
+            if not read_ok:
+                return None
             row = rollup_by.get((day, channel))
             return row if row is not None and (not raw_rows or not whole) else None
 
         day_cog = cog_by_day.get(day, [])
         day_face = face_by_day.get(day, [])
-        cog_roll = _rolled("cognitive", day_cog, cog_whole)
-        face_roll = _rolled("emotion", day_face, face_whole) if include_emotion else None
+        cog_roll = _rolled("cognitive", day_cog, cog_whole, cog_ok)
+        face_roll = (_rolled("emotion", day_face, face_whole, face_ok)
+                     if include_emotion else None)
         # Trusted only, matching the week's averages. A day whose every sample
         # was rejected is then a null beside a `heart_retrieved` of True --
         # "measured, unusable" -- rather than a gap that reads as sensor-off.
         day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
-        heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole)
+        heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole, heart_ok)
                       if include_heart else None)
 
         daily.append({
@@ -1094,9 +1127,51 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "heart_samples": (heart_roll.get("sample_count") or 0) if heart_roll else len(day_heart),
         })
 
+        # Weighted by `trusted_sample_count`, which is the count the averages
+        # were taken over -- rows that produced a usable measurement, not rows
+        # that existed. `rmssd_ms` is the one approximation here: it is an
+        # enrichment that is null on roughly one accepted window in five, so its
+        # true weight is lower than the count used. It biases the week's RMSSD
+        # toward days that reported more of it, which is the right direction and
+        # not exact.
+        if cog_roll:
+            n = cog_roll.get("trusted_sample_count") or 0
+            for key, col in (("focus", "avg_focus"), ("stress", "avg_stress"),
+                             ("engagement", "avg_engagement")):
+                value = cog_roll.get(col)
+                if value is not None and n:
+                    rolled_totals[key][0] += float(value) * n
+                    rolled_totals[key][1] += n
+        if heart_roll:
+            n = heart_roll.get("trusted_sample_count") or 0
+            for key, col in (("heart_rate_bpm", "avg_heart_rate_bpm"),
+                             ("rmssd_ms", "avg_rmssd_ms")):
+                value = heart_roll.get(col)
+                if value is not None and n:
+                    rolled_totals[key][0] += float(value) * n
+                    rolled_totals[key][1] += n
+            rolled_sources.update(heart_roll.get("heart_sources") or ())
+        if face_roll:
+            for label, count in (face_roll.get("emotion_counts") or {}).items():
+                rolled_emotions[label] = rolled_emotions.get(label, 0) + int(count)
+
     # Only trusted heart samples are averaged. An untrusted one carries a rate;
     # it is just not one worth putting in front of a parent, and the same rule
     # runs in the SQL aggregate so the two surfaces cannot disagree.
+    def _week(key, raw_values):
+        """The week's mean over raw samples *and* summarised days.
+
+        Both contribute their true sum and count, so a week that is half raw
+        rows and half rollup -- the state during the term after which the delete
+        job first runs -- is one honest mean rather than whichever half the code
+        happened to look at.
+        """
+        total, n = rolled_totals[key]
+        nums = [float(v) for v in raw_values if v is not None]
+        total += sum(nums)
+        n += len(nums)
+        return (total / n) if n else None
+
     heart_rates = [r["heart_rate_bpm"] for r in heart
                    if r.get("heart_rate_bpm") is not None and r.get("trusted") is True]
     rmssd_values = [r["rmssd_ms"] for r in heart
@@ -1108,16 +1183,27 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     # sample was rejected renders as "the headband was on and measured nothing"
     # beside a null average -- the "measured, unusable" state claiming to be a
     # working sensor.
+    # Summarised days included: once the raw rows are gone, the rollup's
+    # `heart_sources` is the only record that the sensor changed mid-week, and
+    # that is exactly what this column exists to explain.
     heart_sources = sorted({r["source"] for r in heart
-                            if r.get("source") and r.get("trusted") is True})
+                            if r.get("source") and r.get("trusted") is True}
+                           | rolled_sources)
 
-    emotion_counts: dict[str, int] = {}
+    # Seeded from the summarised days, then the raw rows counted on top. The
+    # rollup stores the distribution rather than the winner precisely so this
+    # stays answerable after the detail is deleted -- a dominant emotion is not
+    # recoverable from a label.
+    emotion_counts: dict[str, int] = dict(rolled_emotions)
     for r in face:
         if r.get("emotion"):
             emotion_counts[r["emotion"]] = emotion_counts.get(r["emotion"], 0) + 1
 
-    avg_focus = _avg([r.get("focus") for r in cog])
-    avg_stress = _avg([r.get("stress") for r in cog])
+    def _round2(value):
+        return None if value is None else round(value, 2)
+
+    avg_focus = _round2(_week("focus", [r.get("focus") for r in cog]))
+    avg_stress = _round2(_week("stress", [r.get("stress") for r in cog]))
     avg_attention = _avg([r.get("attention") for r in face])
     highest_stress = max([float(r["stress"]) for r in cog if r.get("stress") is not None], default=None)
     lowest_focus = min([float(r["focus"]) for r in cog if r.get("focus") is not None], default=None)
@@ -1242,15 +1328,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "averages": {
             "focus": avg_focus,
             "stress": avg_stress,
-            "engagement": _avg([r.get("engagement") for r in cog]),
+            "engagement": _round2(_week("engagement",
+                                        [r.get("engagement") for r in cog])),
             "face_attention": avg_attention,
         },
         "highlights": {
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
             "lowest_focus": round(lowest_focus, 2) if lowest_focus is not None else None,
             "dominant_emotion": max(emotion_counts, key=emotion_counts.get) if emotion_counts else None,
-            "heart_rate_bpm": (sum(heart_rates) / len(heart_rates)) if heart_rates else None,
-            "rmssd_ms": (sum(rmssd_values) / len(rmssd_values)) if rmssd_values else None,
+            "heart_rate_bpm": _week("heart_rate_bpm", heart_rates),
+            "rmssd_ms": _week("rmssd_ms", rmssd_values),
         },
         # `heart` present only when the channel was read. Absent rather than
         # null, so a snapshot cannot show an empty heart row that reads as a

@@ -48,13 +48,37 @@ from test_ppg_processing import _load
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def _window(samples, fs, span_seconds=RATE_WINDOW_SECONDS):
+    """`samples` as a healthy link delivers them: nothing lost, no long gap.
+
+    **By keyword, and every field named.** This file was written against a
+    five-field `OpticsWindow` and merged against a seven-field one -- #83 added
+    `received_rate_hz` and `completeness` as fields 3 and 4 while this branch was
+    open, so the five positional arguments here silently became `channels`,
+    `fs`, `received_rate_hz`, `completeness`, `span_seconds`. It failed loudly
+    only because the two fields left over had no defaults; had they, this file
+    would have gone green describing a 25Hz link at 2% completeness.
+    `unusable_reason` *does* have a default, so the next field inserted into the
+    middle of this record gets exactly that outcome. Naming the fields is what
+    turns that from a wrong number into an error.
+    """
+    return OpticsWindow(
+        channels=samples,
+        fs=fs,
+        received_rate_hz=fs,
+        completeness=1.0,
+        span_seconds=span_seconds,
+        largest_gap_seconds=0.02,
+        channel_count=samples.shape[1],
+    )
+
+
 def _record(data, fs, offset_s, tracker=None):
     """One block, built the way a tick builds it: the production window length,
     the production step, and the tracker the rate derivation needs for
     continuity."""
     samples = data[int(offset_s * fs):int((offset_s + RATE_WINDOW_SECONDS) * fs)]
-    window = OpticsWindow(samples, fs, fs, 1.0, RATE_WINDOW_SECONDS, 0.02, samples.shape[1])
-    return build_heart_record(window, tracker or HeartRateTracker(),
+    return build_heart_record(_window(samples, fs), tracker or HeartRateTracker(),
                               EMIT_EVERY_SECONDS)
 
 
@@ -159,8 +183,7 @@ def test_a_refused_rate_is_not_enriched(dense):
     _, fs = dense
     flat = np.zeros((int(RATE_WINDOW_SECONDS * fs), 4))
     record = build_heart_record(
-        OpticsWindow(flat, fs, fs, 1.0, RATE_WINDOW_SECONDS, 0.02, 4),
-        HeartRateTracker(), EMIT_EVERY_SECONDS)
+        _window(flat, fs), HeartRateTracker(), EMIT_EVERY_SECONDS)
     assert record["bpm"] is None
     assert record["rejected_by"] is not None
     assert record["rmssd_ms"] is None
@@ -197,7 +220,18 @@ def test_every_block_carries_the_rmssd_fields(dense):
     """One shape, so a consumer never reads an absent field as a third state --
     the same rule `trusted` and `rejected_by` already follow."""
     data, fs = dense
-    empty = OpticsWindow(np.empty((0, 4)), None, None, None, 0.0, None, 4)
+    # Not `_window`: nothing arrived, so every measurement of the time base is
+    # None rather than a number. Same shape `eeg_ingestion` builds for an empty
+    # buffer, and by keyword for the reason given above.
+    empty = OpticsWindow(
+        channels=np.empty((0, 4)),
+        fs=None,
+        received_rate_hz=None,
+        completeness=None,
+        span_seconds=0.0,
+        largest_gap_seconds=None,
+        channel_count=4,
+    )
     for record in (_record(data, fs, 52),
                    build_heart_record(empty, HeartRateTracker(), EMIT_EVERY_SECONDS)):
         assert set(record) >= {"rmssd_ms", "beat_coverage", "rmssd_rejected_by"}

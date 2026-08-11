@@ -222,6 +222,24 @@ The camera ships **emotion-only**. POS is kept because it is correct and is the 
 of any future attempt, but do not read its passing tests as evidence it measures a heart
 rate. Evidence and the full spectral analysis: `EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
 
+**`face_signals.attention`, `gaze_x`, `gaze_y` and `identity_confidence` have no producer
+either, and unlike `sqi` there is no note anywhere else saying so.**
+`face_processing.build_face_record()` sets only `emotion`, `emotion_confidence`, `trusted`
+and `rejected_by` -- there is no gaze estimator, no attention scorer and no face-identity
+matcher anywhere in `EEGResearch/src/app`. The vendored reference this project started from
+already knew it:
+`FacialRecg/Facial-Recognition-Heart-Rate-Detection-Testing-main/rPPG_LF_export_stress_pie_backend_emotion.py`
+hard-codes `identity_confidence: None` with a comment that they "remain null until those are
+implemented" -- that comment never became a project-level note, so the gap reads as live
+everywhere downstream: the `face_signals` columns exist, `signal_mapping.map_face_to_face_signal`
+carries them through unchanged, `/api/signals/face`'s `FaceSample` schema accepts them, the
+reporting aggregates average them, and the teacher's Live attention gauge, `SessionReview`'s
+attention ribbon, the parent/teacher `face_attention` tiles and the LLM strategy prompt
+("average facial attention was X%") all render off a signal nothing has ever computed. None
+of it lies -- the three-state tile logic renders `No sensor` / `Calibrating` rather than a
+fabricated number -- but it is UI built on a value that cannot arrive until a gaze/attention/
+identity model exists.
+
 Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
 These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
 one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`

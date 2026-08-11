@@ -41,7 +41,7 @@ class _Query:
         # empty list to everything downstream, which is the distinction the
         # report's `retrieved` flags exist to make.
         self._raises = raises
-        self._filters = {}
+        self._filters = []
         self._limit = None
         self._order = None
         self._desc = False
@@ -74,25 +74,32 @@ class _Query:
         return self
 
     def eq(self, col, val):
-        self._filters[col] = val
+        self._filters.append((col, val))
         return self
 
     def gte(self, col, val):
-        self._filters[col] = ("gte", val)
+        self._filters.append((col, ("gte", val)))
+        return self
+
+    def lte(self, col, val):
+        self._filters.append((col, ("lte", val)))
         return self
 
     def in_(self, col, vals):
-        self._filters[col] = ("in", list(vals))
+        self._filters.append((col, ("in", list(vals))))
         return self
 
     def _matches(self, row):
-        for col, want in self._filters.items():
+        for col, want in self._filters:
             have = row.get(col)
             if isinstance(want, tuple) and want[0] == "in":
                 if have not in want[1]:
                     return False
             elif isinstance(want, tuple) and want[0] == "gte":
                 if have is None or str(have) < str(want[1]):
+                    return False
+            elif isinstance(want, tuple) and want[0] == "lte":
+                if have is None or str(have) > str(want[1]):
                     return False
             elif have != want:
                 return False
@@ -376,13 +383,18 @@ _CONSENT_ALL = {"user_id": "student-1", "eeg_enabled": True,
 
 
 def _signal_tables(cog_rows, face_rows=None, session_rows=None,
-                   heart_rows=None, consent_rows=None):
+                   heart_rows=None, consent_rows=None, rollup_rows=None):
     return {
         "cognitive_signals": cog_rows,
         "face_signals": face_rows if face_rows is not None else [],
         "heart_signals": heart_rows or [],
         "sessions": session_rows or [],
         "signal_consent": consent_rows if consent_rows is not None else [_CONSENT_ALL],
+        # Present and empty by default. The report falls back to the rollup for
+        # days whose per-sample rows are gone, and an absent table reads as a
+        # failed read -- which would report every fixture here as a week whose
+        # history could not be checked.
+        "signal_daily_rollup": rollup_rows or [],
     }
 
 
@@ -729,7 +741,8 @@ def test_a_quiet_week_is_still_reported_as_one(monkeypatch):
     report = main._weekly_signal_report("student-1")
 
     assert report["retrieved"] == {"cognitive": True, "face": True,
-                                   "heart": True, "sessions": True}
+                                   "heart": True, "sessions": True,
+                                   "rollup": True}
     assert report["summary"] == "No EEG, facial recognition or heart rate samples were recorded this week."
     assert report["sessions_recorded"] == 0
 

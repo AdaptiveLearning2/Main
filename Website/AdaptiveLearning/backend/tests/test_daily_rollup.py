@@ -102,6 +102,40 @@ def test_an_inverted_span_still_rolls_up_the_closing_day(rpc):
     assert rpc.days == ["2026-06-09"], "an inverted range rolled up nothing"
 
 
+def test_one_days_failure_does_not_skip_the_next(monkeypatch):
+    """Per-day isolation.
+
+    A single try around the loop meant a failure on the first day of a two-day
+    session also skipped the second -- and the second is the closing day, the
+    one the call exists for. The days are independent recomputations; nothing
+    about one failing says the next will.
+    """
+    attempted = []
+
+    class _FirstDayFails:
+        def rpc(self, name, params):
+            attempted.append(params["p_day"])
+            first = len(attempted) == 1
+
+            class _Exec:
+                def execute(_s):
+                    if first:
+                        raise RuntimeError("transient")
+                    return type("R", (), {"data": None})()
+            return _Exec()
+
+    monkeypatch.setattr(main, "supabase", _FirstDayFails())
+    monkeypatch.setattr(main, "_retention_window", lambda: {
+        "state": main.WINDOW_OPEN, "timezone": LA})
+
+    # 23:30 on the 11th to 00:30 on the 12th, Los Angeles.
+    main._rollup_session_days(USER, "2026-06-12T06:30:00Z", "2026-06-12T07:30:00Z")
+
+    assert attempted == ["2026-06-11", "2026-06-12"], (
+        "the second day was skipped because the first one failed"
+    )
+
+
 def test_a_failed_rollup_does_not_reach_the_caller(monkeypatch):
     """The whole reason this is called last and swallows.
 
@@ -139,3 +173,39 @@ def test_the_rollup_runs_after_the_writes_that_matter():
     assert source.index("_rollup_session_days") > source.index("user_stats"), (
         "the rollup runs before the stats write it must not be able to affect"
     )
+
+
+# ── every path that closes a session has to summarise its day ───────────────
+
+def test_every_session_close_writes_a_rollup():
+    """Discovered, not listed.
+
+    Three places end a session: the `/end` endpoint, `start_session`'s sweep of
+    sessions a student abandoned, and `class_live`'s staleness monitor. Only the
+    first called the rollup, so a student who closed the tab -- the case the
+    sweep exists for -- left a day with raw rows and no summary. Once the delete
+    job runs, that day is simply gone.
+
+    Matched on the write rather than on a hand-kept list of functions, for the
+    same reason as the recording-site check: "sets ended_at" is a fact about the
+    code, not a judgement someone has to remember to record here.
+    """
+    import inspect
+    closers = []
+    for name, obj in vars(main).items():
+        if not inspect.isfunction(obj) or obj.__module__ != "main":
+            continue
+        try:
+            source = inspect.getsource(obj)
+        except OSError:                      # pragma: no cover -- defensive
+            continue
+        if '"ended_at":' in source:
+            closers.append((name, source))
+
+    assert len(closers) >= 3, f"the search stopped finding closers: {closers}"
+    for name, source in closers:
+        assert "_rollup_session_days" in source, (
+            f"{name} ends a session without rolling up its day. The rollup is "
+            "what survives the end-of-year delete, so a day closed this way is "
+            "lost rather than summarised."
+        )

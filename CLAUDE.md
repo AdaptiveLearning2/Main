@@ -236,7 +236,16 @@ suffixes for every architecture except one. The exception matters: **`FacePhys` 
 is the package default** (`rppg.Model()` with no argument gives `FacePhys.rlap`). So the model that
 comes for free is the one with no RLAP-free alternative, and naming the model explicitly is what
 keeps that choice deliberate. The vendored scripts in `FacialRecg/` already name
-`RhythmMamba.rlap`; the suffix, not the architecture, is the part to revisit.
+`RhythmMamba.pure`, switched from `.rlap` on 2026-08-11 -- the suffix, not the architecture, was the
+part that needed revisiting.
+
+**Every live model selection in `FacialRecg/` now pins `.pure` explicitly**, including the three
+scripts that called `rppg.Model()` with no argument and so were silently taking `FacePhys.rlap` --
+the one model with no RLAP-free alternative. `ubfc_rppg_exp_dataproc.py` is the deliberate exception:
+it sweeps the whole model/suffix grid and its results are committed in
+`ubfc_model_comparison_report.txt`, so dropping the `.rlap` rows would make that report
+unreproducible. Nothing here has been *run* since the switch -- `open-rppg` has still never been
+installed in this repo -- so treat `.pure` as the licence-safe default, not as a measured one.
 
 So what stands between here and a camera heart rate is engineering and evidence, not permission:
 the confidence gate below is inapplicable to a single-channel source and would have to be designed

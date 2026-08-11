@@ -193,7 +193,7 @@ def _suppress_rppg_thread_error(args):
 
 def main():
     threading.excepthook = _suppress_rppg_thread_error
-    model = rppg.Model()
+    model = rppg.Model('RhythmMamba.pure')
 
     with model.video_capture(0):
         duration = record_video(model)

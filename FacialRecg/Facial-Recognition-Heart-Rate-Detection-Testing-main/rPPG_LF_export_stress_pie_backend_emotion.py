@@ -881,7 +881,7 @@ def main(
     local_only=False,
 ):
     threading.excepthook = _suppress_rppg_thread_error
-    model = rppg.Model('RhythmMamba.rlap')
+    model = rppg.Model('RhythmMamba.pure')
     model.face_detect_per_n = 1
     current_rmssd = current_sqi = current_hr = None
     last_update = 0

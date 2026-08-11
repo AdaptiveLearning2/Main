@@ -8,7 +8,7 @@ import numpy as np
 import rppg
 from scipy.signal import butter, filtfilt
 
-RPPG_MODEL = 'PhysNet.rlap'
+RPPG_MODEL = 'PhysNet.pure'
 DIFF_THRESHOLD_MS = 100.0
 MIN_OVERLAP_SAMPLES = 20
 

@@ -208,8 +208,49 @@ of this rule said that and it overreached. Three spatial averages per frame is a
 what a frame contains, and a learned model over per-pixel, multi-region input has far more to work
 with. The reference implementation this project started from reports ~95% accuracy on its best
 tests using RhythmMamba over full video, which is not in conflict with the result above because it
-is a different method on different information. What blocks it here is the licence -- those
-weights are behind a per-requester Data Usage Agreement -- not physics.
+is a different method on different information. What blocks it here is not physics.
+
+**Nor, on inspection, is it the licence -- an earlier version of this rule said the weights were
+behind a per-requester Data Usage Agreement, and that conflated two things.** Checked 2026-08-11:
+`zizheng-guo/RhythmMamba` (Zou et al., AAAI 2025) is MIT and ships a `PreTrainedModels` folder, and
+`KegangWangCCNU/open-rppg` -- the `rppg` import in `FacialRecg/` -- says "the source code and tools
+in this repository are released under the MIT License" and ships pretrained models and configs, with
+`.rlap`/`.pure` marking training protocols. It disclaims that the weights are "derived from academic
+research ... subject to the license terms specified in their original publications", so the terms are
+the open question, not access.
+
+The DUA is real but it is on the **dataset**: `KegangWangCCNU/RLAP-dataset` grants access by emailing
+the authors a signed agreement and returns a 14-day download link. You need that to *train on* or
+*evaluate against* RLAP. You do not need it to run inference with weights someone else trained and
+published.
+
+**What is genuinely unresolved is whether that agreement reaches derived weights.** Its terms are in
+a PDF behind the request, so nobody here has read them, and `.rlap` means "trained on RLAP". If the
+agreement restricts derivative works, weights published by a third party under MIT may still carry
+obligations -- a question between those authors and RLAP's, which we cannot settle by reading a
+repo. **`.pure` weights, trained on PURE, avoid the question entirely**, and that is the cheaper path
+for a commercial product used by children than obtaining an agreement in order to interpret it.
+
+`RhythmMamba.pure.weights.h5` **is published** -- confirmed in `rppg/weights/`, which ships both
+suffixes for every architecture except one. The exception matters: **`FacePhys` is `.rlap` only, and
+is the package default** (`rppg.Model()` with no argument gives `FacePhys.rlap`). So the model that
+comes for free is the one with no RLAP-free alternative, and naming the model explicitly is what
+keeps that choice deliberate. The vendored scripts in `FacialRecg/` already name
+`RhythmMamba.pure`, switched from `.rlap` on 2026-08-11 -- the suffix, not the architecture, was the
+part that needed revisiting.
+
+**Every live model selection in `FacialRecg/` now pins `.pure` explicitly**, including the three
+scripts that called `rppg.Model()` with no argument and so were silently taking `FacePhys.rlap` --
+the one model with no RLAP-free alternative. `ubfc_rppg_exp_dataproc.py` is the deliberate exception:
+it sweeps the whole model/suffix grid and its results are committed in
+`ubfc_model_comparison_report.txt`, so dropping the `.rlap` rows would make that report
+unreproducible. Nothing here has been *run* since the switch -- `open-rppg` has still never been
+installed in this repo -- so treat `.pure` as the licence-safe default, not as a measured one.
+
+So what stands between here and a camera heart rate is engineering and evidence, not permission:
+the confidence gate below is inapplicable to a single-channel source and would have to be designed
+and *measured* against a reference, and `open-rppg` is 0.1.1, owns the whole signal chain, and pulls
+in JAX and Keras -- a heavy install for software that ships to a student's laptop.
 
 The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
 to a single-channel source.** Its three terms were built for the headband's four contact

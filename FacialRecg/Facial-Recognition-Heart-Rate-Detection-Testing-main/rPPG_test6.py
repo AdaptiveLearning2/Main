@@ -11,7 +11,7 @@ import rppg
 from scipy.signal import butter, filtfilt
 
 # ── Configuration ──────────────────────────────────────────
-RPPG_MODEL = 'PhysNet.rlap'
+RPPG_MODEL = 'PhysNet.pure'
 RMSSD_WINDOW_SIZE = 5
 
 # Bandpass filter for cleaning BVP (0.7–3.5 Hz ≈ 42–210 BPM)

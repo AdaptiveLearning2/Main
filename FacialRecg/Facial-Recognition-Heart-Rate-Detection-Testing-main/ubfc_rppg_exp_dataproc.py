@@ -6,6 +6,16 @@ import rppg
 
 # A simple program for exporting openRPPG outputs to UBFC-style subject text files.
 
+# Deliberately still lists `.rlap` variants, unlike every other script here,
+# which now pin `.pure`. This is the comparison sweep -- its whole job is to
+# measure the model/suffix grid against UBFC ground truth, and the results are
+# committed beside it in ubfc_model_comparison_report.txt. Dropping half the
+# grid would silently make that report unreproducible.
+#
+# Running it needs the RLAP-derived weights, which ship with open-rppg, but read
+# the licence note in CLAUDE.md before publishing anything from a `.rlap` row:
+# what is unresolved is whether the RLAP Data Usage Agreement reaches weights
+# trained on it, not whether the files are obtainable.
 RPPG_MODELS = [
     "FacePhys.rlap",
     "ME-chunk.rlap",

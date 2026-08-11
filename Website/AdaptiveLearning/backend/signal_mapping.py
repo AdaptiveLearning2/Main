@@ -251,10 +251,14 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
 
     None when there is no face block, for the same reason as above.
 
-    `emotion_confidence` and `identity_confidence` are both carried and are not
-    interchangeable: one is how sure the classifier is of the expression, the
-    other how sure it is whose face this is. The fusion rule reads only the
-    first, and read the second by mistake once.
+    `emotion_confidence` keeps its qualified name though it is now the only
+    confidence here. It used to sit beside `identity_confidence` -- how sure we
+    are whose face this is, against how sure we are of the expression -- and the
+    fusion rule read the wrong one of the pair, silently. Face identity was
+    never implemented and was retired in #86 as out of scope: identifying
+    children by face is a different purpose from what the camera consent asks
+    for, so it would need its own consent channel, not just a model. A bare
+    `confidence` would re-open the ambiguity the moment anything else lands.
     """
     face = payload.get("face")
     if not face:
@@ -270,7 +274,6 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
         "attention": face.get("attention"),
         "gaze_x": face.get("gaze_x"),
         "gaze_y": face.get("gaze_y"),
-        "identity_confidence": face.get("identity_confidence"),
         "raw": _raw(payload,
                     device_id=payload.get("device_id"),
                     rejected_by=face.get("rejected_by"),

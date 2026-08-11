@@ -222,23 +222,33 @@ The camera ships **emotion-only**. POS is kept because it is correct and is the 
 of any future attempt, but do not read its passing tests as evidence it measures a heart
 rate. Evidence and the full spectral analysis: `EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
 
-**`face_signals.attention`, `gaze_x`, `gaze_y` and `identity_confidence` have no producer
-either, and unlike `sqi` there is no note anywhere else saying so.**
-`face_processing.build_face_record()` sets only `emotion`, `emotion_confidence`, `trusted`
-and `rejected_by` -- there is no gaze estimator, no attention scorer and no face-identity
-matcher anywhere in `EEGResearch/src/app`. The vendored reference this project started from
-already knew it:
-`FacialRecg/Facial-Recognition-Heart-Rate-Detection-Testing-main/rPPG_LF_export_stress_pie_backend_emotion.py`
-hard-codes `identity_confidence: None` with a comment that they "remain null until those are
-implemented" -- that comment never became a project-level note, so the gap reads as live
-everywhere downstream: the `face_signals` columns exist, `signal_mapping.map_face_to_face_signal`
-carries them through unchanged, `/api/signals/face`'s `FaceSample` schema accepts them, the
-reporting aggregates average them, and the teacher's Live attention gauge, `SessionReview`'s
-attention ribbon, the parent/teacher `face_attention` tiles and the LLM strategy prompt
-("average facial attention was X%") all render off a signal nothing has ever computed. None
-of it lies -- the three-state tile logic renders `No sensor` / `Calibrating` rather than a
-fabricated number -- but it is UI built on a value that cannot arrive until a gaze/attention/
-identity model exists.
+**`face_signals.attention`, `gaze_x` and `gaze_y` have no producer yet.**
+`face_processing.build_face_record()` sets only `emotion`, `emotion_confidence`, `trusted` and
+`rejected_by`; there is no gaze estimator and no attention scorer anywhere in
+`EEGResearch/src/app`. Nothing lies -- the three-state tile logic renders `No sensor` /
+`Calibrating` rather than a fabricated number -- but the teacher's Live attention gauge,
+`SessionReview`'s attention ribbon, the parent/teacher `face_attention` tiles and the LLM
+strategy prompt ("average facial attention was X%") are all built on a value nothing has ever
+computed. **Phase 11 of the plan fills them**, so don't drop the columns or the UI.
+
+The blocker is that the only face detector here is a **Haar cascade returning a bounding box**
+(`face_roi.py`) -- there is no landmark geometry in the system to derive a gaze vector or head
+pose from, so this needs a new model rather than new wiring. When it lands it needs a
+*measurement* against a reference before anything reaches a parent, on the same standard as
+the rPPG and RMSSD work: "attention" inferred from head direction is least valid for exactly
+this product's users, and unlike a FER+ label it renders as an objective-looking percentage.
+A child looking away while thinking is not inattentive.
+
+**`identity_confidence` was retired instead (#86, `20260812000000`) -- do not add it back
+without a consent decision first.** It never had a producer either, but it is not a missing
+feature: matching a child's face against a stored identity is a *different purpose* from what
+the camera consent asks about ("works out how they are finding the questions", in both the
+parent and student copy), so it needs its own consent channel and its own copy before it needs
+a model. Its removal also closed a live footgun -- `face_signals` carried two confidences, and
+`signal_fusion`'s face channel read the wrong one, so a clearly identified face with a garbage
+FER+ label withheld a difficulty increase while a well-classified expression on a poorly
+identified face was discarded, both silently. `emotion_confidence` keeps its qualified name
+for that reason: a bare `confidence` re-opens the ambiguity the moment a second one lands.
 
 Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
 These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for

@@ -228,7 +228,11 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
           <MiniMetric label="Heart Rate" value={unit(heart.heart_rate_bpm, ' bpm')} icon={Heart} tone="rose" />
         )}
       </div>
-      <div className="mt-4 grid md:grid-cols-2 gap-3 text-sm">
+      {/* One tile, not two. "Identity Confidence" sat here and was retired in
+          #86: face identity never had a producer, so the tile could only ever
+          resolve to "No sensor", and identifying a child by face is a different
+          purpose from the one the camera consent asks about. */}
+      <div className="mt-4 grid gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Facial Emotion</p>
           {/* Not a binary faceOn ? value : "Reporting off": a failed consent
@@ -237,12 +241,6 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
               Attention tile above goes through it rather than branching here. */}
           <p className="font-bold text-gray-900 dark:text-white capitalize">
             {valueOrReason(faceOn && face.emotion, faceReason(report, faceOn))}
-          </p>
-        </div>
-        <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Identity Confidence</p>
-          <p className="font-bold text-gray-900 dark:text-white">
-            {valueOrReason(faceOn && pct(face.identity_confidence), faceReason(report, faceOn))}
           </p>
         </div>
       </div>

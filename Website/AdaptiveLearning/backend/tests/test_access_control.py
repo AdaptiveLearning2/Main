@@ -1309,10 +1309,14 @@ def test_strategy_basis_counts_sessions_in_postgres(monkeypatch):
     assert basis["sample_counts"]["sessions"] == 137
 
 
-def test_strategy_basis_drops_identity_confidence(monkeypatch):
-    """basis.averages is the response contract. identity_confidence is a
-    face-recognition confidence score this endpoint was never about, and it was
-    in there only because the report's whole averages dict was passed along."""
+def test_strategy_basis_averages_are_an_explicit_contract(monkeypatch):
+    """basis.averages is the response contract, so it is built as a named list
+    rather than copied from the report.
+
+    It was a copy once, which is how a face-identity confidence score this
+    endpoint was never about ended up in the response. That column is gone (#86)
+    but the shape is what stopped it, and this pins the shape.
+    """
     fake = _FakeSupabase(
         {**TABLES, **_strategy_tables()},
         rpc_results={"student_signal_summary": [{"focus": 0.7}]},

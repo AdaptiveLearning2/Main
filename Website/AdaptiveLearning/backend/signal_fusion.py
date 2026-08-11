@@ -189,14 +189,16 @@ def face_channel(
 ) -> ChannelState:
     """The facial channel, which is only ever allowed to withhold.
 
-    Named `emotion_confidence`, not `confidence`, because `face_signals` carries
-    **two** confidences and they answer different questions:
-    `identity_confidence` is how sure we are whose face this is, and
-    `emotion_confidence` is how sure we are of the expression. Only the second
-    one belongs here, and an earlier revision passed the first -- so a clearly
-    identified face with a garbage FER+ label withheld a difficulty increase,
-    while a well-classified expression on a poorly identified face was thrown
-    away. Both silent. The migration that added the column predicted exactly
+    Named `emotion_confidence`, not `confidence`, and it keeps that name now
+    that it is the only confidence `face_signals` carries. It used to sit beside
+    `identity_confidence` -- how sure we are whose face this is, against how
+    sure we are of the expression -- and an earlier revision passed the wrong
+    one here, so a clearly identified face with a garbage FER+ label withheld a
+    difficulty increase, while a well-classified expression on a poorly
+    identified face was thrown away. Both silent. Face identity was retired in
+    #86 without ever having a producer, so the specific confusion is gone; the
+    qualified name stays, because a bare `confidence` re-opens it the moment a
+    second one lands. The migration that added the column predicted exactly
     this ("an unqualified name leaves a reader a 50/50 guess about which one it
     gates"), so the parameter is named for the column rather than the concept.
 

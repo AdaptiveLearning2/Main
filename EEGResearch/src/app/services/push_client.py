@@ -332,7 +332,6 @@ class PushClient:
                 "attention": face.get("attention"),
                 "gaze_x": face.get("gaze_x"),
                 "gaze_y": face.get("gaze_y"),
-                "identity_confidence": face.get("identity_confidence"),
                 "raw": {"device_id": device_id,
                         "rejected_by": face.get("rejected_by"),
                         "degraded": face.get("degraded"),

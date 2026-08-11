@@ -774,7 +774,6 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "stress": avg_stress,
             "engagement": _avg([r.get("engagement") for r in cog]),
             "face_attention": avg_attention,
-            "identity_confidence": _avg([r.get("identity_confidence") for r in face]),
         },
         "highlights": {
             "highest_stress": round(highest_stress, 2) if highest_stress is not None else None,
@@ -1572,11 +1571,15 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     Shaped like a report because the two consumers read report keys, and both
     are also called directly on real reports by the weekly-report tests.
 
-    Two differences from the report's own figures, both improvements:
-    sessions is Postgres's count rather than a row count capped at
-    _SESSION_ROW_CAP, and averages carries no identity_confidence -- a
-    face-recognition confidence score that this response was never about and
-    that only reached `basis` because the whole averages dict was passed along.
+    One difference from the report's own figures, an improvement: sessions is
+    Postgres's count rather than a row count capped at _SESSION_ROW_CAP.
+
+    It also used to differ by omitting identity_confidence -- a face-identity
+    score this response was never about, which had reached `basis` only because
+    an earlier version passed the whole averages dict along. The `averages`
+    below is an explicit list rather than a copy, which is what fixed that; the
+    column itself was retired in #86, so the point is now historical and the
+    list is the right shape regardless.
 
     include_face is threaded down into the aggregate, so with the opt-out on no
     facial row is read here either.
@@ -2562,11 +2565,13 @@ class FaceSample(BaseModel):
     attention:           float | None = None
     gaze_x:              float | None = None
     gaze_y:              float | None = None
-    # Two confidences, named for what each answers. `identity_confidence` is how
-    # sure we are whose face this is; `emotion_confidence` is how sure we are of
-    # the expression. The fusion rule reads only the second, and read the first
-    # by mistake once -- see the migration comment that predicted it.
-    identity_confidence: float | None = None
+    # One confidence now. There used to be two -- `identity_confidence` (how
+    # sure we are whose face this is) beside this one (how sure we are of the
+    # expression) -- and the pair caused a real silent bug in the fusion rule,
+    # which read the wrong one. Face identity was never implemented and was
+    # retired in #86: it is biometric identification of children, a different
+    # purpose from what the camera consent asks for, so it needs its own consent
+    # channel and its own copy rather than a model. The qualified name stays.
     emotion_confidence:  float | None = None
     emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None
@@ -2807,7 +2812,6 @@ def ingest_face(payload: FaceBatch, request: Request):
             {"timestamp": s.ts or _utc_now().isoformat(),
              "face": {"emotion": s.emotion, "attention": s.attention,
                       "gaze_x": s.gaze_x, "gaze_y": s.gaze_y,
-                      "identity_confidence": s.identity_confidence,
                       "emotion_confidence": s.emotion_confidence,
                       "trusted": s.emotion_trusted},
              "raw": s.raw},

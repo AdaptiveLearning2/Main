@@ -202,17 +202,22 @@ def test_a_camera_heart_row_still_takes_the_ticks_stamp():
     assert "sample_rate_hz" not in row["raw"]
 
 
-def test_the_two_face_confidences_stay_separate():
-    """One is how sure we are of the expression, the other whose face it is. The
-    fusion rule reads only the first, and read the second by mistake once."""
+def test_the_mapper_does_not_carry_a_retired_identity_confidence():
+    """#86 retired the column; a sidecar still sending it must not reach the row.
+
+    The two paths share this mapper, so asserting it here covers push and pull
+    at once -- and an older sidecar posting the old shape is the realistic case,
+    since the sidecar is a per-student local process that upgrades on its own
+    schedule.
+    """
     row = signal_mapping.map_face_to_face_signal({
         "face": {"emotion": "sad", "emotion_confidence": 0.81, "trusted": True,
                  "identity_confidence": 0.42, "attention": 0.6},
     }, "s", "u")
 
     assert row["emotion_confidence"] == 0.81
-    assert row["identity_confidence"] == 0.42
     assert row["emotion_trusted"] is True
+    assert "identity_confidence" not in row
 
 
 def test_the_status_endpoint_does_not_contradict_the_409(push_mode, monkeypatch):

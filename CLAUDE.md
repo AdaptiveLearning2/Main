@@ -787,7 +787,15 @@ nothing, for a reason unrelated to what they assert.
 it skipped. That check is the whole safety property: without it a bug in the rollup writer becomes
 silent permanent loss on a fixed date, since the rows it takes are the only copy. With it, a broken
 writer degrades to data that does not expire — visible and fixable. Asserted in
-`scripts/assert_signal_rls.sql`, which runs against a real stack in CI.
+`scripts/assert_signal_rls.sql`, which runs against a real stack in CI — on all three tables, because
+"the loop body is generated identically" is an argument about the code and the channel mapping
+(`face_signals` → `emotion`) is the one pair whose names do not match.
+
+The return value carries `hit_batch_cap` beside the two counts. Rows that were eligible but not
+reached before `p_max_batches` appear in neither `deleted` nor `skipped_days_without_rollup`, so
+`skipped = 0` on its own does not mean everything eligible was handled — `hit_batch_cap` is the half
+that says so. Harmless either way, since the next run finishes the work, but not something a reader
+should have to infer from a missing number.
 
 **The cutoff is derived, never "today's date".** Days before `starts_on` always expire; once today
 in the school's timezone reaches `ends_on`, everything up to and including it expires too. So the

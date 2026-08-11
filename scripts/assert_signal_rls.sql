@@ -477,5 +477,115 @@ BEGIN
     END IF;
 END $$;
 
+-- The same refusal, on all three tables rather than one. The per-table logic is
+-- generated from one loop body, so this is cheap -- but "generated identically"
+-- is an argument about the code, and the point of an assertion is not to take
+-- that argument on trust. A typo in the channel mapping (`face_signals` ->
+-- 'emotion' is the one that does not match its table name) would leave one
+-- table deleting against a rollup that never matches, which reads as "nothing
+-- expired" rather than as an error.
+DO $$
+DECLARE
+    uid uuid; sess uuid; tbl text; chan text; survivors int;
+BEGIN
+    SELECT owner_id, sess_id INTO uid, sess FROM _ids;
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES ('2025-09-01', '2026-06-30', 'America/Los_Angeles');
+
+    FOREACH tbl IN ARRAY ARRAY['cognitive_signals', 'face_signals', 'heart_signals']
+    LOOP
+        chan := CASE tbl WHEN 'cognitive_signals' THEN 'cognitive'
+                         WHEN 'face_signals' THEN 'emotion' ELSE 'heart' END;
+        EXECUTE format(
+            'DELETE FROM public.%I WHERE user_id = $1', tbl) USING uid;
+        DELETE FROM public.signal_daily_rollup WHERE user_id = uid;
+
+        -- One summarised expired day, one not.
+        IF tbl = 'heart_signals' THEN
+            EXECUTE format($q$INSERT INTO public.%I (session_id, user_id, ts, source)
+                              VALUES ($1, $2, '2026-03-10T18:00:00Z', 'muse_optics'),
+                                     ($1, $2, '2026-03-11T18:00:00Z', 'muse_optics')$q$, tbl)
+                USING sess, uid;
+        ELSE
+            EXECUTE format($q$INSERT INTO public.%I (session_id, user_id, ts)
+                              VALUES ($1, $2, '2026-03-10T18:00:00Z'),
+                                     ($1, $2, '2026-03-11T18:00:00Z')$q$, tbl)
+                USING sess, uid;
+        END IF;
+        INSERT INTO public.signal_daily_rollup
+            (user_id, day, channel, sample_count, trusted_sample_count)
+        VALUES (uid, DATE '2026-03-10', chan, 1, 1);
+
+        PERFORM public.expire_signal_rows();
+
+        EXECUTE format($q$SELECT count(*) FROM public.%I
+                          WHERE user_id = $1
+                            AND (ts AT TIME ZONE 'America/Los_Angeles')::date
+                                = DATE '2026-03-11'$q$, tbl)
+            INTO survivors USING uid;
+        IF survivors = 0 THEN
+            RAISE EXCEPTION '% lost a day with no rollup row', tbl;
+        END IF;
+
+        EXECUTE format($q$SELECT count(*) FROM public.%I
+                          WHERE user_id = $1
+                            AND (ts AT TIME ZONE 'America/Los_Angeles')::date
+                                = DATE '2026-03-10'$q$, tbl)
+            INTO survivors USING uid;
+        IF survivors <> 0 THEN
+            RAISE EXCEPTION
+                '% did not expire a summarised day -- its channel mapping (%) '
+                'may not match the rollup rows, which would make the refusal '
+                'check above pass for the wrong reason', tbl, chan;
+        END IF;
+    END LOOP;
+END $$;
+
+-- The batching loop, which is the one piece of new mechanics with no other
+-- assertion. Two things to establish: that it *iterates* rather than deleting
+-- one batch and stopping, and that the cap is real and reports itself.
+DO $$
+DECLARE
+    uid uuid; sess uuid; result jsonb; remaining int;
+BEGIN
+    SELECT owner_id, sess_id INTO uid, sess FROM _ids;
+    DELETE FROM public.cognitive_signals WHERE user_id = uid;
+    DELETE FROM public.signal_daily_rollup WHERE user_id = uid;
+    DELETE FROM public.retention_window;
+    INSERT INTO public.retention_window (starts_on, ends_on, timezone)
+    VALUES ('2025-09-01', '2026-06-30', 'America/Los_Angeles');
+
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts)
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    INSERT INTO public.signal_daily_rollup
+        (user_id, day, channel, sample_count, trusted_sample_count)
+    VALUES (uid, DATE '2026-03-10', 'cognitive', 5, 5);
+
+    -- One row per batch: five rows must take five passes, not one.
+    result := public.expire_signal_rows(p_batch_size => 1);
+    SELECT count(*) INTO remaining FROM public.cognitive_signals WHERE user_id = uid;
+    IF remaining <> 0 THEN
+        RAISE EXCEPTION
+            'batching stopped early: % rows left with a batch size of 1, so the '
+            'loop is running once rather than until the work is done', remaining;
+    END IF;
+
+    -- And the cap stops it, visibly. Without `hit_batch_cap` this state is
+    -- indistinguishable from "nothing was eligible".
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts)
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    result := public.expire_signal_rows(p_batch_size => 1, p_max_batches => 2);
+    SELECT count(*) INTO remaining FROM public.cognitive_signals WHERE user_id = uid;
+    IF remaining <> 3 THEN
+        RAISE EXCEPTION 'expected 3 rows left after 2 batches of 1, found %', remaining;
+    END IF;
+    IF (result->'hit_batch_cap'->>'cognitive_signals')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION
+            'the batch cap was hit and not reported, so "skipped = 0" reads as '
+            '"everything eligible was handled" when it was not';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

@@ -86,6 +86,7 @@ DECLARE
     cutoff     date;
     tz         text;
     removed    jsonb := '{}'::jsonb;
+    capped     jsonb := '{}'::jsonb;
     table_name text;
     channel    text;
     n          integer;
@@ -99,7 +100,8 @@ BEGIN
         -- No window configured. Nothing has expired, because nothing has a term
         -- to have fallen outside of.
         RETURN jsonb_build_object('cutoff', NULL, 'deleted', removed,
-                                  'skipped_days_without_rollup', skipped);
+                                  'skipped_days_without_rollup', skipped,
+                                  'hit_batch_cap', capped);
     END IF;
 
     FOREACH table_name IN ARRAY ARRAY['cognitive_signals', 'face_signals', 'heart_signals']
@@ -133,6 +135,15 @@ BEGIN
             EXIT WHEN n = 0 OR batches >= p_max_batches;
         END LOOP;
         removed := removed || jsonb_build_object(table_name, total);
+        -- Whether the batch cap stopped this table before it ran out of work.
+        -- Reported because it is what makes the two counts below readable: rows
+        -- that were eligible and simply not reached appear in neither `deleted`
+        -- nor `skipped_days_without_rollup`, so `skipped = 0` alone does not
+        -- mean everything eligible was handled. `capped = false` is the half
+        -- that says so. Harmless either way -- the job is idempotent and the
+        -- next run finishes the work -- but a reader should not have to infer
+        -- that from the absence of a number.
+        capped := capped || jsonb_build_object(table_name, n <> 0);
 
         -- Student-days left behind on this table because nothing had
         -- summarised them. Counted per channel and reported, not logged: this
@@ -153,7 +164,8 @@ BEGIN
     END LOOP;
 
     RETURN jsonb_build_object('cutoff', cutoff, 'deleted', removed,
-                              'skipped_days_without_rollup', skipped);
+                              'skipped_days_without_rollup', skipped,
+                              'hit_batch_cap', capped);
 END;
 $$;
 

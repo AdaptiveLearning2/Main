@@ -139,10 +139,75 @@ WINDOW_AFTER = "after_year"
 WINDOW_UNCONFIGURED = "unconfigured"
 WINDOW_UNREADABLE = "unreadable"
 
-# All four non-open states deny. Kept as a set rather than `!= WINDOW_OPEN` so
-# that adding a sixth state is a deliberate decision about which side it falls
-# on, not a default.
-_WINDOW_DENIED = {WINDOW_BEFORE, WINDOW_AFTER, WINDOW_UNCONFIGURED, WINDOW_UNREADABLE}
+class _WindowMeaning(NamedTuple):
+    """What a window state means, in the three places that need to know."""
+    records: bool
+    # Shown to a person. Lowercase, because the ingest endpoints embed it in a
+    # `reason` field beside "eeg not consented" and friends.
+    reason: str | None
+    # Rendered by the frontend, which picks its own copy from the key.
+    stopped_reason: str | None
+
+
+# **One table.** These three facts about a state were three separate structures
+# kept in step by hand, and the failure mode is silent: a sixth state added to
+# only two of them would deny correctly and then explain itself as nothing at
+# all, or explain itself and quietly record. Adding a row here is now the whole
+# change, and `test_every_window_state_has_a_meaning` fails if a constant is
+# declared without one.
+_WINDOW_STATES = {
+    WINDOW_OPEN: _WindowMeaning(True, None, None),
+    WINDOW_BEFORE: _WindowMeaning(
+        False, "recording has not started for this school year",
+        "school_year_not_started"),
+    WINDOW_AFTER: _WindowMeaning(
+        False, "the school year has ended", "school_year_ended"),
+    WINDOW_UNCONFIGURED: _WindowMeaning(
+        False, "no school year is configured, so nothing is recorded",
+        "school_year_unconfigured"),
+    WINDOW_UNREADABLE: _WindowMeaning(
+        False, "could not check the school year, so nothing was recorded",
+        "school_year_unknown"),
+}
+
+# Derived, not maintained. A state absent from the table above denies, because
+# `.get` returns None and an unknown state is not evidence that recording is
+# allowed -- the same fail-closed direction as everything else here.
+_WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
+
+
+def _window_records(state: str) -> bool:
+    meaning = _WINDOW_STATES.get(state)
+    return bool(meaning and meaning.records)
+
+
+# How long a successful window read is reused. The window is one row, identical
+# for every student, edited twice a year -- so a read per ingest request is a
+# round trip for an answer that has not changed since the last one.
+#
+# **Why this may be cached when `_consent` may not.** Consent is per-student and
+# a withdrawal has to land mid-lesson: caching it would record against a refusal
+# for the length of the TTL, which is the exact failure the consent rules exist
+# to prevent. The window is a pair of dates that move twice a year, so the only
+# staleness it can produce is up to `_RETENTION_TTL_SECONDS` of recording just
+# after local midnight on the day the year ends. That is bounded, it is the same
+# order as the poller's own re-check interval, and it costs nothing anyone can
+# perceive -- where a stale consent answer costs a student their decision.
+#
+# A plain constant, not `_env_number`: that rule covers settings read from the
+# environment, and this is not one. There is no deployment that wants a
+# different value -- shorter buys nothing, and longer only extends the one
+# staleness described above.
+_RETENTION_TTL_SECONDS = 30.0
+_retention_cached: tuple[float, dict] | None = None
+_retention_lock = threading.Lock()
+
+
+def _retention_cache_clear() -> None:
+    """Drop the cached window. For tests, and for anything that edits the row."""
+    global _retention_cached
+    with _retention_lock:
+        _retention_cached = None
 
 
 def _retention_window() -> dict:
@@ -161,17 +226,39 @@ def _retention_window() -> dict:
     somewhere in the middle of the afternoon or run several hours into the next
     day, depending which side of the meridian the school is on.
     """
+    global _retention_cached
+    now = time.monotonic()
+    with _retention_lock:
+        cached = _retention_cached
+    if cached and now < cached[0]:
+        # Recomputed rather than returned whole: the *state* depends on today's
+        # date, and a cached "open" that outlived the last day of school would
+        # be the one staleness that matters. Only the row is reused.
+        return _resolve_window(cached[1])
+
     try:
         rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
     except Exception as e:
         print(f"[retention:read] {e}")
+        # Failures are deliberately not cached. Denial is the safe direction, so
+        # holding one costs nothing in correctness -- but it would keep denying
+        # for the TTL after the database came back, and a transient blip should
+        # not outlive itself.
         return {"state": WINDOW_UNREADABLE, "starts_on": None, "ends_on": None,
                 "timezone": None}
     if not rows:
         return {"state": WINDOW_UNCONFIGURED, "starts_on": None, "ends_on": None,
                 "timezone": None}
 
-    row = rows[0]
+    with _retention_lock:
+        _retention_cached = (now + _RETENTION_TTL_SECONDS, rows[0])
+    return _resolve_window(rows[0])
+
+
+def _resolve_window(row: dict) -> dict:
+    """Today's position in a window row. Split out so the cache stores the row
+    and not the verdict -- the row is what is stable, the verdict is a fact
+    about right now."""
     name = row.get("timezone") or "UTC"
     try:
         tz = ZoneInfo(name)
@@ -239,31 +326,37 @@ def _may_record(student_id: str) -> dict:
             "record_camera": recording and bool(consent.get("camera_enabled"))}
 
 
-# What to say when a channel is not recording. One table, because six call
-# sites each wording it themselves is how "consent unavailable" and "we could
-# not find out" ended up meaning the same thing in two different endpoints.
-#
-# The window reasons come first: when the year has not started, *no* channel is
-# recording, and reporting "eeg not consented" would send a parent to the
-# consent screen to fix something that is not broken there.
-_WINDOW_REASONS = {
-    WINDOW_BEFORE: "recording has not started for this school year",
-    WINDOW_AFTER: "the school year has ended",
-    WINDOW_UNCONFIGURED: "no school year is configured, so nothing is recorded",
-    WINDOW_UNREADABLE: "could not check the school year, so nothing was recorded",
-}
+def _as_sentence(text: str) -> str:
+    """A reason string as a standalone sentence.
+
+    The reasons are written lowercase and unpunctuated because their main home
+    is an ingest response's `reason` field, sitting beside "eeg not consented".
+    An HTTP error detail is read on its own, so it needs a capital and a stop.
+    Named rather than inlined at its one call site: `x[0].upper() + x[1:]`
+    applied to shared text is the kind of thing that gets copied to a second
+    caller and then a third with a different idea of punctuation.
+    """
+    if not text:
+        return text
+    return text[0].upper() + text[1:] + ("" if text.endswith((".", "!", "?")) else ".")
 
 
-# The same precedence as `_WINDOW_REASONS`, as machine-readable reasons rather
-# than sentences: this one is rendered by the frontend, which picks its own
-# copy. Separate table because the audiences differ -- a stopped_reason is a
-# key, and a reason string is a sentence someone reads.
-_WINDOW_STOPPED_REASONS = {
-    WINDOW_BEFORE: "school_year_not_started",
-    WINDOW_AFTER: "school_year_ended",
-    WINDOW_UNCONFIGURED: "school_year_unconfigured",
-    WINDOW_UNREADABLE: "school_year_unknown",
-}
+def _window_reason(state: str) -> str | None:
+    """Why this window state does not record, or None when it does.
+
+    The window reason wins over the consent one wherever both could apply: when
+    the year has not started, *no* channel is recording, and reporting "eeg not
+    consented" would send a parent to the consent screen to fix something that
+    is not broken there.
+    """
+    meaning = _WINDOW_STATES.get(state)
+    return meaning.reason if meaning else None
+
+
+def _window_stopped_reason(state: str) -> str | None:
+    """The machine-readable form, for the frontend to pick its own copy from."""
+    meaning = _WINDOW_STATES.get(state)
+    return meaning.stopped_reason if meaning else None
 
 
 def _not_recording_reason(gate: dict, declined: str,
@@ -283,7 +376,7 @@ def _not_recording_reason(gate: dict, declined: str,
     sites disagreeing about whether a closed year outranks an unreadable
     consent row.
     """
-    window = _WINDOW_REASONS.get(gate.get("window_state"))
+    window = _window_reason(gate.get("window_state"))
     if window:
         return window
     if not gate.get("retrieved"):
@@ -2868,11 +2961,13 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
     check reaches it, so under `INGEST_MODE=pull` this is the only enforcement
     there is.
 
-    Built from `_consent` and `_permitted_heart_sources`, the same two calls
-    `/api/signals/heart` makes, rather than a second read of the same table:
+    Built from `_may_record` and `_permitted_heart_sources`, the same two calls
+    `/api/signals/heart` makes, rather than a second read of the same tables:
     the two ingestion paths giving different answers about one student is the
-    failure this whole arrangement exists to prevent. `_consent` already fails
-    closed on a read error, so no denial is added here.
+    failure this whole arrangement exists to prevent. Both halves of
+    `_may_record` already fail closed, so no denial is added here -- and because
+    `_permitted_heart_sources` reads the composed `record_*` flags, the school
+    year is applied without this function mentioning it.
     """
     return source in _permitted_heart_sources(_may_record(student_id))
 
@@ -3309,21 +3404,27 @@ def _poller_status(user_id: str) -> dict:
     # the family never made. A poller that is not running with consent intact
     # and no reason attached is precisely the silent quiet week this module's
     # reporting rules exist to stop, and a closed year was reaching it that way.
-    window = _retention_window()
-    stopped = _WINDOW_STOPPED_REASONS.get(window["state"])
+    #
+    # `_may_record` rather than a window read and a consent read placed in the
+    # right order by hand: it is the same conjunction the recording sites use,
+    # and re-deriving it here is how the two would come to disagree about which
+    # answer wins. It carries the raw consent flags alongside the composed
+    # ones, which is what lets this still report a withdrawal *by name* rather
+    # than only "not recording".
+    gate = _may_record(user_id)
+    stopped = _window_stopped_reason(gate["window_state"])
     if stopped:
         return {**status, "stopped_reason": stopped,
-                "window_starts_on": window["starts_on"],
-                "window_ends_on": window["ends_on"]}
-    consent = _consent(user_id)
-    if not consent.get("retrieved"):
+                "window_starts_on": gate["window_starts_on"],
+                "window_ends_on": gate["window_ends_on"]}
+    if not gate.get("retrieved"):
         # Unknown, not "withdrawn". The reporting three-state rule again: a
         # failed read is not a refusal, and saying so wrongly to a parent is
         # worse than saying nothing.
         return {**status, "stopped_reason": "consent_unknown"}
-    if not consent.get("eeg_enabled"):
+    if not gate.get("eeg_enabled"):
         return {**status, "stopped_reason": "consent_withdrawn",
-                "revoked_at": consent.get("eeg_revoked_at")}
+                "revoked_at": gate.get("eeg_revoked_at")}
     return status
 
 
@@ -3561,11 +3662,10 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         #
         # Same helper as the three ingest endpoints, so the precedence -- window
         # ahead of consent -- is decided once. Only the wording is local.
-        detail = _not_recording_reason(
+        raise HTTPException(403, _as_sentence(_not_recording_reason(
             consent,
             "EEG recording is switched off for this student.",
-            "Could not check whether EEG recording is allowed, so it was not started.")
-        raise HTTPException(403, detail[0].upper() + detail[1:])
+            "Could not check whether EEG recording is allowed, so it was not started.")))
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
@@ -3580,6 +3680,16 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
+    except eeg_poller.ConsentError as e:
+        # `_may_record` passed a moment ago and `start()` checks again, so this
+        # is the gap between them: a withdrawal, or the school year ending,
+        # between the two. Rare, and it surfaced as a raw 500 -- an outcome that
+        # reads as a broken server for what is actually the system working.
+        #
+        # Also the unwired-check case, which raises the same class. That is a
+        # misconfigured deployment rather than a decision about this student, so
+        # it must not be reported as one: the message comes from the exception.
+        raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
         # Covers two distinct causes with one message deliberately: a live
         # poller already recording for someone else, or someone else's

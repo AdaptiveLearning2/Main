@@ -66,9 +66,13 @@ def _school_year_is_open(monkeypatch):
     because a default that cannot be turned off is a rule nothing tests.
     """
     import main
+    # Cleared both sides of the test: the real reader caches successful reads,
+    # and a row cached by one test must not decide another's answer.
+    main._retention_cache_clear()
     monkeypatch.setattr(main, "_retention_window",
                         lambda: {"state": main.WINDOW_OPEN,
                                  "starts_on": "2000-01-01",
                                  "ends_on": "2099-12-31",
                                  "timezone": "UTC"})
     yield
+    main._retention_cache_clear()

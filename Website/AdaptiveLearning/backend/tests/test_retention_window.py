@@ -64,8 +64,14 @@ def _row(starts, ends, tz="UTC"):
 
 
 def _window(monkeypatch, rows, raises=False):
-    """Install a real `_retention_window` over conftest's open-year default."""
+    """Install a real `_retention_window` over conftest's open-year default.
+
+    Clears the TTL cache first: successful reads are reused for
+    `_RETENTION_TTL_SECONDS`, so without this every test after the first would
+    be asserting against the previous test's row.
+    """
     monkeypatch.undo()
+    main._retention_cache_clear()
     monkeypatch.setattr(main, "supabase", _Window(rows, raises))
     return main._retention_window()
 
@@ -145,6 +151,7 @@ def test_the_boundary_is_resolved_in_the_schools_timezone(monkeypatch):
             return datetime(2026, 6, 12, 3, 0, tzinfo=_tz.utc).astimezone(tz or _tz.utc)
 
     monkeypatch.undo()
+    main._retention_cache_clear()
     monkeypatch.setattr(main, "_utc_now", lambda: _FixedNow.now())
 
     # 11 June in Los Angeles, 12 June in UTC.
@@ -154,6 +161,7 @@ def test_the_boundary_is_resolved_in_the_schools_timezone(monkeypatch):
         "the school's last day was cut short by a UTC comparison"
     )
 
+    main._retention_cache_clear()
     monkeypatch.setattr(main, "supabase",
                         _Window([_row("2026-01-05", "2026-06-11", "UTC")]))
     assert main._retention_window()["state"] == main.WINDOW_AFTER, (
@@ -262,17 +270,69 @@ def test_the_reason_names_the_window_before_the_channel(monkeypatch):
 # `_MODE_AWARE` in test_ingest_mode.py, which lists the endpoints that must know
 # the ingest mode after five review rounds found them one at a time.
 
-_RECORDING_SITES = (
-    "_poller_may_record_eeg",   # the poller's recurring EEG permission check
-    "_heart_consent_for_poller",  # and its per-source heart check
-    "ingest_cognitive",
-    "ingest_face",
-    "ingest_heart",
-    "eeg_start",
-)
+# The endpoints are **discovered, not listed**: any function in `main` whose
+# body inserts into one of the three signal tables is a recording site by
+# definition, and has to be gated. A hand-kept allowlist is the shape
+# `_MODE_AWARE` has, and it is only there because nothing can derive the set of
+# endpoints that "should know about the ingest mode" -- that is a judgement.
+# "Writes signal rows" is not a judgement, so it should not be maintained by
+# hand, and a seventh endpoint added next year is caught without anyone
+# remembering this file exists.
+_SIGNAL_TABLES = ("cognitive_signals", "face_signals", "heart_signals")
+
+# The two that gate without inserting: they are the poller's permission checks,
+# and the poller does the writing. Nothing in their source can reveal them, so
+# these stay explicit -- a short list of exceptions beside a derived rule, which
+# is a different thing from a list standing in for the rule.
+_GATING_CALLBACKS = ("_poller_may_record_eeg", "_heart_consent_for_poller")
 
 
-@pytest.mark.parametrize("name", _RECORDING_SITES)
+def _writes_signal_rows(source: str) -> bool:
+    """Whether a function inserts into a signal table.
+
+    Deliberately crude -- a table name and a write call in the same body. It
+    over-matches rather than under-matches, and the failure of over-matching is
+    a test telling someone to gate a function that did not need it, which is a
+    conversation. Under-matching is a recording site nobody notices.
+
+    `upsert` is in the list because leaving it out missed `ingest_heart` on the
+    first run: heart rows dedupe on `heart_session_source_ts_key`, so that
+    endpoint upserts where the other two insert. That is precisely the
+    under-match this cannot afford, and it is why the self-check below exists.
+    """
+    return (any(t in source for t in _SIGNAL_TABLES)
+            and (".insert(" in source or ".upsert(" in source))
+
+
+def _recording_sites():
+    import inspect
+    found = []
+    for name, obj in vars(main).items():
+        if not inspect.isfunction(obj) or obj.__module__ != "main":
+            continue
+        try:
+            source = inspect.getsource(obj)
+        except OSError:                      # pragma: no cover -- defensive
+            continue
+        if _writes_signal_rows(source):
+            found.append(name)
+    return sorted(found)
+
+
+def test_the_discovery_finds_the_endpoints_we_know_about():
+    """The derived list is only worth anything if it actually finds things.
+
+    Without this, a typo in `_writes_signal_rows` yields an empty set and every
+    parametrised test below silently passes by having nothing to check -- the
+    exact way an exhaustiveness test stops being one.
+    """
+    sites = _recording_sites()
+    for known in ("ingest_cognitive", "ingest_face", "ingest_heart"):
+        assert known in sites, (known, sites)
+
+
+@pytest.mark.parametrize("name", _recording_sites() + list(_GATING_CALLBACKS)
+                         + ["eeg_start"])
 def test_every_recording_site_gates_on_the_window(name):
     """A site that calls `_consent` directly records all summer.
 

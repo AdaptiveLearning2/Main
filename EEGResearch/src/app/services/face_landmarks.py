@@ -284,6 +284,8 @@ class FaceMeshLandmarker:
         # and makes the log useless for whatever else is wrong.
         self._reported: set[str] = set()
         self._rejections = 0
+        # Why the last frame produced nothing. See locate().
+        self.last_reason: str | None = "no_face"
         if mesh is not None:
             self._mesh = mesh
             return
@@ -295,15 +297,25 @@ class FaceMeshLandmarker:
         Returns empty rather than raising on a frame with no face: no face is
         an ordinary outcome several times a minute, and the caller already
         counts it.
+
+        **`last_reason` says which kind of empty**, because `{}` covers two
+        unrelated events: the detector saw no face, or it saw one and
+        `check_topology` refused the landmark set. Rendering both as "no face"
+        sends someone to check their lighting when the answer is that a named
+        point is somewhere a face cannot put it -- and at strong yaw the second
+        happens routinely, since `nose_outside_eyes` becomes true near profile.
+        `None` means a face was returned.
         """
         result = self._mesh.process(frame)
         faces = getattr(result, "multi_face_landmarks", None)
         if not faces:
+            self.last_reason = "no_face"
             return {}
 
         named = named_landmarks(faces[0].landmark, width, height)
         wrong = check_topology(named)
         if wrong is not None:
+            self.last_reason = wrong
             self._rejections += 1
             # Once per reason, not once per frame. This means the index table
             # is wrong rather than that the student moved, so it has to be
@@ -317,6 +329,7 @@ class FaceMeshLandmarker:
                              "occurrences of this reason are counted, not logged)",
                              wrong)
             return {}
+        self.last_reason = None
         return named
 
     @property

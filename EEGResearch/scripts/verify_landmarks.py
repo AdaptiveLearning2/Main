@@ -38,6 +38,10 @@ sentence rather than a wall of numbers to interpret:
 2. **Eyes hard left, head still** -- `gaze.x` must go *negative*. Positive means
    the eye landmarks are mirrored, which is the failure this exists to find.
 3. **Turn your head left** -- `yaw` must go negative, on the same convention.
+   A *modest* turn: the bar is 10 degrees, and near profile the landmark set
+   stops being usable. Past roughly 70 degrees the nose tip crosses the far eye
+   corner, `check_topology` refuses the frame as `nose_outside_eyes`, and the
+   step measures nothing -- correctly, but it is not what the step is asking.
 
 Steps 2 and 3 are separate because they can fail independently: the eye/iris
 indices and the face-outline indices are different parts of the table, and one
@@ -185,7 +189,8 @@ class Gui:
             self._text(img, f"refused: {reason}", (14, h - 12), self.BAD, 0.5)
 
     def frame(self, frame, named, pose, gz, *, step: str, instruction: str,
-              watch: str, target: float, progress: float | None) -> None:
+              watch: str, target: float, progress: float | None,
+              reason: str | None = None) -> None:
         """One frame. Returns nothing; sets `aborted` if the user pressed q."""
         cv2 = self._cv2
         img = self._canvas(frame)
@@ -199,9 +204,23 @@ class Gui:
 
         if named:
             self._landmarks(img, named)
-        else:
+        elif reason in (None, "no_face"):
             self._text(img, "NO FACE", (w // 2 - 60, img.shape[0] // 2),
                        self.BAD, 1.0, 2)
+        else:
+            # A face WAS found and the landmark set was refused. Rendering that
+            # as "no face" sends someone to check their lighting when the real
+            # answer is that a named point is somewhere a face cannot put it --
+            # and near profile that is routine rather than a fault, because
+            # `nose_outside_eyes` becomes true once the nose crosses the far
+            # eye corner. Two different events, two different sentences.
+            self._text(img, "FACE FOUND, LANDMARKS REFUSED",
+                       (w // 2 - 240, img.shape[0] // 2 - 16), self.BAD, 0.85, 2)
+            self._text(img, reason, (w // 2 - 100, img.shape[0] // 2 + 14),
+                       self.WATCH, 0.7, 2)
+            if reason == "nose_outside_eyes":
+                self._text(img, "turned too far -- come back toward the camera",
+                           (w // 2 - 210, img.shape[0] // 2 + 44), self.DIM, 0.6)
         self._readout(img, pose, gz, watch, target)
 
         if progress is not None:
@@ -243,8 +262,14 @@ class Gui:
 
 
 def _collect(landmarker, source, seconds: float, width: int, height: int,
-             gui=None, **render) -> list:
-    """Poses and gazes over a few seconds, with the refusals counted."""
+             gui=None, reasons: dict | None = None, **render) -> list:
+    """Poses and gazes over a few seconds, with the refusals counted.
+
+    `reasons`, when given, is tallied with why each empty frame was empty --
+    `no_face` from the detector versus a `check_topology` refusal. Without it a
+    step that measured nothing reports no refusals at all, because the existing
+    tallies are built from *usable* samples and a refused frame produces none.
+    """
     samples = []
     deadline = time.perf_counter() + seconds
     while time.perf_counter() < deadline:
@@ -252,6 +277,9 @@ def _collect(landmarker, source, seconds: float, width: int, height: int,
         if frame is None:
             continue
         named = landmarker.locate(frame, width, height)
+        if not named and reasons is not None:
+            why = getattr(landmarker, "last_reason", None) or "no_face"
+            reasons[why] = reasons.get(why, 0) + 1
         pose, gz = (head_pose(named), gaze(named)) if named else (None, None)
         if gui is not None:
             # Drawn before the `continue` below, so a stretch with no face shows
@@ -259,6 +287,7 @@ def _collect(landmarker, source, seconds: float, width: int, height: int,
             # someone needs to see, since it is usually them leaving the frame.
             gui.frame(frame, named, pose or head_pose({}), gz or gaze({}),
                       progress=1.0 - (deadline - time.perf_counter()) / seconds,
+                      reason=getattr(landmarker, "last_reason", None),
                       **render)
             if gui.aborted:
                 break
@@ -292,8 +321,9 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h,
                     gui.countdown(frame, name, instruction, count)
     print(f"   measuring for {seconds:.0f}s...      ")
 
+    empty: dict[str, int] = {}
     samples = _collect(landmarker, source, seconds, w, h, gui=gui,
-                       step=name, instruction=instruction,
+                       reasons=empty, step=name, instruction=instruction,
                        watch=watch, target=target)
     poses = [p for p, _ in samples]
     gazes = [g for _, g in samples]
@@ -315,6 +345,12 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h,
     if measured["pose_refusals"] or measured["gaze_refusals"]:
         print(f"   refusals: pose={measured['pose_refusals'] or '-'} "
               f"gaze={measured['gaze_refusals'] or '-'}")
+    if empty:
+        # Separately from the two above, which are computed over frames that
+        # produced a face. These are the frames that produced none, and why --
+        # a detector miss reads very differently from a topology refusal.
+        print("   empty frames: "
+              + ", ".join(f"{why}={n}" for why, n in sorted(empty.items())))
     return measured
 
 
@@ -467,7 +503,8 @@ def main() -> int:
                      landmarker, source, args.seconds, width, height,
                      gui=gui, watch="gaze.x", target=-GAZE_THRESHOLD)
         head = _step("3/3 head left",
-                     "Look straight ahead and turn your HEAD to the left.",
+                     "Turn your HEAD left about 30 deg -- NOT a full profile; "
+                     "keep both eyes visible.",
                      landmarker, source, args.seconds, width, height,
                      gui=gui, watch="yaw", target=-YAW_THRESHOLD)
 

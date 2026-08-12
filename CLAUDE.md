@@ -262,10 +262,14 @@ not have — a guessed focal length yields a systematically wrong pose that stil
 turning. The trade is that perspective is ignored, so it degrades at close range and large angles.
 **Yaw is measurable only within ±90°**: past that the Euler recovery returns the other branch of a
 two-fold ambiguity no rotation matrix can resolve, corrupting pitch and roll by 180° as well, so it
-refuses with `implausible_pose` rather than reporting a mirrored angle. When it lands it needs a *measurement* against a reference
-before anything reaches a parent: "attention" inferred from head direction is least valid for exactly
-this product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
-looking away while thinking is not inattentive.
+refuses with `implausible_pose` rather than reporting a mirrored angle.
+
+**The attention score is the part that still needs a measurement**, against a reference, before
+anything reaches a parent: "attention" inferred from head direction is least valid for exactly this
+product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
+looking away while thinking is not inattentive. One adult is not a sufficient validation set here —
+the failure mode is population-specific — so that step is blocked on a labelled recording rather than
+on code.
 
 **`identity_confidence` was retired instead (#86, `20260812000000`) — do not add it back without a
 consent decision first.** Matching a child's face against a stored identity is a *different purpose*

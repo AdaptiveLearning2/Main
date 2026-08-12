@@ -597,8 +597,16 @@ class FaceCaptureAdapter:
         A refusal is stored, not discarded. `Gaze` carries `rejected_by`, and
         the record layer needs it to tell a closed eye from a channel that has
         produced nothing yet -- dropping it would collapse those to one state.
+
+        **A failure is stored too, as its own refusal.** Returning without
+        storing leaves `_latest_gaze` at None, which the record layer reports as
+        `no_reading` -- the warming-up state. A landmarker that raises on every
+        frame (a corrupt model, a MediaPipe that will not initialise) would then
+        spend the whole session claiming to be warming up, which is precisely
+        the broken-versus-not-started confusion this codebase refuses. `raw`
+        carries `last_error` for the detail; this carries the state.
         """
-        from src.app.services.face_geometry import gaze  # noqa: PLC0415
+        from src.app.services.face_geometry import Gaze, gaze  # noqa: PLC0415
 
         try:
             height, width = frame.shape[0], frame.shape[1]
@@ -606,8 +614,10 @@ class FaceCaptureAdapter:
             reading = gaze(named)
         except Exception as exc:                          # noqa: BLE001
             logger.exception("gaze sampling failed")
+            reading = Gaze(None, None, 0, "landmarker_failed")
             with self._lock:
                 self._counters.last_error = f"{type(exc).__name__}: {exc}"
+                self._latest_gaze = reading
             return
         with self._lock:
             self._latest_gaze = reading

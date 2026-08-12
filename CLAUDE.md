@@ -288,7 +288,18 @@ Three things about that path are load-bearing:
 
 Gaze keys are **absent** when the channel is off, `None` + a reason when refused, a number when
 measured — the same three states as everything else here. 0.0 is a valid gaze (dead centre), so a
-refusal must never be recorded as one.
+refusal must never be recorded as one. A landmarker that raises stores
+`rejected_by="landmarker_failed"` rather than leaving the reading unset: unset reads as `no_reading`,
+which is the *warming-up* state, so a corrupt model would otherwise claim to be starting up for a
+whole session.
+
+**Before enabling `FACE_GAZE_ENABLED` in production, settle what a gaze-only row does to the emotion
+rollup.** `rollup_signal_day`'s `'emotion'` channel takes `sample_count` as `count(*)` over
+`face_signals`, so rows carrying a gaze and no emotion inflate it — `emotion_counts` and
+`trusted_sample_count` are filtered and stay correct, but `face_samples` on the weekly report is
+documented as "how much is behind each figure" and would overstate the emotion evidence. Latent
+today because the flag is off and nothing renders gaze; it becomes real the moment either changes,
+and it lands in the copy that survives `expire_signal_rows`.
 
 **`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
 reference rather than on code: "attention" inferred from head direction is least valid for exactly

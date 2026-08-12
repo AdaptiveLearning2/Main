@@ -237,8 +237,11 @@ def build_face_record(
     step 3, and it is blocked on a labelled reference rather than on code: an
     attention score inferred from head direction is least valid for exactly this
     product's users, and unlike a FER+ label it renders as a percentage, which
-    reads as objective. The key is emitted so a consumer can tell "no producer"
-    from "key I forgot to read"; nothing may fill it without that measurement.
+    reads as objective. Nothing may fill it without that measurement.
+
+    It rides with the gaze keys rather than always being present, because it
+    would be derived from gaze and head pose -- so it belongs to that channel
+    and is absent for the same reason they are when the channel is off.
     """
     record: dict[str, Any] = {
         "emotion": None,

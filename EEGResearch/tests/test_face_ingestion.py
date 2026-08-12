@@ -836,3 +836,22 @@ def test_disconnect_drops_the_reading_but_keeps_the_model():
 
     assert adapter.latest_gaze() is None
     assert adapter._landmarker is lm
+
+
+def test_a_landmarker_that_always_fails_says_so_rather_than_warming_up():
+    """`_latest_gaze` left at None reports as `no_reading` -- the warming-up
+    state. A landmarker that raises every frame would then claim to be warming
+    up for the whole session, which is the broken-versus-not-started confusion
+    this codebase refuses everywhere else."""
+    lm = FakeLandmarker(raises=True)
+    adapter, _ = _gaze_adapter(lm)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_gaze() is not None), \
+            "a failing landmarker left the channel indistinguishable from warm-up"
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    assert reading.x is None
+    assert reading.rejected_by == "landmarker_failed"

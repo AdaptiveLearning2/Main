@@ -244,6 +244,14 @@ class DeviceSession:
                 heart_enabled=self.adapter.heart_enabled,
                 emotion_enabled=self.adapter.emotion_enabled,
                 emotion_meta=raw_meta,
+                # getattr, unlike `latest_emotion` beside it, because the
+                # adapters here are duck-typed with no base class and the
+                # payload builder's caller **swallows exceptions into a
+                # warning**. A missing attribute would therefore not fail
+                # loudly -- it would drop the entire camera payload, every
+                # tick, heart and emotion with it, for the sake of a channel
+                # that is off by default. Degrading gaze to "off" is the
+                # smaller and more honest failure.
                 gaze=getattr(self.adapter, "latest_gaze", lambda: None)(),
                 gaze_enabled=getattr(self.adapter, "gaze_enabled", False),
             )

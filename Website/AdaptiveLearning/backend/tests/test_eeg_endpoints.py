@@ -284,6 +284,88 @@ def test_the_same_users_failed_attempt_on_one_device_spares_their_other(monkeypa
     assert main.eeg_muse_refresh(request=None, body={"device_id": "station-b"}) == {"ok": True}
 
 
+def test_closing_one_session_spares_another_sessions_reservation(monkeypatch):
+    """#88's failure scenario, end to end through the endpoints.
+
+    A student is mid-pairing station B under session S2 when a reload calls
+    /api/sessions/start, finds S1 stale, and stops it. S1's close must not
+    release S2's station: the release is keyed on user_id, so before session_id
+    was threaded through it dropped every reservation the student held.
+
+    Bounded, and still worth closing -- station B became claimable by a
+    different student up to RESERVATION_TTL_SECONDS early, in the middle of
+    someone actively pairing it.
+    """
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+
+    # Two sessions, two stations, one student -- the state the old docstring
+    # admitted was reachable and could not scope.
+    main.eeg_muse_refresh(request=None,
+                          body={"device_id": "station-a", "session_id": "S1"})
+    main.eeg_muse_refresh(request=None,
+                          body={"device_id": "station-b", "session_id": "S2"})
+
+    monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
+    main.eeg_stop(main.EegSessionRequest(session_id="S1"), request=None)
+
+    # S1's station is free, which is the point of the close.
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(
+        request=None, body={"device_id": "station-a"}) == {"ok": True}
+
+    # S2's is not. Without the fix this 200s and a stranger takes the station
+    # out from under an active pairing flow.
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-b"})
+    assert exc_info.value.status_code == 403
+
+
+def test_a_reservation_with_no_session_is_still_released(monkeypatch):
+    """The compatibility path, and the reason unattributed entries are dropped
+    rather than spared.
+
+    A frontend that has not been updated sends no session_id. Sparing those
+    would look safer and would be worse: no session close could ever name one,
+    so an abandoned pairing would hold a station against everybody until its
+    TTL, instead of being released a little early for one person.
+    """
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-old"})
+
+    monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
+    main.eeg_stop(main.EegSessionRequest(session_id="S1"), request=None)
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    assert main.eeg_muse_refresh(
+        request=None, body={"device_id": "station-old"}) == {"ok": True}
+
+
+def test_refreshing_without_a_session_id_keeps_the_one_already_recorded(monkeypatch):
+    """A pairing flow calls refresh repeatedly. If a later call that cannot
+    name a session overwrote the recorded one with None, the scoping would
+    decay during the flow rather than fail outright -- the harder version to
+    notice, since it needs a particular call order to show up."""
+    monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
+    monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-a"})
+
+    main.eeg_muse_refresh(request=None,
+                          body={"device_id": "station-c", "session_id": "S2"})
+    main.eeg_muse_refresh(request=None, body={"device_id": "station-c"})
+
+    monkeypatch.setattr(main, "supabase", _SessionsTable("user-a"))
+    main.eeg_stop(main.EegSessionRequest(session_id="S1"), request=None)
+
+    monkeypatch.setattr(main, "get_user", lambda request: {"id": "user-b"})
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.eeg_muse_refresh(request=None, body={"device_id": "station-c"})
+    assert exc_info.value.status_code == 403
+
+
 def test_stop_releases_the_reservation_for_another_user(monkeypatch):
     monkeypatch.setattr(eeg_client, "is_alive", lambda *a, **k: True)
     monkeypatch.setattr(eeg_client, "muse_refresh", lambda device_id: {"ok": True})

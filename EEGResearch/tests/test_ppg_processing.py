@@ -255,34 +255,155 @@ def test_ambiguous_windows_after_motion_are_rejected():
         assert out.rejected_by == "confidence"
 
 
-def test_the_first_window_after_motion_is_wrong_and_the_tracker_clears_it():
-    """A documented limitation, pinned so it cannot be lost silently.
+def test_the_first_window_after_motion_is_wrong_and_is_never_published():
+    """The limitation, and what now contains it (#105).
 
     The window starting the moment the wearer sat down reads ~127 bpm against a
-    true ~90, on all four channels and with a healthy margin. Nothing in
-    estimate_window separates it from a real 127 -- and a rule that did would
-    also have to leave a genuine 127 reportable, which is the trap a previous
-    revision fell into.
+    true ~90, on all four channels and with a healthy margin. That is still
+    true of `estimate_window` and is expected to stay true: nothing *in* one
+    window separates it from a real 127, and a rule that did would also have to
+    leave a genuine 127 reportable -- the trap a previous revision fell into.
 
-    The tracker is what contains it: 127 becomes the anchor, the next two
-    windows are rejected as discontinuous, and it re-acquires."""
+    What changed is that the tracker no longer publishes it. An unanchored
+    candidate is held until a second window agrees, so a periodicity that is
+    gone a step later never becomes a reading. Motion settling is gone a step
+    later; a heartbeat is not.
+
+    The old behaviour -- 127 adopted as the anchor, the next two windows
+    rejected as discontinuous, re-acquire within ~30s -- contained the error
+    from the *anchor* but still put 127 bpm on the chart for one window.
+    """
     data, fs = _load("optics_recovery_150s.jsonl.gz")
     w, step = int(25 * fs), int(10 * fs)
 
     first = estimate_window(data[:w], fs)
     assert first.bpm == pytest.approx(127.0, abs=4.0), (
-        "if this window now reads correctly, the limitation is fixed and this "
-        "test should be replaced -- but check 120-180 bpm still reports first"
+        "if this window now reads correctly the estimator has changed, and the "
+        "tracker rule below is being tested against the wrong input -- but "
+        "check 120-180 bpm still reports first"
     )
 
     tracker = HeartRateTracker()
     seen = [tracker.update(data[s:s + w], fs, 10.0).bpm
             for s in range(0, 5 * step, step)]
-    assert seen[0] == pytest.approx(127.0, abs=4.0)
-    assert seen[1] is None and seen[2] is None, "should reject, not follow"
-    assert seen[-1] == pytest.approx(83.0, abs=6.0), (
-        f"should have re-acquired a plausible rate, got {seen}"
+
+    assert seen[0] is None, f"127 bpm was published as a reading: {seen}"
+    assert all(b is None for b in seen[:4]), (
+        f"nothing should be published until a window is corroborated: {seen}"
     )
+    assert seen[4] == pytest.approx(83.0, abs=6.0), (
+        f"should publish the first corroborated rate, got {seen}"
+    )
+
+
+def test_a_held_first_reading_says_why():
+    """`unconfirmed_anchor`, not `no_signal`. The window produced a rate and it
+    was withheld; reporting that as no signal would tell a caller the sensor
+    saw nothing, which is the can't-tell-no-data-from-a-refusal failure this
+    codebase keeps a separate vocabulary for."""
+    data, fs = _load("optics_recovery_150s.jsonl.gz")
+    held = HeartRateTracker().update(data[:int(25 * fs)], fs, 10.0)
+
+    assert held.bpm is None
+    assert held.rejected_by == "unconfirmed_anchor"
+    assert "127" in held.reason
+
+
+def test_a_steady_rate_costs_exactly_one_window_of_latency():
+    """The price of the rule, pinned so it cannot grow.
+
+    Synthetic rather than a fixture, deliberately: the rest recording's first
+    window is rejected on its own merits (confidence 0.28), so measuring the
+    latency there would confuse "held for corroboration" with "unusable", and
+    would quietly pass if the hold ever became two windows.
+
+    One *usable* window, and then a reading. Not two, and never a rejection --
+    a genuinely fast rate is published a step late, not refused.
+    """
+    channels = np.column_stack([_pulse(150.0, harmonic=0.4, seed=i) for i in range(4)])
+
+    tracker = HeartRateTracker()
+    seen = [tracker.update(channels, FS, 10.0).bpm for _ in range(3)]
+
+    assert seen[0] is None, "the first window must not be published unconfirmed"
+    assert seen[1] == pytest.approx(150.0, abs=2.0), (
+        f"a steady rate should publish at the second usable window: {seen}"
+    )
+    assert seen[2] == pytest.approx(150.0, abs=2.0)
+
+
+def test_re_acquisition_is_corroborated_too():
+    """The path that needs the rule most, and the one it originally missed.
+
+    A lock is dropped because two windows disagreed with it -- which is what a
+    mid-lesson motion event looks like, a student shifting or adjusting the
+    headband. So the window doing the re-acquiring is drawn from exactly the
+    population this rule exists to distrust, and adopting it directly put the
+    weakest test on the most exposed path: the pre-#105 bug relocated rather
+    than fixed.
+
+    Found in review of #109 by reproduction rather than by reading, and every
+    other test in this file passed against the broken version.
+    """
+    slow = np.column_stack([_pulse(70.0, seed=i) for i in range(4)])
+    fast = np.column_stack([_pulse(140.0, harmonic=0.4, seed=i) for i in range(4)])
+
+    tracker = HeartRateTracker()
+    tracker.update(slow, FS, 10.0)                      # candidate
+    assert tracker.update(slow, FS, 10.0).bpm == pytest.approx(70.0, abs=2.0)
+
+    first = tracker.update(fast, FS, 10.0)              # discontinuous #1
+    assert first.bpm is None and first.rejected_by == "continuity"
+
+    reacquire = tracker.update(fast, FS, 10.0)          # drops the lock
+    assert reacquire.bpm is None, (
+        "a re-acquired rate was published without a second window agreeing"
+    )
+    assert reacquire.rejected_by == "unconfirmed_anchor"
+
+    # And it does re-acquire -- the rule delays, it does not lock the tracker
+    # out of ever following a real change.
+    assert tracker.update(fast, FS, 10.0).bpm == pytest.approx(140.0, abs=3.0)
+
+
+def test_two_consecutive_windows_must_agree_to_corroborate():
+    """Consecutive is necessary, not sufficient.
+
+    Two readable windows in a row that disagree by more than a heart can move
+    are two artefacts, or an artefact and a pulse -- not corroboration. Without
+    the distance check the rule degrades into "publish the second window
+    whatever it says", which would have republished the motion anchor in any
+    recording where the window after it happened to be readable.
+    """
+    fast = np.column_stack([_pulse(150.0, harmonic=0.4, seed=i) for i in range(4)])
+    slow = np.column_stack([_pulse(60.0, seed=i) for i in range(4)])
+
+    tracker = HeartRateTracker()
+    assert tracker.update(fast, FS, 10.0).bpm is None      # candidate
+    assert tracker.update(slow, FS, 10.0).bpm is None, (
+        "150 -> 60 bpm in one step is not a heart rate changing"
+    )
+    # The disagreeing window becomes the new candidate, so agreement with *it*
+    # publishes -- the rule delays a reading, it does not lock the tracker out.
+    assert tracker.update(slow, FS, 10.0).bpm == pytest.approx(60.0, abs=2.0)
+
+
+def test_a_gap_discards_a_candidate_rather_than_bridging_it():
+    """Two windows either side of an unusable one are not two consecutive
+    windows. A candidate is evidence about the present only while the step
+    between them is a step; across a gap it is just an old number, and
+    accepting it would reintroduce exactly the anchor this rule exists to
+    stop -- 127 bpm was followed by two unusable windows."""
+    good = np.column_stack([_pulse(72.0, seed=i) for i in range(4)])
+    flat = np.zeros((int(25 * FS), 4))
+
+    tracker = HeartRateTracker()
+    assert tracker.update(good, FS, 10.0).bpm is None      # candidate
+    assert tracker.update(flat, FS, 10.0).bpm is None      # unusable: discards it
+    assert tracker.update(good, FS, 10.0).bpm is None, (
+        "a candidate must not be corroborated across an unusable window"
+    )
+    assert tracker.update(good, FS, 10.0).bpm == pytest.approx(72.0, abs=2.0)
 
 
 def test_settled_recovery_matches_the_watch():

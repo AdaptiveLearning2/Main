@@ -352,27 +352,9 @@ def test_the_derived_rate_rises_after_exertion():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The first recovery window anchors on a motion artefact. Measured "
-        "through HeartRateTracker: the window covering the first 25s after "
-        "exercise is accepted at 127.5 bpm -- above the 97 bpm peak the "
-        "wearer's watch recorded during the exercise itself, and implausible "
-        "for a heart that reads 83 fifteen seconds later. Scored without "
-        "continuity that same window's channels give 91.9, which fits the "
-        "decay that follows, so the anchor is wrong rather than early. "
-        "It then costs three windows: 91.9 is rejected for moving too far from "
-        "127.5, and the tracker needs two rejections before it drops the "
-        "anchor and re-acquires, blanking ~30s of the most interesting part of "
-        "the recording. This is the failure HeartRateTracker's own docstring "
-        "describes -- 'the window right after motion produces a confident, "
-        "wrong anchor' -- so the tracker bounds it rather than preventing it, "
-        "and the first window has nothing to check itself against. Fixing it "
-        "needs a rule for accepting an anchor at all, which is the candidate "
-        "derivation change in Phase 3 of the plan."
-    ),
-)
+# Fixed by #105: the tracker holds an unanchored candidate until a second
+# window agrees, so the 127.5 bpm window is never published. Before that this
+# was a strict xfail carrying the measurement; the assertion is unchanged.
 def test_the_first_window_after_exertion_is_a_plausible_rate():
     """What the recording can support, and what the derivation publishes.
 

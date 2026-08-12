@@ -267,7 +267,7 @@ def main() -> int:
         rejected = getattr(landmarker, "rejections", 0)
         if rejected:
             print(f"\n   note: {rejected} frame(s) were refused by the topology "
-                  f"check — see the logged reason; that means an index is "
+                  f"check - see the logged reason; that means an index is "
                   f"grossly wrong, not merely mirrored.")
 
         return _verdict(square, eyes, head)

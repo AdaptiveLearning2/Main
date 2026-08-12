@@ -126,46 +126,76 @@ one-line fix is to run the policy at `float32` rather than patch each site.
 With those changes -- one line for the backend, one for the policy, ~10 for
 `Block_mamba` -- **the model runs under TensorFlow and the weights load.**
 
-### And then it exports, and the export is invalid
+### And then it exports, and the export is invalid -- three times
+
+`net.export(..., format='onnx')` prints `Saved artifact` and writes 22 MB. The
+file is not a model. Loading it under onnxruntime is the only way to find out,
+and it took three rounds:
+
+| Unconverted op | Where | Fix |
+| --- | --- | --- |
+| `StatefulPartitionedCall` | Mamba's **grouped Conv1D** | `groups == filters == channels`, so it *is* depthwise; compute it with `ops.depthwise_conv` and one kernel transpose |
+| `StatefulPartitionedCall` | the same, again | the first patch landed on `BiMamba` -- the same source line, in a class `RhythmMamba` never calls, with `same` padding instead of `causal`. Patch the *second* occurrence. |
+| `RFFT` | `Frequencydomain_FFN` | tf2onnx converts it at no opset it supports (it caps at 19). The transform length is fixed by the input signature, so the DFT is a constant matrix and the transform is a matmul. |
+
+Each rewrite was checked against the version it replaced: the depthwise
+convolution differs by 1.1e-05 and the DFT matmuls by 7.0e-06, which is float32
+rounding.
+
+## It works
 
 ```
-net.export('rm.onnx', format='onnx', ...)   ->  "Saved artifact"   22 MB, ~90 s
+*** RUNS under onnxruntime alone -- no jax, keras or tensorflow imported ***
+  session load     1.57 s
+  inference        0.93 s for 160 frames
+  max abs diff     2.086e-05
+  correlation      1.00000000
 ```
 
-Loading that file is where it ends:
+| | `open-rppg` | exported ONNX |
+| --- | --- | --- |
+| New dependencies | ~600 MB | **none** -- onnxruntime is already in the `face` extra |
+| Start-up | ~34 s | **1.5 s** |
+| Artefact | -- | 22 MB |
+| Deprecated `setuptools<81` pin | required | not required |
+| Inference, 160 frames | not measured | 0.93 s -- 5.3 s of video at 30 fps, so ~6x real time on CPU |
 
-```
-INVALID_GRAPH: ... ("...mamba_1/conv1d_2_1/StatefulPartitionedCall", StatefulPartitionedCall)
-  No Op registered for StatefulPartitionedCall with domain_version of 15
-```
+That last row is the one that answers a question the plan asked separately:
+whether this could run alongside EEG on the same laptop. On this hardware, a
+25 s window's worth of inference costs about four seconds of CPU.
 
-`tf2onnx` did not convert Mamba's **grouped Conv1D** (`groups=internal_dim`, a
-depthwise convolution) and left a TensorFlow function call in the graph.
-Identical at opsets 15, 17 and 18. The export *reports success*; only loading it
-under onnxruntime reveals the artefact is not a model -- which is worth knowing
-before trusting an exporter's exit code.
+`scripts/export_rhythmmamba_onnx.py` is the recipe, and it verifies its own
+output under onnxruntime by default -- because the exporter reports success
+either way, and skipping that check is exactly how an invalid graph would get
+shipped.
 
-### Where this actually leaves the escape route
+The `.onnx` is deliberately **not committed**: it is derived from weights whose
+licence terms belong to their authors, and a binary nobody can regenerate is
+worse than a script that regenerates it.
 
-Much closer than the previous section claimed, and blocked on one named layer
-rather than on the architecture:
+### What this does and does not settle
 
-1. **Replace the grouped Conv1D** with a formulation tf2onnx converts --
-   `DepthwiseConv1D`, or a reshape to depthwise Conv2D. Another vendored patch
-   of the same size as the others, and the last known obstacle.
-2. Then re-export and **check numerical agreement against the Keras output**,
-   which is the step this stopped short of.
+It settles the **cost**. Camera rPPG no longer implies 600 MB, a 34 s start or a
+deprecated setuptools pin; it implies a 22 MB file and a dependency already
+present.
 
-The patches are small, mechanical and independently useful -- they make the model
-backend-agnostic, which is worth something on its own -- but they are patches to a
-vendored dependency, which has to be maintained against upstream. That is the
-real cost to weigh, not the size of any one edit.
+It settles nothing about **accuracy**, which is Phase 12's first blocker and
+needs a synchronised video and ECG capture. The confidence gate is still
+undesigned and still has to be measured on its refusals. The three-minute POS
+rejection from 2026-08-08 still stands as the last word on whether this webcam
+can produce a heart rate at all.
+
+The remaining cost is the patch set: ~20 lines against a vendored dependency,
+which has to be reapplied when `open-rppg` moves. The script fails loudly rather
+than silently if upstream changes under it.
 
 ## Reading this
 
-This is a cost, not a verdict. Camera rPPG is still *validated-and-rejected* on
-the POS result from 2026-08-08, and nothing measured here changes that; it prices
-the reopening the plan proposes.
+Camera rPPG is still *validated-and-rejected* on the POS result from
+2026-08-08, and nothing here changes that. What has changed is the price: the
+reopening the plan proposes no longer costs 600 MB and half a minute of
+start-up, so the only remaining question is the one that always mattered --
+whether it is accurate, which needs a capture.
 
 The cheap escape has been tried and did not work, so the choice is now between
 three real options rather than two:
@@ -173,18 +203,18 @@ three real options rather than two:
 - **Accept the cost** — 600 MB and ~34 s of start-up on a student's laptop, plus
   a pinned deprecated `setuptools` — and go on to the capture, which is the only
   thing that can produce an accuracy number.
-- **Finish the ONNX export.** It is one named layer away: the model already
-  runs under TensorFlow and exports, and only Mamba's grouped Conv1D fails to
-  convert. The cost is maintaining ~15 lines of patch against a vendored
-  dependency, not reimplementing anything.
+- **The ONNX export is done** (`scripts/export_rhythmmamba_onnx.py`), so the
+  cost objection is gone: no new dependencies, 1.5 s start-up, 22 MB. What is
+  left to decide is whether to spend a capture session on accuracy.
 - **Stop here.** *"Rejected again, here is the number"* is a complete outcome by
   the phase's own definition, and this time the number is about the price rather
   than the accuracy.
 
-Two corrections to earlier readings of this file, both of which were too
-pessimistic: the Mamba scan is *not* an obstacle, and the model is *not*
-JAX-bound in any way that requires reimplementation. What remains is a converter
-gap on one layer and a patch set to maintain.
+Three earlier readings of this file were wrong, all pessimistic: the Mamba scan
+is not an obstacle, the model is not JAX-bound in any way requiring
+reimplementation, and the export was not one layer away -- it was three, and all
+three are done. Each was corrected by reading the source or loading the artefact
+rather than by reasoning from the previous error message.
 
 Reproduce with:
 

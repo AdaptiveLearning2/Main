@@ -233,12 +233,14 @@ load, so the licence-safe path is real rather than theoretical. The ONNX escape 
 a dependency, so exporting the weights would drop nearly all of that — was tried and **does not
 currently work**: `jax2onnx` cannot convert `Fusion_Stem`'s channels-last 3D convolution, and the
 model hardcodes that layout. It fails *before* reaching the Mamba scan, so whether the scan exports
-is still unknown; don't read the conv error as the only obstacle. The TensorFlow route **works with ~15 lines of
-vendored patch** — the Mamba scan turned out to be pure `keras.ops` and no obstacle at all, and the
-only JAX binding in the forward pass is three `.at[].set()` lines in `Block_mamba.call`. Patched, the
-model runs under TF and exports to a 22 MB ONNX file. That file is **invalid**: `tf2onnx` leaves
-Mamba's grouped Conv1D as a `StatefulPartitionedCall`, at every opset tried. So the escape route is
-one named layer away, and the cost is maintaining a patch set against a vendored dependency. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+is still unknown; don't read the conv error as the only obstacle. **The ONNX export works and the cost objection is gone**:
+`scripts/export_rhythmmamba_onnx.py` patches a vendored `open-rppg` (~20 lines: the JAX-only
+`.at[].set()` in `Block_mamba`, Mamba's grouped Conv1D, and `Frequencydomain_FFN`'s RFFT, none of
+which tf2onnx converts) and emits a 22 MB model that runs under **onnxruntime alone** — already a
+dependency — loading in 1.5 s against ~34 s, and matching Keras at correlation 1.00000000. Inference
+is 0.93 s per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
+from weights whose licence terms are the authors', and the script regenerates it. **This settles the
+cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
 against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a

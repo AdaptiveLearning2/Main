@@ -3160,7 +3160,12 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
             # bucketed by school day. Rebuilding them against UTC would move
             # every boundary and leave the survivors bucketed one way and the
             # rest of the year the other.
-            "p_timezone": _school_timezone(),
+            # `.key`, not the ZoneInfo: RPC params are serialised with plain
+            # `json.dumps`, which raises on it. Inside this try, so the failure
+            # would have been swallowed into the 500 below rather than showing
+            # up as a type error -- every erasure failing identically, for a
+            # reason nothing in the response or the log would name.
+            "p_timezone": _school_timezone().key,
         }).execute().data or {}
     except Exception as e:
         # No partial state to describe: the function is one transaction, so

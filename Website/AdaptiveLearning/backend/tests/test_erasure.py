@@ -11,7 +11,9 @@ itself is a Postgres function and is asserted against a real stack in
 whether the rows went.
 """
 
+import json
 import os
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
@@ -88,7 +90,14 @@ def parent(monkeypatch):
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
     monkeypatch.setattr(main, "_is_linked_parent",
                         lambda viewer, student: viewer == "parent-1")
-    monkeypatch.setattr(main, "_school_timezone", lambda: "America/Los_Angeles")
+    # A real ZoneInfo, because that is what the real function returns. Stubbing
+    # a plain string here modelled a return type `_school_timezone` has never
+    # produced, and hid a bug that turned every erasure into a 500: the params
+    # are serialised with json.dumps, which raises on a ZoneInfo, inside the try
+    # that answers 500. Same trap as `_StubClient` in test_ingest_mode.py -- a
+    # stub whose shape is convenient rather than accurate tests the stub.
+    monkeypatch.setattr(main, "_school_timezone",
+                        lambda: ZoneInfo("America/Los_Angeles"))
 
 
 def _req(channel="camera", confirm=True):
@@ -178,6 +187,23 @@ def test_the_rebuild_uses_the_school_timezone_not_utc(monkeypatch, parent):
     main.erase_consent_channel(STUDENT, _req(), None)
 
     assert client.rpc_calls[0][1]["p_timezone"] == "America/Los_Angeles"
+
+
+def test_every_rpc_parameter_survives_json(monkeypatch, parent):
+    """postgrest-py serialises params with plain `json.dumps`, and this call
+    sits inside a try that answers 500 -- so a parameter it cannot encode does
+    not surface as a type error, it turns every erasure into an identical
+    server error with nothing naming the cause.
+
+    Asserting on the *type* of one parameter would only pin the one that has
+    already been wrong. This pins the property.
+    """
+    client = _Fake()
+    monkeypatch.setattr(main, "supabase", client)
+
+    main.erase_consent_channel(STUDENT, _req(), None)
+
+    json.dumps(client.rpc_calls[0][1])
 
 
 def test_the_archived_charts_are_removed_too(monkeypatch, parent):

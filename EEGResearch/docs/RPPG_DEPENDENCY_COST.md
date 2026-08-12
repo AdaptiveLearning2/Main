@@ -98,14 +98,49 @@ The export dies on the convolution before reaching it, so whether the scan is
 exportable is **still unknown**. Anyone resuming this should not read "conv
 layout" as the only obstacle.
 
-Two routes remain, neither tried:
+### The TensorFlow route is not a route
 
-1. **Keras with the TensorFlow backend, then `tf2onnx`.** Keras 3 can load the
-   same `.weights.h5` under a different backend, and the TF export path is more
-   mature. Costs a TensorFlow install, but only at export time — the artefact
-   shipped would be the `.onnx` file.
-2. **Patch `jax2onnx`'s conv converter** to transpose channels-last inputs. A
-   narrower fix, upstreamable, and it would still leave the Mamba question open.
+Tried next, and it is closed for a stronger reason than the conv error. Keras 3
+can load the same `.weights.h5` under any backend, so `tf2onnx` looked like the
+mature alternative. Under `KERAS_BACKEND=tensorflow` the model does not run at
+all:
+
+```
+AttributeError: Exception encountered when calling RhythmMamba.call().
+'tensorflow.python.framework.ops.EagerTensor' object has no attribute 'at'
+```
+
+`.at[...].set(...)` is JAX's indexed-update syntax. `rppg/models.py` imports JAX
+directly (`import jax`, `from jax import numpy as jnp`) and calls it inside model
+code, in at least two places:
+
+| Location | What it is |
+| --- | --- |
+| `Frequencydomain_FFN.scale_seg()` | a `@partial(jax.jit, static_argnums=…)` function with a doubly-nested Python loop of `.at[].set()` updates |
+| `Block_mamba.call()` | the same pattern |
+
+**So this model is JAX-bound by construction, not merely shipped with JAX as a
+Keras backend.** Keras 3's backend-agnosticism does not apply to a layer that
+calls `jnp` directly. Dropping JAX means patching or reimplementing the vendor's
+model source, which is a different and much larger undertaking than an export.
+
+That also weakens the one remaining route. Patching `jax2onnx`'s conv converter
+would get past `Fusion_Stem`, and then meet `scale_seg`: a Python loop of
+indexed updates over a static range, which unrolls into a long chain of scatter
+operations if it converts at all. The Mamba scan is still further on and still
+unexamined.
+
+### Where that leaves the escape route
+
+It is not "one converter bug away". Ranked by what each would cost:
+
+1. **Patch `jax2onnx`'s conv converter**, then find out what `scale_seg` and the
+   Mamba scan do. Upstreamable, open-ended, and the two unknowns are sequential
+   — you cannot price the second until the first is done.
+2. **Reimplement the architecture** against the published weights, in whatever
+   the sidecar can already run. Large, and it puts this project in the business
+   of maintaining a model implementation.
+3. **Accept JAX**, at the measured cost above.
 
 ### A Windows aside
 
@@ -137,16 +172,18 @@ three real options rather than two:
 - **Accept the cost** — 600 MB and ~34 s of start-up on a student's laptop, plus
   a pinned deprecated `setuptools` — and go on to the capture, which is the only
   thing that can produce an accuracy number.
-- **Spend a day on the TensorFlow export route** before committing to that, on
-  the chance it makes the cost disappear. It is the more promising of the two
-  untried routes, and it would still leave the Mamba question open.
+- **Pursue the ONNX export further**, knowing it is not one bug away: the
+  TensorFlow route turned out to be closed outright, and what remains is
+  patching a converter and then discovering what two further JAX-specific
+  constructs do.
 - **Stop here.** *"Rejected again, here is the number"* is a complete outcome by
   the phase's own definition, and this time the number is about the price rather
   than the accuracy.
 
-What should not happen is accepting 600 MB without anyone having tried the TF
-route, or dismissing the phase on the conv error alone — that error is a
-converter limitation on one layer, not a statement about the model.
+What should not happen is dismissing the phase on the conv error alone — that
+one is a converter limitation on a single layer. The JAX binding is the finding
+that actually constrains the options, and it is a property of the vendor's code
+rather than of any tool.
 
 Reproduce with:
 

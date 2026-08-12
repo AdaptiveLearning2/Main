@@ -41,6 +41,7 @@ export const CHANNELS = [
     parent: {
       title: 'Headband (EEG)',
       body: 'Records focus and calm during practice sessions. Off means it is never measured or saved — not hidden from reports.',
+      erase: 'every focus and calm reading ever recorded from the headband',
     },
   },
   {
@@ -53,6 +54,7 @@ export const CHANNELS = [
     parent: {
       title: 'Heart sensor (headband)',
       body: 'Records heart rate and heart-rate variability during practice sessions. Off means it is never measured or saved — not hidden from reports.',
+      erase: 'every heart-rate reading ever recorded from the headband',
     },
   },
   {
@@ -65,6 +67,7 @@ export const CHANNELS = [
     parent: {
       title: 'Camera',
       body: 'Records how the child appears to be finding the questions, from the camera on their device. No video is stored — only the reading. Off means it is never measured or saved.',
+      erase: 'every reading ever recorded from the camera, including any heart rate it measured',
     },
   },
 ]
@@ -113,6 +116,15 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const [error, setError]       = useState(null)
   const [saving, setSaving]     = useState(null)
   const [confirming, setConfirming] = useState(null)
+  // Erasure is a separate decision from consent and gets separate state, so a
+  // half-finished erase confirmation can never be committed by a switch click
+  // or the reverse. `erasing` is the channel in flight; `erasureAck` is the
+  // checkbox, cleared whenever the panel opens or closes so it can never be
+  // inherited by the next channel.
+  const [erasureFor, setErasureFor] = useState(null)
+  const [erasureAck, setErasureAck] = useState(false)
+  const [erasing, setErasing] = useState(null)
+  const [erasureNote, setErasureNote] = useState(null)
 
   // Returns its promise, and takes the conflict message to leave in place. A
   // reload triggered by a conflict would otherwise clear the very error that
@@ -185,6 +197,52 @@ export default function ConsentChannels({ studentId, role, studentName = null })
     }
   }
 
+  const openErasure = (key) => {
+    setErasureAck(false)      // never inherited from a panel opened earlier
+    setErasureNote(null)
+    setErasureFor(key)
+  }
+
+  const closeErasure = () => {
+    setErasureAck(false)
+    setErasureFor(null)
+  }
+
+  const erase = async (key) => {
+    setErasing(key)
+    setError(null)
+    setErasureNote(null)
+    try {
+      const out = await apiFetch(`/api/consent/${studentId}/erase`, {
+        method: 'POST',
+        // The channel name, not the flag: the endpoint takes `eeg`,
+        // `headband_optical`, `camera`, which is what CHANNELS keys are once
+        // the `_enabled` suffix is dropped.
+        body: { channel: key.replace('_enabled', ''), confirm: true },
+      })
+      // Reload rather than patch the local copy: `erased_at` comes from the
+      // consent payload, and inventing it here would show a date the server
+      // has not confirmed for an action that cannot be repeated to check.
+      await load()
+      // Reported, not hidden. The rows are gone by the time storage is
+      // touched, so a chart that could not be removed is the one part of an
+      // erasure that can be incomplete -- and a parent who was told "erased"
+      // should not have to discover that from a chart that still loads.
+      setErasureNote(
+        out.charts_failed
+          ? 'The readings were erased. Some archived charts could not be removed '
+            + 'and are no longer reachable from the app; please tell us so they '
+            + 'can be cleared.'
+          : 'Erased.',
+      )
+      closeErasure()
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setErasing(null)
+    }
+  }
+
   const request = (key, next) => {
     // Only the student's own switch-off needs confirming: it is the one action
     // this UI cannot undo for them. A parent's change is reversible by the
@@ -203,12 +261,14 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-rose-500">{error}</p>}
+      {erasureNote && <p className="text-sm text-rose-600 dark:text-rose-400">{erasureNote}</p>}
 
       {CHANNELS.map(ch => {
         const state = channels[ch.key.replace('_enabled', '')] || {}
         const copy  = role === 'student' ? ch.student : ch.parent
         const on    = !!state.enabled
         const since = formatDate(state.revoked_at)
+        const erasedOn = formatDate(state.erased_at)
         // The student cannot re-enable. Shown as a disabled switch with the
         // reason beside it rather than a hidden control: a switch that vanishes
         // when you turn it off looks like a bug.
@@ -237,6 +297,19 @@ export default function ConsentChannels({ studentId, role, studentName = null })
                       A parent can turn this back on for you.
                     </p>
                   )}
+
+                  {/* Shown to the student as well as the parent, and
+                      independently of `on`. Erasure is a fact about the stored
+                      history, not about the current decision: a channel can be
+                      switched on and its past gone, and a student is entitled
+                      to know their readings were deleted even though only a
+                      parent can ask for it. */}
+                  {erasedOn && (
+                    <p className="text-xs font-bold text-rose-600 dark:text-rose-400 mt-2">
+                      Readings recorded before {erasedOn} were erased
+                      {role === 'student' ? ' at a parent\'s request' : ''}.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -263,6 +336,74 @@ export default function ConsentChannels({ studentId, role, studentName = null })
                   <button onClick={() => setConfirming(null)}
                           className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">
                     Keep it on
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Parent only, and not because the UI is enforcing anything --
+                the backend refuses a student outright. A student is shown that
+                an erasure happened (above) and not offered the action, because
+                a control that always fails is worse than no control. */}
+            {role === 'parent' && erasureFor !== ch.key && (
+              <button type="button"
+                      onClick={() => openErasure(ch.key)}
+                      className="mt-3 text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline">
+                Erase what this recorded
+              </button>
+            )}
+
+            {role === 'parent' && erasureFor === ch.key && (
+              <div className="mt-3 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800">
+                <p className="text-xs font-bold text-rose-800 dark:text-rose-200">
+                  Erase {copy.title.toLowerCase()} readings?
+                </p>
+                {/* Says what goes and what stays, inside the confirmation
+                    rather than under the control. A permanent disclaimer would
+                    mean the control's name overpromised; a parent about to
+                    destroy something is owed the scope at the moment they
+                    decide. */}
+                <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
+                  This deletes {copy.erase}, the daily summaries built from it,
+                  and the charts saved from those sessions. It cannot be undone.
+                </p>
+                <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
+                  Practice sessions, answers and progress are kept
+                  {ch.key === 'camera_enabled'
+                    ? ', and readings from the headband are kept.'
+                    : '.'}
+                </p>
+                {!on && (
+                  <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
+                    This does not change the setting above — it stays off.
+                  </p>
+                )}
+                {on && (
+                  <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
+                    This setting stays on, so new readings will be recorded from
+                    now on. Turn it off first if you do not want that.
+                  </p>
+                )}
+
+                <label className="flex items-start gap-2 mt-3 cursor-pointer">
+                  <input type="checkbox" checked={erasureAck}
+                         onChange={e => setErasureAck(e.target.checked)}
+                         className="mt-0.5" />
+                  <span className="text-xs text-rose-800 dark:text-rose-200">
+                    I understand this cannot be undone.
+                  </span>
+                </label>
+
+                <div className="flex gap-2 mt-3">
+                  <button onClick={() => erase(ch.key)}
+                          disabled={!erasureAck || erasing === ch.key}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed">
+                    {erasing === ch.key ? 'Erasing…' : 'Erase them'}
+                  </button>
+                  <button onClick={closeErasure}
+                          disabled={erasing === ch.key}
+                          className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">
+                    Cancel
                   </button>
                 </div>
               </div>

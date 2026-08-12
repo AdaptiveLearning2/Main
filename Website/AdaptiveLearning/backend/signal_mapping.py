@@ -273,6 +273,10 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
         "raw": _raw(payload,
                     device_id=payload.get("device_id"),
                     rejected_by=face.get("rejected_by"),
+                    # Its own field, like `rmssd_rejected_by` on the heart row:
+                    # emotion and gaze are two measurements and one refusal
+                    # field cannot say which of them failed.
+                    gaze_rejected_by=face.get("gaze_rejected_by"),
                     degraded=face.get("degraded"),
                     ingestion=payload.get("ingestion")),
     }

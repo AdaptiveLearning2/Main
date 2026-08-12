@@ -384,3 +384,93 @@ def test_a_zero_frame_rate_is_reported_rather_than_hidden():
                                 window_quality=0.9)
     assert record["measured_fps"] == 0.0
     assert record["rejected_by"] == "frame_rate_too_low"
+
+
+# ── gaze (Phase 11, step 2) ─────────────────────────────────────────────────
+#
+# `face_signals.gaze_x` and `gaze_y` shipped in 20260625000000 with nothing
+# writing them. These cover the record layer; the geometry has its own tests and
+# was verified against a camera on 2026-08-12.
+
+from src.app.services.face_geometry import Gaze          # noqa: E402
+
+
+def test_gaze_keys_are_absent_when_the_channel_is_off():
+    """A channel that was switched off is not a channel that failed. Emitting
+    `gaze_x: null` for a deployment with no landmark model would be
+    indistinguishable from a camera that could not get a reading."""
+    record = build_face_record(EmotionResult("happy", 0.82, True))
+
+    assert "gaze_x" not in record
+    assert "gaze_y" not in record
+    assert "gaze_rejected_by" not in record
+    assert "attention" not in record
+
+
+def test_a_gaze_reading_reaches_the_record():
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
+
+    assert record["gaze_x"] == 0.42
+    assert record["gaze_y"] == -0.03
+    assert record["gaze_rejected_by"] is None
+
+
+def test_a_refused_gaze_is_null_with_a_reason_never_zero():
+    """0.0 is a valid gaze — dead centre. A refusal recorded as 0.0 would be
+    averaged by every aggregate as "looking straight ahead", which is the
+    can't-tell-no-data-from-zero failure this codebase refuses everywhere."""
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=Gaze(None, None, 0, "no_eye"),
+                               gaze_enabled=True)
+
+    assert record["gaze_x"] is None
+    assert record["gaze_y"] is None
+    assert record["gaze_rejected_by"] == "no_eye"
+
+
+def test_before_the_first_reading_is_not_a_refusal():
+    """At start-up the landmarker has not run yet. Calling that a rejection
+    would report a warming-up camera as a broken one."""
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=None, gaze_enabled=True)
+
+    assert record["gaze_x"] is None
+    assert record["gaze_rejected_by"] == "no_reading"
+
+
+def test_attention_stays_null_and_is_nobody_s_to_fill():
+    """Phase 11 step 3, and blocked on a labelled reference rather than on
+    code. It renders to a parent as a percentage, which reads as objective, and
+    "attention" inferred from head direction is least valid for exactly this
+    product's users. The key is emitted so a consumer can tell "no producer"
+    from "a key I forgot to read"."""
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
+
+    assert record["attention"] is None
+
+
+def test_emotion_and_gaze_refusals_do_not_share_a_field():
+    """Two measurements, two refusals. One field for both cannot say which
+    failed — the same split as `rmssd_rejected_by` beside `rejected_by` on the
+    heart block."""
+    record = build_face_record(
+        EmotionResult(None, None, False, "low_confidence", ""),
+        gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
+
+    assert record["rejected_by"] == "low_confidence"
+    assert record["emotion"] is None
+    assert record["gaze_rejected_by"] is None
+    assert record["gaze_x"] == 0.42, "a usable gaze was lost to an emotion refusal"
+
+
+def test_gaze_alone_still_produces_a_face_block():
+    """Gaze needs no 35 MB FER+ model, so gaze-without-emotion is a coherent
+    deployment. Gating the block on emotion would make it emit nothing."""
+    payload = build_camera_payload(
+        rgb_window=None, fps=FPS, heart_enabled=False, emotion_enabled=False,
+        gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
+
+    assert payload["face"]["gaze_x"] == 0.42
+    assert payload["face"]["emotion"] is None

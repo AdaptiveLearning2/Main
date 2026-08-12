@@ -123,6 +123,19 @@ LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 # on a device that is also running a browser, a maths lesson and the EEG stack.
 EMOTION_INTERVAL_S = 0.25
 
+# How often the face-mesh landmarker runs. Slower than emotion, and for a
+# different reason: this is a second detector on the same frames, and it does
+# its own face detection rather than reusing the Haar box (a box has no
+# landmarks in it). Two detectors on a student's laptop is the cost worth
+# minding, so gaze runs at 5 Hz -- fast enough that a glance away spans several
+# samples, slow enough to stay a fraction of one core.
+#
+# Not derived from EMOTION_INTERVAL_S. They answer to different physics --
+# expression changes over seconds, a saccade takes tens of milliseconds and
+# neither rate can resolve one -- and tying them together would silently
+# retune gaze whenever someone tuned emotion.
+GAZE_INTERVAL_S = 0.2
+
 
 class FrameSource(Protocol):
     """Anything that yields frames. A webcam in production, a list in tests.
@@ -183,6 +196,9 @@ class FaceCaptureAdapter:
         emotion_enabled: bool = False,
         emotion_classifier_factory: Callable[[], Any] | None = None,
         emotion_interval_s: float = EMOTION_INTERVAL_S,
+        gaze_enabled: bool = False,
+        landmarker_factory: Callable[[], Any] | None = None,
+        gaze_interval_s: float = GAZE_INTERVAL_S,
         error_backoff: float = ERROR_BACKOFF_SECONDS,
         warmup_seconds: float = WARMUP_SECONDS,
     ) -> None:
@@ -243,6 +259,8 @@ class FaceCaptureAdapter:
             )
         if emotion_enabled and emotion_classifier_factory is None:
             raise ValueError("emotion_enabled requires an emotion_classifier_factory")
+        if gaze_enabled and landmarker_factory is None:
+            raise ValueError("gaze_enabled requires a landmarker_factory")
 
         self._make_source = frame_source_factory
         self._make_locator = locator_factory
@@ -262,6 +280,16 @@ class FaceCaptureAdapter:
         self._warmup_started_at: float | None = None
         self._last_emotion_at = 0.0
         self._latest_emotion: Any = None
+
+        # Same factory treatment as the classifier, and more necessary: the
+        # landmarker loads a model file that may not be on the machine at all,
+        # so constructing it here would stop a registry naming a camera.
+        self.gaze_enabled = gaze_enabled
+        self._make_landmarker = landmarker_factory
+        self._landmarker: Any = None
+        self._gaze_interval = gaze_interval_s
+        self._last_gaze_at = 0.0
+        self._latest_gaze: Any = None
 
         self._source: FrameSource | None = None
         self._locator: Any = None
@@ -316,6 +344,8 @@ class FaceCaptureAdapter:
         self._locator = self._make_locator()
         if self.emotion_enabled and self._emotion is None:
             self._emotion = self._make_emotion()
+        if self.gaze_enabled and self._landmarker is None:
+            self._landmarker = self._make_landmarker()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="face-capture", daemon=True
@@ -342,6 +372,11 @@ class FaceCaptureAdapter:
         self._locator = None
         self._latest_emotion = None
         self._last_emotion_at = 0.0
+        # The landmarker itself is kept: it holds a loaded model, and MediaPipe
+        # takes seconds to build one. The *reading* is dropped, because a gaze
+        # from before the camera was released is not a gaze now.
+        self._latest_gaze = None
+        self._last_gaze_at = 0.0
         while True:
             try:
                 self._queue.get_nowait()
@@ -434,6 +469,18 @@ class FaceCaptureAdapter:
         with self._lock:
             self._counters.frames_read += 1
 
+        now = now_seconds()
+        # Before the Haar box, and deliberately. The landmarker runs its own
+        # detection on the full frame, so a Haar miss says nothing about whether
+        # a mesh is available -- and returning early on one would make the gaze
+        # channel silently depend on a detector it does not use. The file
+        # already carries that lesson one channel over: an unguarded emotion
+        # crop used to abort the iteration and take the colour sample with it.
+        if (self.gaze_enabled
+                and now - self._last_gaze_at >= self._gaze_interval):
+            self._last_gaze_at = now
+            self._sample_gaze(frame)
+
         # Luma-weighted, not a flat mean. Haar cascades are trained on
         # ITU-R BT.601 luma, and a flat RGB average is a different image --
         # notably brighter in the red channel, which is most of a face.
@@ -445,7 +492,6 @@ class FaceCaptureAdapter:
                 self._counters.missing_reason = "no_face"
             return True
 
-        now = now_seconds()
         if (self.emotion_enabled
                 and now - self._last_emotion_at >= self._emotion_interval):
             self._last_emotion_at = now
@@ -539,6 +585,42 @@ class FaceCaptureAdapter:
             self._buffer.popleft()
         if len(self._buffer) == self._buffer.maxlen:
             self._counters.buffer_capped += 1
+
+    def _sample_gaze(self, frame: np.ndarray) -> None:
+        """One gaze reading from a full frame. Never raises.
+
+        Wrapped like the emotion crop and for the reason that wrapping was added
+        there: a failure in one channel must not stop the others. This one runs
+        *before* the colour sample, so an exception escaping here would cost the
+        heart channel every frame rather than merely blanking gaze.
+
+        A refusal is stored, not discarded. `Gaze` carries `rejected_by`, and
+        the record layer needs it to tell a closed eye from a channel that has
+        produced nothing yet -- dropping it would collapse those to one state.
+
+        **A failure is stored too, as its own refusal.** Returning without
+        storing leaves `_latest_gaze` at None, which the record layer reports as
+        `no_reading` -- the warming-up state. A landmarker that raises on every
+        frame (a corrupt model, a MediaPipe that will not initialise) would then
+        spend the whole session claiming to be warming up, which is precisely
+        the broken-versus-not-started confusion this codebase refuses. `raw`
+        carries `last_error` for the detail; this carries the state.
+        """
+        from src.app.services.face_geometry import Gaze, gaze  # noqa: PLC0415
+
+        try:
+            height, width = frame.shape[0], frame.shape[1]
+            named = self._landmarker.locate(frame, width, height)
+            reading = gaze(named)
+        except Exception as exc:                          # noqa: BLE001
+            logger.exception("gaze sampling failed")
+            reading = Gaze(None, None, 0, "landmarker_failed")
+            with self._lock:
+                self._counters.last_error = f"{type(exc).__name__}: {exc}"
+                self._latest_gaze = reading
+            return
+        with self._lock:
+            self._latest_gaze = reading
 
     def rgb_buffer(self) -> np.ndarray:
         """Everything currently buffered, as (n, 3)."""
@@ -640,6 +722,18 @@ class FaceCaptureAdapter:
         with self._lock:
             return self._latest_emotion
 
+    def latest_gaze(self) -> Any:
+        """The most recent gaze reading, or None if gaze is off or nothing has
+        been measured yet.
+
+        A `Gaze` whose `x` is None is a *refusal* and is returned as such -- the
+        caller needs `rejected_by` to tell a closed eye from a channel that has
+        not produced anything, and collapsing both to None here would take that
+        away.
+        """
+        with self._lock:
+            return self._latest_gaze
+
     def get_ingestion_meta(self) -> dict[str, Any]:
         """Camera state for the API.
 
@@ -696,6 +790,7 @@ class FaceCaptureAdapter:
                 "last_error": c.last_error,
                 "heart_enabled": self.heart_enabled,
                 "emotion_enabled": self.emotion_enabled,
+                "gaze_enabled": self.gaze_enabled,
                 **(self._emotion.get_meta() if self._emotion is not None else {}),
             }
 
@@ -804,6 +899,8 @@ def build_face_adapter(
     heart_enabled: bool = True,
     emotion_enabled: bool = False,
     emotion_model_path: Any = None,
+    gaze_enabled: bool = False,
+    landmark_model_path: Any = None,
 ) -> FaceCaptureAdapter:
     """A camera-backed adapter. Nothing is opened, loaded or verified until
     connect() is called -- so a registry can name a camera on a machine that has
@@ -818,6 +915,11 @@ def build_face_adapter(
 
         return EmotionClassifier(emotion_model_path)
 
+    def make_landmarker():
+        from src.app.services.face_landmarks import FaceMeshLandmarker  # noqa: PLC0415
+
+        return FaceMeshLandmarker(model_path=landmark_model_path)
+
     return FaceCaptureAdapter(
         lambda: OpenCvFrameSource(camera_index=camera_index, fps=fps),
         make_locator,
@@ -825,4 +927,6 @@ def build_face_adapter(
         heart_enabled=heart_enabled,
         emotion_enabled=emotion_enabled,
         emotion_classifier_factory=make_classifier if emotion_enabled else None,
+        gaze_enabled=gaze_enabled,
+        landmarker_factory=make_landmarker if gaze_enabled else None,
     )

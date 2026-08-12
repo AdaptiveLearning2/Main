@@ -220,17 +220,43 @@ def test_the_mapper_does_not_carry_a_retired_identity_confidence():
     assert "identity_confidence" not in row
 
 
+def test_the_gaze_refusal_rides_in_raw_beside_the_emotion_one():
+    """Two measurements in one block, so one refusal field cannot serve both --
+    the same split as `rmssd_rejected_by` beside `rejected_by` on the heart row.
+
+    Collapsed into one, a rejected gaze on a well-classified face would read as
+    a rejected *emotion*, and the row would explain the wrong null.
+    """
+    row = signal_mapping.map_face_to_face_signal({
+        "face": {"emotion": "sad", "emotion_confidence": 0.81, "trusted": True,
+                 "rejected_by": None, "gaze_x": None, "gaze_y": None,
+                 "gaze_rejected_by": "no_eye"},
+    }, "s", "u")
+
+    assert row["gaze_x"] is None
+    assert row["raw"]["gaze_rejected_by"] == "no_eye"
+    # `_raw` drops nulls so an absent field does not read as a recorded one, so
+    # the emotion refusal is *missing* rather than null here. That is the point:
+    # the row explains the gaze null and says nothing about the emotion, which
+    # succeeded.
+    assert "rejected_by" not in row["raw"]
+
+
 def test_the_three_unproduced_face_columns_are_kept_on_purpose():
-    """`attention`, `gaze_x` and `gaze_y` have no producer and must survive.
+    """`attention`, `gaze_x` and `gaze_y` must survive the mapper.
 
-    They look exactly like the column next to them that was just retired --
+    They looked exactly like the column next to them that was retired --
     unwritten since 20260625000000, rendering as "No sensor" everywhere -- and
-    the only thing separating them is a decision recorded in prose: identity was
-    out of scope, these are Phase 11 and are waiting on a landmark model.
+    the only thing separating them was a decision recorded in prose: identity
+    was out of scope, these were Phase 11 and waiting on a landmark model.
 
-    That decision was enforced by nothing, which is the failure mode this
-    project keeps hitting: a rule stated in a comment and checked nowhere. A
-    tidy-up that removed all four would have been green. This is the check.
+    **Two of the three now have one.** Phase 11 step 2 wired the face-mesh
+    landmarker into the capture loop, so `gaze_x` and `gaze_y` are written.
+    `attention` is still unproduced and is still deliberate: it is step 3, and
+    it is blocked on a labelled reference rather than on code, because a
+    percentage inferred from head direction is least valid for exactly this
+    product's users. So this test keeps doing its original job for one column
+    and guards a live path for the other two.
     """
     row = signal_mapping.map_face_to_face_signal({
         "face": {"emotion": "sad", "attention": 0.6, "gaze_x": -0.2,

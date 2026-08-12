@@ -774,6 +774,8 @@ def build_ingestion_adapter(
             heart_enabled=settings.face_heart_enabled,
             emotion_enabled=settings.face_emotion_enabled,
             emotion_model_path=settings.face_emotion_model_path,
+            gaze_enabled=settings.face_gaze_enabled,
+            landmark_model_path=settings.face_landmark_model_path,
         )
     raise ValueError(
         "Unsupported EEG_SOURCE. Use 'sim' for local runs, 'muse' for live bridge "

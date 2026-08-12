@@ -485,6 +485,57 @@ async def test_a_rejected_face_window_is_not_a_row(client):
 
 
 @pytest.mark.anyio
+async def test_a_gaze_without_an_emotion_is_still_a_reading(client):
+    """A reading is an emotion **or** a gaze. Gating on emotion alone was right
+    while emotion was the only measurement in this block; with gaze in it, a
+    window where FER+ refused and the landmarks did not would be dropped -- and
+    the gaze channel would appear to work everywhere except on the faces the
+    classifier finds hardest, which is the population it is least reliable on
+    to begin with."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t", "device_id": "cam0",
+        "face": {"emotion": None, "rejected_by": "low_confidence",
+                 "trusted": False, "attention": None,
+                 "gaze_x": 0.42, "gaze_y": -0.03, "gaze_rejected_by": None},
+    })
+
+    assert client.status()["queued"]["face"] == 1
+
+
+@pytest.mark.anyio
+async def test_neither_measurement_is_still_not_a_row(client):
+    """Widening the gate must not reopen the all-null flood it was added to
+    stop: a window that refused both is not a reading of anything."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t", "device_id": "cam0",
+        "face": {"emotion": None, "rejected_by": "no_face", "trusted": False,
+                 "attention": None, "gaze_x": None, "gaze_y": None,
+                 "gaze_rejected_by": "no_eye"},
+    })
+
+    assert client.status()["queued"]["face"] == 0
+
+
+@pytest.mark.anyio
+async def test_the_gaze_refusal_reaches_raw_separately_from_the_emotion_one(client):
+    """Two measurements, two refusals. One field for both cannot say which
+    failed."""
+    await _started(client)
+    client.submit_payload({
+        "kind": "camera", "timestamp": "t", "device_id": "cam0",
+        "face": {"emotion": "sad", "emotion_confidence": 0.7, "trusted": True,
+                 "rejected_by": None, "attention": None,
+                 "gaze_x": None, "gaze_y": None, "gaze_rejected_by": "no_eye"},
+    })
+
+    row = client._queues["face"][-1]
+    assert row["raw"]["gaze_rejected_by"] == "no_eye"
+    assert row["raw"]["rejected_by"] is None
+
+
+@pytest.mark.anyio
 async def test_an_untrusted_emotion_is_still_a_reading(client):
     """`emotion_trusted` is a column and fusion gates on it. Dropping untrusted
     readings here would silently narrow what the backend gets to decide about."""

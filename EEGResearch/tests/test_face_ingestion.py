@@ -692,3 +692,147 @@ def test_enabling_the_heart_channel_is_never_quiet(caplog):
     assert any("FACE_RPPG_ECG.md" in r.message for r in caplog.records), (
         "enabling camera heart rate produced no warning"
     )
+
+
+# ── gaze (Phase 11, step 2) ─────────────────────────────────────────────────
+
+class FakeLandmarker:
+    """Stands in for MediaPipe. Returns whatever named landmarks it is given."""
+
+    def __init__(self, named=None, raises=False):
+        self.named = named if named is not None else {}
+        self.raises = raises
+        self.calls = 0
+
+    def locate(self, frame, width, height):
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("mediapipe exploded")
+        return self.named
+
+
+def _eyes_looking(dx: float) -> dict:
+    """A landmark set with both irises offset by `dx` px within the eye."""
+    named = {}
+    for side, (lo, hi) in (("right", (40.0, 60.0)), ("left", (90.0, 110.0))):
+        mid = (lo + hi) / 2
+        named[f"{side}_eye_outer"] = (lo if side == "right" else hi, 50.0)
+        named[f"{side}_eye_inner"] = (hi if side == "right" else lo, 50.0)
+        named[f"{side}_eye_upper"] = (mid, 45.0)
+        named[f"{side}_eye_lower"] = (mid, 55.0)
+        named[f"{side}_iris"] = (mid + dx, 50.0)
+    return named
+
+
+def _gaze_adapter(landmarker, locator=None, gaze_interval_s=0.0):
+    src = FakeSource()
+    return FaceCaptureAdapter(
+        lambda: src, lambda: locator or FakeLocator(), fps=500.0,
+        buffer_seconds=2.0, error_backoff=0.0, warmup_seconds=0.0,
+        gaze_enabled=True, landmarker_factory=lambda: landmarker,
+        gaze_interval_s=gaze_interval_s), src
+
+
+def test_gaze_enabled_without_a_landmarker_is_refused_at_construction():
+    """Same guard as the classifier. A camera that connects and silently never
+    produces a gaze is indistinguishable from a student sitting still."""
+    with pytest.raises(ValueError, match="landmarker_factory"):
+        FaceCaptureAdapter(FakeSource, FakeLocator, gaze_enabled=True)
+
+
+def test_gaze_is_sampled_from_the_capture_loop():
+    lm = FakeLandmarker(_eyes_looking(+6.0))
+    adapter, _ = _gaze_adapter(lm)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_gaze() is not None)
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    assert reading.x is not None and reading.x > 0
+
+
+def test_a_haar_miss_does_not_suppress_gaze():
+    """The landmarker runs its own detection on the full frame, so the Haar
+    box says nothing about whether a mesh is available. Sampling gaze after the
+    `box is None` early return would make the channel silently depend on a
+    detector it does not use — and it would fail exactly when a face is hard to
+    find, which is when gaze is most interesting."""
+    class NeverFinds:
+        def locate(self, gray):
+            return None
+
+    lm = FakeLandmarker(_eyes_looking(+6.0))
+    adapter, _ = _gaze_adapter(lm, locator=NeverFinds())
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_gaze() is not None), \
+            "no gaze was ever sampled while Haar found nothing"
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    # Read inside the try and asserted here: `disconnect()` clears the reading,
+    # so `adapter.latest_gaze() is None` after teardown is unconditionally true
+    # and any assertion tolerating it passes without testing anything.
+    assert reading.x is not None and reading.x > 0
+
+
+def test_a_landmarker_that_raises_costs_only_gaze():
+    """It runs before the colour sample, so an escaping exception would cost
+    the heart channel every frame rather than merely blanking gaze."""
+    lm = FakeLandmarker(raises=True)
+    adapter, _ = _gaze_adapter(lm)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.get_ingestion_meta()["frames_read"] > 5)
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 0), \
+            "the colour buffer stopped filling when gaze raised"
+    finally:
+        adapter.disconnect()
+
+    assert adapter.latest_gaze() is None
+
+
+def test_a_refusal_is_kept_rather_than_discarded():
+    """`Gaze.rejected_by` is what lets the record layer tell a closed eye from
+    a channel that has produced nothing yet."""
+    lm = FakeLandmarker({})            # no eyes at all
+    adapter, _ = _gaze_adapter(lm)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_gaze() is not None)
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    assert reading.x is None and reading.rejected_by == "no_eye"
+
+
+def test_gaze_runs_on_its_own_interval_not_every_frame():
+    """A second detector on every frame is the cost this interval exists to
+    bound."""
+    lm = FakeLandmarker(_eyes_looking(+6.0))
+    adapter, _ = _gaze_adapter(lm, gaze_interval_s=10.0)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.get_ingestion_meta()["frames_read"] > 20)
+    finally:
+        adapter.disconnect()
+
+    assert lm.calls == 1, f"ran {lm.calls} times over 20+ frames"
+
+
+def test_disconnect_drops_the_reading_but_keeps_the_model():
+    """A gaze from before the camera was released is not a gaze now. The
+    landmarker itself is kept — it holds a loaded model and MediaPipe takes
+    seconds to build one."""
+    lm = FakeLandmarker(_eyes_looking(+6.0))
+    adapter, _ = _gaze_adapter(lm)
+    adapter.connect()
+    assert _wait_for(lambda: adapter.latest_gaze() is not None)
+    adapter.disconnect()
+
+    assert adapter.latest_gaze() is None
+    assert adapter._landmarker is lm

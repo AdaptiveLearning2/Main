@@ -318,7 +318,13 @@ class PushClient:
         # is a column and fusion gates on it -- but a rejection is not a
         # measurement of anything and belongs in the sidecar's own state, which
         # is where `/api/v1/state` already reports it.
-        if face and face.get("emotion") is not None:
+        # A reading is an emotion **or** a gaze. Gating on emotion alone was
+        # right while emotion was the only measurement in this block; with gaze
+        # in it, a window where FER+ refused and the landmarks did not would be
+        # dropped, and the gaze channel would appear to work everywhere except
+        # on the faces the classifier finds hardest.
+        if face and (face.get("emotion") is not None
+                     or face.get("gaze_x") is not None):
             self.enqueue("face", {
                 "ts": ts,
                 "emotion": face.get("emotion"),
@@ -334,6 +340,7 @@ class PushClient:
                 "gaze_y": face.get("gaze_y"),
                 "raw": {"device_id": device_id,
                         "rejected_by": face.get("rejected_by"),
+                        "gaze_rejected_by": face.get("gaze_rejected_by"),
                         "degraded": face.get("degraded"),
                         "ingestion": payload.get("ingestion")},
             })

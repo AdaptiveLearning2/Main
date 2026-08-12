@@ -208,13 +208,37 @@ def build_heart_record(
 def build_face_record(
     emotion: EmotionResult | None,
     meta: dict[str, Any] | None = None,
+    gaze: Any = None,
+    gaze_enabled: bool = False,
 ) -> dict[str, Any]:
-    """The `face` block from one emotion result.
+    """The `face` block from one emotion result and one gaze reading.
 
     `emotion_confidence` rather than `confidence`, deliberately. In the original
     the SQI was surfaced under `quality.confidence` while downstream read
     `features.confidence` as confidence in the reading, so a well-lit face and a
     trusted classification became one number. Two quantities, two names.
+
+    **Two independent measurements, not one.** Emotion comes from FER+ over a
+    64x64 crop; gaze comes from face-mesh landmarks through `face_geometry`.
+    Either can succeed while the other fails, so `gaze_rejected_by` is its own
+    field and `rejected_by` continues to mean the *emotion* refusal -- the same
+    split as `rmssd_rejected_by` beside `rejected_by` on the heart block, and
+    for the same reason: one field for two refusals cannot say which failed.
+
+    Gaze keys are **absent** when the channel is off, rather than null. A
+    channel that was switched off is not a channel that failed, and this is the
+    same three-state rule the payload keeps everywhere else:
+
+    * key absent          -- gaze is not enabled on this deployment
+    * `None` + a reason   -- measured and refused (no eye, closed eye, no face)
+    * a number            -- a reading
+
+    **`attention` is deliberately null and has no producer.** That is Phase 11
+    step 3, and it is blocked on a labelled reference rather than on code: an
+    attention score inferred from head direction is least valid for exactly this
+    product's users, and unlike a FER+ label it renders as a percentage, which
+    reads as objective. The key is emitted so a consumer can tell "no producer"
+    from "key I forgot to read"; nothing may fill it without that measurement.
     """
     record: dict[str, Any] = {
         "emotion": None,
@@ -233,6 +257,18 @@ def build_face_record(
         )
     if meta:
         record["degraded"] = bool(meta.get("emotion_degraded", False))
+
+    if gaze_enabled:
+        record["attention"] = None
+        record["gaze_x"] = None
+        record["gaze_y"] = None
+        # "no_reading" is not a refusal: it is the state before the landmarker
+        # has produced anything, which at start-up lasts one gaze interval.
+        # Calling it a rejection would report a warming-up camera as a broken
+        # one on every session's first tick.
+        record["gaze_rejected_by"] = "no_reading" if gaze is None else gaze.rejected_by
+        if gaze is not None and gaze.x is not None:
+            record.update(gaze_x=gaze.x, gaze_y=gaze.y)
     return record
 
 
@@ -248,6 +284,8 @@ def build_camera_payload(
     heart_enabled: bool = True,
     emotion_enabled: bool = True,
     emotion_meta: dict[str, Any] | None = None,
+    gaze: Any = None,
+    gaze_enabled: bool = False,
 ) -> dict[str, Any]:
     """Both blocks, with the disabled one absent rather than nulled.
 
@@ -266,6 +304,11 @@ def build_camera_payload(
             samples=samples,
             timestamps=timestamps,
         )
-    if emotion_enabled:
-        payload["face"] = build_face_record(emotion, emotion_meta)
+    # Either measurement is enough to warrant the block. Gating it on emotion
+    # alone would make a gaze-only deployment -- which is a coherent thing to
+    # want, since gaze needs no 35 MB FER+ model -- emit nothing at all.
+    if emotion_enabled or gaze_enabled:
+        payload["face"] = build_face_record(
+            emotion if emotion_enabled else None, emotion_meta,
+            gaze=gaze, gaze_enabled=gaze_enabled)
     return payload

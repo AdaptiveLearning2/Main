@@ -263,15 +263,41 @@ The camera ships **emotion-only**. POS is kept because it is correct and is the 
 future attempt; do not read its passing tests as evidence it measures a heart rate. Full analysis:
 `EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
 
-### Three face columns have no producer yet
+### `attention` has no producer; `gaze_x`/`gaze_y` now do
 
-`face_signals.attention`, `gaze_x` and `gaze_y`. `face_processing.build_face_record()` sets only
-`emotion`, `emotion_confidence`, `trusted` and `rejected_by`, and there is no gaze estimator or
-attention scorer anywhere in `EEGResearch/src/app`. Nothing lies — the three-state tile logic renders
-`No sensor` / `Calibrating` rather than a number — but the teacher's Live attention gauge,
-`SessionReview`'s attention ribbon, the parent/teacher `face_attention` tiles and one line of the LLM
-strategy prompt are all built on a value nothing has ever computed. **Phase 11 fills them**, so don't
-drop the columns or the UI.
+**Gaze is wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh landmarker on its own
+`GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
+face detection rather than reusing the Haar box — and `build_face_record` carries the reading.
+`FACE_GAZE_ENABLED` is **off by default**: it needs `models/face_landmarker.task`, which is not in the
+MediaPipe wheel, and a deployment without one must not have the camera path fail on it.
+
+Three things about that path are load-bearing:
+
+- **It samples before the Haar early-return.** A Haar miss says nothing about whether a mesh is
+  available, so returning early on one would make gaze silently depend on a detector it does not use —
+  and it would fail exactly on the faces that are hardest to find. `_sample_gaze` also never raises,
+  because it runs *before* the colour sample and an escaping exception would cost the heart channel
+  every frame.
+- **Emotion and gaze are two measurements, so they get two refusal fields.** `rejected_by` stays the
+  emotion refusal and `gaze_rejected_by` is its own, exactly like `rmssd_rejected_by` on the heart
+  block. Collapsed into one, a refused gaze on a well-classified face explains the wrong null.
+- **A reading is an emotion *or* a gaze.** `push_client` gated on `emotion is not None`, which was
+  right while emotion was the only measurement here; unwidened, a window where FER+ refused and the
+  landmarks did not is dropped. It still refuses when *both* refuse, or the all-null flood that gate
+  was added to stop comes back.
+
+Gaze keys are **absent** when the channel is off, `None` + a reason when refused, a number when
+measured — the same three states as everything else here. 0.0 is a valid gaze (dead centre), so a
+refusal must never be recorded as one.
+
+**`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
+reference rather than on code: "attention" inferred from head direction is least valid for exactly
+this product's users, and unlike a FER+ label it renders as a percentage, which reads as objective.
+One adult is not a validation set for a construct whose failure mode is population-specific. The
+teacher's Live attention gauge, `SessionReview`'s attention ribbon, the parent/teacher
+`face_attention` tiles and one line of the LLM strategy prompt all still read a value nothing
+computes — the three-state tile logic renders `No sensor` / `Calibrating` rather than a number, so
+nothing lies. Don't drop the column or the UI, and don't fill it without the measurement.
 
 `face_geometry.py` is the arithmetic half: named landmarks in, head pose and iris offset out, pure
 numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,

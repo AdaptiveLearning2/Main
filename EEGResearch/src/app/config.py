@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # failover path -- it should not run while a headband is healthy.
     face_emotion_enabled: bool = Field(default=True, alias="FACE_EMOTION_ENABLED")
     face_heart_enabled: bool = Field(default=False, alias="FACE_HEART_ENABLED")
+    # Off by default. Gaze needs a second detector on every sampled frame and a
+    # model file that is not in the MediaPipe wheel, so a deployment that has
+    # not provisioned one must not have the camera path fail on it.
+    face_gaze_enabled: bool = Field(default=False, alias="FACE_GAZE_ENABLED")
+    face_landmark_model_path: str = Field(
+        default="models/face_landmarker.task", alias="FACE_LANDMARK_MODEL_PATH"
+    )
     face_emotion_model_path: str = Field(
         default="models/emotion-ferplus-8.onnx", alias="FACE_EMOTION_MODEL_PATH"
     )

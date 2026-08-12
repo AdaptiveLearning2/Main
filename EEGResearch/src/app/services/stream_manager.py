@@ -244,6 +244,8 @@ class DeviceSession:
                 heart_enabled=self.adapter.heart_enabled,
                 emotion_enabled=self.adapter.emotion_enabled,
                 emotion_meta=raw_meta,
+                gaze=getattr(self.adapter, "latest_gaze", lambda: None)(),
+                gaze_enabled=getattr(self.adapter, "gaze_enabled", False),
             )
         )
         return payload

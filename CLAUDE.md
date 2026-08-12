@@ -260,8 +260,17 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so **the manual camera check is still owed**: sit square on, look hard left, confirm
-`gaze.x` goes negative. It deliberately scores no attention:
+relation — so **the manual camera check is still owed**, and it is one command:
+
+```bash
+python scripts/verify_landmarks.py
+```
+
+Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
+that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
+Steps 2 and 3 are separate: the eye/iris indices and the outline indices are different regions of
+the table, and one being right says nothing about the other. **Record the date here when it passes**,
+and until it does, do not wire the landmark path into the capture loop. It deliberately scores no attention:
 the geometry has a right answer and can be checked against one, the inference to "attending" is a
 judgement, and keeping them apart is what lets the judgement be revised without re-deriving
 anything.

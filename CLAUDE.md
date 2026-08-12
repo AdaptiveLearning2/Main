@@ -974,7 +974,46 @@ consent check degrading to *enabled* records data against a refusal.
 
 **Withdrawal stops future recording and keeps what is already stored.** Decided 2026-08-10: a
 revoked channel records nothing further until consent is given again, and no past row is deleted or
-hidden. Withdrawal is not erasure — a separate question, tracked in #75.
+hidden. Withdrawal is not erasure — that is `POST /api/consent/{id}/erase`, below.
+
+### Erasure is the other request, and nothing triggers it by side effect
+
+`erase_signals(user, channel, by, tz)` destroys one channel's stored signals for one student, and
+`signal_erasure` records that it happened. It runs **only** when a parent asks for it by name.
+`test_changing_consent_never_erases` pins that: wiring a revocation to the delete would turn the
+reversible control into the irreversible one by a side effect nobody asked for.
+
+**A linked parent only** — not the student, not a teacher, so *not* `_consent_actor`. A student may
+withdraw precisely because a parent can undo it; nothing undoes this. The request also carries its
+own `confirm: true`, because a dialog is not auditable and there is no undo anywhere in the system.
+
+**Per channel, and the heart deletes are keyed on `source`.** Erasing `camera` takes `face_signals`
+and the `rppg` heart rows; `headband_optical` takes the `muse_optics` ones. A delete keyed on the
+table would let a parent erasing the webcam destroy headband data they said nothing about.
+
+**Derived data goes too, and the rollup is deleted before it is rebuilt.** `rollup_signal_day` has
+`HAVING count(*) > 0` on every channel, so with the raw rows gone it inserts nothing and *leaves the
+existing row standing* — averages of erased data outliving the erasure. Deleting first is what makes
+the rebuild a recomputation. The rebuild is not optional either: `expire_signal_rows` refuses a day
+with no rollup row, so a day left without one keeps its raw rows past `ends_on` for a reason nobody
+would think to look for.
+
+**Archived charts are erased if they draw on the channel at all**, which is why `camera` takes
+`heart_rate` and `stress_pie` with it — those mix both sensors into one picture and no pixel says
+which is which. Over-deletion, accepted deliberately over serving a chart that still contains what
+was erased. Object paths are **derived** in the function, never read from `chart_paths`: there it
+would be a delete list of the writer's choosing.
+
+Everything in the database is one transaction; the storage removal runs after it commits and is
+**counted, not awaited** (`charts_failed` on the response, and a log line). Once `chart_paths` is
+nulled the objects are unreachable through the product whether or not the removal succeeded, which
+is why that is safe to report rather than roll back.
+
+**The tombstone is the fourth reporting state.** `erased_at` rides on each channel of the consent
+payload, independent of `enabled` and `revoked_at` — a parent who erased and then re-consented has a
+channel that is on and a past that is gone. `_erasures()` fails **open** to `{}`, unlike `_consent()`:
+it only decides whether a tile says "erased" or "no sensor", and never whether anything may be
+recorded.
 
 That rule has to hold on **both ingestion paths**, and for a while it did not. `/api/signals/*` has
 called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with

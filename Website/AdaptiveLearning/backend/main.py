@@ -2933,7 +2933,7 @@ def _consent_actor(viewer: dict, student_id: str) -> str:
     raise HTTPException(403, "Only the student or a linked parent can change consent")
 
 
-def _shape_consent(row: dict, student_id: str) -> dict:
+def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> dict:
     """Per-channel payload: enabled, when it was revoked, and by which role.
 
     `revoked_by` is a role, never an identity. A teacher needs to know a
@@ -2954,6 +2954,13 @@ def _shape_consent(row: dict, student_id: str) -> dict:
         channels[c] = {
             "enabled": enabled,
             "revoked_at": row.get(f"{c}_revoked_at"),
+            # Independent of `enabled` and of `revoked_at`, and carried even
+            # when the channel is back on: erasure is a fact about the stored
+            # history, not about the current decision. A parent who erased and
+            # then re-consented has a channel that is on and a past that is
+            # gone, and a tile that showed only one of those would be wrong
+            # about the other.
+            "erased_at": (erasures or {}).get(c),
             # Only meaningful while the channel is off; a role attached to an
             # enabled channel would read as "turned on by", which it is not.
             "revoked_by": (
@@ -2985,11 +2992,36 @@ class ConsentUpdate(BaseModel):
     camera_enabled:           bool | None = None
 
 
+class ErasureRequest(BaseModel):
+    channel: str
+    # Erasure is unrecoverable and there is no undo anywhere in the system, so
+    # the request carries its own confirmation rather than relying on a dialog
+    # nobody can audit. A client that omits it gets a 422 naming the field.
+    confirm: bool = False
+
+
+def _erasures(student_id: str) -> dict:
+    """`{channel: erased_at}` for channels whose history has been erased.
+
+    Fails **open** to an empty map, unlike `_consent()`, and the asymmetry is
+    the same one `_school_timezone()` makes. A consent read that fails must deny
+    or it records against a refusal; this one only decides whether a tile says
+    "erased" or "no sensor", so refusing to answer would blank a dashboard over
+    a fact that changes nothing about what may be collected.
+    """
+    try:
+        rows = supabase.table("signal_erasure").select("channel, erased_at") \
+            .eq("user_id", student_id).execute().data or []
+    except Exception:
+        return {}
+    return {r["channel"]: r["erased_at"] for r in rows if r.get("channel")}
+
+
 @app.get("/api/consent/{student_id}")
 def get_consent(student_id: str, request: Request):
     user = get_user(request)
     _verify_can_view_student(user, student_id)
-    return _shape_consent(_consent(student_id), student_id)
+    return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
 
 @app.put("/api/consent/{student_id}")
@@ -3037,7 +3069,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         # No-op. Deliberately does not restamp updated_by/updated_at: a parent
         # re-saving unchanged settings would otherwise raise a notice at the
         # student about a change that did not happen.
-        return _shape_consent(current, student_id)
+        return _shape_consent(current, student_id, _erasures(student_id))
 
     fields["updated_by"] = user["id"]
     fields["updated_at"] = now
@@ -3062,7 +3094,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
                         409, "Consent changed while you were editing it; reload and try again"
                     )
                 raise
-            return _shape_consent(_consent(student_id), student_id)
+            return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
         # Conditional on every flag this call decided against. Read-then-write
         # is not atomic, and the two racing writes here are a student's
@@ -3086,7 +3118,66 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
     if not written:
         raise HTTPException(409, "Consent changed while you were editing it; reload and try again")
 
-    return _shape_consent(_consent(student_id), student_id)
+    return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
+
+
+@app.post("/api/consent/{student_id}/erase")
+def erase_consent_channel(student_id: str, payload: ErasureRequest,
+                          request: Request):
+    """Destroy one channel's stored signals for one student. Irreversible.
+
+    **A linked parent only** -- not the student, and not a teacher. The consent
+    model lets a student withdraw and only a parent re-enable, and that
+    asymmetry is safe because a parent can undo it. Nothing undoes this, so it
+    is not `_consent_actor`, which admits the student: withdrawal and erasure
+    are different decisions with different stakes and they get different gates.
+
+    Deliberately **not** wired to a consent change. Withdrawal keeps history --
+    decided 2026-08-10 -- and making a revocation delete would turn the
+    reversible control into the irreversible one by a side effect nobody asked
+    for. This runs only when someone asks for it by name.
+
+    The database half is one transaction: rows, rollups, `chart_paths`, and the
+    tombstone that claims they are gone. The storage half runs after it commits
+    and is reported rather than awaited -- `charts_failed` on the response, and
+    a log line. Anything left in the bucket is orphaned but unservable, because
+    `chart_paths` no longer points at it.
+    """
+    user = get_user(request)
+    if not _is_linked_parent(user["id"], student_id):
+        raise HTTPException(403, "Only a linked parent can erase stored signals")
+    if payload.channel not in CONSENT_CHANNELS:
+        raise HTTPException(422, f"Unknown channel {payload.channel!r}")
+    if not payload.confirm:
+        raise HTTPException(422, "Set confirm=true; erasing stored signals cannot be undone")
+
+    try:
+        result = supabase.rpc("erase_signals", {
+            "p_user_id": student_id,
+            "p_channel": payload.channel,
+            "p_erased_by": user["id"],
+            # The school's timezone, because the rollup rows this rebuilds are
+            # bucketed by school day. Rebuilding them against UTC would move
+            # every boundary and leave the survivors bucketed one way and the
+            # rest of the year the other.
+            # `.key`, not the ZoneInfo: RPC params are serialised with plain
+            # `json.dumps`, which raises on it. Inside this try, so the failure
+            # would have been swallowed into the 500 below rather than showing
+            # up as a type error -- every erasure failing identically, for a
+            # reason nothing in the response or the log would name.
+            "p_timezone": _school_timezone().key,
+        }).execute().data or {}
+    except Exception as e:
+        # No partial state to describe: the function is one transaction, so
+        # either all of it happened or none of it did.
+        print(f"[erase] {student_id} {payload.channel}: {e}")
+        raise HTTPException(500, "Could not erase stored signals")
+
+    removed, failed = chart_archive.remove_objects(
+        supabase, result.pop("object_paths", []))
+
+    return {**result, "charts_removed": removed, "charts_failed": len(failed),
+            "erased_at": _erasures(student_id).get(payload.channel)}
 
 
 @app.post("/api/consent/ack")

@@ -30,7 +30,15 @@ against the same true ~90. What handles the first window is the tracker rather
 than the estimator, and it does so **across** windows rather than within one:
 an unanchored candidate is held until a second window agrees, so a periodicity
 that is gone a step later is never published. Motion settling is gone a step
-later; a heartbeat is not.
+later; a heartbeat is not. The same applies on re-acquisition, and matters more
+there: a lock is dropped because two windows disagreed with it, so whatever
+re-acquires is drawn from the population this rule distrusts.
+
+Traced on the recovery fixture, the 127 window is killed by the two
+confidence-rejected windows immediately after it -- a candidate does not survive
+a gap -- and the reading that eventually appears is a *second, independent*
+candidate (92 bpm at 30s) paying its own one-window cost, not the first one's
+chain surviving.
 
 That is a different question from the one no in-window test could answer. It is
 not "is this window's periodicity cardiac" -- which agreement, out-of-band power
@@ -475,15 +483,23 @@ class HeartRateTracker:
                     self.bpm = None
                     self._rejections = 0
                     fresh = estimate_window(channels, fs, None, 0.0)
-                    if fresh.bpm is not None:
-                        fresh.reason = "re-acquired after repeated rejections"
-                        # Same bar as any other anchor. This is the path most
-                        # likely to be taken right after a bad lock, so letting
-                        # it adopt a merely-reportable window would put the
-                        # weakest test on the most exposed path.
-                        if fresh.confidence >= self.anchor_min_confidence:
-                            self.bpm = fresh.bpm
-                    return fresh
+                    if fresh.bpm is None:
+                        self._pending = None
+                        return fresh
+                    # Re-acquisition goes through corroboration too, and this
+                    # is the path that needs it most: a lock is dropped because
+                    # two windows disagreed with it, which is what a mid-lesson
+                    # motion event looks like -- so the window doing the
+                    # re-acquiring is drawn from exactly the population this
+                    # rule exists to distrust. Adopting `fresh` directly put
+                    # the *weakest* test on the *most* exposed path, and was
+                    # the pre-#105 bug relocated rather than fixed.
+                    self._pending = fresh.bpm
+                    return HeartEstimate(
+                        None, fresh.confidence, fresh.channels,
+                        f"re-acquiring: holding {fresh.bpm:.1f} bpm until a "
+                        f"second window agrees",
+                        rejected_by="unconfirmed_anchor")
             # A window that produced nothing breaks the chain. A candidate is
             # only evidence about the present while the windows either side of
             # it are readable; across a gap it is just an old number.

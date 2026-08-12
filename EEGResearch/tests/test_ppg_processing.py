@@ -332,6 +332,40 @@ def test_a_steady_rate_costs_exactly_one_window_of_latency():
     assert seen[2] == pytest.approx(150.0, abs=2.0)
 
 
+def test_re_acquisition_is_corroborated_too():
+    """The path that needs the rule most, and the one it originally missed.
+
+    A lock is dropped because two windows disagreed with it -- which is what a
+    mid-lesson motion event looks like, a student shifting or adjusting the
+    headband. So the window doing the re-acquiring is drawn from exactly the
+    population this rule exists to distrust, and adopting it directly put the
+    weakest test on the most exposed path: the pre-#105 bug relocated rather
+    than fixed.
+
+    Found in review of #109 by reproduction rather than by reading, and every
+    other test in this file passed against the broken version.
+    """
+    slow = np.column_stack([_pulse(70.0, seed=i) for i in range(4)])
+    fast = np.column_stack([_pulse(140.0, harmonic=0.4, seed=i) for i in range(4)])
+
+    tracker = HeartRateTracker()
+    tracker.update(slow, FS, 10.0)                      # candidate
+    assert tracker.update(slow, FS, 10.0).bpm == pytest.approx(70.0, abs=2.0)
+
+    first = tracker.update(fast, FS, 10.0)              # discontinuous #1
+    assert first.bpm is None and first.rejected_by == "continuity"
+
+    reacquire = tracker.update(fast, FS, 10.0)          # drops the lock
+    assert reacquire.bpm is None, (
+        "a re-acquired rate was published without a second window agreeing"
+    )
+    assert reacquire.rejected_by == "unconfirmed_anchor"
+
+    # And it does re-acquire -- the rule delays, it does not lock the tracker
+    # out of ever following a real change.
+    assert tracker.update(fast, FS, 10.0).bpm == pytest.approx(140.0, abs=3.0)
+
+
 def test_two_consecutive_windows_must_agree_to_corroborate():
     """Consecutive is necessary, not sufficient.
 

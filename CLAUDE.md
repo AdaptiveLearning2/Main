@@ -556,9 +556,11 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   every genuinely fast rate along with it. So the tracker asks a different question — is the
   periodicity still there a step later — and holds an unanchored candidate until it is. Motion
   settling is not; a heartbeat is. An unusable window in between discards the candidate rather than
-  bridging it. Costs one usable window of latency and refuses nothing: a fast rate is published a
-  step late. `rejected_by="unconfirmed_anchor"` says a rate was *withheld*, which is not
-  `no_signal`.
+  bridging it. **Re-acquisition after a dropped lock goes through the same rule**, and needs it most:
+  a lock is dropped because two windows disagreed with it, so whatever re-acquires comes from exactly
+  the population this distrusts — adopting it directly was the same bug one path over. Costs one
+  usable window of latency and refuses nothing: a fast rate is published a step late.
+  `rejected_by="unconfirmed_anchor"` says a rate was *withheld*, which is not `no_signal`.
 - **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
   ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
   client dedupes per `(device, source)`, and the poller upserts on

@@ -154,11 +154,16 @@ error. Agreement is a quality signal, not a correctness one.
   turned out to reject every genuinely fast rate too.
 
   What changed is that `HeartRateTracker` no longer publishes an unanchored
-  candidate at all: it holds one until a second window agrees, and an unusable
-  window in between discards it. 127 is followed by two unusable windows, so it
-  never corroborates and never reaches a caller. The recording now reports
-  nothing until 83 bpm at 40 s, then tracks the decay to rest. The cost is one
-  usable window of latency at the start of a session — a delay, not a refusal.
+  candidate at all: it holds one until a consecutive window agrees, and an
+  unusable window in between discards it rather than bridging it.
+
+  Per window, so the mechanism is not mistaken for a single surviving chain:
+  127.6 at 0 s becomes a candidate; the confidence-rejected windows at 10 s and
+  20 s discard it; 92.0 at 30 s becomes a *new* candidate; 83.1 at 40 s
+  corroborates that one (Δ 8.9, inside the allowance) and is the first thing
+  published. The decay to rest is tracked from there. The cost is one usable
+  window of latency — a delay, not a refusal — and it applies on re-acquisition
+  too, which is the path a mid-session motion event takes.
 - The end-to-end test these fixtures enable: **derived BPM must be higher in the
   recovery capture than in the rest capture.** No synthetic signal can validate
   the whole chain against real physiology.

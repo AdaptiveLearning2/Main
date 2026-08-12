@@ -224,9 +224,34 @@ alternative — name the model explicitly. Every live selection in `FacialRecg/`
 committed report would otherwise be unreproducible. Nothing has been *run* since the switch —
 `open-rppg` has never been installed here — so treat `.pure` as licence-safe, not as measured.
 
-What actually stands in the way is engineering and evidence: `open-rppg` is 0.1.1, owns the whole
-signal chain and pulls in JAX and Keras — a heavy install for a student's laptop — and the gate below
-would have to be designed and *measured* against a reference.
+What actually stands in the way is engineering and evidence, and one of the three blockers now has
+a number. Measured 2026-08-12: `open-rppg` costs **~600 MB installed** beyond what the camera path
+already brings (jaxlib alone is 252 MB), `import rppg` takes 5.3s and loading `RhythmMamba.pure`
+another 27.5s — about **34s of start-up** on a student's laptop. It also imports `pkg_resources`,
+removed in setuptools 81, so adopting it means pinning a deprecated setuptools. `.pure` weights do
+load, so the licence-safe path is real rather than theoretical. The ONNX escape route — onnxruntime is already
+a dependency, so exporting the weights would drop nearly all of that — was tried and **does not
+currently work**: `jax2onnx` cannot convert `Fusion_Stem`'s channels-last 3D convolution, and the
+model hardcodes that layout. It fails *before* reaching the Mamba scan, so whether the scan exports
+is still unknown; don't read the conv error as the only obstacle. **The ONNX export works and the cost objection is gone**:
+`scripts/export_rhythmmamba_onnx.py` patches a vendored `open-rppg` (~20 lines: the JAX-only
+`.at[].set()` in `Block_mamba`, Mamba's grouped Conv1D, and `Frequencydomain_FFN`'s RFFT, none of
+which tf2onnx converts) and emits a 22 MB model that runs under **onnxruntime alone** — already a
+dependency — loading in 1.5 s against ~34 s, and matching **the unpatched package** at
+correlation 0.99985 — measured against a baseline captured *before* patching, because comparing the
+export to the patched model only proves it reproduced what it was exported from. Inference is 0.97 s
+per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
+from weights whose licence terms are the authors', and the script regenerates it. **This settles the
+cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands.
+`scripts/capture_face_video_ecg.py` is that capture: 128×128 face crops (what the model takes),
+lossless because every lossy codec discards exactly the variation rPPG reads, and it **refuses to
+write inside the repo** — this is the one artefact that must never be committable, and `git add -A`
+does not ask. `--delete` clears the frames and stamps the header, since a cleaned-up capture with no
+trace is indistinguishable from one nobody cleaned up. The `.npy` is **trimmed on close to the frames
+actually captured**: it is allocated for the worst case, `open_memmap` zero-fills, and an untrimmed
+tail reads back as black frames rather than as absent data — which a windowing script would feed to
+the model as a sharp non-physiological edge. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a
 single-channel source.** Its three terms were built for four contact channels — `agreement` is 1.00

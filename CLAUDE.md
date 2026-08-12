@@ -248,9 +248,18 @@ attention scorer anywhere in `EEGResearch/src/app`. Nothing lies — the three-s
 strategy prompt are all built on a value nothing has ever computed. **Phase 11 fills them**, so don't
 drop the columns or the UI.
 
-The blocker is that the only face detector here is a **Haar cascade returning a bounding box**
-(`face_roi.py`) — no landmark geometry exists to derive a gaze vector or head pose from, so this
-needs a new model rather than new wiring. When it lands it needs a *measurement* against a reference
+`face_geometry.py` is the arithmetic half and is done: named landmarks in, head pose and iris
+offset out, pure numpy so CI can test it. **It has no caller** — the only face detector here is a
+Haar cascade returning a bounding box (`face_roi.py`), so what is still missing is a landmark model
+to feed it (MediaPipe Face Mesh is the candidate: Apache 2.0, models downloadable without an
+agreement, which is the constraint that blocked RhythmMamba). It deliberately scores no attention:
+the geometry has a right answer and can be checked against one, the inference to "attending" is a
+judgement, and keeping them apart is what lets the judgement be revised without re-deriving
+anything.
+
+It uses an orthographic fit, **not `cv2.solvePnP`**, because solvePnP needs camera intrinsics we do
+not have — a guessed focal length yields a systematically wrong pose that still looks like a face
+turning. The trade is that perspective is ignored, so it degrades at close range and large angles. When it lands it needs a *measurement* against a reference
 before anything reaches a parent: "attention" inferred from head direction is least valid for exactly
 this product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
 looking away while thinking is not inattentive.

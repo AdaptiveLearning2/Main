@@ -237,8 +237,10 @@ is still unknown; don't read the conv error as the only obstacle. **The ONNX exp
 `scripts/export_rhythmmamba_onnx.py` patches a vendored `open-rppg` (~20 lines: the JAX-only
 `.at[].set()` in `Block_mamba`, Mamba's grouped Conv1D, and `Frequencydomain_FFN`'s RFFT, none of
 which tf2onnx converts) and emits a 22 MB model that runs under **onnxruntime alone** — already a
-dependency — loading in 1.5 s against ~34 s, and matching Keras at correlation 1.00000000. Inference
-is 0.93 s per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
+dependency — loading in 1.5 s against ~34 s, and matching **the unpatched package** at
+correlation 0.99985 — measured against a baseline captured *before* patching, because comparing the
+export to the patched model only proves it reproduced what it was exported from. Inference is 0.97 s
+per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
 from weights whose licence terms are the authors', and the script regenerates it. **This settles the
 cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands.
 `scripts/capture_face_video_ecg.py` is that capture: 128×128 face crops (what the model takes),

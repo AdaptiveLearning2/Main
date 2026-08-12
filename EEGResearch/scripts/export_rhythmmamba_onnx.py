@@ -6,8 +6,9 @@ Why this exists
 `open-rppg` costs ~600 MB of new dependencies and ~34 s of start-up (see
 docs/RPPG_DEPENDENCY_COST.md). Exported to ONNX it costs **nothing new** --
 onnxruntime is already a dependency of the `face` extra -- and loads in ~1.5 s.
-The exported file is 22 MB and agrees with the Keras model to 2.1e-05
-(correlation 1.00000000).
+The exported file is 22 MB and agrees with the **unpatched** package at
+correlation 0.99985 (0.999998 comparing like for like at float32; the package
+ships at mixed_float16 and the export runs at float32).
 
 That is the difference between camera rPPG being an affordable experiment and
 being a 600 MB commitment, so the recipe is kept rather than the result: the
@@ -49,8 +50,13 @@ against a throwaway install.
    at 19). The transform length is fixed by the input signature, so the DFT is a
    constant matrix and the transform is a matmul.
 
-Edits 4 and 5 are each verified numerically here: replacing them changes the
-output by ~1e-05, which is float32 rounding.
+All five are verified together rather than by inspection: the script captures
+the unpatched model's output *before* patching and the final check compares the
+ONNX graph against that. Measured on the same input, at float32 on both sides,
+the patches alone move the output by 1.1e-04 (correlation 0.9999999993) -- op
+reordering, not a change of function. At the package's own mixed_float16 the
+same patches move it by 1.8e-02, which is float16 accumulation and is the reason
+the export runs at float32.
 
 Usage
 -----
@@ -212,9 +218,9 @@ def patch(models_py: pathlib.Path) -> None:
     print(f"patched {models_py}")
 
 
-EXPORT = textwrap.dedent("""
-    import glob, os, sys, time
-    import numpy as np, keras, rppg, rppg.main as M
+BASELINE = textwrap.dedent("""
+    import glob, os, sys
+    import numpy as np, rppg, rppg.main as M
 
     out = sys.argv[1]
     w = glob.glob(os.path.join(os.path.dirname(rppg.__file__),
@@ -226,7 +232,20 @@ EXPORT = textwrap.dedent("""
     rng = np.random.default_rng(0)
     x = rng.random((1, 160, 128, 128, 3), dtype='float32')
     np.save(out + '.input.npy', x)
-    np.save(out + '.expected.npy', np.asarray(net(x)))
+    np.save(out + '.expected.npy', np.asarray(net(x), dtype='float32'))
+    print('baseline captured from the unpatched model')
+""")
+
+EXPORT = textwrap.dedent("""
+    import glob, os, sys, time
+    import numpy as np, keras, rppg, rppg.main as M
+
+    out = sys.argv[1]
+    w = glob.glob(os.path.join(os.path.dirname(rppg.__file__),
+                               'weights', 'RhythmMamba.pure.weights.h5'))[0]
+    net = M.RhythmMamba()
+    net(np.zeros((1, 160, 128, 128, 3), dtype='float32'))
+    net.load_weights(w)
 
     t = time.perf_counter()
     net.export(out, format='onnx',
@@ -258,14 +277,16 @@ VERIFY = textwrap.dedent("""
     corr = float(np.corrcoef(got.ravel(), expected.ravel())[0, 1])
     print(f'  session load    {load:.2f}s')
     print(f'  inference       {infer:.2f}s for 160 frames')
-    print(f'  max abs diff    {diff:.3e}')
+    print(f'  max abs diff    {diff:.3e}  (vs the UNPATCHED model)')
     print(f'  correlation     {corr:.8f}')
-    # Loose on the absolute difference and strict on the correlation: float32
-    # rounding moves individual samples, but a wrongly wired graph destroys the
-    # waveform, which is what this model produces and what matters downstream.
-    assert diff < 1e-3, 'exported model disagrees with the Keras one'
-    assert corr > 0.9999, 'exported waveform does not match'
-    print('  OK')
+    # Correlation, not absolute difference, and the bar is 0.999 rather than
+    # something tighter. The reference is the package as shipped, which runs at
+    # mixed_float16 while the export runs at float32, so individual samples move
+    # by ~5e-2 on a waveform spanning ~4 -- that is precision, not wiring.
+    # Measured on this input: 0.99984906. A wrongly wired graph does not score
+    # 0.999 on a biosignal waveform; it scores nothing like it.
+    assert corr > 0.999, f'exported waveform does not match the original ({corr})'
+    print('  OK -- matches the unpatched model')
 """)
 
 
@@ -283,6 +304,26 @@ def main() -> int:
     models = pathlib.Path(args.rppg) / "rppg" / "models.py"
     if not models.exists():
         raise SystemExit(f"no open-rppg at {models}")
+    if "_dft_matrices" in models.read_text(encoding="utf-8"):
+        raise SystemExit(
+            f"{models} is already patched, so there is no pristine model left "
+            f"to measure against. Reinstall open-rppg into a clean target."
+        )
+
+    # The reference comes from the UNPATCHED model, before anything is
+    # rewritten. Capturing it afterwards would have the patched model grading
+    # itself: the comparison would only prove the ONNX graph faithfully
+    # reproduces the patched TensorFlow one, which says nothing about whether
+    # the patches preserved the original's behaviour. That was the shape of a
+    # real gap in an earlier version of this script.
+    print("capturing the baseline from the unpatched model...")
+    base_env = dict(os.environ, PYTHONPATH=args.rppg, KERAS_BACKEND="jax",
+                    TF_CPP_MIN_LOG_LEVEL="3")
+    base_env.pop("RPPG_POLICY", None)      # the package's own mixed_float16
+    if subprocess.run([sys.executable, "-c", BASELINE, args.out],
+                      env=base_env).returncode:
+        return 1
+
     patch(models)
 
     env = dict(os.environ, PYTHONPATH=args.rppg, KERAS_BACKEND="tensorflow",

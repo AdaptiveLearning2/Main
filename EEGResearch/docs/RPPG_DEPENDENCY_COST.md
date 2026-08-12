@@ -138,19 +138,43 @@ and it took three rounds:
 | `StatefulPartitionedCall` | the same, again | the first patch landed on `BiMamba` -- the same source line, in a class `RhythmMamba` never calls, with `same` padding instead of `causal`. Patch the *second* occurrence. |
 | `RFFT` | `Frequencydomain_FFN` | tf2onnx converts it at no opset it supports (it caps at 19). The transform length is fixed by the input signature, so the DFT is a constant matrix and the transform is a matmul. |
 
-Each rewrite was checked against the version it replaced: the depthwise
-convolution differs by 1.1e-05 and the DFT matmuls by 7.0e-06, which is float32
-rounding.
+Each rewrite was checked against the version it replaced as it was made, and all
+of them together are checked against the unpatched package by the script itself
+-- see the numbers below. The DFT matrices additionally have unit tests against
+`numpy.fft` (`tests/test_export_rhythmmamba_onnx.py`), which need none of the
+2.5 GB toolchain and so run in CI.
 
 ## It works
 
 ```
 *** RUNS under onnxruntime alone -- no jax, keras or tensorflow imported ***
-  session load     1.57 s
-  inference        0.93 s for 160 frames
-  max abs diff     2.086e-05
-  correlation      1.00000000
+  session load     1.58 s
+  inference        0.97 s for 160 frames
+  max abs diff     4.802e-02   (vs the UNPATCHED package)
+  correlation      0.99984906
 ```
+
+**Against the unpatched package**, not against the patched model. An earlier
+version of this measured the ONNX graph against the *patched* TensorFlow model,
+which only established that the export reproduced the thing it was exported
+from -- it said nothing about whether the patches preserved the original's
+behaviour. The script now captures the baseline before applying any patch, so
+the comparison is end-to-end by construction.
+
+The three numbers that matter, all on the same input:
+
+| Comparison | max abs diff | correlation |
+| --- | --- | --- |
+| patches alone, both JAX, both float32 | 1.06e-04 | 0.9999999993 |
+| patches alone, both JAX, at the package's `mixed_float16` | 1.76e-02 | 0.99998229 |
+| **ONNX vs the package as shipped** | **4.80e-02** | **0.99984906** |
+| ONNX vs the package at float32, like for like | 4.96e-03 | 0.99999837 |
+
+Read together: the patches are equivalent to op reordering (row 1), float16
+accumulation is what makes that visible (row 2), and the end-to-end divergence
+is dominated by precision and by TF/ONNX kernel differences rather than by the
+rewrites. On a biosignal waveform 0.9998 is agreement; a mis-wired graph does
+not land near it.
 
 | | `open-rppg` | exported ONNX |
 | --- | --- | --- |

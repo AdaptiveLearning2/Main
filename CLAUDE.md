@@ -293,13 +293,21 @@ refusal must never be recorded as one. A landmarker that raises stores
 which is the *warming-up* state, so a corrupt model would otherwise claim to be starting up for a
 whole session.
 
-**Before enabling `FACE_GAZE_ENABLED` in production, settle what a gaze-only row does to the emotion
-rollup.** `rollup_signal_day`'s `'emotion'` channel takes `sample_count` as `count(*)` over
-`face_signals`, so rows carrying a gaze and no emotion inflate it — `emotion_counts` and
-`trusted_sample_count` are filtered and stay correct, but `face_samples` on the weekly report is
-documented as "how much is behind each figure" and would overstate the emotion evidence. Latent
-today because the flag is off and nothing renders gaze; it becomes real the moment either changes,
-and it lands in the copy that survives `expire_signal_rows`.
+**`face_signals` is the one signal table with two producers, so its counts are per *measurement*, not
+per row.** `rollup_signal_day`'s `'emotion'` channel takes `sample_count` as
+`count(*) FILTER (WHERE emotion IS NOT NULL)` (`20260819000000`) — unlike the cognitive and heart
+channels, which count every row in their table, because those tables have one producer each. A window
+where the landmarker read a gaze and FER+ refused is a real face row with no emotion in it, and
+counting it would make enabling gaze read as *emotion coverage improving* in the summary that
+outlives `expire_signal_rows`.
+
+Two halves that have to move together: `_weekly_signal_report`'s raw-day fallback counts the same
+thing, or `face_samples` means something different depending on whether the day has been rolled up
+yet. The row's *existence* still gates on `count(*) > 0` over all face rows — `expire_signal_rows`
+refuses a day with no rollup row, so a gaze-only day must still get one or its raw rows never expire.
+Asserted against a real stack in `scripts/assert_signal_rls.sql`, which is the only place this
+arithmetic runs: the backend suite drives `main.py` with a fake client, and CI applying the migration
+proves the SQL parses, not that it counts.
 
 **`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
 reference rather than on code: "attention" inferred from head direction is least valid for exactly

@@ -1127,7 +1127,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # This keeps a thin day visibly thin after the detail is gone --
             # without it four samples and four thousand look identical.
             "cognitive_samples": (cog_roll.get("sample_count") or 0) if cog_roll else len(day_cog),
-            "face_samples": (face_roll.get("sample_count") or 0) if face_roll else len(day_face),
+            # Emotion rows, not face rows. `face_signals` has two producers
+            # since Phase 11 step 2 -- a gaze-only row is a real face row with
+            # no emotion in it -- and `20260819000000` narrowed the rollup's
+            # emotion `sample_count` to match. Both sides have to move together
+            # or this number means something different depending on whether the
+            # day happens to have been rolled up yet, which is exactly the
+            # comparison the block above exists to keep sound.
+            "face_samples": ((face_roll.get("sample_count") or 0) if face_roll
+                             else sum(1 for r in day_face
+                                      if r.get("emotion") is not None)),
             "heart_samples": (heart_roll.get("sample_count") or 0) if heart_roll else len(day_heart),
         })
 

@@ -924,5 +924,75 @@ BEGIN
     END IF;
 END $$;
 
+-- ── the emotion rollup counts emotion samples, not face rows ────────────────
+--
+-- `face_signals` gained a second producer in Phase 11 step 2: the landmarker
+-- writes `gaze_x`/`gaze_y`, and a row is written when *either* measurement
+-- succeeds. So `count(*)` over the table stopped meaning "emotion samples".
+--
+-- Asserted here rather than in the backend suite because that suite drives
+-- `main.py` with a fake client and this arithmetic is in Postgres. The
+-- migration passing CI only proves the SQL *applies*; this is the only place it
+-- runs.
+DO $$
+DECLARE
+    owner_id uuid;
+    sess     uuid;
+    n        int;
+BEGIN
+    SELECT i.owner_id, i.sess_id INTO owner_id, sess FROM _ids i;
+
+    DELETE FROM face_signals WHERE user_id = owner_id;
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+
+    -- Three rows carrying an emotion, two carrying only a gaze. The second pair
+    -- is what a window looks like when the landmarker read a face and FER+
+    -- refused it -- an ordinary outcome, not an error.
+    INSERT INTO face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT sess, owner_id,
+           '2026-03-11T18:00:00Z'::timestamptz + (g || ' s')::interval,
+           'happy', true
+      FROM generate_series(1, 3) g;
+    INSERT INTO face_signals (session_id, user_id, ts, emotion, emotion_trusted,
+                              gaze_x, gaze_y)
+    SELECT sess, owner_id,
+           '2026-03-11T18:01:00Z'::timestamptz + (g || ' s')::interval,
+           NULL, false, 0.42, -0.03
+      FROM generate_series(1, 2) g;
+
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-11', 'UTC');
+
+    SELECT sample_count INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'emotion';
+    IF n <> 3 THEN
+        RAISE EXCEPTION
+            'emotion sample_count is % over 3 emotion rows and 2 gaze-only '
+            'rows, expected 3 -- gaze inflates the figure the weekly report '
+            'presents as how much is behind the emotion numbers, in the copy '
+            'that outlives expire_signal_rows', n;
+    END IF;
+
+    -- The day is still summarised. `expire_signal_rows` refuses to delete a day
+    -- with no rollup row, so gating the row's existence on emotion would leave
+    -- a gaze-only day's raw rows undeletable for ever.
+    DELETE FROM face_signals WHERE user_id = owner_id AND emotion IS NOT NULL;
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-11', 'UTC');
+
+    SELECT count(*) INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'emotion';
+    IF n <> 1 THEN
+        RAISE EXCEPTION
+            'a gaze-only day produced no emotion rollup row, so its raw rows '
+            'can never expire';
+    END IF;
+
+    SELECT sample_count INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'emotion';
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'a gaze-only day reports % emotion samples', n;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

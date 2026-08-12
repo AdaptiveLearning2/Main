@@ -351,3 +351,42 @@ def test_a_failed_raw_read_is_not_papered_over_by_the_rollup(monkeypatch,
         "a failed live read was reported as a complete day"
     )
     assert day["focus"] is None
+
+
+# ── face_samples counts emotion samples, not face rows ──────────────────────
+
+def _face_row(ts, emotion, gaze_x=None):
+    return {"user_id": STUDENT, "ts": ts, "emotion": emotion,
+            "emotion_trusted": emotion is not None, "attention": None,
+            "gaze_x": gaze_x, "gaze_y": None}
+
+
+def test_a_gaze_only_row_does_not_count_as_an_emotion_sample(monkeypatch,
+                                                             at_three_am_utc):
+    """`face_signals` has two producers since Phase 11 step 2, and `push_client`
+    writes a row when *either* succeeds. A window where the landmarker read a
+    gaze and FER+ refused is a real face row with no emotion in it.
+
+    `face_samples` is presented as how much is behind the emotion figure, so
+    counting those would make enabling gaze read as emotion coverage improving.
+    `20260819000000` narrows the rollup's side of this; the raw side has to
+    agree, or the number means something different depending on whether the day
+    happens to have been rolled up.
+    """
+    _school(monkeypatch, LA)
+    tables = _tables()
+    tables["face_signals"] = [
+        _face_row("2026-06-12T03:00:00+00:00", "happy"),
+        _face_row("2026-06-12T03:00:01+00:00", "sad"),
+        _face_row("2026-06-12T03:00:02+00:00", None, gaze_x=0.42),
+        _face_row("2026-06-12T03:00:03+00:00", None, gaze_x=0.0),
+    ]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+
+    report = main._weekly_signal_report(STUDENT)
+    day = _day(report, "2026-06-11")
+
+    assert day is not None
+    assert day["face_samples"] == 2, (
+        f"counted {day['face_samples']}: gaze-only rows inflated the emotion "
+        "sample count")

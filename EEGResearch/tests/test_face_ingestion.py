@@ -781,7 +781,14 @@ def test_a_haar_miss_does_not_suppress_gaze():
 
 def test_a_landmarker_that_raises_costs_only_gaze():
     """It runs before the colour sample, so an escaping exception would cost
-    the heart channel every frame rather than merely blanking gaze."""
+    the heart channel every frame rather than merely blanking gaze.
+
+    Read inside the try, like its neighbours. This assertion used to sit after
+    `disconnect()`, where it was vacuous — teardown clears the reading, so it
+    held whatever the landmarker did — and after `landmarker_failed` was added
+    it was vacuous *and* wrong, reading as "gaze stays unset on failure" when
+    the failure now stores an explicit refusal.
+    """
     lm = FakeLandmarker(raises=True)
     adapter, _ = _gaze_adapter(lm)
     adapter.connect()
@@ -789,10 +796,14 @@ def test_a_landmarker_that_raises_costs_only_gaze():
         assert _wait_for(lambda: adapter.get_ingestion_meta()["frames_read"] > 5)
         assert _wait_for(lambda: len(adapter.rgb_buffer()) > 0), \
             "the colour buffer stopped filling when gaze raised"
+        contained = adapter.latest_gaze()
     finally:
         adapter.disconnect()
 
-    assert adapter.latest_gaze() is None
+    # The containment claim: the exception became a refusal on this channel
+    # rather than escaping. What that refusal *says* is the next test's job.
+    assert contained is not None, "a raising landmarker produced no state at all"
+    assert contained.x is None
 
 
 def test_a_refusal_is_kept_rather_than_discarded():

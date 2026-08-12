@@ -119,3 +119,39 @@ def test_the_median_ignores_refused_frames_rather_than_counting_them_as_zero():
     assert verify._median([None, -0.6, None, -0.5]) == pytest.approx(-0.55)
     assert verify._median([None, None]) is None
     assert verify._median([]) is None
+
+
+def test_a_failed_square_on_skips_the_yaw_check_but_not_the_gaze_check(capsys):
+    """The two depend on different things, so gating them together would throw
+    away a usable answer.
+
+    `gaze` is computed from the eye and iris landmarks alone and never touches
+    the rotation fit, so a wrong canonical model cannot flip its sign — the
+    mirror check still works. `yaw` comes straight out of that fit, so it is
+    meaningless until square-on passes, and printing PASS beside a warning
+    saying not to trust it is how someone reads the wrong half of a failed run.
+    """
+    code = verify._verdict(
+        _step(yaw=60.0),               # square-on fails: the pose fit is wrong
+        _step(gaze_x=-0.6),            # ...but the eyes are still readable
+        _step(yaw=+40.0),              # ...and this would otherwise print PASS/FAIL
+    )
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "SKIP" in out and "yaw comes from the pose fit" in out
+    assert "looking left drives gaze.x negative" in out
+
+
+def test_nothing_printed_needs_more_than_ascii():
+    """A Windows console is cp1252 and cannot encode box-drawing characters or
+    arrows at all. The failure is a UnicodeEncodeError on the first line of
+    output, before the check runs — on the project's first-class dev platform,
+    for a script whose whole premise is being cheap to run.
+
+    pytest captures output through a UTF-8 buffer, so no other test here can
+    see this; the source is checked directly instead.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    body = source.split('"""', 2)[2]      # the docstring is never printed
+    body.encode("cp1252")                 # raises if any runtime string cannot

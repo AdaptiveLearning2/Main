@@ -43,6 +43,14 @@ frame, which is not mirrored. "My left" below always means the left side of your
 own body.
 """
 
+# ASCII only in everything this prints. A Windows console defaults to cp1252,
+# which cannot encode box-drawing characters or arrows at all -- and the failure
+# is a UnicodeEncodeError traceback on the first line of output, before the
+# check has run. For a script whose entire premise is "a check that is expensive
+# to run is a check nobody runs", crashing on the project's first-class dev
+# platform would be worse than the docstring it replaces. It also keeps the
+# output readable when piped to a file.
+
 from __future__ import annotations
 
 import argparse
@@ -89,12 +97,12 @@ def _median(values):
 
 
 def _step(name: str, instruction: str, landmarker, source, seconds, w, h) -> dict:
-    print(f"\n── {name} ──")
+    print(f"\n-- {name} --")
     print(f"   {instruction}")
     for count in range(3, 0, -1):
-        print(f"   starting in {count}…", end="\r", flush=True)
+        print(f"   starting in {count}...", end="\r", flush=True)
         time.sleep(1.0)
-    print(f"   measuring for {seconds:.0f}s…      ")
+    print(f"   measuring for {seconds:.0f}s...      ")
 
     samples = _collect(landmarker, source, seconds, w, h)
     poses = [p for p, _ in samples]
@@ -121,7 +129,7 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h) -> dic
 
 
 def _verdict(square, eyes, head) -> int:
-    print("\n── verdict ──")
+    print("\n-- verdict --")
     failures = 0
 
     def report(ok: bool, line: str) -> None:
@@ -130,7 +138,7 @@ def _verdict(square, eyes, head) -> int:
         failures += 0 if ok else 1
 
     if not square["frames"]:
-        print("   INCONCLUSIVE  no face was measured at all — check the camera, "
+        print("   INCONCLUSIVE  no face was measured at all - check the camera, "
               "the lighting, and that MediaPipe is installed")
         return 2
 
@@ -139,7 +147,7 @@ def _verdict(square, eyes, head) -> int:
     report(square_ok, f"square on reads near zero "
                       f"(yaw={square['yaw']}, pitch={square['pitch']}, roll={square['roll']})")
     if not square_ok:
-        print("         → the canonical model or the pose maths is wrong, not "
+        print("         -> the canonical model or the pose maths is wrong, not "
               "the index table. The two steps below cannot be trusted until "
               "this passes.")
 
@@ -150,12 +158,24 @@ def _verdict(square, eyes, head) -> int:
         report(True, f"looking left drives gaze.x negative ({gx})")
     elif gx >= GAZE_THRESHOLD:
         report(False, f"looking left drives gaze.x POSITIVE ({gx})")
-        print("         → the eye and iris indices are MIRRORED. Swap the "
+        print("         -> the eye and iris indices are MIRRORED. Swap the "
               "`left_*` and `right_*` eye entries in "
               "face_landmarks.MEDIAPIPE_INDICES.")
     else:
-        report(False, f"gaze.x barely moved ({gx}) — look harder, or the iris "
+        report(False, f"gaze.x barely moved ({gx}) - look harder, or the iris "
                       f"landmarks are not tracking")
+
+    # Step 3 is skipped when step 1 failed, and step 2 is not. That is not an
+    # inconsistency: `gaze` is computed from the eye and iris landmarks alone
+    # and never touches the rotation fit, so a wrong canonical model or a wrong
+    # Euler extraction cannot flip its sign. `yaw` comes straight out of that
+    # fit, so it is meaningless until step 1 passes -- and printing PASS beside
+    # a warning that says not to trust it is how someone reads the wrong half
+    # of a failed run.
+    if not square_ok:
+        print("   SKIP  turning left: yaw comes from the pose fit, which step 1 "
+              "says is wrong")
+        return 1
 
     yaw = head["yaw"]
     if yaw is None:
@@ -164,11 +184,11 @@ def _verdict(square, eyes, head) -> int:
         report(True, f"turning left drives yaw negative ({yaw})")
     elif yaw >= YAW_THRESHOLD:
         report(False, f"turning left drives yaw POSITIVE ({yaw})")
-        print("         → the outline indices are MIRRORED, or the canonical "
+        print("         -> the outline indices are MIRRORED, or the canonical "
               "model's x axis is flipped. Note this is a *different* table "
               "region from the eyes above; check which of the two failed.")
     else:
-        report(False, f"yaw barely moved ({yaw}) — turn further, or the "
+        report(False, f"yaw barely moved ({yaw}) - turn further, or the "
                       f"outline landmarks are not tracking")
 
     print()
@@ -207,7 +227,18 @@ def main() -> int:
         return 2
 
     # The constructor opens the camera; there is no separate open().
-    source = OpenCvFrameSource(camera_index=args.camera, fps=args.fps)
+    # Wrapped like the two setup steps above it. This is the likeliest failure
+    # of the three in practice -- no webcam, permission denied, or the camera
+    # held by a video call -- and it was the only one that produced a raw
+    # traceback instead of a sentence saying what to do.
+    try:
+        source = OpenCvFrameSource(camera_index=args.camera, fps=args.fps)
+    except Exception as exc:                                   # noqa: BLE001
+        print(f"could not open camera {args.camera}: {exc}",
+              "check it is connected, not in use by another app, and that this "
+              "terminal has camera permission; --camera N selects another",
+              sep="\n", file=sys.stderr)
+        return 2
     try:
         first = None
         deadline = time.perf_counter() + 5.0
@@ -220,7 +251,7 @@ def main() -> int:
         print(f"camera {args.camera}: {width}x{height}; "
               f"exposure locked: {source.locked}")
         print("No video is recorded. Each frame becomes angles and is dropped.")
-        print("Ignore any mirrored preview in other apps — this reads the raw "
+        print("Ignore any mirrored preview in other apps - this reads the raw "
               "frame.\n'left' below always means the left side of YOUR body.")
 
         square = _step("1/3 square on",

@@ -18,6 +18,7 @@ import pytest
 
 from src.app.services.face_landmarks import (
     MEDIAPIPE_INDICES,
+    FaceMeshLandmarker,
     MIN_VISIBILITY,
     check_topology,
     named_landmarks,
@@ -201,3 +202,63 @@ def test_topology_holds_for_a_tilted_face():
     rolled = {name: (x + (y - 240.0) * 0.3, y) for name, (x, y) in _pixels().items()}
 
     assert check_topology(rolled) is None
+
+
+# ── the boundary, and the log ───────────────────────────────────────────────
+
+def test_a_landmark_exactly_at_the_threshold_is_visible():
+    """`< MIN_VISIBILITY` rejects, so the threshold itself is kept. Pinned
+    rather than left implied: flipping this to `<=` drops a whole band of
+    marginal-but-usable landmarks, and nothing else would notice."""
+    named = named_landmarks(_mesh(visibility=MIN_VISIBILITY), 640, 480)
+
+    assert len(named) == len(MEDIAPIPE_INDICES)
+
+
+class _FakeMesh:
+    """Stands in for MediaPipe. `locate()` is testable through this — only
+    constructing a real Face Mesh is not."""
+
+    def __init__(self, points):
+        self._points = points
+
+    def process(self, _frame):
+        landmarks = self._points
+
+        class _Result:
+            multi_face_landmarks = ([type("F", (), {"landmark": landmarks})()]
+                                    if landmarks is not None else None)
+        return _Result()
+
+
+def test_a_frame_with_no_face_is_empty_not_an_error(caplog):
+    landmarker = FaceMeshLandmarker(mesh=_FakeMesh(None))
+
+    assert landmarker.locate(object(), 640, 480) == {}
+    assert landmarker.rejections == 0
+
+
+def test_a_good_frame_returns_named_landmarks():
+    landmarker = FaceMeshLandmarker(mesh=_FakeMesh(_mesh()))
+
+    named = landmarker.locate(object(), 640, 480)
+
+    assert set(named) == set(MEDIAPIPE_INDICES)
+
+
+def test_a_bad_index_table_is_reported_once_not_once_per_frame(caplog):
+    """At the capture loop's rate this is tens of identical lines a second,
+    which buries the one thing worth reading. It is a standing condition, not
+    an event — but the count has to keep rising, or "wrong on one frame" and
+    "wrong on every frame all session" would read identically."""
+    broken = _mesh({**FACE, "nose_tip": (0.95, 0.50)})   # nose outside the eyes
+    landmarker = FaceMeshLandmarker(mesh=_FakeMesh(broken))
+
+    with caplog.at_level("ERROR"):
+        for _ in range(25):
+            assert landmarker.locate(object(), 640, 480) == {}
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1, f"logged {len(errors)} times for one standing fault"
+    assert "nose_outside_eyes" in errors[0].getMessage()
+    assert landmarker.rejections == 25

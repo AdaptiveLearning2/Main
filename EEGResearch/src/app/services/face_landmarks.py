@@ -175,14 +175,20 @@ class FaceMeshLandmarker:
     deployment must not need, and a test must be able to drive the pipeline
     without one.
 
-    **Not exercised by any test**, like `FaceLocator`, because it needs
-    MediaPipe and a camera. Its behaviour belongs to the manual verification
-    step. What *is* tested is everything it delegates to -- the index mapping,
-    the pixel conversion and the topology check -- which is where a mistake
-    would actually live.
+    Only the **construction** of a real Face Mesh is untestable here, needing
+    MediaPipe and a camera; `locate()` is exercised through an injected mesh,
+    which is the point of the injection. An earlier version of this docstring
+    said the whole class was untested, which overstated the gap and would have
+    discouraged anyone from covering the part that can be.
     """
 
     def __init__(self, mesh: Any | None = None) -> None:
+        # Reasons already reported, so a wrong index table does not become a
+        # per-frame error flood. At the capture loop's rate that is tens of
+        # identical lines a second, which buries the one thing worth reading
+        # and makes the log useless for whatever else is wrong.
+        self._reported: set[str] = set()
+        self._rejections = 0
         if mesh is not None:
             self._mesh = mesh
             return
@@ -213,10 +219,27 @@ class FaceMeshLandmarker:
         named = named_landmarks(faces[0].landmark, width, height)
         wrong = check_topology(named)
         if wrong is not None:
-            # Loud, once per occurrence: this means the index table is wrong,
-            # not that the student moved. It is the failure the table's own
-            # docstring warns about, and it must not be swallowed as a quiet
-            # empty frame.
-            logger.error("landmark topology rejected: %s", wrong)
+            self._rejections += 1
+            # Once per reason, not once per frame. This means the index table
+            # is wrong rather than that the student moved, so it has to be
+            # visible -- but it is a standing condition, not an event, and
+            # repeating it every frame buries it in its own copies. The count
+            # is kept so the repetition is still measurable.
+            if wrong not in self._reported:
+                self._reported.add(wrong)
+                logger.error("landmark topology rejected: %s "
+                             "(the mesh index table is likely wrong; further "
+                             "occurrences of this reason are counted, not logged)",
+                             wrong)
             return {}
         return named
+
+    @property
+    def rejections(self) -> int:
+        """How many frames the topology check has refused.
+
+        Exposed because the log is now deduplicated: without a count, "wrong
+        on one frame" and "wrong on every frame since the session began" read
+        identically, and they are very different facts.
+        """
+        return self._rejections

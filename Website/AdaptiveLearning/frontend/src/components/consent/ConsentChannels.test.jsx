@@ -218,3 +218,199 @@ describe('copy', () => {
     expect(text).toMatch(/saved/)
   })
 })
+
+// ── erasure (#106) ──────────────────────────────────────────────────────────
+//
+// A separate decision from consent, with a separate endpoint and a separate
+// gate: a student may withdraw, only a linked parent may erase, and nothing
+// undoes it. What is asserted here is that the two never get confused for one
+// another and that the irreversible one cannot be reached by accident.
+
+const ERASED = {
+  ...ALL_ON,
+  channels: {
+    ...ALL_ON.channels,
+    camera: { enabled: true, revoked_at: null, revoked_by: null,
+              erased_at: '2026-08-11T09:00:00Z' },
+  },
+}
+
+function eraseOk(extra = {}) {
+  apiFetch.mockImplementation((url, opts) => {
+    if (url.endsWith('/erase')) return Promise.resolve({ channel: 'camera', charts_failed: 0, ...extra })
+    return Promise.resolve(opts?.method === 'PUT' ? ALL_ON : ERASED)
+  })
+}
+
+describe('erasing stored readings', () => {
+  it('is not offered to the student', async () => {
+    // The backend refuses them outright, so a control here would always fail.
+    // They are still told an erasure happened -- see the test below.
+    apiFetch.mockResolvedValue(ERASED)
+    render(<ConsentChannels studentId="stu-1" role="student" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    expect(screen.queryByText(/erase what this recorded/i)).not.toBeInTheDocument()
+  })
+
+  it('tells the student their readings were erased', async () => {
+    // Only a parent can ask for it; a student is still entitled to know it
+    // happened to them.
+    apiFetch.mockResolvedValue(ERASED)
+    render(<ConsentChannels studentId="stu-1" role="student" />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/readings recorded before .* were erased/i))
+        .toBeInTheDocument())
+  })
+
+  it('reports an erasure even though the channel is still on', async () => {
+    // Erasure is a fact about the stored history, not the current decision. A
+    // parent who erased and left the sensor on has a channel that is recording
+    // and a past that is gone.
+    apiFetch.mockResolvedValue(ERASED)
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/were erased/i)).toBeInTheDocument())
+    expect(screen.getAllByRole('switch')[2]).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('will not erase until the parent acknowledges it cannot be undone', async () => {
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+
+    const button = screen.getByRole('button', { name: /erase them/i })
+    expect(button).toBeDisabled()
+    await user.click(button)
+    expect(apiFetch.mock.calls.some(c => String(c[0]).endsWith('/erase'))).toBe(false)
+
+    await user.click(screen.getByRole('checkbox'))
+    expect(button).not.toBeDisabled()
+  })
+
+  it('sends the channel name the endpoint takes, not the switch key', async () => {
+    // `camera_enabled` is the flag; `camera` is the channel. Sending the flag
+    // gets a 422 on every erasure.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    await waitFor(() => {
+      const call = apiFetch.mock.calls.find(c => String(c[0]).endsWith('/erase'))
+      expect(call).toBeTruthy()
+      expect(call[1].body).toEqual({ channel: 'camera', confirm: true })
+    })
+  })
+
+  it('does not carry the acknowledgement over to another channel', async () => {
+    // Ticking the box for the camera and then opening the headband panel must
+    // not arrive pre-confirmed. One acknowledgement, one deletion.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    // Straight to another channel, without cancelling. Cancelling also clears
+    // the box, so a test that goes via Cancel passes whether or not opening a
+    // panel resets it -- which is the path that actually needs guarding.
+    await user.click(screen.getAllByText(/erase what this recorded/i)[0])
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
+    expect(screen.getByRole('button', { name: /erase them/i })).toBeDisabled()
+  })
+
+  it('says so when an archived chart could not be removed', async () => {
+    // The rows are gone by the time storage is touched, so this is the one
+    // part of an erasure that can be incomplete. A parent told "erased" should
+    // not find out from a chart that still loads.
+    const user = userEvent.setup()
+    eraseOk({ charts_failed: 2 })
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/some archived charts could not be removed/i))
+        .toBeInTheDocument())
+  })
+
+  it('warns that erasing does not stop the sensor still recording', async () => {
+    // The two decisions are independent, and this is the combination a parent
+    // is most likely to get wrong: erase the past, leave it collecting.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+
+    expect(screen.getByText(/new readings will be recorded from now on/i))
+      .toBeInTheDocument()
+  })
+})
+
+describe('the erasure result banner', () => {
+  it('does not use the failure colour for a successful erasure', async () => {
+    // Rose is this component's colour for the destructive action itself.
+    // Carrying it into the confirmation of a *successful* one reads as
+    // something having gone wrong, and charts_failed: 0 is the good outcome.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    const note = await screen.findByText('Erased.')
+    expect(note.className).not.toMatch(/rose/)
+    expect(note.className).toMatch(/emerald/)
+  })
+
+  it('keeps the failure colour when a chart could not be removed', async () => {
+    const user = userEvent.setup()
+    eraseOk({ charts_failed: 1 })
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    const note = await screen.findByText(/some archived charts could not be removed/i)
+    expect(note.className).toMatch(/rose/)
+  })
+
+  it('clears the note when the parent does something else', async () => {
+    // Still true, but a note left above an unrelated change reads as the
+    // result of that change.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+    await screen.findByText('Erased.')
+
+    await user.click(screen.getAllByRole('switch')[0])
+
+    await waitFor(() => expect(screen.queryByText('Erased.')).not.toBeInTheDocument())
+  })
+})

@@ -1009,6 +1009,18 @@ Everything in the database is one transaction; the storage removal runs after it
 nulled the objects are unreachable through the product whether or not the removal succeeded, which
 is why that is safe to report rather than roll back.
 
+**The control is per channel and parent-only, in `ConsentChannels.jsx`.** A student is shown that
+an erasure happened and is not offered the action — the backend refuses them, and a control that
+always fails is worse than none. The erase button sits in the channel's own card, gated behind an
+"I understand this cannot be undone" checkbox that is cleared whenever a panel opens, so an
+acknowledgement can never carry from one channel to another. It sends the **channel** name
+(`camera`), not the switch key (`camera_enabled`), which is a 422 otherwise.
+
+The confirmation states what goes *and* what stays, at the moment of deciding rather than as
+standing copy under the control — a permanent disclaimer would mean the control's name overpromised,
+which is what retired `FacialRecognitionToggle`. It also says the setting is unchanged: erasing the
+past while leaving the sensor on is the combination a parent is most likely to get wrong.
+
 **The tombstone is the fourth reporting state.** `erased_at` rides on each channel of the consent
 payload, independent of `enabled` and `revoked_at` — a parent who erased and then re-consented has a
 channel that is on and a past that is gone. `_erasures()` fails **open** to `{}`, unlike `_consent()`:

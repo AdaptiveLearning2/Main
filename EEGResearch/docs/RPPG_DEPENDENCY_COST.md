@@ -98,67 +98,68 @@ The export dies on the convolution before reaching it, so whether the scan is
 exportable is **still unknown**. Anyone resuming this should not read "conv
 layout" as the only obstacle.
 
-### The TensorFlow route is not a route
+### The TensorFlow route, pursued properly
 
-Tried next, and it is closed for a stronger reason than the conv error. Keras 3
-can load the same `.weights.h5` under any backend, so `tf2onnx` looked like the
-mature alternative. Under `KERAS_BACKEND=tensorflow` the model does not run at
-all:
+The first attempt failed with `'EagerTensor' object has no attribute 'at'` and I
+concluded the model was JAX-bound by construction and that dropping JAX meant
+reimplementing it. **That was wrong, and twice over.** Reading the source and
+then patching it establishes something much narrower.
 
-```
-AttributeError: Exception encountered when calling RhythmMamba.call().
-'tensorflow.python.framework.ops.EagerTensor' object has no attribute 'at'
-```
+**What is actually JAX-specific in the forward pass:**
 
-`.at[...].set(...)` is JAX's indexed-update syntax. `rppg/models.py` imports JAX
-directly (`import jax`, `from jax import numpy as jnp`) and calls it inside model
-code, in at least two places:
-
-| Location | What it is |
+| Thing | Verdict |
 | --- | --- |
-| `Frequencydomain_FFN.scale_seg()` | a `@partial(jax.jit, static_argnums=…)` function with a doubly-nested Python loop of `.at[].set()` updates |
-| `Block_mamba.call()` | the same pattern |
+| `selective_scan` -- the Mamba scan | **Not a blocker.** Pure `keras.ops`: einsum, pad, `cumsum`, exp, reversal. The cumsum formulation, no `lax.scan`, no custom op. Every op has an ONNX equivalent, and it is backend-agnostic already. This was the thing most expected to block, and it does not. |
+| `scale_seg` -- the `@jax.jit` nested loop | **Dead code.** Its call site in `Block_mamba.call` is commented out and the logic inlined. |
+| `Block_mamba.call` -- three `.at[].set()` lines | The only real one. Python loops over a *static* range (`segment = 4`), so they are a temporal shift and a cumulative average, expressible as concat-of-slices in ~10 backend-agnostic lines. |
+| `models.py:2`, `models.py:18` | Forces `KERAS_BACKEND="jax"` and `mixed_float16` globally. |
 
-**So this model is JAX-bound by construction, not merely shipped with JAX as a
-Keras backend.** Keras 3's backend-agnosticism does not apply to a layer that
-calls `jnp` directly. Dropping JAX means patching or reimplementing the vendor's
-model source, which is a different and much larger undertaking than an export.
+Everything else matching `jax`/`jnp` in that file is in `load_*` wrappers or
+other architectures, not in `RhythmMamba`'s graph.
 
-That also weakens the one remaining route. Patching `jax2onnx`'s conv converter
-would get past `Fusion_Stem`, and then meet `scale_seg`: a Python loop of
-indexed updates over a static range, which unrolls into a long chain of scatter
-operations if it converts at all. The Mamba scan is still further on and still
-unexamined.
+**The model relies on JAX's implicit dtype promotion**, which surfaces once the
+backend changes: `A` and `D` are float32 by construction while the rest of the
+graph is float16 under the mixed-precision policy, and TF refuses to multiply
+across the two. Four separate sites appeared before the pattern was clear. The
+one-line fix is to run the policy at `float32` rather than patch each site.
 
-### Where that leaves the escape route
+With those changes -- one line for the backend, one for the policy, ~10 for
+`Block_mamba` -- **the model runs under TensorFlow and the weights load.**
 
-It is not "one converter bug away". Ranked by what each would cost:
-
-1. **Patch `jax2onnx`'s conv converter**, then find out what `scale_seg` and the
-   Mamba scan do. Upstreamable, open-ended, and the two unknowns are sequential
-   — you cannot price the second until the first is done.
-2. **Reimplement the architecture** against the published weights, in whatever
-   the sidecar can already run. Large, and it puts this project in the business
-   of maintaining a model implementation.
-3. **Accept JAX**, at the measured cost above.
-
-### A Windows aside
-
-`jax2onnx` pulls `flax`, which pulls `orbax-checkpoint`, whose own bundled test
-fixtures exceed the 260-character path limit and **cannot be installed on
-Windows** without enabling long-path support:
+### And then it exports, and the export is invalid
 
 ```
-[WinError 206] The filename or extension is too long:
-  ...orbax/checkpoint/experimental/v1/_src/testing/compatibility/checkpoints/...
+net.export('rm.onnx', format='onnx', ...)   ->  "Saved artifact"   22 MB, ~90 s
 ```
 
-Working around it here meant installing the chain with `--no-deps` one package
-at a time. That is export-time tooling on a developer machine rather than
-anything a student would install, so it is an inconvenience rather than a
-finding about the product — but it is why this took longer than it should, and
-it is worth knowing before someone repeats it. On Linux or macOS it is a
-non-issue.
+Loading that file is where it ends:
+
+```
+INVALID_GRAPH: ... ("...mamba_1/conv1d_2_1/StatefulPartitionedCall", StatefulPartitionedCall)
+  No Op registered for StatefulPartitionedCall with domain_version of 15
+```
+
+`tf2onnx` did not convert Mamba's **grouped Conv1D** (`groups=internal_dim`, a
+depthwise convolution) and left a TensorFlow function call in the graph.
+Identical at opsets 15, 17 and 18. The export *reports success*; only loading it
+under onnxruntime reveals the artefact is not a model -- which is worth knowing
+before trusting an exporter's exit code.
+
+### Where this actually leaves the escape route
+
+Much closer than the previous section claimed, and blocked on one named layer
+rather than on the architecture:
+
+1. **Replace the grouped Conv1D** with a formulation tf2onnx converts --
+   `DepthwiseConv1D`, or a reshape to depthwise Conv2D. Another vendored patch
+   of the same size as the others, and the last known obstacle.
+2. Then re-export and **check numerical agreement against the Keras output**,
+   which is the step this stopped short of.
+
+The patches are small, mechanical and independently useful -- they make the model
+backend-agnostic, which is worth something on its own -- but they are patches to a
+vendored dependency, which has to be maintained against upstream. That is the
+real cost to weigh, not the size of any one edit.
 
 ## Reading this
 
@@ -172,18 +173,18 @@ three real options rather than two:
 - **Accept the cost** — 600 MB and ~34 s of start-up on a student's laptop, plus
   a pinned deprecated `setuptools` — and go on to the capture, which is the only
   thing that can produce an accuracy number.
-- **Pursue the ONNX export further**, knowing it is not one bug away: the
-  TensorFlow route turned out to be closed outright, and what remains is
-  patching a converter and then discovering what two further JAX-specific
-  constructs do.
+- **Finish the ONNX export.** It is one named layer away: the model already
+  runs under TensorFlow and exports, and only Mamba's grouped Conv1D fails to
+  convert. The cost is maintaining ~15 lines of patch against a vendored
+  dependency, not reimplementing anything.
 - **Stop here.** *"Rejected again, here is the number"* is a complete outcome by
   the phase's own definition, and this time the number is about the price rather
   than the accuracy.
 
-What should not happen is dismissing the phase on the conv error alone — that
-one is a converter limitation on a single layer. The JAX binding is the finding
-that actually constrains the options, and it is a property of the vendor's code
-rather than of any tool.
+Two corrections to earlier readings of this file, both of which were too
+pessimistic: the Mamba scan is *not* an obstacle, and the model is *not*
+JAX-bound in any way that requires reimplementation. What remains is a converter
+gap on one layer and a patch set to maintain.
 
 Reproduce with:
 

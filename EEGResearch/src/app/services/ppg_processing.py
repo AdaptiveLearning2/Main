@@ -13,8 +13,8 @@ microamps. Two wavelengths (730nm and 850nm) on left and right. On other Muse
 models the same shape arrives via the PPG packet instead; this code does not
 care which, only that it is a set of optical channels at a known rate.
 
-Motion, and the one window nothing here catches
------------------------------------------------
+Motion, and the one window no single window catches
+----------------------------------------------------
 The hardest case in the fixtures is the ~30s after vigorous exercise. The
 window starting the moment the wearer sat down reads **127 bpm against a true
 rate near 90, on all four channels**, and no in-window test found so far
@@ -27,9 +27,21 @@ separates it from a real 127:
 
 The peak margin does reject the two windows after it, which read 58 and 55 bpm
 against the same true ~90. What handles the first window is the tracker rather
-than the estimator: it takes 127 as an anchor, rejects the next two windows as
-discontinuous, and re-acquires, so the error clears within about 30s and the
-decay that follows is tracked from 83 bpm down to the resting rate.
+than the estimator, and it does so **across** windows rather than within one:
+an unanchored candidate is held until a second window agrees, so a periodicity
+that is gone a step later is never published. Motion settling is gone a step
+later; a heartbeat is not.
+
+That is a different question from the one no in-window test could answer. It is
+not "is this window's periodicity cardiac" -- which agreement, out-of-band power
+and the peak margin all failed to decide -- but "is it still there a step on".
+The cost is one usable window of latency at the start of a session, and it is a
+delay rather than a refusal: a genuinely fast rate is published a step late,
+which is the check the 120-180 bpm cases exist to keep honest.
+
+Before this the tracker took 127 as its anchor, rejected the next two windows as
+discontinuous and re-acquired within ~30s. That contained the error in the
+*anchor* while still putting 127 bpm on the chart for one window.
 
 Motion is worse than that, and it is not solvable here
 ------------------------------------------------------
@@ -145,7 +157,13 @@ class HeartEstimate:
     # would have silently disabled it with no test noticing.
     reason: str = ""
     # Machine-readable cause, when there is one: "continuity" | "confidence" |
-    # "no_signal". This is what control flow matches on.
+    # "no_signal" | "unconfirmed_anchor". This is what control flow matches on.
+    #
+    # `unconfirmed_anchor` is a *withheld* reading, not an absent one: the
+    # window produced a rate and the tracker is waiting for a second window to
+    # agree. Reporting it as no_signal would tell a caller the sensor saw
+    # nothing, which is the can't-tell-no-data-from-a-refusal failure this
+    # vocabulary exists to prevent.
     rejected_by: str | None = None
 
     @property
@@ -437,6 +455,9 @@ class HeartRateTracker:
         # every later window is judged against.
         self.anchor_min_confidence = anchor_min_confidence
         self._rejections = 0
+        # A candidate anchor that has not yet been seen twice. Nothing is
+        # published from it until it is (#105).
+        self._pending: float | None = None
 
     def update(self, channels: np.ndarray, fs: float, seconds_since_previous: float) -> HeartEstimate:
         est = estimate_window(channels, fs, self.bpm, seconds_since_previous)
@@ -463,12 +484,50 @@ class HeartRateTracker:
                         if fresh.confidence >= self.anchor_min_confidence:
                             self.bpm = fresh.bpm
                     return fresh
+            # A window that produced nothing breaks the chain. A candidate is
+            # only evidence about the present while the windows either side of
+            # it are readable; across a gap it is just an old number.
+            self._pending = None
             return est
 
         self._rejections = 0
-        if self.bpm is not None or est.confidence >= self.anchor_min_confidence:
+        if self.bpm is not None:
             self.bpm = est.bpm
-        return est
+            return est
+
+        # ── unanchored: nothing is published until two windows agree (#105) ──
+        #
+        # The first window of a session, and the first after a lock is dropped,
+        # is the one with no context -- and it is also the one most likely to be
+        # contaminated, because a session starts with a headband being put on
+        # and a body settling. Measured on the recovery fixture: the window
+        # covering the first 25s after exercise reads 127 bpm against a true
+        # rate near 90, on all four channels, at confidence 1.00.
+        #
+        # No *in-window* test separates that from a real 127 -- agreement,
+        # out-of-band power and peak margin were all tried and are recorded as
+        # failures in the module docstring, and one candidate discriminator
+        # rejected every genuinely fast rate along with it. This is a
+        # cross-window rule instead, which is a different question: not "is
+        # this window's periodicity cardiac" but "is it still there a step
+        # later". Motion settling is not, and a heartbeat is.
+        #
+        # It costs one window of latency at the start of a session, and refuses
+        # rather than delays nothing: a genuinely fast rate is published a step
+        # late, not rejected. That is the trade this codebase already makes
+        # everywhere else -- a refusal costs one window, an acceptance costs a
+        # number on a parent's chart.
+        previous, self._pending = self._pending, est.bpm
+        allowed = min(MAX_BPM_CHANGE_PER_S * seconds_since_previous,
+                      MAX_CONTINUITY_JUMP_BPM)
+        if previous is not None and abs(est.bpm - previous) <= allowed:
+            if est.confidence >= self.anchor_min_confidence:
+                self.bpm = est.bpm
+            return est
+        return HeartEstimate(
+            None, est.confidence, est.channels,
+            f"holding {est.bpm:.1f} bpm until a second window agrees",
+            rejected_by="unconfirmed_anchor")
 
 
 def near_known_interferer(bpm: float) -> bool:

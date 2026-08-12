@@ -37,7 +37,16 @@ def _window(samples=1600, fs=64.0, received=64.0, span=None, gap=None,
 
 
 def _build(window, tracker=None, since=EMIT_EVERY_SECONDS):
-    return build_heart_record(window, tracker or HeartRateTracker(), since)
+    if tracker is not None:
+        return build_heart_record(window, tracker, since)
+    # A fresh tracker holds its first reading until a second window agrees
+    # (#105), and these tests are about the record and the quality gates rather
+    # than the anchor policy -- `test_ppg_processing` owns that. Feeding the
+    # window once to warm the tracker models a session already producing
+    # readings, which is the state they all mean to describe.
+    warm = HeartRateTracker()
+    build_heart_record(window, warm, since)
+    return build_heart_record(window, warm, since)
 
 
 def test_a_refusal_is_never_a_reading():

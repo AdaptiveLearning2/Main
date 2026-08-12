@@ -549,6 +549,16 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   unique key cannot collapse those — up to 4 near-identical rows a second. It leaves the tracker
   alone too: EEG dropping out says nothing about the optical emitters, and the anchor is what
   catches octave errors.
+- **A session's first heart reading is withheld until a second window agrees.** The window right
+  after motion — putting the headband on, sitting down after exercise — produces a *confident,
+  unanimous, wrong* rate, and no in-window test separates it from a real one: agreement, out-of-band
+  power and the peak margin were all tried and all fail, and one candidate discriminator rejected
+  every genuinely fast rate along with it. So the tracker asks a different question — is the
+  periodicity still there a step later — and holds an unanchored candidate until it is. Motion
+  settling is not; a heartbeat is. An unusable window in between discards the candidate rather than
+  bridging it. Costs one usable window of latency and refuses nothing: a fast rate is published a
+  step late. `rejected_by="unconfirmed_anchor"` says a rate was *withheld*, which is not
+  `no_signal`.
 - **The block carries its own `ts`, and both writers key on it.** Held, one measurement arrives on
   ~40 consecutive ticks. `map_heart_to_heart_signal` prefers `heart["ts"]` over the tick's, the push
   client dedupes per `(device, source)`, and the poller upserts on

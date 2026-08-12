@@ -176,6 +176,10 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const commit = async (key, next) => {
     setSaving(key)
     setError(null)
+    // A note about an erasure is stale the moment the parent does something
+    // else on this screen. Still true, but it reads as a result of whatever
+    // they just clicked.
+    setErasureNote(null)
     try {
       const updated = await apiFetch(`/api/consent/${studentId}`, {
         method: 'PUT', body: { [key]: next },
@@ -228,13 +232,14 @@ export default function ConsentChannels({ studentId, role, studentName = null })
       // touched, so a chart that could not be removed is the one part of an
       // erasure that can be incomplete -- and a parent who was told "erased"
       // should not have to discover that from a chart that still loads.
-      setErasureNote(
-        out.charts_failed
-          ? 'The readings were erased. Some archived charts could not be removed '
-            + 'and are no longer reachable from the app; please tell us so they '
-            + 'can be cleared.'
-          : 'Erased.',
-      )
+      setErasureNote(out.charts_failed
+        ? {
+            failed: true,
+            text: 'The readings were erased. Some archived charts could not be '
+              + 'removed and are no longer reachable from the app; please tell '
+              + 'us so they can be cleared.',
+          }
+        : { failed: false, text: 'Erased.' })
       closeErasure()
     } catch (e) {
       setError(String(e.message || e))
@@ -261,7 +266,16 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-rose-500">{error}</p>}
-      {erasureNote && <p className="text-sm text-rose-600 dark:text-rose-400">{erasureNote}</p>}
+      {/* Rose only when something actually failed. A parent glancing at a red
+          banner after a successful erasure reads it as an error, and
+          `charts_failed: 0` is the good outcome. */}
+      {erasureNote && (
+        <p className={`text-sm ${erasureNote.failed
+          ? 'text-rose-600 dark:text-rose-400'
+          : 'text-emerald-600 dark:text-emerald-400'}`}>
+          {erasureNote.text}
+        </p>
+      )}
 
       {CHANNELS.map(ch => {
         const state = channels[ch.key.replace('_enabled', '')] || {}

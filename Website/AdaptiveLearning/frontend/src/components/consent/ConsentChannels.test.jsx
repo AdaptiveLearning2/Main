@@ -362,3 +362,55 @@ describe('erasing stored readings', () => {
       .toBeInTheDocument()
   })
 })
+
+describe('the erasure result banner', () => {
+  it('does not use the failure colour for a successful erasure', async () => {
+    // Rose is this component's colour for the destructive action itself.
+    // Carrying it into the confirmation of a *successful* one reads as
+    // something having gone wrong, and charts_failed: 0 is the good outcome.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    const note = await screen.findByText('Erased.')
+    expect(note.className).not.toMatch(/rose/)
+    expect(note.className).toMatch(/emerald/)
+  })
+
+  it('keeps the failure colour when a chart could not be removed', async () => {
+    const user = userEvent.setup()
+    eraseOk({ charts_failed: 1 })
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+
+    const note = await screen.findByText(/some archived charts could not be removed/i)
+    expect(note.className).toMatch(/rose/)
+  })
+
+  it('clears the note when the parent does something else', async () => {
+    // Still true, but a note left above an unrelated change reads as the
+    // result of that change.
+    const user = userEvent.setup()
+    eraseOk()
+    render(<ConsentChannels studentId="stu-1" role="parent" />)
+
+    await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
+    await user.click(screen.getAllByText(/erase what this recorded/i)[2])
+    await user.click(screen.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /erase them/i }))
+    await screen.findByText('Erased.')
+
+    await user.click(screen.getAllByRole('switch')[0])
+
+    await waitFor(() => expect(screen.queryByText('Erased.')).not.toBeInTheDocument())
+  })
+})

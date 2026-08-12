@@ -278,6 +278,118 @@ def test_the_pulse_rises_after_exertion():
     )
 
 
+def _tracked_bpms(numpy, frames):
+    """Every window's rate over a recording, through the production path.
+
+    `HeartRateTracker`, not `estimate_window` directly: the tracker is what
+    `optics_processing` calls, and it owns the anchor, the continuity check and
+    the re-acquisition after two rejections. Threading `previous_bpm` by hand --
+    the obvious way to write this -- models a path no session takes, and it
+    matters here: doing so leaves the recovery fixture with a single accepted
+    window, because nothing ever drops a bad anchor.
+
+    25s windows stepped 10s, which is what `RATE_WINDOW_SECONDS` and the poller
+    cadence produce. None for a window that produced no rate.
+    """
+    from src.app.services.ppg_processing import HeartRateTracker
+
+    a = numpy.array([f["ch"] for f in frames], dtype=float)
+    win = int(25.0 * EXPECTED_RATE_HZ)
+    step = int(10.0 * EXPECTED_RATE_HZ)
+
+    tracker = HeartRateTracker()
+    out = []
+    for start in range(0, len(a) - win + 1, step):
+        rate = tracker.update(a[start:start + win], EXPECTED_RATE_HZ, 10.0)
+        out.append(rate.bpm)
+    return out
+
+
+def test_the_derived_rate_rises_after_exertion():
+    """The half `test_the_pulse_rises_after_exertion` does not cover (#71).
+
+    That test takes a spectral peak per channel over the whole recording, so it
+    proves the *recording* contains an exertion rise -- worth knowing, since it
+    is what identifies ~68/76 bpm as cardiac rather than merely the largest
+    peak. It proves nothing about the code that derives a rate from it, despite
+    being documented as "the end-to-end check no synthetic signal can provide".
+
+    Both are worth having and they check different things: the spectral one says
+    the recording is valid evidence, this one says the code reads it.
+
+    **Compared over the first 60s of recovery, not the whole file.** The
+    recovery fixture is 150s of a heart returning to rest, so its median sits
+    near the resting rate by construction -- roughly 68 against rest's 69. That
+    is the statistic, not the derivation: issue #71 read a whole-recording
+    median as evidence the rise was not tracked. Matching the rest fixture's own
+    60s window is the like-for-like comparison, and there the derivation does
+    follow it.
+    """
+    numpy = pytest.importorskip("numpy")
+    rest = [b for b in _tracked_bpms(numpy, _load(REST_FIXTURE)) if b is not None]
+    recovery = _tracked_bpms(numpy, _load(RECOVERY_FIXTURE))
+    # Windows starting inside the first 60s, at a 10s step.
+    early = [b for b in recovery[:7] if b is not None]
+
+    assert rest, "no window of the rest fixture produced a rate"
+    assert early, "no window of the first 60s of recovery produced a rate"
+
+    rest_bpm = float(numpy.median(rest))
+    early_bpm = float(numpy.median(early))
+    assert early_bpm > rest_bpm + 3.0, (
+        f"derived rest {rest_bpm:.1f} -> early recovery {early_bpm:.1f}; the raw "
+        f"spectral peaks rise {REST_BPM} -> {RECOVERY_BPM} on every channel"
+    )
+
+    # And not because of the bad anchor the next test pins. That window reads
+    # 127.5 bpm, which would drag any average upwards on its own -- so the rise
+    # has to survive dropping it, or this test would start failing as a side
+    # effect of fixing something else.
+    without_anchor = [b for b in early if b <= 97.0]
+    assert without_anchor, "every early recovery window was the implausible one"
+    assert float(numpy.median(without_anchor)) > rest_bpm + 3.0, (
+        "the rise depends on the implausible first window"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "The first recovery window anchors on a motion artefact. Measured "
+        "through HeartRateTracker: the window covering the first 25s after "
+        "exercise is accepted at 127.5 bpm -- above the 97 bpm peak the "
+        "wearer's watch recorded during the exercise itself, and implausible "
+        "for a heart that reads 83 fifteen seconds later. Scored without "
+        "continuity that same window's channels give 91.9, which fits the "
+        "decay that follows, so the anchor is wrong rather than early. "
+        "It then costs three windows: 91.9 is rejected for moving too far from "
+        "127.5, and the tracker needs two rejections before it drops the "
+        "anchor and re-acquires, blanking ~30s of the most interesting part of "
+        "the recording. This is the failure HeartRateTracker's own docstring "
+        "describes -- 'the window right after motion produces a confident, "
+        "wrong anchor' -- so the tracker bounds it rather than preventing it, "
+        "and the first window has nothing to check itself against. Fixing it "
+        "needs a rule for accepting an anchor at all, which is the candidate "
+        "derivation change in Phase 3 of the plan."
+    ),
+)
+def test_the_first_window_after_exertion_is_a_plausible_rate():
+    """What the recording can support, and what the derivation publishes.
+
+    Separate from the test above because it fails for a different reason and
+    would be fixed by a different change. That one asks whether the rise is
+    tracked at all; this asks whether the first reading after motion is one a
+    parent's chart should carry.
+    """
+    numpy = pytest.importorskip("numpy")
+    recovery = _tracked_bpms(numpy, _load(RECOVERY_FIXTURE))
+
+    first = next((b for b in recovery if b is not None), None)
+    assert first is not None, "no window of the recovery fixture produced a rate"
+    # The watch measured 97 during the exercise; nothing after it can be higher.
+    assert first <= 97.0, f"first accepted recovery rate {first:.1f} bpm exceeds the watch peak"
+
+
 def test_the_44_bpm_component_is_not_cardiac():
     """It is present in both captures and moves in neither.
 

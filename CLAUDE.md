@@ -248,11 +248,20 @@ attention scorer anywhere in `EEGResearch/src/app`. Nothing lies — the three-s
 strategy prompt are all built on a value nothing has ever computed. **Phase 11 fills them**, so don't
 drop the columns or the UI.
 
-`face_geometry.py` is the arithmetic half and is done: named landmarks in, head pose and iris
-offset out, pure numpy so CI can test it. **It has no caller** — the only face detector here is a
-Haar cascade returning a bounding box (`face_roi.py`), so what is still missing is a landmark model
-to feed it (MediaPipe Face Mesh is the candidate: Apache 2.0, models downloadable without an
-agreement, which is the constraint that blocked RhythmMamba). It deliberately scores no attention:
+`face_geometry.py` is the arithmetic half: named landmarks in, head pose and iris offset out, pure
+numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,
+models downloadable without an agreement, the constraint that blocked RhythmMamba) mapped onto those
+names, and the only file that knows a mesh index from a face part, so swapping detector rewrites it
+and nothing else. **Neither is wired into the capture loop yet.**
+
+**Its index table is unverified against hardware** — MediaPipe 1.0.0 ships no canonical mesh file
+and there is no camera in CI, so the mapping comes from published topology rather than measurement.
+A left/right swap would produce a *mirrored* gaze, which every aggregate reads as healthy. So the
+table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
+nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
+index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
+relation — so **the manual camera check is still owed**: sit square on, look hard left, confirm
+`gaze.x` goes negative. It deliberately scores no attention:
 the geometry has a right answer and can be checked against one, the inference to "attending" is a
 judgement, and keeping them apart is what lets the judgement be revised without re-deriving
 anything.

@@ -3971,8 +3971,15 @@ def _refuse_under_push(what: str) -> None:
         )
 
 
-def _reserve_and_call(user_id: str, device_id: str, fn, *args):
+def _reserve_and_call(user_id: str, device_id: str, fn, *args,
+                      session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
+
+    session_id, when the caller sends one, records which pairing attempt owns
+    the reservation so that closing *that* session releases it and closing a
+    different one does not (#88). Optional on purpose: an older frontend sends
+    nothing and gets the previous release-everything behaviour rather than a
+    reservation nothing can clear.
 
     Shared by muse/refresh and muse/connect -- the two actions that *start* a
     pairing attempt, and so are what reserve_device (#34) exists to protect.
@@ -3987,7 +3994,7 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args):
     rounds fixed one call site at a time before this was pulled out into one
     place).
     """
-    if not eeg_poller.reserve_device(user_id, device_id):
+    if not eeg_poller.reserve_device(user_id, device_id, session_id):
         raise HTTPException(403, "Station in use by another user")
     if not eeg_client.is_alive():
         eeg_poller.release_reservation(user_id, device_id)
@@ -4020,7 +4027,8 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     # an unwanted side effect. reserve_device (#34) also claims the pre-claim
     # pairing window: a scan is the first interaction with an unclaimed
     # station, so it is where that station's TTL'd reservation starts.
-    return _reserve_and_call(user["id"], device_id, eeg_client.muse_refresh, device_id)
+    return _reserve_and_call(user["id"], device_id, eeg_client.muse_refresh, device_id,
+                             session_id=(body or {}).get("session_id"))
 
 @app.post("/api/eeg/muse/connect")
 def eeg_muse_connect(request: Request, body: dict = Body(...)):
@@ -4032,7 +4040,8 @@ def eeg_muse_connect(request: Request, body: dict = Body(...)):
         raise HTTPException(400, "Device name required")
     # See eeg_muse_refresh above -- before _reserve_and_call, not after.
     _refuse_under_push("connect to a headband")
-    return _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id)
+    return _reserve_and_call(user["id"], device_id, eeg_client.muse_connect, name, device_id,
+                             session_id=body.get("session_id"))
 
 @app.post("/api/eeg/muse/disconnect")
 def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):

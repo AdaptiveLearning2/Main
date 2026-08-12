@@ -439,7 +439,9 @@ export default function Adaptive() {
 
       // 3. Tell the native bridge to scan for nearby headbands
       setHeadband(s => ({ ...s, phase: 'scanning' }))
-      await apiFetch('/api/eeg/muse/refresh', { method: 'POST', body: { device_id: stationId } })
+      // session_id scopes the station reservation this scan claims (#88), so
+      // closing a *different* session of the same student cannot release it.
+      await apiFetch('/api/eeg/muse/refresh', { method: 'POST', body: { device_id: stationId, session_id: activeSessionId } })
 
       // 4. Poll up to 12 s for at least one device to appear
       let devices = []
@@ -471,7 +473,7 @@ export default function Adaptive() {
       // 5. Connect to first discovered device (usually there's only one)
       const target = devices[0]
       setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
-      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target, device_id: stationId } })
+      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target, device_id: stationId, session_id: activeSessionId } })
 
       // 6. Poll for actual BLE connection — bridge connects asynchronously.
       //    If we get BadStateError the headband is still streaming from a prior session;

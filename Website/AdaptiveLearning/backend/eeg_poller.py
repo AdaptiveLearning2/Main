@@ -431,9 +431,18 @@ _lock = threading.Lock()
 # from under the user still driving it.
 RESERVATION_TTL_SECONDS = 30.0
 
-# device_id -> (user_id, reserved_at). Same _lock as _active: a reservation
-# and a poller-claim are two stages of the same ownership question, and
-# checking them under different locks would let one race past the other.
+# device_id -> (user_id, reserved_at, session_id | None). Same _lock as
+# _active: a reservation and a poller-claim are two stages of the same
+# ownership question, and checking them under different locks would let one
+# race past the other.
+#
+# session_id is what makes a release scopable (#88). It is **optional and
+# stays optional**: the pairing flow is allowed to run before a session
+# exists, and a caller that does not know one is not a caller to refuse. None
+# means "unattributable", which release_reservation treats as the old
+# release-everything-this-user-holds behaviour rather than as a reason to keep
+# it -- an entry nobody can attribute must still be releasable, or an abandoned
+# pairing outlives every mechanism for clearing it early.
 _reservations: Dict[str, tuple] = {}
 
 
@@ -449,7 +458,7 @@ def _reservation_owner(device_id: str) -> str | None:
     entry = _reservations.get(device_id)
     if entry is None:
         return None
-    user_id, reserved_at = entry
+    user_id, reserved_at = entry[0], entry[1]
     if time.monotonic() - reserved_at >= RESERVATION_TTL_SECONDS:
         del _reservations[device_id]
         return None
@@ -472,8 +481,14 @@ def _live_poller_owner(device_id: str) -> str | None:
     return None
 
 
-def reserve_device(user_id: str, device_id: str) -> bool:
+def reserve_device(user_id: str, device_id: str,
+                   session_id: str | None = None) -> bool:
     """Claim or refresh device_id's pre-claim reservation for user_id.
+
+    session_id records *which* pairing attempt this is, so that ending one
+    session releases only the reservations that session created (#88). It is
+    optional because the pairing endpoints are reachable without one, and a
+    missing session_id degrades to the old behaviour rather than refusing.
 
     Called from the three control endpoints -- refresh/connect/disconnect --
     the actions that mean "I am now pairing this station", rather than from
@@ -494,11 +509,21 @@ def reserve_device(user_id: str, device_id: str) -> bool:
         owner = _reservation_owner(device_id)
         if owner is not None and owner != user_id:
             return False
-        _reservations[device_id] = (user_id, time.monotonic())
+        # Refreshing our own entry keeps whatever session it was already
+        # attributed to when this call cannot name one. Overwriting with None
+        # would silently widen a scoped reservation back to the old
+        # release-everything behaviour, and it would do so on the *refresh*
+        # path -- the one that runs repeatedly during a pairing flow, so the
+        # scoping would decay rather than fail, which is worse to notice.
+        previous = _reservations.get(device_id)
+        if session_id is None and previous is not None and previous[0] == user_id:
+            session_id = previous[2] if len(previous) > 2 else None
+        _reservations[device_id] = (user_id, time.monotonic(), session_id)
         return True
 
 
-def release_reservation(user_id: str, device_id: str | None = None) -> None:
+def release_reservation(user_id: str, device_id: str | None = None,
+                        session_id: str | None = None) -> None:
     """Drop user_id's reservation, scoped as narrowly as the caller can manage.
 
     With device_id: drop only that device's entry, and only if it is still
@@ -509,25 +534,31 @@ def release_reservation(user_id: str, device_id: str | None = None) -> None:
     dropped both; see test_a_successful_scan_still_holds_its_reservation_
     through_a_later_failure_on_another_device for the case that caught it.
 
-    Without device_id: drop every reservation user_id holds. This is a real
-    tradeoff, not a harmless simplification -- a user genuinely can hold more
-    than one at once (test_the_same_users_failed_attempt_on_one_device_spares_
-    their_other builds exactly that), so ending one session this way can
-    release a different, still-live reservation the same user holds
-    elsewhere. Accepted because the alternative needs information this
-    module does not have: reservations are keyed by device_id -> user_id with
-    no session_id, and the endpoints that create them (muse/refresh, connect,
-    disconnect -- see main.py) are never told one; `Adaptive.jsx` calls them
-    with only a device_id. Scoping this properly means threading session_id
-    through those three endpoints and their frontend callers, which is a
-    real change, not a bug fix, and hasn't been made. Until it is, every
-    caller here (stop(), and therefore end_session, start_session's stale
-    cleanup, class_live's sweep, and /api/eeg/stop) accepts an early release
-    of at most one unrelated, concurrently-held reservation as the cost of
-    reliably releasing the one that actually mattered -- a low-severity,
-    time-bounded (RESERVATION_TTL_SECONDS) cost, not a security gap: it can
-    only make a station available sooner than ideal, never deny one to its
-    rightful holder.
+    With session_id (and no device_id): drop the reservations *this session*
+    created, plus any the same user holds that are not attributed to a session
+    at all. This is what stop() uses, and it is the fix for #88 -- a user
+    genuinely can hold more than one reservation at once
+    (test_the_same_users_failed_attempt_on_one_device_spares_their_other builds
+    exactly that), so closing one session used to release a different, live
+    session's station up to RESERVATION_TTL_SECONDS early.
+
+    **Unattributed entries are still dropped, deliberately.** Sparing them
+    would be the safer-looking choice and is the wrong one: a reservation with
+    no session_id is one no session close can ever name, so keeping it means an
+    abandoned pairing outlives the only mechanism for clearing it early. That
+    is a station held against everyone rather than released too soon for one
+    person -- trading a bounded imprecision for an unbounded one. It is also
+    the compatibility path: a frontend that has not been updated sends no
+    session_id, and gets exactly the old behaviour rather than a release that
+    silently stops working.
+
+    Without either: drop every reservation user_id holds. No production caller
+    does this any more -- stop() always passes a session_id -- but it stays the
+    default so a caller that genuinely has no session in scope releases too
+    much rather than too little. The failure direction matters: releasing early
+    can only make a station available sooner than ideal, never deny one to its
+    rightful holder, and that asymmetry is what made the #88 tradeoff
+    acceptable while it stood.
     """
     with _lock:
         if device_id is not None:
@@ -536,8 +567,13 @@ def release_reservation(user_id: str, device_id: str | None = None) -> None:
                 del _reservations[device_id]
             return
         for did, entry in list(_reservations.items()):
-            if entry[0] == user_id:
-                del _reservations[did]
+            if entry[0] != user_id:
+                continue
+            if session_id is not None:
+                owner_session = entry[2] if len(entry) > 2 else None
+                if owner_session is not None and owner_session != session_id:
+                    continue
+            del _reservations[did]
 
 
 def is_polling(session_id: str) -> bool:
@@ -746,7 +782,11 @@ def stop(session_id: str, user_id: str | None = None) -> dict:
             p.stop()
     release_for = user_id or (p.user_id if p else None)
     if release_for is not None:
-        release_reservation(release_for)
+        # Scoped to this session (#88): a stale-session sweep must not release
+        # the station a *different*, still-live session of the same user is
+        # mid-pairing with. Reservations this session never created, and that
+        # carry a session_id of their own, are left alone.
+        release_reservation(release_for, session_id=session_id)
     if p:
         return {"running": False, "samples": p.samples}
     return {"running": False, "samples": 0}

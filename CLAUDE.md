@@ -146,157 +146,123 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
-`INGEST_RATE_WINDOW` (the signal-ingest bounds — the sidecar posts with the *student's* token, so
-that endpoint is a trust boundary and neither the session check nor the consent check bounds
-volume), and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below. Frontend: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`,
-`VITE_EEG_DEBUG`. EEGResearch reads `.env` through `src/app/config.py` — `API_TOKEN` and
-`ADMIN_TOKEN` are required, `EEG_SOURCE` picks sim vs muse, and `EEG_DEVICES`
-(`station1:muse@8765,...`) drives the multi-headband registry.
+`INGEST_RATE_WINDOW`, and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below. The ingest bounds
+matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and
+neither the session check nor the consent check bounds volume. Frontend: `VITE_SUPABASE_URL`,
+`VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`. EEGResearch reads `.env` through
+`src/app/config.py` — `API_TOKEN` and `ADMIN_TOKEN` required, `EEG_SOURCE` picks sim vs muse,
+`EEG_DEVICES` (`station1:muse@8765,...`) drives the multi-headband registry. The native bridge reads
+its own env directly, not through `config.py`: `MUSE_BRIDGE_PORT` (8765), `MUSE_ENABLE_OPTICS` (off)
+and `MUSE_OPTICS_PRESET` (`1035`).
 
-The native bridge reads its own env directly, not through `config.py`: `MUSE_BRIDGE_PORT`
-(default 8765), `MUSE_ENABLE_OPTICS` (default off) and `MUSE_OPTICS_PRESET` (default `1035`).
+Read numeric settings through `_env_number(name, default, cast, minimum=...)`, never
+`int(os.getenv(…))`. These are read at import, so a typo would otherwise take every endpoint down
+over a tuning knob for one optional feature. It falls back on unparseable and non-finite values
+(`inf` passes a `minimum` check, `nan` fails every comparison, and both break call sites in ways that
+look like the feature being off) and clamps below the floor. **Give every one a floor:** a number is
+not automatically a usable setting.
 
 **`MUSE_ENABLE_OPTICS` stays off unless you are testing the heart channel.** On it, a 2025 Athena
-is moved off `PRESET_21` onto an optics-carrying preset — which is a bandwidth trade with a sharp
-edge. Measured on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE link
-within ~20s *and* collapses electrode contact from `[1,1,1,1]` to `[4,4,4,4]`; 8 CH and 4 CH both
-hold for minutes with good contact and ~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung —
-`1031`/`1032` are 16 CH, `1033`/`1034` are 8 CH, `1035`/`1036` are 4 CH (odd = low power). The
-default sits at the bottom deliberately: the 16-channel failure took EEG down with it, and that is
-not a cliff to park next to. An unrecognised value warns once and falls back.
+moves off `PRESET_21` onto an optics-carrying preset — a bandwidth trade with a sharp edge. Measured
+on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE link within ~20s
+*and* collapses electrode contact from `[1,1,1,1]` to `[4,4,4,4]`; 8 CH and 4 CH hold for minutes at
+~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung — `1031`/`1032` 16 CH, `1033`/`1034` 8 CH,
+`1035`/`1036` 4 CH (odd = low power). The default sits at the bottom deliberately: the 16-channel
+failure took EEG down with it. An unrecognised value warns once and falls back.
 
-**Headband BPM is accurate seated and fails only under gait. The two are different regimes and
-the rule is scoped to the right one.**
+### Headband BPM: cleared seated, fails under gait
 
-Seated, validated against a simultaneous watch ECG 2026-08-09: **14 of 16 windows accepted, max
-error 2.1 bpm** against a true 70–72. That is the operating condition for a student at a desk, and
-it is good enough to record and to act on.
+Two regimes with different mechanisms, and the rule is scoped to the right one.
 
-Deliberate desk fidgeting — shifting, leg-bouncing, head turns, typing — degrades into **refusal,
-not into confident error**: 12 of 16 windows rejected at confidence 0.00–0.50, and the 4 accepted
-were within 7.5 bpm. Corroborating how vigorous that was, the *watch's own ECG* failed one of its
-three attempts with `Poor recording`. A medical-grade contact sensor could not cope with movement
-the headband survived while correctly reporting when it could not.
+- **Seated — cleared.** Against a simultaneous watch ECG (2026-08-09): **14 of 16 windows accepted,
+  max error 2.1 bpm** against a true 70–72. That is a student at a desk, and it is good enough to
+  record and to act on.
+- **Desk fidgeting — degrades into refusal, not error.** 12 of 16 windows rejected at confidence
+  0.00–0.50; the 4 accepted were within 7.5 bpm. The *watch's own ECG* failed one of three attempts
+  with `Poor recording`, so a medical-grade contact sensor could not cope with movement the headband
+  survived while correctly reporting that it could not.
+- **Gait — confident error.** Through exercise `ppg_processing` reported 162–167 bpm at **confidence
+  1.00** for six consecutive windows against a watch-verified 104: step cadence. 166/104 = 1.60, no
+  harmonic relation, so no periodicity test sees it and four have been tried.
 
-**Gait is the failure, and it is a different mechanism.** Through exercise, `ppg_processing`
-reported 162–167 bpm at **confidence 1.00** for six consecutive windows against a watch-verified
-104 — the wearer's step cadence. 166/104 = 1.60, no harmonic relation, so no periodicity test sees
-it and four have been tried. Running supplies a *sustained clean rival oscillator* for the
-autocorrelation to lock onto; fidgeting merely destroys the pulse, leaving no peak and therefore no
-confidence. That is why confidence discriminates in one case and not the other.
+Confidence discriminates in the second case and not the third because running supplies a *sustained
+clean rival oscillator* for the autocorrelation to lock onto, while fidgeting merely destroys the
+pulse. The accelerometer remains the only signal independent of the periodicity being confused, and
+is what a walking-around deployment would need — it is not a prerequisite for a maths lesson at a
+desk.
 
-So: **seated use is cleared.** An earlier version of this rule said not to record derived BPM until
-the accelerometer landed. That was over-scoped — it generalised an exercise result to a product
-whose users sit at a screen. The accelerometer is still the only signal independent of the
-periodicity being confused, and it is still what a walking-around deployment would need; it is not
-a prerequisite for a maths lesson at a desk.
+Two limits worth keeping in view: the seated validation is one adult over three minutes, not a child
+over a lesson; and 7.5 bpm at high confidence is harmless for fusion (which can only ease difficulty)
+while being a real if modest error on a parent-facing chart. Evidence and the failed discriminators:
+`EEGResearch/tests/fixtures/README.md`.
 
-Two limits worth keeping in view: the seated validation is one adult over three minutes, not a
-child over a lesson; and 7.5 bpm at high confidence is harmless for fusion (which can only ease
-difficulty) while being a real if modest error on a parent-facing chart. Evidence and the failed
-discriminators are in `EEGResearch/tests/fixtures/README.md`.
+### Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off
 
-**Camera rPPG is validated-and-rejected. `FACE_HEART_ENABLED` stays off.** Measured
-against a simultaneous watch ECG on 2026-08-08: 47.7 bpm reported at **confidence 0.74**
-against a true 88, on five minutes with the face found in 8988 of 8988 frames. Not a
-derivation bug: the pulse is not recoverable **from the mean RGB of our three ROI boxes by
-POS**, and the raw R/G/B channels of those means show the same, so POS is not at fault. The
-autocorrelation peak was 0.02 where a real pulse gives 0.3-0.7.
+Against a simultaneous watch ECG (2026-08-08): **47.7 bpm at confidence 0.74 against a true 88**,
+over five minutes with the face found in 8988 of 8988 frames, autocorrelation peak 0.02 where a real
+pulse gives 0.3–0.7.
 
-Scope that claim carefully. It is not "the pulse is absent from the video" -- an earlier version
-of this rule said that and it overreached. Three spatial averages per frame is a small fraction of
-what a frame contains, and a learned model over per-pixel, multi-region input has far more to work
-with. The reference implementation this project started from reports ~95% accuracy on its best
-tests using RhythmMamba over full video, which is not in conflict with the result above because it
-is a different method on different information. What blocks it here is not physics.
+**Scope that precisely.** It is not "the pulse is absent from the video" — it is that the pulse is
+not recoverable *from the mean RGB of our three ROI boxes by POS*. Three spatial averages per frame
+is a small fraction of a frame, and a learned model over per-pixel multi-region input has far more to
+work with; the reference implementation reports ~95% accuracy with RhythmMamba over full video, which
+is a different method on different information. Raw R/G/B of those means show the same, so POS is not
+at fault.
 
-**Nor, on inspection, is it the licence -- an earlier version of this rule said the weights were
-behind a per-requester Data Usage Agreement, and that conflated two things.** Checked 2026-08-11:
-`zizheng-guo/RhythmMamba` (Zou et al., AAAI 2025) is MIT and ships a `PreTrainedModels` folder, and
-`KegangWangCCNU/open-rppg` -- the `rppg` import in `FacialRecg/` -- says "the source code and tools
-in this repository are released under the MIT License" and ships pretrained models and configs, with
-`.rlap`/`.pure` marking training protocols. It disclaims that the weights are "derived from academic
-research ... subject to the license terms specified in their original publications", so the terms are
-the open question, not access.
+**Nor is the licence a blocker, and `.pure` is why.** Both `zizheng-guo/RhythmMamba` (Zou et al.,
+AAAI 2025) and `KegangWangCCNU/open-rppg` are MIT and ship pretrained weights; the `.rlap`/`.pure`
+suffix is the training protocol. The Data Usage Agreement is on the **RLAP dataset**, not the
+weights — you need it to train on or evaluate against RLAP, not to run inference. What is unresolved
+is whether that agreement reaches *derived* weights, and nobody here has read its terms. `.pure`
+weights avoid the question entirely, which is the cheaper path for a commercial product used by
+children.
 
-The DUA is real but it is on the **dataset**: `KegangWangCCNU/RLAP-dataset` grants access by emailing
-the authors a signed agreement and returns a 14-day download link. You need that to *train on* or
-*evaluate against* RLAP. You do not need it to run inference with weights someone else trained and
-published.
+`RhythmMamba.pure.weights.h5` is published. **`FacePhys` is `.rlap`-only and is the package default**
+(`rppg.Model()` with no argument), so the model that comes for free is the one with no RLAP-free
+alternative — name the model explicitly. Every live selection in `FacialRecg/` pins `.pure`;
+`ubfc_rppg_exp_dataproc.py` is the deliberate exception, since it sweeps the whole grid and its
+committed report would otherwise be unreproducible. Nothing has been *run* since the switch —
+`open-rppg` has never been installed here — so treat `.pure` as licence-safe, not as measured.
 
-**What is genuinely unresolved is whether that agreement reaches derived weights.** Its terms are in
-a PDF behind the request, so nobody here has read them, and `.rlap` means "trained on RLAP". If the
-agreement restricts derivative works, weights published by a third party under MIT may still carry
-obligations -- a question between those authors and RLAP's, which we cannot settle by reading a
-repo. **`.pure` weights, trained on PURE, avoid the question entirely**, and that is the cheaper path
-for a commercial product used by children than obtaining an agreement in order to interpret it.
+What actually stands in the way is engineering and evidence: `open-rppg` is 0.1.1, owns the whole
+signal chain and pulls in JAX and Keras — a heavy install for a student's laptop — and the gate below
+would have to be designed and *measured* against a reference.
 
-`RhythmMamba.pure.weights.h5` **is published** -- confirmed in `rppg/weights/`, which ships both
-suffixes for every architecture except one. The exception matters: **`FacePhys` is `.rlap` only, and
-is the package default** (`rppg.Model()` with no argument gives `FacePhys.rlap`). So the model that
-comes for free is the one with no RLAP-free alternative, and naming the model explicitly is what
-keeps that choice deliberate. The vendored scripts in `FacialRecg/` already name
-`RhythmMamba.pure`, switched from `.rlap` on 2026-08-11 -- the suffix, not the architecture, was the
-part that needed revisiting.
+**The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a
+single-channel source.** Its three terms were built for four contact channels — `agreement` is 1.00
+by construction against one waveform, `margin` is highest exactly when there is no rival structure to
+beat, and noise scored an snr of 0.314, inside the range the code documents as a clear pulse. The
+gate is not weak, it is **inapplicable**, and better hardware would not fix that.
 
-**Every live model selection in `FacialRecg/` now pins `.pure` explicitly**, including the three
-scripts that called `rppg.Model()` with no argument and so were silently taking `FacePhys.rlap` --
-the one model with no RLAP-free alternative. `ubfc_rppg_exp_dataproc.py` is the deliberate exception:
-it sweeps the whole model/suffix grid and its results are committed in
-`ubfc_model_comparison_report.txt`, so dropping the `.rlap` rows would make that report
-unreproducible. Nothing here has been *run* since the switch -- `open-rppg` has still never been
-installed in this repo -- so treat `.pure` as the licence-safe default, not as a measured one.
+The camera ships **emotion-only**. POS is kept because it is correct and is the front half of any
+future attempt; do not read its passing tests as evidence it measures a heart rate. Full analysis:
+`EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
 
-So what stands between here and a camera heart rate is engineering and evidence, not permission:
-the confidence gate below is inapplicable to a single-channel source and would have to be designed
-and *measured* against a reference, and `open-rppg` is 0.1.1, owns the whole signal chain, and pulls
-in JAX and Keras -- a heavy install for software that ships to a student's laptop.
+### Three face columns have no producer yet
 
-The part that generalises past this webcam: **`ppg_processing`'s confidence does not apply
-to a single-channel source.** Its three terms were built for the headband's four contact
-channels -- `agreement` is 1.00 by construction against one waveform, `margin` is highest
-exactly when there is no rival structure to beat, and noise scored an snr of 0.314, inside
-the range the code documents as a clear pulse. So the gate in front of camera heart rate is
-not weak, it is inapplicable, and better hardware alone would not fix that.
-
-The camera ships **emotion-only**. POS is kept because it is correct and is the front half
-of any future attempt, but do not read its passing tests as evidence it measures a heart
-rate. Evidence and the full spectral analysis: `EEGResearch/tests/fixtures/FACE_RPPG_ECG.md`.
-
-**`face_signals.attention`, `gaze_x` and `gaze_y` have no producer yet.**
-`face_processing.build_face_record()` sets only `emotion`, `emotion_confidence`, `trusted` and
-`rejected_by`; there is no gaze estimator and no attention scorer anywhere in
-`EEGResearch/src/app`. Nothing lies -- the three-state tile logic renders `No sensor` /
-`Calibrating` rather than a fabricated number -- but the teacher's Live attention gauge,
-`SessionReview`'s attention ribbon, the parent/teacher `face_attention` tiles and the LLM
-strategy prompt ("average facial attention was X%") are all built on a value nothing has ever
-computed. **Phase 11 of the plan fills them**, so don't drop the columns or the UI.
+`face_signals.attention`, `gaze_x` and `gaze_y`. `face_processing.build_face_record()` sets only
+`emotion`, `emotion_confidence`, `trusted` and `rejected_by`, and there is no gaze estimator or
+attention scorer anywhere in `EEGResearch/src/app`. Nothing lies — the three-state tile logic renders
+`No sensor` / `Calibrating` rather than a number — but the teacher's Live attention gauge,
+`SessionReview`'s attention ribbon, the parent/teacher `face_attention` tiles and one line of the LLM
+strategy prompt are all built on a value nothing has ever computed. **Phase 11 fills them**, so don't
+drop the columns or the UI.
 
 The blocker is that the only face detector here is a **Haar cascade returning a bounding box**
-(`face_roi.py`) -- there is no landmark geometry in the system to derive a gaze vector or head
-pose from, so this needs a new model rather than new wiring. When it lands it needs a
-*measurement* against a reference before anything reaches a parent, on the same standard as
-the rPPG and RMSSD work: "attention" inferred from head direction is least valid for exactly
-this product's users, and unlike a FER+ label it renders as an objective-looking percentage.
-A child looking away while thinking is not inattentive.
+(`face_roi.py`) — no landmark geometry exists to derive a gaze vector or head pose from, so this
+needs a new model rather than new wiring. When it lands it needs a *measurement* against a reference
+before anything reaches a parent: "attention" inferred from head direction is least valid for exactly
+this product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
+looking away while thinking is not inattentive.
 
-**`identity_confidence` was retired instead (#86, `20260812000000`) -- do not add it back
-without a consent decision first.** It never had a producer either, but it is not a missing
-feature: matching a child's face against a stored identity is a *different purpose* from what
-the camera consent asks about ("works out how they are finding the questions", in both the
-parent and student copy), so it needs its own consent channel and its own copy before it needs
-a model. Its removal also closed a live footgun -- `face_signals` carried two confidences, and
-`signal_fusion`'s face channel read the wrong one, so a clearly identified face with a garbage
-FER+ label withheld a difficulty increase while a well-classified expression on a poorly
-identified face was discarded, both silently. `emotion_confidence` keeps its qualified name
-for that reason: a bare `confidence` re-opens the ambiguity the moment a second one lands.
-
-Read numeric settings through `_env_number(name, default, cast, minimum=...)`, not `int(os.getenv(…))`.
-These are read at import, so a typo would otherwise take every endpoint down over a tuning knob for
-one optional feature. It falls back on unparseable and non-finite values (`inf` passes a `minimum`
-check, `nan` fails every comparison, and both break call sites in ways that look like the feature
-being off) and clamps below the floor. Give every one a floor: a number is not automatically a
-usable setting.
+**`identity_confidence` was retired instead (#86, `20260812000000`) — do not add it back without a
+consent decision first.** Matching a child's face against a stored identity is a *different purpose*
+from what the camera consent asks about ("works out how they are finding the questions"), so it needs
+its own consent channel and copy before it needs a model. Its removal also closed a live footgun:
+`face_signals` carried two confidences and `signal_fusion`'s face channel read the wrong one, so a
+clearly identified face with a garbage FER+ label withheld a difficulty increase while a
+well-classified expression on a poorly identified face was discarded, both silently.
+`emotion_confidence` keeps its qualified name for that reason.
 
 ## Database — Postgres functions are world-executable by default
 
@@ -978,54 +944,49 @@ hidden. Withdrawal is not erasure — that is `POST /api/consent/{id}/erase`, be
 
 ### Erasure is the other request, and nothing triggers it by side effect
 
-`erase_signals(user, channel, by, tz)` destroys one channel's stored signals for one student, and
-`signal_erasure` records that it happened. It runs **only** when a parent asks for it by name.
-`test_changing_consent_never_erases` pins that: wiring a revocation to the delete would turn the
-reversible control into the irreversible one by a side effect nobody asked for.
+`erase_signals(user, channel, by, tz)` destroys one channel's stored signals for one student;
+`signal_erasure` records that it happened. It runs **only** when a parent asks by name —
+`test_changing_consent_never_erases` pins that, because wiring a revocation to the delete would turn
+the reversible control into the irreversible one by a side effect nobody asked for.
 
-**A linked parent only** — not the student, not a teacher, so *not* `_consent_actor`. A student may
-withdraw precisely because a parent can undo it; nothing undoes this. The request also carries its
-own `confirm: true`, because a dialog is not auditable and there is no undo anywhere in the system.
+**A linked parent only**, so *not* `_consent_actor`: a student may withdraw precisely because a
+parent can undo it, and nothing undoes this. The request carries its own `confirm: true` — a dialog
+is not auditable.
 
-**Per channel, and the heart deletes are keyed on `source`.** Erasing `camera` takes `face_signals`
-and the `rppg` heart rows; `headband_optical` takes the `muse_optics` ones. A delete keyed on the
-table would let a parent erasing the webcam destroy headband data they said nothing about.
+**Per channel, with the heart deletes keyed on `source`.** `camera` takes `face_signals` and the
+`rppg` heart rows; `headband_optical` takes the `muse_optics` ones. Keyed on the table instead, a
+parent erasing the webcam would destroy headband data they said nothing about.
 
 **Derived data goes too, and the rollup is deleted before it is rebuilt.** `rollup_signal_day` has
 `HAVING count(*) > 0` on every channel, so with the raw rows gone it inserts nothing and *leaves the
 existing row standing* — averages of erased data outliving the erasure. Deleting first is what makes
 the rebuild a recomputation. The rebuild is not optional either: `expire_signal_rows` refuses a day
-with no rollup row, so a day left without one keeps its raw rows past `ends_on` for a reason nobody
-would think to look for.
+with no rollup row, so a day left without one keeps its raw rows past `ends_on`.
 
-**Archived charts are erased if they draw on the channel at all**, which is why `camera` takes
-`heart_rate` and `stress_pie` with it — those mix both sensors into one picture and no pixel says
-which is which. Over-deletion, accepted deliberately over serving a chart that still contains what
-was erased. Object paths are **derived** in the function, never read from `chart_paths`: there it
-would be a delete list of the writer's choosing.
+**Archived charts go if they draw on the channel at all**, so `camera` takes `heart_rate` and
+`stress_pie` with it — those mix both sensors into one picture and no pixel says which is which.
+Over-deletion, preferred to serving a chart that still contains what was erased. Object paths are
+**derived** in the function, never read from `chart_paths`, where they would be a delete list of the
+writer's choosing.
 
-Everything in the database is one transaction; the storage removal runs after it commits and is
-**counted, not awaited** (`charts_failed` on the response, and a log line). Once `chart_paths` is
-nulled the objects are unreachable through the product whether or not the removal succeeded, which
-is why that is safe to report rather than roll back.
+The database half is one transaction; storage removal runs after it commits and is **counted, not
+awaited** (`charts_failed`, plus a log line). Once `chart_paths` is nulled the objects are
+unreachable through the product either way, which is why that is safe to report rather than roll
+back.
 
-**The control is per channel and parent-only, in `ConsentChannels.jsx`.** A student is shown that
-an erasure happened and is not offered the action — the backend refuses them, and a control that
-always fails is worse than none. The erase button sits in the channel's own card, gated behind an
-"I understand this cannot be undone" checkbox that is cleared whenever a panel opens, so an
-acknowledgement can never carry from one channel to another. It sends the **channel** name
-(`camera`), not the switch key (`camera_enabled`), which is a 422 otherwise.
-
-The confirmation states what goes *and* what stays, at the moment of deciding rather than as
-standing copy under the control — a permanent disclaimer would mean the control's name overpromised,
-which is what retired `FacialRecognitionToggle`. It also says the setting is unchanged: erasing the
-past while leaving the sensor on is the combination a parent is most likely to get wrong.
+**The control** (`ConsentChannels.jsx`) is per channel and parent-only; a student sees that an
+erasure happened but is not offered an action the backend would refuse. It is gated behind an "I
+understand this cannot be undone" checkbox, cleared whenever a panel opens so an acknowledgement
+cannot carry between channels, and sends the **channel** name (`camera`), not the switch key
+(`camera_enabled`), which 422s. The confirmation states what goes *and* what stays, and that the
+setting is unchanged — erasing the past while leaving the sensor on is the mistake most available to
+a parent. That scope belongs in the confirmation, not as standing copy: a permanent disclaimer means
+the control's name overpromised, which is what retired `FacialRecognitionToggle`.
 
 **The tombstone is the fourth reporting state.** `erased_at` rides on each channel of the consent
-payload, independent of `enabled` and `revoked_at` — a parent who erased and then re-consented has a
+payload, independent of `enabled` and `revoked_at` — a parent who erased and re-consented has a
 channel that is on and a past that is gone. `_erasures()` fails **open** to `{}`, unlike `_consent()`:
-it only decides whether a tile says "erased" or "no sensor", and never whether anything may be
-recorded.
+it decides only whether a tile says "erased" or "no sensor", never whether anything may be recorded.
 
 That rule has to hold on **both ingestion paths**, and for a while it did not. `/api/signals/*` has
 called `_consent()` per request since it existed; the poller writes `cognitive_signals` directly with

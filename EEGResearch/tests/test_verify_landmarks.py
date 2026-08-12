@@ -37,38 +37,49 @@ def _step(frames=120, yaw=0.0, pitch=0.0, roll=0.0, gaze_x=0.0, gaze_y=0.0):
 
 
 def test_a_correct_table_passes():
-    """Looking left drives both gaze.x and yaw negative, which is the
-    convention `face_geometry` documents."""
+    """Looking and turning toward your own left drives both gaze.x and yaw
+    *positive*: the frame is not mirrored, so your own left is the image right,
+    and both quantities are measured in image coordinates.
+
+    These were asserted negative until a camera said otherwise on 2026-08-12.
+    A correct index table failed, and the script named a specific edit to make
+    — swapping `left_*` and `right_*` — which would have broken it."""
     code = verify._verdict(
         _step(),
-        _step(gaze_x=-0.6),
-        _step(yaw=-25.0),
+        _step(gaze_x=+0.6),
+        _step(yaw=+25.0),
     )
 
     assert code == 0
 
 
-def test_mirrored_eyes_fail_rather_than_pass():
-    """The failure this whole script exists to catch. gaze.x positive when
-    looking left means the eye and iris indices are swapped — and the reading
-    is *mirrored*, not absent, so nothing downstream would ever question it."""
+def test_gaze_tracking_the_wrong_way_fails():
+    """gaze.x negative while looking toward your own left means the iris is
+    moving the wrong way in image x — a mirrored frame, or an iris index that
+    is not the iris.
+
+    Note what this is *not*: a left/right label swap. `gaze` averages both eyes
+    in image coordinates, so permuting the labels returns an identical number
+    and no threshold here can see it. `test_gaze_cannot_see_a_left_right_swap`
+    in test_face_geometry pins that."""
     code = verify._verdict(
         _step(),
-        _step(gaze_x=+0.6),
-        _step(yaw=-25.0),
+        _step(gaze_x=-0.6),
+        _step(yaw=+25.0),
     )
 
     assert code == 1
 
 
-def test_mirrored_outline_fails_independently_of_the_eyes():
-    """The eye indices and the outline indices are different regions of the
-    table, so one being right says nothing about the other. A check that only
-    looked at gaze would pass a face whose yaw was backwards."""
+def test_an_inverted_pose_fit_fails_independently_of_the_eyes():
+    """Gaze and yaw come from different halves — iris offsets versus a fit
+    against a model with a handedness — so one being right says nothing about
+    the other. A check that only looked at gaze would pass a face whose yaw was
+    backwards, and gaze is the half that cannot see a mirror at all."""
     code = verify._verdict(
         _step(),
-        _step(gaze_x=-0.6),
-        _step(yaw=+25.0),
+        _step(gaze_x=+0.6),
+        _step(yaw=-25.0),
     )
 
     assert code == 1
@@ -79,8 +90,8 @@ def test_a_movement_too_small_to_read_is_not_a_pass():
     is how a table nobody actually exercised gets marked verified."""
     code = verify._verdict(
         _step(),
-        _step(gaze_x=-0.02),
-        _step(yaw=-1.0),
+        _step(gaze_x=+0.02),
+        _step(yaw=+1.0),
     )
 
     assert code == 1
@@ -100,8 +111,8 @@ def test_a_crooked_sitter_still_passes_the_square_on_step():
     be dismissed rather than acted on."""
     code = verify._verdict(
         _step(yaw=-8.0, pitch=6.0, roll=-5.0),
-        _step(gaze_x=-0.5),
-        _step(yaw=-20.0),
+        _step(gaze_x=+0.5),
+        _step(yaw=+20.0),
     )
 
     assert code == 0
@@ -127,20 +138,21 @@ def test_a_failed_square_on_skips_the_yaw_check_but_not_the_gaze_check(capsys):
 
     `gaze` is computed from the eye and iris landmarks alone and never touches
     the rotation fit, so a wrong canonical model cannot flip its sign — the
-    mirror check still works. `yaw` comes straight out of that fit, so it is
+    iris-tracking check still works. (It is not a mirror check; nothing about
+    gaze is.) `yaw` comes straight out of that fit, so it is
     meaningless until square-on passes, and printing PASS beside a warning
     saying not to trust it is how someone reads the wrong half of a failed run.
     """
     code = verify._verdict(
         _step(yaw=60.0),               # square-on fails: the pose fit is wrong
-        _step(gaze_x=-0.6),            # ...but the eyes are still readable
-        _step(yaw=+40.0),              # ...and this would otherwise print PASS/FAIL
+        _step(gaze_x=+0.6),            # ...but the eyes are still readable
+        _step(yaw=-40.0),              # ...and this would otherwise print PASS/FAIL
     )
     out = capsys.readouterr().out
 
     assert code == 1
     assert "SKIP" in out and "yaw comes from the pose fit" in out
-    assert "looking left drives gaze.x negative" in out
+    assert "looking left drives gaze.x positive" in out
 
 
 def test_nothing_printed_needs_more_than_ascii():

@@ -34,18 +34,30 @@ Three prompted steps, each with an automatic verdict, so the outcome is a
 sentence rather than a wall of numbers to interpret:
 
 1. **Square on** -- the pose should read near zero on all three angles. Failing
-   here means the canonical model or the pose maths is wrong, not the mapping.
-2. **Eyes hard left, head still** -- `gaze.x` must go *negative*. Positive means
-   the eye landmarks are mirrored, which is the failure this exists to find.
-3. **Turn your head left** -- `yaw` must go negative, on the same convention.
+   here means the canonical model or the pose maths is wrong, *or* the index
+   table is mirrored: both make the correspondence unfittable by a rotation and
+   both surface as `implausible_pose`. Confirmed against hardware 2026-08-12,
+   where a wrong-handed model refused 120 frames of 120.
+2. **Eyes hard left, head still** -- `gaze.x` must go *positive*. The frame is
+   not mirrored, so the subject's own left is the image right, and `gaze.x` is
+   measured in image x (`_eye_offset` divides by an absolute width, so there is
+   no per-eye sign flip). This checks that the iris tracks and that the sign
+   convention holds. **It cannot detect a left/right swap** -- both eyes are
+   averaged in image coordinates, so permuting the labels returns the identical
+   number. It claimed to, and would have prescribed swapping a correct table.
+3. **Turn your head left** -- `yaw` must go *positive*, same reason: turning
+   toward your own left is turning toward the image right. This is the step
+   that adjudicates the mapping, because yaw comes from a fit against a model
+   that has a handedness. A mirrored table makes that fit impossible rather
+   than wrong, so it surfaces as a refusal.
    A *modest* turn: the bar is 10 degrees, and near profile the landmark set
    stops being usable. Past roughly 70 degrees the nose tip crosses the far eye
    corner, `check_topology` refuses the frame as `nose_outside_eyes`, and the
    step measures nothing -- correctly, but it is not what the step is asking.
 
-Steps 2 and 3 are separate because they can fail independently: the eye/iris
-indices and the face-outline indices are different parts of the table, and one
-being mirrored says nothing about the other.
+Steps 2 and 3 are separate because they test different things over different
+regions of the table -- iris tracking and image-x sign for one, the pose fit's
+handedness for the other -- and neither says anything about the other.
 
 **Do not judge direction from another app's camera preview.** Video-call
 software usually mirrors the image for the person on screen; this reads the raw
@@ -91,9 +103,9 @@ class Gui:
 
     Not decoration. This check hunts a **sign** error, and the headless version
     asks you to perform a movement blind and reads you the verdict four seconds
-    later -- so a FAIL cannot distinguish a mirrored table from someone who
-    looked the wrong way, and neither can you. Watching `gaze.x` go negative
-    while you look left collapses that into a single observation.
+    later -- so a FAIL cannot distinguish a wrong mapping from someone who
+    looked the wrong way, and neither can you. Watching the number move as you
+    move collapses that into a single observation.
 
     Two properties it must not break:
 
@@ -380,13 +392,14 @@ def _verdict(square, eyes, head) -> int:
     gx = eyes["gaze_x"]
     if gx is None:
         report(False, "looking left produced no gaze reading")
-    elif gx <= -GAZE_THRESHOLD:
-        report(True, f"looking left drives gaze.x negative ({gx})")
     elif gx >= GAZE_THRESHOLD:
-        report(False, f"looking left drives gaze.x POSITIVE ({gx})")
-        print("         -> the eye and iris indices are MIRRORED. Swap the "
-              "`left_*` and `right_*` eye entries in "
-              "face_landmarks.MEDIAPIPE_INDICES.")
+        report(True, f"looking left drives gaze.x positive ({gx})")
+    elif gx <= -GAZE_THRESHOLD:
+        report(False, f"looking left drives gaze.x NEGATIVE ({gx})")
+        print("         -> the iris is tracking the wrong way in image x. Not "
+              "a left/right label swap: gaze averages both eyes in image "
+              "coordinates and cannot see one. Suspect the iris indices, or a "
+              "frame that arrived mirrored.")
     else:
         report(False, f"gaze.x barely moved ({gx}) - look harder, or the iris "
                       f"landmarks are not tracking")
@@ -406,13 +419,14 @@ def _verdict(square, eyes, head) -> int:
     yaw = head["yaw"]
     if yaw is None:
         report(False, "turning left produced no pose reading")
-    elif yaw <= -YAW_THRESHOLD:
-        report(True, f"turning left drives yaw negative ({yaw})")
     elif yaw >= YAW_THRESHOLD:
-        report(False, f"turning left drives yaw POSITIVE ({yaw})")
-        print("         -> the outline indices are MIRRORED, or the canonical "
-              "model's x axis is flipped. Note this is a *different* table "
-              "region from the eyes above; check which of the two failed.")
+        report(True, f"turning left drives yaw positive ({yaw})")
+    elif yaw <= -YAW_THRESHOLD:
+        report(False, f"turning left drives yaw NEGATIVE ({yaw})")
+        print("         -> the pose fit is inverted about the vertical axis. "
+              "A mirrored index table would refuse at step 1 rather than reach "
+              "here, so suspect CANONICAL_FACE's x signs or the Euler "
+              "recovery, not the mapping.")
     else:
         report(False, f"yaw barely moved ({yaw}) - turn further, or the "
                       f"outline landmarks are not tracking")

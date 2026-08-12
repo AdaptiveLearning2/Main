@@ -299,6 +299,21 @@ nose between the eyes, iris inside its own eye) and refuses a set that does not,
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
 relation — so **the manual camera check is still owed**, and it is one command:
 
+**Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
+a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head
+left drives `yaw` **positive**; `pitch > 0` is the face pointing *up*. `CANONICAL_FACE` must therefore
+put the subject's left at **positive x** — it did the opposite until 2026-08-12, and because the fit
+solves for a rotation and a rotation cannot reflect, a person sitting perfectly square on was refused
+`implausible_pose` on 120 frames of 120. **Round-trip tests cannot catch this**: rotating the model
+and recovering the rotation is self-consistent under either handedness, which is how 32 of them
+passed over an unusable model. Tests that pin it construct a frame from the image convention instead
+(`test_the_model_handedness_matches_a_real_frame`).
+
+**`gaze` cannot detect a left/right swap and must never be described as doing so.** Both eyes are
+averaged in image coordinates and `_eye_offset` divides by an absolute width, so permuting the labels
+returns a bit-identical number. `head_pose` is the adjudicator — a mirrored table makes the
+correspondence unfittable, so it *refuses* rather than answering wrongly.
+
 ```bash
 python scripts/verify_landmarks.py
 ```

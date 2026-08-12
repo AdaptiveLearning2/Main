@@ -44,8 +44,12 @@ logger = logging.getLogger(__name__)
 # eye appears on the *right* of a non-mirrored image -- the single most likely
 # thing in this file to be backwards, and precisely what `check_topology`
 # cannot detect on its own, since a mirrored face is still a valid face.
-# Confirming it needs the manual camera check: sit square on, look hard left,
-# and confirm `gaze.x` goes negative.
+# Confirming it needs the manual camera check. The frame is not mirrored, so
+# the subject's own left is the image right: looking hard left drives `gaze.x`
+# POSITIVE and turning the head left drives `yaw` positive. Note that `gaze`
+# cannot see a swap of these labels at all -- it averages both eyes in image
+# coordinates -- so `head_pose` is what adjudicates, by refusing a mirrored set
+# outright rather than answering it wrongly.
 MEDIAPIPE_INDICES = {
     "left_eye_outer": 263,
     "left_eye_inner": 362,

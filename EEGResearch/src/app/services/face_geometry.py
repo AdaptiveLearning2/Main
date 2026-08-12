@@ -37,16 +37,26 @@ Sign conventions
 ----------------
 Image coordinates: **x right, y down**, as every frame array in this codebase
 is indexed. The canonical model is a face looking straight at the camera, with
-+z out of the face toward the lens.
++z out of the face toward the lens. The frame is **not mirrored**, so a subject
+facing the lens has their own left on the image right -- which is why
+`CANONICAL_FACE` puts the subject's left at positive x. See the note there; a
+model of the opposite handedness cannot be fitted at all, because the fit
+solves for a rotation and a rotation cannot reflect.
 
 - **yaw** > 0: the subject's face turns toward the right-hand side of the image
-- **pitch** > 0: the face tilts downward (chin toward chest)
+  -- equivalently, they turn toward their own left
+- **pitch** > 0: the face points upward (chin away from chest)
 - **roll** > 0: the head tips so the subject's right eye rises in the image
 
-These are asserted by round-trip in the tests -- a known rotation is applied to
-the canonical model, projected, and recovered -- rather than stated and hoped
-for, because a sign error here is invisible in every aggregate and only shows up
-as a mirrored gaze on somebody's dashboard.
+Round-trip tests apply a known rotation to the canonical model, project, and
+recover it. **That is weaker than it looks and two of these were wrong anyway.**
+A round trip is self-consistent under a mirrored model and under an inverted
+axis description alike: it pins the decomposition against itself, not against a
+camera. The handedness was inverted until 2026-08-12 and every test passed; the
+pitch line above described the opposite of what the code does, and no test
+mentioned pitch's physical direction at all. What pins these now is
+`test_the_model_handedness_matches_a_real_frame` and its neighbours, which
+construct a frame from the image convention rather than from this model.
 
 **Yaw is measurable only within +/-90 degrees.** Beyond that the decomposition
 returns the other branch of a two-fold ambiguity that no rotation matrix can
@@ -76,8 +86,23 @@ POSE_LANDMARKS = (
 
 # A canonical face, facing the camera, in arbitrary units (roughly millimetres
 # on an adult). Only the *shape* matters: scale is solved for, so a child's
-# smaller face fits the same model. Left and right are the **subject's**, so
-# `left_eye_outer` sits at negative x when the subject faces the lens.
+# smaller face fits the same model.
+#
+# **Left and right are the subject's, and the subject's left sits at POSITIVE
+# x.** That is not a free choice and it was wrong here until 2026-08-12. The fit
+# solves for a rotation, and a rotation cannot produce a reflection: if the
+# model's handedness disagrees with the frame's, no pose exists that maps one to
+# the other and every frame is refused. In a non-mirrored frame -- which is what
+# OpenCV hands over -- a subject facing the lens has their own left on the image
+# right, i.e. at larger x, so the model must put it at larger x too.
+#
+# The earlier version had `left_eye_outer` at -45, which contradicted this
+# file's own "x right, y down" convention, and the symptom was total: a person
+# sitting perfectly square on produced `implausible_pose` on 120 frames out of
+# 120. The round-trip tests did not catch it because they rotate this model and
+# recover the rotation, which is self-consistent under either handedness --
+# see `test_the_model_handedness_matches_a_real_frame`, which pins it against
+# the image convention instead.
 #
 # These are the standard correspondences used with the 3D morphable-model mean
 # face; they are not measured from this product's users, and that is a known
@@ -85,13 +110,13 @@ POSE_LANDMARKS = (
 # pose slightly. It is bounded and systematic rather than noisy, and correcting
 # it needs the same reference recording the attention score needs.
 CANONICAL_FACE = {
-    "left_eye_outer":  (-45.0, -34.0, -12.0),
-    "left_eye_inner":  (-15.0, -34.0,  -6.0),
-    "right_eye_inner": (15.0, -34.0,  -6.0),
-    "right_eye_outer": (45.0, -34.0, -12.0),
+    "left_eye_outer":  (45.0, -34.0, -12.0),
+    "left_eye_inner":  (15.0, -34.0,  -6.0),
+    "right_eye_inner": (-15.0, -34.0,  -6.0),
+    "right_eye_outer": (-45.0, -34.0, -12.0),
     "nose_tip":        (0.0,   0.0,  22.0),
-    "mouth_left":      (-27.0,  38.0,  -3.0),
-    "mouth_right":     (27.0,  38.0,  -3.0),
+    "mouth_left":      (27.0,  38.0,  -3.0),
+    "mouth_right":     (-27.0,  38.0,  -3.0),
     "chin":            (0.0,  75.0,  -8.0),
 }
 

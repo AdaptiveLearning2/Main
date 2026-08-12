@@ -248,12 +248,28 @@ attention scorer anywhere in `EEGResearch/src/app`. Nothing lies — the three-s
 strategy prompt are all built on a value nothing has ever computed. **Phase 11 fills them**, so don't
 drop the columns or the UI.
 
-The blocker is that the only face detector here is a **Haar cascade returning a bounding box**
-(`face_roi.py`) — no landmark geometry exists to derive a gaze vector or head pose from, so this
-needs a new model rather than new wiring. When it lands it needs a *measurement* against a reference
-before anything reaches a parent: "attention" inferred from head direction is least valid for exactly
-this product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
-looking away while thinking is not inattentive.
+`face_geometry.py` is the arithmetic half and is done: named landmarks in, head pose and iris
+offset out, pure numpy so CI can test it. **It has no caller** — the only face detector here is a
+Haar cascade returning a bounding box (`face_roi.py`), so what is still missing is a landmark model
+to feed it (MediaPipe Face Mesh is the candidate: Apache 2.0, models downloadable without an
+agreement, which is the constraint that blocked RhythmMamba). It deliberately scores no attention:
+the geometry has a right answer and can be checked against one, the inference to "attending" is a
+judgement, and keeping them apart is what lets the judgement be revised without re-deriving
+anything.
+
+It uses an orthographic fit, **not `cv2.solvePnP`**, because solvePnP needs camera intrinsics we do
+not have — a guessed focal length yields a systematically wrong pose that still looks like a face
+turning. The trade is that perspective is ignored, so it degrades at close range and large angles.
+**Yaw is measurable only within ±90°**: past that the Euler recovery returns the other branch of a
+two-fold ambiguity no rotation matrix can resolve, corrupting pitch and roll by 180° as well, so it
+refuses with `implausible_pose` rather than reporting a mirrored angle.
+
+**The attention score is the part that still needs a measurement**, against a reference, before
+anything reaches a parent: "attention" inferred from head direction is least valid for exactly this
+product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
+looking away while thinking is not inattentive. One adult is not a sufficient validation set here —
+the failure mode is population-specific — so that step is blocked on a labelled recording rather than
+on code.
 
 **`identity_confidence` was retired instead (#86, `20260812000000`) — do not add it back without a
 consent decision first.** Matching a child's face against a stored identity is a *different purpose*

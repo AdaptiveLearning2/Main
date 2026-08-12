@@ -297,7 +297,7 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so it needs the manual camera check. **Passed 2026-08-12** (`--gui`, one adult, laptop
+relation — so it needs the manual camera check. **Passed 2026-08-12** (one adult, laptop
 webcam): square on `yaw 5.97 / pitch -13.76 / roll -4.40` with no refusals, eyes left
 `gaze.x +0.442`, head left `yaw +32.97`. That confirms the table's left/right, both sign
 conventions, and that the model handedness now matches a real frame — the same three steps refused
@@ -323,12 +323,11 @@ returns a bit-identical number. `head_pose` is the adjudicator — a mirrored ta
 correspondence unfittable, so it *refuses* rather than answering wrongly.
 
 ```bash
-python scripts/verify_landmarks.py --gui
+python scripts/verify_landmarks.py
 ```
 
 Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
-that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video;
-`--gui` previews it, deliberately **unmirrored**, since the whole question is which way is left.
+that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
 Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
 image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
 and it claimed to until the run that found all this. It deliberately scores no attention:

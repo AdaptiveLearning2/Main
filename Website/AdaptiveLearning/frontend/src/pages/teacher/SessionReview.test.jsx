@@ -181,3 +181,65 @@ describe('the archived-chart fallback', () => {
     expect(screen.getByText(/no signal samples for this session/i)).toBeInTheDocument()
   })
 })
+
+// ── mixed states across a section's charts ──────────────────────────────────
+//
+// The backend signs each of the four objects independently and puts a name in
+// `unavailable` on that object's own read failure, so states genuinely differ
+// within one section. Every test above uses a uniform state, which is exactly
+// why the first version of this page read one channel and spoke for the set.
+
+describe('a fault is never reported as an absence', () => {
+  it('does not call an unreadable heart chart "nothing recorded"', async () => {
+    // cognitive drew nothing (a fact about the session) while heart_rate's
+    // object could not be read (a fault). Reading only cognitive_timeline
+    // downgrades the fault to an absence.
+    mockPair({
+      archived: true,
+      charts: { cognitive_timeline: null, emotion_pie: null, stress_pie: null },
+      unavailable: ['heart_rate'],
+    })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByText(/archived chart for this session could not be loaded/i))
+        .toBeInTheDocument())
+    expect(screen.queryByText(/nothing was recorded on this channel/i))
+      .not.toBeInTheDocument()
+  })
+
+  it('flags the fault even when the other chart in the section drew fine', async () => {
+    // One chart rendered, one unreadable. Silence here presents a partial
+    // view as the whole session.
+    mockPair({
+      archived: true,
+      charts: { cognitive_timeline: 'https://storage.test/a/cognitive_timeline.svg' },
+      unavailable: ['heart_rate'],
+    })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
+    expect(screen.getByText(/one archived chart for this session could not be loaded/i))
+      .toBeInTheDocument()
+  })
+
+  it('does not call an unreadable emotion chart "no face samples"', async () => {
+    mockPair({ archived: true, charts: { cognitive_timeline: null }, unavailable: ['emotion_pie'] })
+    renderAt()
+
+    await waitFor(() => expect(screen.getByText('Emotion timeline')).toBeInTheDocument())
+    expect(screen.queryByText(/no face samples for this session/i))
+      .not.toBeInTheDocument()
+  })
+
+  it('keeps the pie section mounted so an unreadable pie is still reported', async () => {
+    // Hiding the section reports nothing at all -- the absence swallowing the
+    // fault one level up.
+    mockPair({ archived: true, charts: { emotion_pie: null }, unavailable: ['stress_pie'] })
+    renderAt()
+
+    await waitFor(() => expect(screen.getByText('Heart-rate stress')).toBeInTheDocument())
+    expect(screen.getAllByText(/could not be loaded/i).length).toBeGreaterThan(0)
+  })
+})

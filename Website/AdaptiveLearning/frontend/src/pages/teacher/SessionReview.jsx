@@ -271,6 +271,23 @@ export default function SessionReview() {
 
   const isUrl = (v) => typeof v === 'string' && v.startsWith('http')
 
+  // A section can cover more than one chart -- the timeline block draws both
+  // cognitive and heart -- and the backend signs each object independently, so
+  // the states genuinely differ across a set: `cognitive_timeline` empty while
+  // `heart_rate` is unavailable is an ordinary outcome, not a corner case.
+  //
+  // A fault therefore outranks an absence whenever they are mixed. Reading the
+  // state of one member and speaking for the whole set is how "the object could
+  // not be read" becomes "nothing was recorded", which is the single thing this
+  // payload's shape exists to prevent.
+  const anyUnavailable = (names) => names.some(n => archivedChart(n) === 'unavailable')
+
+  // The copy for a set with no drawable chart in it, fault first.
+  const noChartCopy = (names) =>
+    anyUnavailable(names)
+      ? NO_CHART_COPY.unavailable
+      : NO_CHART_COPY[archivedChart(names[0])]
+
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-6">
       <Link to="/teacher/live" className="text-sm text-violet-600 font-bold flex items-center gap-1 hover:text-violet-700">
@@ -323,6 +340,13 @@ export default function SessionReview() {
                 {isUrl(archivedChart('heart_rate')) && (
                   <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
                 )}
+                {/* One chart drawn, the other unreadable. Saying nothing here
+                    would present a partial view as the whole session. */}
+                {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-2">
+                    One archived chart for this session could not be loaded.
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -331,7 +355,7 @@ export default function SessionReview() {
                     channels' timestamps), so this can no longer name just the
                     one channel it used to be the only source for. */}
                 <p className="text-sm text-gray-400">
-                  {NO_CHART_COPY[archivedChart('cognitive_timeline')]}
+                  {noChartCopy(['cognitive_timeline', 'heart_rate'])}
                 </p>
                 {/* Only under the empty branch. Beside an archived chart it
                     would be telling a teacher to wait for a stream on a
@@ -440,12 +464,19 @@ export default function SessionReview() {
                 borrowing `emotion_pie` here would answer a different question
                 under this heading. The pie is rendered below, where it says
                 what it is. */}
+            {/* Compared against the state, not against the rendered string.
+                Testing `NO_CHART_COPY[x] === NO_CHART_COPY.empty` worked only
+                as long as no two states shared wording -- and two of them
+                already do, so it was one copy edit away from silently
+                misreporting. */}
             <p className="text-sm text-gray-400">
               {isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
-                : NO_CHART_COPY[archivedChart('emotion_pie')] === NO_CHART_COPY.empty
-                  ? 'Nothing was recorded on the camera channel.'
-                  : 'No face samples for this session.'}
+                : archivedChart('emotion_pie') === 'unavailable'
+                  ? NO_CHART_COPY.unavailable
+                  : archivedChart('emotion_pie') === 'empty'
+                    ? 'Nothing was recorded on the camera channel.'
+                    : 'No face samples for this session.'}
             </p>
           </div>
         ) : (
@@ -467,14 +498,22 @@ export default function SessionReview() {
           alike scrolling through emojis. Rendered only when there is something
           to render: an empty pie is a claim about a session that recorded
           nothing, which an unread channel has not earned. */}
+      {/* `unavailable` keeps the section mounted rather than hiding it. A
+          hidden section reports nothing at all, which is how an unreadable
+          stress chart would have gone unmentioned on every surface -- the
+          absence swallowing the fault, one level up. */}
       {(emotionSlices.length > 0 || stressSlices.length > 0
-        || isUrl(archivedChart('emotion_pie')) || isUrl(archivedChart('stress_pie'))) && (
+        || isUrl(archivedChart('emotion_pie')) || isUrl(archivedChart('stress_pie'))
+        || anyUnavailable(['emotion_pie', 'stress_pie'])) && (
         <div className="grid md:grid-cols-2 gap-4">
-          {(emotionSlices.length > 0 || isUrl(archivedChart('emotion_pie'))) && (
+          {(emotionSlices.length > 0 || isUrl(archivedChart('emotion_pie'))
+            || archivedChart('emotion_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Emotion mix</h2>
               {emotionSlices.length === 0 ? (
-                <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
+                isUrl(archivedChart('emotion_pie'))
+                  ? <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
+                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
@@ -493,7 +532,8 @@ export default function SessionReview() {
               )}
             </div>
           )}
-          {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))) && (
+          {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
+            || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
               {/* Not bare "Stress": heart_signals.stress_category is a
                   physiological measurement, distinct from the EEG-derived
@@ -501,7 +541,9 @@ export default function SessionReview() {
                   never render both under one "Stress" label. */}
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
               {stressSlices.length === 0 ? (
-                <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
+                isUrl(archivedChart('stress_pie'))
+                  ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
+                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">

@@ -144,14 +144,63 @@ def test_a_failed_square_on_skips_the_yaw_check_but_not_the_gaze_check(capsys):
 
 
 def test_nothing_printed_needs_more_than_ascii():
-    """A Windows console is cp1252 and cannot encode box-drawing characters or
-    arrows at all. The failure is a UnicodeEncodeError on the first line of
-    output, before the check runs — on the project's first-class dev platform,
-    for a script whose whole premise is being cheap to run.
+    """A Windows console cannot encode box-drawing characters or arrows. The
+    failure is a UnicodeEncodeError on the first line of output, before the
+    check runs — on the project's first-class dev platform, for a script whose
+    whole premise is being cheap to run.
+
+    **`ascii`, not `cp1252`.** The bar was cp1252 and that is weaker than the
+    rule the script states: cp1252 happens to contain an em dash, so one got
+    into a runtime print twenty lines below the comment forbidding it and this
+    test passed. cp437 and cp850 — both reachable in a `cmd.exe` console — do
+    not contain it, and neither does a pipe to a file under an ASCII locale.
 
     pytest captures output through a UTF-8 buffer, so no other test here can
     see this; the source is checked directly instead.
     """
     source = SCRIPT.read_text(encoding="utf-8")
     body = source.split('"""', 2)[2]      # the docstring is never printed
-    body.encode("cp1252")                 # raises if any runtime string cannot
+    body.encode("ascii")                  # raises if any runtime string cannot
+
+
+# ── the preview ─────────────────────────────────────────────────────────────
+
+def test_the_preview_writes_nothing_to_disk():
+    """The script's headline promise is that it records nothing, and adding a
+    window is exactly the change that would quietly break it — a frame is
+    already decoded and drawn on, so saving one is a single call away.
+
+    Cheap and coarse on purpose: it cannot prove absence, but it fails the
+    moment someone reaches for the obvious call.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    for forbidden in ("imwrite", "imencode", "VideoWriter"):
+        assert forbidden not in source, f"{forbidden} would persist a frame"
+
+
+def test_the_preview_sees_frames_with_no_face_rather_than_freezing():
+    """A stretch with no face is the state a subject most needs to see, because
+    it is usually them having left the frame. Drawing only when a face is found
+    leaves the window frozen on the last good frame, which looks like the script
+    having hung."""
+    class _Source:
+        def __init__(self): self.left = 3
+        def read(self):
+            self.left -= 1
+            return object() if self.left >= 0 else None
+
+    class _Landmarker:
+        def locate(self, frame, w, h): return {}          # never finds a face
+
+    class _Gui:
+        aborted = False
+        def __init__(self): self.drawn = 0
+        def frame(self, *a, **k): self.drawn += 1
+
+    gui = _Gui()
+    samples = verify._collect(_Landmarker(), _Source(), 0.2, 640, 480, gui=gui,
+                              step="x", instruction="y", watch="yaw", target=0.0)
+
+    assert samples == [], "a frame with no face is not a sample"
+    assert gui.drawn > 0, "the preview never saw the frames with no face"

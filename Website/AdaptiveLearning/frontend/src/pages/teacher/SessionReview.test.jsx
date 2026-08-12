@@ -58,3 +58,126 @@ describe('the two stress figures', () => {
     expect(screen.queryByText('Stress')).not.toBeInTheDocument()
   })
 })
+
+// ── the archived-chart fallback ─────────────────────────────────────────────
+//
+// `expire_signal_rows` deletes per-sample rows on `ends_on` and deliberately
+// leaves the archived SVGs, so past that date the archive is the *only*
+// remaining view of a session. Without this fallback the page renders "no
+// samples" over charts sitting in the bucket -- an absence contradicted by
+// the data, which is the failure the whole reporting layer is built around.
+
+const EXPIRED = { cognitive: [], face: [], heart: [], answers: [] }
+
+function mockPair(charts) {
+  apiFetch.mockImplementation((url) =>
+    Promise.resolve(url.endsWith('/charts') ? charts : EXPIRED))
+}
+
+describe('the archived-chart fallback', () => {
+  it('asks for the archive only when every channel is empty', async () => {
+    // A session that still has rows must not pay for the extra round trip,
+    // and must not sign four URLs nobody will look at.
+    apiFetch.mockResolvedValue({
+      cognitive: [
+        { ts: '2026-08-10T09:00:00Z', focus: 0.6 },
+        { ts: '2026-08-10T09:01:00Z', focus: 0.7 },
+      ],
+      face: [], heart: [], answers: [],
+    })
+    renderAt()
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+    expect(apiFetch.mock.calls.some(c => String(c[0]).endsWith('/charts'))).toBe(false)
+  })
+
+  it('draws the archived charts once the rows have expired', async () => {
+    mockPair({
+      archived: true,
+      charts: {
+        cognitive_timeline: 'https://storage.test/a/cognitive_timeline.svg',
+        heart_rate: 'https://storage.test/a/heart_rate.svg',
+        emotion_pie: 'https://storage.test/a/emotion_pie.svg',
+        stress_pie: null,
+      },
+      unavailable: [],
+    })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
+    expect(screen.getByAltText('Heart rate and HRV')).toBeInTheDocument()
+    expect(screen.getByAltText('Emotion mix')).toBeInTheDocument()
+    // Null means that channel drew nothing, so there is no picture to show
+    // and inventing an empty one would assert the session had it and it read
+    // flat.
+    expect(screen.queryByAltText('Autonomic arousal')).not.toBeInTheDocument()
+    expect(screen.getByText(/per-sample rows for this session have expired/i))
+      .toBeInTheDocument()
+  })
+
+  it('does not tell a teacher to wait for a stream on an expired session', async () => {
+    mockPair({
+      archived: true,
+      charts: { cognitive_timeline: 'https://storage.test/a/cognitive_timeline.svg' },
+      unavailable: [],
+    })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByAltText('Cognitive timeline')).toBeInTheDocument())
+    expect(screen.queryByText(/once a sensor starts streaming/i))
+      .not.toBeInTheDocument()
+  })
+
+  it('says nothing was recorded when the archive ran and drew nothing', async () => {
+    // Distinct from the case below: here we know, because the archive ran.
+    mockPair({
+      archived: true,
+      charts: { cognitive_timeline: null, heart_rate: null, emotion_pie: null, stress_pie: null },
+      unavailable: [],
+    })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByText(/nothing was recorded on this channel/i))
+        .toBeInTheDocument())
+  })
+
+  it('reports an unreadable object as a fault, not as an absence', async () => {
+    // A path was recorded and the object could not be read. Saying "nothing
+    // was recorded" here would be a claim the read never established -- a
+    // bucket half-emptied by hand would otherwise read as a term nobody wore
+    // a headband in.
+    mockPair({ archived: true, charts: {}, unavailable: ['cognitive_timeline'] })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByText(/archived chart for this session could not be loaded/i))
+        .toBeInTheDocument())
+  })
+
+  it('falls back to the old wording when the archive never ran', async () => {
+    mockPair({ archived: false, charts: {}, unavailable: [] })
+    renderAt()
+
+    await waitFor(() =>
+      expect(screen.getByText(/no signal samples for this session/i))
+        .toBeInTheDocument())
+  })
+
+  it('survives the archive call failing without blanking the page', async () => {
+    // The answers, tiles and accuracy do not depend on the archive. Letting a
+    // missing picture become the page's error state would be the opposite of
+    // what this fallback is for.
+    apiFetch.mockImplementation((url) =>
+      String(url).endsWith('/charts')
+        ? Promise.reject(new Error('signing failed'))
+        : Promise.resolve({ ...EXPIRED, answers: [{ correct: true }] }))
+    renderAt()
+
+    await waitFor(() => expect(screen.getByText('Session Review')).toBeInTheDocument())
+    expect(screen.queryByText(/could not load session/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/no signal samples for this session/i)).toBeInTheDocument()
+  })
+})

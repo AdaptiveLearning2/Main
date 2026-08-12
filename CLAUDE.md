@@ -279,6 +279,18 @@ models downloadable without an agreement, the constraint that blocked RhythmMamb
 names, and the only file that knows a mesh index from a face part, so swapping detector rewrites it
 and nothing else. **Neither is wired into the capture loop yet.**
 
+**MediaPipe 1.0.0 removed `mp.solutions` — the entire legacy Solutions API.** `mp.solutions.face_mesh`
+raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`, which reads like a broken
+install and is not one; the top level exposes only `Image`, `ImageFormat` and `tasks`. The Tasks API
+(`vision.FaceLandmarker`, `RunningMode.VIDEO`, `detect_for_video`) replaces it and still returns the
+478-point mesh, so `MEDIAPIPE_INDICES` is unaffected. Two consequences worth knowing before touching
+it: the model is **no longer in the wheel** — `_TasksMesh` loads `models/face_landmarker.task`
+(gitignored; override with `FACE_LANDMARK_MODEL_PATH`) and refuses with the fetch command when it is
+absent, since a silent download onto a student's laptop is not something to do by accident. And the
+Tasks call shape is adapted at *construction* rather than in `locate()`: `locate()` is the half with
+tests and its injected collaborator's shape is the legacy `process()`/`multi_face_landmarks` one, so
+porting the untested half to fit the tested half keeps every existing test on real code.
+
 **Its index table is unverified against hardware** — MediaPipe 1.0.0 ships no canonical mesh file
 and there is no camera in CI, so the mapping comes from published topology rather than measurement.
 A left/right swap would produce a *mirrored* gaze, which every aggregate reads as healthy. So the

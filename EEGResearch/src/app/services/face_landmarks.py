@@ -29,6 +29,9 @@ deployment that never enables the camera must not need it installed.
 from __future__ import annotations
 
 import logging
+import os
+import time
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -167,6 +170,97 @@ def check_topology(landmarks: dict) -> str | None:
     return None
 
 
+MODEL_ENV = "FACE_LANDMARK_MODEL_PATH"
+MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+             "face_landmarker/float16/latest/face_landmarker.task")
+
+
+def default_model_path() -> Path:
+    """Where the landmark bundle is looked for when nothing says otherwise."""
+    return Path(__file__).resolve().parents[3] / "models" / "face_landmarker.task"
+
+
+class _TasksMesh:
+    """MediaPipe's Tasks `FaceLandmarker` behind the legacy `process()` shape.
+
+    **MediaPipe 1.0.0 removed `mp.solutions` entirely** -- the whole legacy
+    Solutions API, including the `FaceMesh` this module was written against.
+    `mp.solutions.face_mesh` raises `AttributeError: module 'mediapipe' has no
+    attribute 'solutions'`, which reads like a broken install and is not one.
+    The Tasks API replaces it, with a different call shape and a model bundle
+    that is no longer compiled into the wheel.
+
+    Adapting here rather than rewriting `locate()` is deliberate. `locate()` is
+    the half with tests, and the shape those tests inject is this one; porting
+    the untested half to fit the tested half keeps every existing test
+    exercising real code, and confines the API change to construction, which is
+    the part that was already documented as untestable without hardware.
+
+    `VIDEO` rather than `IMAGE`: it tracks between frames, which is what
+    `static_image_mode=False` bought before. It requires timestamps that never
+    go backwards, so they are clamped rather than trusted -- `perf_counter` is
+    monotonic, but rounding two fast frames to the same millisecond is not, and
+    the failure is an exception mid-capture rather than a bad landmark.
+    """
+
+    def __init__(self, model_path: str | None = None) -> None:
+        import numpy as np                                  # noqa: PLC0415
+        import mediapipe as mp                              # noqa: PLC0415
+        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
+        from mediapipe.tasks.python import vision           # noqa: PLC0415
+
+        self._np = np
+        self._mp = mp
+
+        path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"no face landmark model at {path}.\n"
+                f"MediaPipe 1.0.0 does not ship one -- the Tasks API loads it "
+                f"from a file. Fetch it once (about 3.8 MB):\n"
+                f"    mkdir -p \"{path.parent}\"\n"
+                f"    curl -L -o \"{path}\" {MODEL_URL}\n"
+                f"or set {MODEL_ENV} to a copy you already have."
+            )
+
+        self._landmarker = vision.FaceLandmarker.create_from_options(
+            vision.FaceLandmarkerOptions(
+                base_options=mp_python.BaseOptions(model_asset_path=str(path)),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                # Not needed and not free. The geometry is derived from the
+                # landmarks here, deliberately -- see face_geometry, which fits
+                # an orthographic pose rather than trusting a matrix whose
+                # camera assumptions are not ours.
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+            )
+        )
+        self._last_ms = -1
+
+    def process(self, frame: Any) -> Any:
+        """The legacy return shape: `.multi_face_landmarks[0].landmark`."""
+        mp = self._mp
+        # SRGB means uint8 RGB, which is what OpenCvFrameSource already hands
+        # out. Contiguity is required by the C++ boundary and a cropped or
+        # sliced array is not.
+        image = mp.Image(image_format=mp.ImageFormat.SRGB,
+                         data=self._np.ascontiguousarray(frame, dtype="uint8"))
+        ms = max(int(time.perf_counter() * 1000), self._last_ms + 1)
+        self._last_ms = ms
+        result = self._landmarker.detect_for_video(image, ms)
+        faces = getattr(result, "face_landmarks", None) or []
+        if not faces:
+            return type("R", (), {"multi_face_landmarks": None})()
+        # Tasks returns a plain list of landmarks per face; the legacy API
+        # wrapped it in an object with a `.landmark` attribute.
+        return type("R", (), {
+            "multi_face_landmarks": [type("F", (), {"landmark": faces[0]})()]
+        })()
+
+
 class FaceMeshLandmarker:
     """MediaPipe Face Mesh, wrapped to return named landmarks.
 
@@ -182,7 +276,8 @@ class FaceMeshLandmarker:
     discouraged anyone from covering the part that can be.
     """
 
-    def __init__(self, mesh: Any | None = None) -> None:
+    def __init__(self, mesh: Any | None = None,
+                 model_path: str | None = None) -> None:
         # Reasons already reported, so a wrong index table does not become a
         # per-frame error flood. At the capture loop's rate that is tens of
         # identical lines a second, which buries the one thing worth reading
@@ -192,17 +287,7 @@ class FaceMeshLandmarker:
         if mesh is not None:
             self._mesh = mesh
             return
-        import mediapipe as mp                             # noqa: PLC0415
-
-        self._mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            # The iris landmarks (468-477) only exist with this on, and gaze is
-            # the whole point.
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
+        self._mesh = _TasksMesh(model_path)
 
     def locate(self, frame: Any, width: int, height: int) -> dict:
         """Named landmarks for the first face found, or `{}`.

@@ -189,6 +189,53 @@ The remaining cost is the patch set: ~20 lines against a vendored dependency,
 which has to be reapplied when `open-rppg` moves. The script fails loudly rather
 than silently if upstream changes under it.
 
+## The capture, which is what is left
+
+`scripts/capture_face_video_ecg.py` records the frames Phase 12's first blocker
+needs. It is the only script here that writes images of a face to disk, and it
+is built around making the second half -- deleting them -- hard to forget.
+
+**It stores 128x128 face crops, not video.** That is exactly what RhythmMamba
+consumes, and it is lossless: rPPG reads colour variation well under one part in
+a hundred, and every lossy codec is designed to discard precisely that, so an
+MP4 would look identical and measure nothing. Crops rather than full frames both
+because it is what the model takes and because 128x128 is ~1.5 MB/s where raw
+640x480 is ~27 MB/s -- five minutes is 440 MB rather than 8 GB. The cost is that
+the ROI choice is baked in; a later analysis wanting a different region has to
+re-capture. That is the deliberate trade against storing more of a person than
+the measurement needs.
+
+**It refuses to write anywhere inside the repository.** Not a stylistic
+preference: everything else this project writes is committable by design, this
+is the one artefact that must never be, and `git add -A` does not ask. The check
+is on path components rather than string prefixes, so a sibling directory named
+`AdaptiveLearning-captures` is not caught by accident.
+
+**Alignment is by offset search, not by a shared clock.** Nothing here talks to
+a watch. The header records the wall-clock start and every frame carries a
+`perf_counter` offset, which is what lets the two be lined up afterwards -- the
+same approach `test_hrv_against_ecg.py` already uses with its `PAIRS` offsets.
+
+**Exposure lock is recorded, not assumed.** Auto-exposure hunting is a
+brightness oscillation the model would read as a pulse. `OpenCvFrameSource`
+tries to lock it; whether the driver accepted is written into the header, so an
+unlocked capture is known about before the analysis rather than after.
+
+`--delete` removes the frames and the per-frame log, keeps the header, and
+stamps it with the deletion time -- because a cleaned-up capture with no trace
+is indistinguishable from one nobody cleaned up.
+
+### What is still needed after the capture
+
+- **A confidence gate, designed and measured on its refusals.** `ppg_processing`'s
+  is inapplicable to a single channel and always was. One input that did not
+  exist when this was written: `face_geometry` (Phase 11) now yields head pose,
+  which is a motion signal independent of the periodicity being confused -- the
+  role CLAUDE.md gives the accelerometer for the headband's gait failure. It has
+  to be measured against the capture before it means anything.
+- **A decision recorded either way.** "Rejected again, here is the number" is a
+  complete outcome by the phase's own definition.
+
 ## Reading this
 
 Camera rPPG is still *validated-and-rejected* on the POS result from

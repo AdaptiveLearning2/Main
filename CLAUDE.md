@@ -240,7 +240,12 @@ which tf2onnx converts) and emits a 22 MB model that runs under **onnxruntime al
 dependency — loading in 1.5 s against ~34 s, and matching Keras at correlation 1.00000000. Inference
 is 0.93 s per 160-frame window, about 6× real time on CPU. The `.onnx` is not committed: it derives
 from weights whose licence terms are the authors', and the script regenerates it. **This settles the
-cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+cost, not the accuracy** — that still needs the video + ECG capture, and the POS rejection stands.
+`scripts/capture_face_video_ecg.py` is that capture: 128×128 face crops (what the model takes),
+lossless because every lossy codec discards exactly the variation rPPG reads, and it **refuses to
+write inside the repo** — this is the one artefact that must never be committable, and `git add -A`
+does not ask. `--delete` clears the frames and stamps the header, since a cleaned-up capture with no
+trace is indistinguishable from one nobody cleaned up. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
 against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a

@@ -275,6 +275,46 @@ def signed_chart_urls(client, chart_paths, user_id: str,
     return urls, missing
 
 
+# ── removing them ───────────────────────────────────────────────────────────
+
+# One `remove` call per batch. Storage-py takes a list, and a parent erasing a
+# term's worth of sessions would otherwise be a few hundred round trips inside
+# one request.
+_REMOVE_BATCH = 100
+
+
+def remove_objects(client, paths) -> tuple[int, list]:
+    """Delete archived chart objects. Returns `(removed, failed paths)`.
+
+    Called by the erasure path with a list `erase_signals` derived from the ids
+    -- never one read out of `chart_paths`. A path taken from that column would
+    be an instruction to destroy an object of the writer's choosing, which is
+    the same trap as the signing endpoint with the consequence reversed.
+
+    Failure is reported, not raised. By the time this runs the database half has
+    committed and `chart_paths` no longer points at these objects, so anything
+    left behind is orphaned but unservable -- the signing endpoint has nothing
+    to sign. That is a smaller problem than an erasure that half-rolls-back, and
+    it is why the caller can be told a number instead of an exception.
+    """
+    paths = [p for p in (paths or []) if p]
+    if not paths:
+        return 0, []
+    storage = client.storage.from_(BUCKET)
+    removed, failed = 0, []
+    for i in range(0, len(paths), _REMOVE_BATCH):
+        batch = paths[i:i + _REMOVE_BATCH]
+        try:
+            storage.remove(batch)
+            removed += len(batch)
+        except Exception as e:
+            # Loud: this is the one part of an erasure that can be incomplete,
+            # and nobody is watching a return value once the parent is gone.
+            print(f"[charts] erasure could not remove {len(batch)} object(s): {e}")
+            failed.extend(batch)
+    return removed, failed
+
+
 # ── running it off the request path ─────────────────────────────────────────
 #
 # Two workers, lazily built, shut down from `main._lifespan`. Same shape as the

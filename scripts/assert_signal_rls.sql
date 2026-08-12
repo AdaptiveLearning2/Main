@@ -774,5 +774,155 @@ BEGIN
     RESET ROLE;
 END $$;
 
+-- ── erasure on request (#75) ────────────────────────────────────────────────
+--
+-- Runs last, because it deletes the fixture rows every block above depends on.
+--
+-- The property with no recovery is the one in the middle: erasing one heart
+-- source must leave the other standing, and must leave that survivor's day
+-- average correct. Everything else here is a delete, which is easy to get
+-- right; that one is a delete plus a recomputation, and the recomputation is
+-- the half a reviewer would not think to check.
+
+DO $$
+DECLARE
+    owner_id uuid;
+    other_id uuid;
+    sess     uuid;
+    result   jsonb;
+    n        int;
+    avg_bpm  numeric;
+BEGIN
+    SELECT i.owner_id, i.other_id, i.sess_id INTO owner_id, other_id, sess FROM _ids i;
+
+    DELETE FROM heart_signals WHERE user_id = owner_id;
+    DELETE FROM face_signals WHERE user_id = owner_id;
+    DELETE FROM cognitive_signals WHERE user_id = owner_id;
+    DELETE FROM signal_daily_rollup WHERE user_id = owner_id;
+
+    -- One day, both heart sources, deliberately far apart in value so an
+    -- average computed over the wrong set is unmistakable rather than close.
+    INSERT INTO heart_signals (session_id, user_id, source, ts, heart_rate_bpm, trusted)
+    SELECT sess, owner_id, 'muse_optics',
+           '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval, 70, true
+      FROM generate_series(1, 5) g;
+    INSERT INTO heart_signals (session_id, user_id, source, ts, heart_rate_bpm, trusted)
+    SELECT sess, owner_id, 'rppg',
+           '2026-03-10T18:10:00Z'::timestamptz + (g || ' s')::interval, 120, true
+      FROM generate_series(1, 5) g;
+    INSERT INTO face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT sess, owner_id,
+           '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval, 'happy', true
+      FROM generate_series(1, 4) g;
+    INSERT INTO cognitive_signals (session_id, user_id, ts, focus)
+    SELECT sess, owner_id,
+           '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval, 0.5
+      FROM generate_series(1, 3) g;
+
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-10', 'UTC');
+    SELECT avg_heart_rate_bpm INTO avg_bpm
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'heart';
+    IF avg_bpm IS DISTINCT FROM 95 THEN
+        RAISE EXCEPTION
+            'fixture is wrong: heart average should be 95 over both sources, '
+            'got % -- the survivor check below would prove nothing', avg_bpm;
+    END IF;
+
+    result := public.erase_signals(owner_id, 'camera', other_id, 'UTC');
+
+    SELECT count(*) INTO n FROM face_signals WHERE user_id = owner_id;
+    IF n <> 0 THEN RAISE EXCEPTION '% face rows survived a camera erasure', n; END IF;
+
+    SELECT count(*) INTO n
+      FROM heart_signals WHERE user_id = owner_id AND source = 'rppg';
+    IF n <> 0 THEN RAISE EXCEPTION '% rppg heart rows survived', n; END IF;
+
+    -- The one that matters. A parent erasing the camera has said nothing about
+    -- the headband, and a delete keyed on the table rather than the source
+    -- would take both.
+    SELECT count(*) INTO n
+      FROM heart_signals WHERE user_id = owner_id AND source = 'muse_optics';
+    IF n <> 5 THEN
+        RAISE EXCEPTION
+            'erasing the camera took % of 5 headband heart rows with it', 5 - n;
+    END IF;
+
+    SELECT count(*) INTO n FROM cognitive_signals WHERE user_id = owner_id;
+    IF n <> 3 THEN RAISE EXCEPTION 'erasing the camera touched EEG rows'; END IF;
+
+    -- Derived data goes too, or the rows are gone and the data is not.
+    SELECT count(*) INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'emotion';
+    IF n <> 0 THEN RAISE EXCEPTION 'the emotion rollup survived the erasure'; END IF;
+
+    -- And the survivor's average is *recomputed*, not merely left alone.
+    -- `rollup_signal_day` has `HAVING count(*) > 0` on every channel, so it
+    -- cannot correct a stale row by itself -- deleting first is what makes the
+    -- rebuild a recomputation. If this reads 95 the erased readings are still
+    -- being published, in the copy designed to outlive the rows.
+    SELECT avg_heart_rate_bpm INTO avg_bpm
+      FROM signal_daily_rollup WHERE user_id = owner_id AND channel = 'heart';
+    IF avg_bpm IS DISTINCT FROM 70 THEN
+        RAISE EXCEPTION
+            'the heart rollup reads % after erasing the camera, expected 70 '
+            '(the headband rows alone) -- erased readings are still averaged in',
+            avg_bpm;
+    END IF;
+
+    SELECT count(*) INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF n <> 1 THEN RAISE EXCEPTION 'the cognitive rollup was collateral'; END IF;
+
+    -- The tombstone. Without it an erased term is indistinguishable from one
+    -- where the sensor was never worn.
+    SELECT count(*) INTO n FROM signal_erasure
+     WHERE user_id = owner_id AND channel = 'camera' AND erased_by = other_id;
+    IF n <> 1 THEN RAISE EXCEPTION 'no tombstone recorded for the erasure'; END IF;
+
+    IF (result->>'face_signals')::int <> 4 THEN
+        RAISE EXCEPTION 'reported % face rows deleted, expected 4',
+            result->>'face_signals';
+    END IF;
+
+    -- Erasing the other source now empties the channel, and the rollup row for
+    -- it has to go rather than linger at the surviving average of nothing.
+    PERFORM public.erase_signals(owner_id, 'headband_optical', other_id, 'UTC');
+    SELECT count(*) INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'heart';
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'the heart rollup outlived every row it summarised';
+    END IF;
+END $$;
+
+-- The function destroys a child's stored biometrics and takes the subject as a
+-- parameter, so an ambient grant is a delete button for anyone's history.
+-- `check_function_grants.py` matches by name and would catch a missing revoke
+-- block; it cannot see that the grant is right on a real instance.
+DO $$
+BEGIN
+    IF has_function_privilege('authenticated',
+            'public.erase_signals(uuid, text, uuid, text)', 'EXECUTE')
+       OR has_function_privilege('anon',
+            'public.erase_signals(uuid, text, uuid, text)', 'EXECUTE') THEN
+        RAISE EXCEPTION
+            'erase_signals is executable by an application role -- any logged-in '
+            'user can delete any student''s stored signals';
+    END IF;
+
+    -- The tombstone is readable and not writable. A client that could delete it
+    -- could hide the erasure, which is worse than not recording one.
+    IF NOT has_table_privilege('authenticated', 'public.signal_erasure', 'SELECT') THEN
+        RAISE EXCEPTION 'authenticated cannot read signal_erasure';
+    END IF;
+    IF has_table_privilege('authenticated', 'public.signal_erasure', 'DELETE')
+       OR has_table_privilege('authenticated', 'public.signal_erasure', 'UPDATE')
+       OR has_table_privilege('authenticated', 'public.signal_erasure', 'INSERT') THEN
+        RAISE EXCEPTION 'authenticated can write signal_erasure';
+    END IF;
+    IF has_table_privilege('anon', 'public.signal_erasure', 'SELECT') THEN
+        RAISE EXCEPTION 'anon can read signal_erasure';
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

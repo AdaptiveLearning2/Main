@@ -128,14 +128,25 @@ non-issue.
 ## Reading this
 
 This is a cost, not a verdict. Camera rPPG is still *validated-and-rejected* on
-the POS result from 2026-08-08, and this measurement does not change that; it
-prices the reopening the plan proposes. Two things follow:
+the POS result from 2026-08-08, and nothing measured here changes that; it prices
+the reopening the plan proposes.
 
-- If the phase proceeds, the ONNX question should be asked first. 600 MB and a
-  34 s start are worth avoiding, and the export may be cheap.
-- If it does not, this is the recorded reason for one of the three blockers, and
-  *"rejected again, here is the number"* is a complete outcome by the phase's own
-  definition.
+The cheap escape has been tried and did not work, so the choice is now between
+three real options rather than two:
+
+- **Accept the cost** — 600 MB and ~34 s of start-up on a student's laptop, plus
+  a pinned deprecated `setuptools` — and go on to the capture, which is the only
+  thing that can produce an accuracy number.
+- **Spend a day on the TensorFlow export route** before committing to that, on
+  the chance it makes the cost disappear. It is the more promising of the two
+  untried routes, and it would still leave the Mamba question open.
+- **Stop here.** *"Rejected again, here is the number"* is a complete outcome by
+  the phase's own definition, and this time the number is about the price rather
+  than the accuracy.
+
+What should not happen is accepting 600 MB without anyone having tried the TF
+route, or dismissing the phase on the conv error alone — that error is a
+converter limitation on one layer, not a statement about the model.
 
 Reproduce with:
 

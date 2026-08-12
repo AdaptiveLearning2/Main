@@ -224,9 +224,16 @@ alternative — name the model explicitly. Every live selection in `FacialRecg/`
 committed report would otherwise be unreproducible. Nothing has been *run* since the switch —
 `open-rppg` has never been installed here — so treat `.pure` as licence-safe, not as measured.
 
-What actually stands in the way is engineering and evidence: `open-rppg` is 0.1.1, owns the whole
-signal chain and pulls in JAX and Keras — a heavy install for a student's laptop — and the gate below
-would have to be designed and *measured* against a reference.
+What actually stands in the way is engineering and evidence, and one of the three blockers now has
+a number. Measured 2026-08-12: `open-rppg` costs **~600 MB installed** beyond what the camera path
+already brings (jaxlib alone is 252 MB), `import rppg` takes 5.3s and loading `RhythmMamba.pure`
+another 27.5s — about **34s of start-up** on a student's laptop. It also imports `pkg_resources`,
+removed in setuptools 81, so adopting it means pinning a deprecated setuptools. `.pure` weights do
+load, so the licence-safe path is real rather than theoretical. **Ask whether the weights export to
+ONNX before accepting that**: onnxruntime is already a dependency, and the liability is `open-rppg`
+the package rather than the model. Numbers and method:
+`EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a
 single-channel source.** Its three terms were built for four contact channels — `agreement` is 1.00

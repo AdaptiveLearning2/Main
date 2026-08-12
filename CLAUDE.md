@@ -297,7 +297,15 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so **the manual camera check is still owed**, and it is one command:
+relation — so it needs the manual camera check. **Passed 2026-08-12** (`--gui`, one adult, laptop
+webcam): square on `yaw 5.97 / pitch -13.76 / roll -4.40` with no refusals, eyes left
+`gaze.x +0.442`, head left `yaw +32.97`. That confirms the table's left/right, both sign
+conventions, and that the model handedness now matches a real frame — the same three steps refused
+every frame an hour earlier. It says nothing about pitch/roll *accuracy* against a reference, and
+nothing about children. The `-13.8` pitch at square on is the predicted bias, not a fault: a laptop
+camera sits below eye level and `CANONICAL_FACE` is an adult mean face, so a systematic offset of
+this size is expected and is why the step's tolerance is 20°. Re-run it after any change to the
+index table or the canonical model:
 
 **Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
 a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head
@@ -315,14 +323,15 @@ returns a bit-identical number. `head_pose` is the adjudicator — a mirrored ta
 correspondence unfittable, so it *refuses* rather than answering wrongly.
 
 ```bash
-python scripts/verify_landmarks.py
+python scripts/verify_landmarks.py --gui
 ```
 
 Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
-that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
-Steps 2 and 3 are separate: the eye/iris indices and the outline indices are different regions of
-the table, and one being right says nothing about the other. **Record the date here when it passes**,
-and until it does, do not wire the landmark path into the capture loop. It deliberately scores no attention:
+that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video;
+`--gui` previews it, deliberately **unmirrored**, since the whole question is which way is left.
+Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
+image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
+and it claimed to until the run that found all this. It deliberately scores no attention:
 the geometry has a right answer and can be checked against one, the inference to "attending" is a
 judgement, and keeping them apart is what lets the judgement be revised without re-deriving
 anything.

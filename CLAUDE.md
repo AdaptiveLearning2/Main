@@ -229,10 +229,12 @@ a number. Measured 2026-08-12: `open-rppg` costs **~600 MB installed** beyond wh
 already brings (jaxlib alone is 252 MB), `import rppg` takes 5.3s and loading `RhythmMamba.pure`
 another 27.5s — about **34s of start-up** on a student's laptop. It also imports `pkg_resources`,
 removed in setuptools 81, so adopting it means pinning a deprecated setuptools. `.pure` weights do
-load, so the licence-safe path is real rather than theoretical. **Ask whether the weights export to
-ONNX before accepting that**: onnxruntime is already a dependency, and the liability is `open-rppg`
-the package rather than the model. Numbers and method:
-`EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+load, so the licence-safe path is real rather than theoretical. The ONNX escape route — onnxruntime is already
+a dependency, so exporting the weights would drop nearly all of that — was tried and **does not
+currently work**: `jax2onnx` cannot convert `Fusion_Stem`'s channels-last 3D convolution, and the
+model hardcodes that layout. It fails *before* reaching the Mamba scan, so whether the scan exports
+is still unknown; don't read the conv error as the only obstacle. Untried: the TensorFlow backend
+plus `tf2onnx`. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
 against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a

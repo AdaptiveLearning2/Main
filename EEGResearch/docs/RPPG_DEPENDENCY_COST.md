@@ -64,11 +64,66 @@ work around.
   what would decide whether this can run alongside EEG on the same laptop.
 - **Accuracy.** Still unmeasured, still blocked on a synchronised video and ECG
   capture, which is Phase 12's first blocker and unchanged by any of this.
-- **A lighter path.** ONNX Runtime is already a dependency of the camera extra.
-  Whether these weights can be exported to ONNX and run without JAX, Keras and
-  `av` was not investigated, and it is the obvious thing to try before accepting
-  600 MB. It would also sidestep the `pkg_resources` problem, since the
-  liability is `open-rppg` the package rather than the model.
+- **Inference accuracy or speed under ONNX.** See below — the export does not
+  currently succeed, so there is nothing to measure yet.
+
+## The ONNX escape route, attempted
+
+ONNX Runtime is already a dependency of the camera extra, so if these weights
+export, the 600 MB and most of the start-up go away and the `pkg_resources`
+liability with them — the problem is `open-rppg` the package, not the model.
+Attempted 2026-08-12. **It does not currently export**, and the reason is not
+the one expected.
+
+`RhythmMamba` is a `keras.Model` subclass and Keras 3.15's
+`Model.export(..., format="onnx")` is the supported route. Under the JAX backend
+that delegates to `jax2onnx`, and there it fails:
+
+```
+NotImplementedError: Unsupported conv layouts:
+  lhs=(0, 4, 1, 2, 3), rhs=(4, 3, 0, 1, 2), out=(0, 4, 1, 2, 3)
+```
+
+That is a **channels-last 3D convolution** in `Fusion_Stem`, which `jax2onnx`'s
+converter does not handle. Forcing `channels_first` globally does not help: the
+model code hardcodes channels-last reshapes and fails to build at all —
+
+```
+cannot reshape array of shape (1, 3, 640, 128, 128) into shape (3, 160, 128, 12)
+```
+
+**Note what this did *not* establish.** The expected blocker was the Mamba
+selective scan, since state-space models often use ops with no ONNX equivalent.
+The export dies on the convolution before reaching it, so whether the scan is
+exportable is **still unknown**. Anyone resuming this should not read "conv
+layout" as the only obstacle.
+
+Two routes remain, neither tried:
+
+1. **Keras with the TensorFlow backend, then `tf2onnx`.** Keras 3 can load the
+   same `.weights.h5` under a different backend, and the TF export path is more
+   mature. Costs a TensorFlow install, but only at export time — the artefact
+   shipped would be the `.onnx` file.
+2. **Patch `jax2onnx`'s conv converter** to transpose channels-last inputs. A
+   narrower fix, upstreamable, and it would still leave the Mamba question open.
+
+### A Windows aside
+
+`jax2onnx` pulls `flax`, which pulls `orbax-checkpoint`, whose own bundled test
+fixtures exceed the 260-character path limit and **cannot be installed on
+Windows** without enabling long-path support:
+
+```
+[WinError 206] The filename or extension is too long:
+  ...orbax/checkpoint/experimental/v1/_src/testing/compatibility/checkpoints/...
+```
+
+Working around it here meant installing the chain with `--no-deps` one package
+at a time. That is export-time tooling on a developer machine rather than
+anything a student would install, so it is an inconvenience rather than a
+finding about the product — but it is why this took longer than it should, and
+it is worth knowing before someone repeats it. On Linux or macOS it is a
+non-issue.
 
 ## Reading this
 

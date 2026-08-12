@@ -47,6 +47,12 @@ These are asserted by round-trip in the tests -- a known rotation is applied to
 the canonical model, projected, and recovered -- rather than stated and hoped
 for, because a sign error here is invisible in every aggregate and only shows up
 as a mirrored gaze on somebody's dashboard.
+
+**Yaw is measurable only within +/-90 degrees.** Beyond that the decomposition
+returns the other branch of a two-fold ambiguity that no rotation matrix can
+resolve on its own, so `head_pose` refuses with `implausible_pose` rather than
+reporting a mirrored angle. A face turned that far has most of these landmarks
+occluded anyway. See the check in `head_pose`.
 """
 
 from __future__ import annotations
@@ -102,6 +108,13 @@ MIN_POSE_POINTS = 6
 # subset: near zero means the chosen points are collinear or coplanar in the
 # projection, so at least one axis of rotation is not observable.
 MIN_CONDITION = 0.02
+
+# Beyond this many degrees of pitch or roll, the Euler recovery has picked the
+# wrong branch of a two-fold ambiguity rather than measured a real head — a neck
+# does not bend that far. See the check in `head_pose` for why an assumption of
+# this kind cannot be avoided, only declared. Radians, to compare against the
+# atan2 results directly.
+MAX_PLAUSIBLE_TILT = math.radians(90.0)
 
 
 @dataclass
@@ -226,6 +239,25 @@ def head_pose(landmarks: dict[str, tuple[float, float]]) -> HeadPose:
     yaw = math.atan2(-rotation[2, 0], cos_yaw)
     pitch = math.atan2(rotation[2, 1], rotation[2, 2])
     roll = math.atan2(rotation[1, 0], rotation[0, 0])
+
+    # The two-fold ambiguity, which no rotation matrix can resolve on its own:
+    # (yaw, pitch, roll) and (180°−yaw, pitch+180°, roll+180°) are the *same*
+    # rotation. `cos_yaw` is a hypot and therefore never negative, so the yaw
+    # above is always in (−90°, 90°) — and a face genuinely turned further than
+    # that comes back on the wrong branch, silently. Measured: a true yaw of
+    # 120° reports 60°, and a true (91°, 15°, 10°) reports (89°, −165°, −170°),
+    # so a 2° change in the truth swings pitch and roll by 180° with nothing
+    # marked wrong.
+    #
+    # Some external assumption is unavoidable here; what matters is saying so.
+    # A neck does not pitch or roll past a right angle, so |pitch| or |roll|
+    # beyond 90° means the other branch was the real one. Refused rather than
+    # corrected: the arithmetic could be flipped back, but a face turned more
+    # than 90° has most of these landmarks occluded, so the *input* to the fit
+    # is unreliable whichever branch is chosen — and this codebase would rather
+    # lose the window than publish a confident wrong angle.
+    if abs(pitch) > MAX_PLAUSIBLE_TILT or abs(roll) > MAX_PLAUSIBLE_TILT:
+        return HeadPose(None, None, None, len(names), "implausible_pose")
 
     return HeadPose(round(math.degrees(yaw), 2),
                     round(math.degrees(pitch), 2),

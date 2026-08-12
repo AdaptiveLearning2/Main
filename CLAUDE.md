@@ -259,7 +259,10 @@ anything.
 
 It uses an orthographic fit, **not `cv2.solvePnP`**, because solvePnP needs camera intrinsics we do
 not have — a guessed focal length yields a systematically wrong pose that still looks like a face
-turning. The trade is that perspective is ignored, so it degrades at close range and large angles. When it lands it needs a *measurement* against a reference
+turning. The trade is that perspective is ignored, so it degrades at close range and large angles.
+**Yaw is measurable only within ±90°**: past that the Euler recovery returns the other branch of a
+two-fold ambiguity no rotation matrix can resolve, corrupting pitch and roll by 180° as well, so it
+refuses with `implausible_pose` rather than reporting a mirrored angle. When it lands it needs a *measurement* against a reference
 before anything reaches a parent: "attention" inferred from head direction is least valid for exactly
 this product's users, and unlike a FER+ label it renders as an objective-looking percentage. A child
 looking away while thinking is not inattentive.

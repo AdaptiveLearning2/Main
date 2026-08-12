@@ -177,6 +177,46 @@ def test_collinear_landmarks_are_refused():
     assert not pose.ok and pose.rejected_by == "degenerate"
 
 
+@pytest.mark.parametrize("yaw", [91.0, 100.0, 120.0, 150.0])
+def test_a_face_turned_past_ninety_degrees_is_refused_not_mirrored(yaw):
+    """The two-fold ambiguity, which no rotation matrix resolves on its own.
+
+    `cos_yaw` is a hypot and never negative, so the recovered yaw is always in
+    (-90, 90) — a face turned further comes back on the other branch, and
+    silently. Measured before the guard existed: a true 120 reported 60, with
+    `ok=True` and no reason.
+
+    A student turning to talk to someone beside them is exactly the population
+    this module is for, so this is not a corner case; it is the corner it will
+    meet first.
+    """
+    pose = head_pose(_project(_rotation(yaw_deg=yaw)))
+
+    assert not pose.ok, f"true yaw {yaw} came back as {pose.yaw}"
+    assert pose.rejected_by == "implausible_pose"
+
+
+def test_the_wrong_branch_corrupts_all_three_angles_and_is_caught():
+    """Not just yaw. Pitch and roll are recovered from terms carrying an
+    implicit cos(yaw), so crossing the boundary swings both by 180 degrees.
+    Measured before the guard: a true (91, 15, 10) reported (89, -165, -170) —
+    a 2 degree change in truth moving two angles by half a turn, confidently.
+    """
+    pose = head_pose(_project(_rotation(yaw_deg=91.0, pitch_deg=15.0, roll_deg=10.0)))
+
+    assert not pose.ok and pose.rejected_by == "implausible_pose"
+
+
+def test_a_steep_but_real_turn_still_measures():
+    """The guard must not eat the range it is protecting. 85 degrees is a hard
+    look sideways and is on the correct branch, so it has to survive."""
+    pose = head_pose(_project(_rotation(yaw_deg=85.0, pitch_deg=10.0)))
+
+    assert pose.ok
+    assert pose.yaw == pytest.approx(85.0, abs=2.0)
+    assert pose.pitch == pytest.approx(10.0, abs=3.0)
+
+
 # ── gaze ────────────────────────────────────────────────────────────────────
 
 def _eye(side: str, iris_dx: float = 0.0, iris_dy: float = 0.0) -> dict:

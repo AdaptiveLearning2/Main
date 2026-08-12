@@ -19,7 +19,11 @@ What it writes
 Not video. **128x128 face crops**, which is exactly what RhythmMamba consumes,
 stored losslessly as raw uint8:
 
-- `<out>.npy`      — (N, 128, 128, 3) uint8, preallocated
+- `<out>.npy`      — (N, 128, 128, 3) uint8, where N is exactly the number of
+                     frames captured. Allocated for the worst case and trimmed
+                     on close: unwritten rows are zero-filled, and a run of
+                     black frames at the end of a recording is not distinguishable
+                     from footage once it is in the file
 - `<out>.jsonl`    — one line per frame: elapsed seconds, face box, whether the
                      detector found one
 - `<out>.json`     — header: wall-clock start, nominal fps, camera, exposure lock
@@ -94,6 +98,64 @@ def refuse_if_inside_repo(out: pathlib.Path) -> None:
         f"Face frames must not be committable. Choose a path outside it, on a "
         f"disk you will remember to clear:  --out D:/rppg/session1"
     )
+
+
+def truncate_npy(path: pathlib.Path, rows: int) -> None:
+    """Shrink a preallocated `.npy` to the rows that were actually written.
+
+    The array is sized for the worst case and filled at whatever rate the camera
+    manages, so the tail is normally unwritten — a dropped read or a frame with
+    no face does not advance the cursor. `open_memmap` zero-fills, so those rows
+    read back as **pure black frames**, which is indistinguishable from footage
+    of a covered lens. A windowing script iterating the file would hand them to
+    the model as captured data, and a step to black is exactly the kind of sharp
+    non-physiological edge a frequency-domain estimator converts into a
+    confident wrong number.
+
+    The header records `frames_written` separately, so nothing is lost — but
+    that leaves correctness resting on every future reader remembering to slice,
+    and this is the codebase whose recurring rule is that absence must not be
+    representable as data. Trimming makes the file mean what it says.
+
+    In place, because the alternative — load, slice, re-save — needs a second
+    copy of a file that runs to hundreds of megabytes.
+    """
+    import numpy as np
+
+    with open(path, "r+b") as f:
+        version = np.lib.format.read_magic(f)
+        if version == (1, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_1_0(f)
+            len_field = 2
+        elif version == (2, 0):
+            shape, fortran, dtype = np.lib.format.read_array_header_2_0(f)
+            len_field = 4
+        else:
+            raise SystemExit(f"unexpected .npy version {version} in {path}")
+        data_offset = f.tell()
+
+        if rows > shape[0]:
+            raise SystemExit(f"cannot grow {path}: {shape[0]} rows on disk, "
+                             f"asked for {rows}")
+        if rows == shape[0]:
+            return
+
+        # Rewrite the header in place. The declared header length stays as it
+        # is and the shortfall goes into the padding numpy already allows, so
+        # the data offset does not move and the rows below it are untouched.
+        dims = ", ".join(str(d) for d in (rows, *shape[1:]))
+        body = "{'descr': %s, 'fortran_order': %s, 'shape': (%s%s), }" % (
+            repr(np.lib.format.dtype_to_descr(dtype)), fortran, dims,
+            "," if len(shape) == 1 else "")
+        pad = data_offset - len(np.lib.format.magic(*version)) - len_field \
+            - len(body) - 1
+        if pad < 0:                       # unreachable: rows <= shape[0]
+            raise SystemExit(f"cannot rewrite the header of {path} in place")
+        f.seek(len(np.lib.format.magic(*version)) + len_field)
+        f.write((body + " " * pad + "\n").encode("latin1"))
+
+        row_bytes = dtype.itemsize * int(np.prod(shape[1:], dtype="int64"))
+        f.truncate(data_offset + rows * row_bytes)
 
 
 def confirm(out: pathlib.Path, seconds: float) -> None:
@@ -197,6 +259,13 @@ def capture(args) -> int:
     finally:
         source.release()
         frames.flush()
+        # Release the mapping before truncating — Windows refuses to shorten a
+        # file that is still mapped. Nothing touches `frames` after this.
+        mapping = getattr(frames, "_mmap", None)
+        del frames
+        if mapping is not None:
+            mapping.close()
+        truncate_npy(pathlib.Path(f"{out}.npy"), written)
 
     header.update(frames_written=written, frames_missed=missed,
                   measured_fps=round(written / max(time.perf_counter() - t0, 1e-9), 3))

@@ -247,7 +247,10 @@ cost, not the accuracy** — that still needs the video + ECG capture, and the P
 lossless because every lossy codec discards exactly the variation rPPG reads, and it **refuses to
 write inside the repo** — this is the one artefact that must never be committable, and `git add -A`
 does not ask. `--delete` clears the frames and stamps the header, since a cleaned-up capture with no
-trace is indistinguishable from one nobody cleaned up. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
+trace is indistinguishable from one nobody cleaned up. The `.npy` is **trimmed on close to the frames
+actually captured**: it is allocated for the worst case, `open_memmap` zero-fills, and an untrimmed
+tail reads back as black frames rather than as absent data — which a windowing script would feed to
+the model as a sharp non-physiological edge. Numbers and method: `EEGResearch/docs/RPPG_DEPENDENCY_COST.md`. The gate below still has to be designed and *measured*
 against a reference, which is unchanged and still needs a capture.
 
 **The part that generalises past this webcam: `ppg_processing`'s confidence does not apply to a

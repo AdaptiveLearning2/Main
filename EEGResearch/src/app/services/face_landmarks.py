@@ -29,6 +29,9 @@ deployment that never enables the camera must not need it installed.
 from __future__ import annotations
 
 import logging
+import os
+import time
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -41,8 +44,12 @@ logger = logging.getLogger(__name__)
 # eye appears on the *right* of a non-mirrored image -- the single most likely
 # thing in this file to be backwards, and precisely what `check_topology`
 # cannot detect on its own, since a mirrored face is still a valid face.
-# Confirming it needs the manual camera check: sit square on, look hard left,
-# and confirm `gaze.x` goes negative.
+# Confirming it needs the manual camera check. The frame is not mirrored, so
+# the subject's own left is the image right: looking hard left drives `gaze.x`
+# POSITIVE and turning the head left drives `yaw` positive. Note that `gaze`
+# cannot see a swap of these labels at all -- it averages both eyes in image
+# coordinates -- so `head_pose` is what adjudicates, by refusing a mirrored set
+# outright rather than answering it wrongly.
 MEDIAPIPE_INDICES = {
     "left_eye_outer": 263,
     "left_eye_inner": 362,
@@ -167,6 +174,97 @@ def check_topology(landmarks: dict) -> str | None:
     return None
 
 
+MODEL_ENV = "FACE_LANDMARK_MODEL_PATH"
+MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+             "face_landmarker/float16/latest/face_landmarker.task")
+
+
+def default_model_path() -> Path:
+    """Where the landmark bundle is looked for when nothing says otherwise."""
+    return Path(__file__).resolve().parents[3] / "models" / "face_landmarker.task"
+
+
+class _TasksMesh:
+    """MediaPipe's Tasks `FaceLandmarker` behind the legacy `process()` shape.
+
+    **MediaPipe 1.0.0 removed `mp.solutions` entirely** -- the whole legacy
+    Solutions API, including the `FaceMesh` this module was written against.
+    `mp.solutions.face_mesh` raises `AttributeError: module 'mediapipe' has no
+    attribute 'solutions'`, which reads like a broken install and is not one.
+    The Tasks API replaces it, with a different call shape and a model bundle
+    that is no longer compiled into the wheel.
+
+    Adapting here rather than rewriting `locate()` is deliberate. `locate()` is
+    the half with tests, and the shape those tests inject is this one; porting
+    the untested half to fit the tested half keeps every existing test
+    exercising real code, and confines the API change to construction, which is
+    the part that was already documented as untestable without hardware.
+
+    `VIDEO` rather than `IMAGE`: it tracks between frames, which is what
+    `static_image_mode=False` bought before. It requires timestamps that never
+    go backwards, so they are clamped rather than trusted -- `perf_counter` is
+    monotonic, but rounding two fast frames to the same millisecond is not, and
+    the failure is an exception mid-capture rather than a bad landmark.
+    """
+
+    def __init__(self, model_path: str | None = None) -> None:
+        import numpy as np                                  # noqa: PLC0415
+        import mediapipe as mp                              # noqa: PLC0415
+        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
+        from mediapipe.tasks.python import vision           # noqa: PLC0415
+
+        self._np = np
+        self._mp = mp
+
+        path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"no face landmark model at {path}.\n"
+                f"MediaPipe 1.0.0 does not ship one -- the Tasks API loads it "
+                f"from a file. Fetch it once (about 3.8 MB):\n"
+                f"    mkdir -p \"{path.parent}\"\n"
+                f"    curl -L -o \"{path}\" {MODEL_URL}\n"
+                f"or set {MODEL_ENV} to a copy you already have."
+            )
+
+        self._landmarker = vision.FaceLandmarker.create_from_options(
+            vision.FaceLandmarkerOptions(
+                base_options=mp_python.BaseOptions(model_asset_path=str(path)),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                # Not needed and not free. The geometry is derived from the
+                # landmarks here, deliberately -- see face_geometry, which fits
+                # an orthographic pose rather than trusting a matrix whose
+                # camera assumptions are not ours.
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+            )
+        )
+        self._last_ms = -1
+
+    def process(self, frame: Any) -> Any:
+        """The legacy return shape: `.multi_face_landmarks[0].landmark`."""
+        mp = self._mp
+        # SRGB means uint8 RGB, which is what OpenCvFrameSource already hands
+        # out. Contiguity is required by the C++ boundary and a cropped or
+        # sliced array is not.
+        image = mp.Image(image_format=mp.ImageFormat.SRGB,
+                         data=self._np.ascontiguousarray(frame, dtype="uint8"))
+        ms = max(int(time.perf_counter() * 1000), self._last_ms + 1)
+        self._last_ms = ms
+        result = self._landmarker.detect_for_video(image, ms)
+        faces = getattr(result, "face_landmarks", None) or []
+        if not faces:
+            return type("R", (), {"multi_face_landmarks": None})()
+        # Tasks returns a plain list of landmarks per face; the legacy API
+        # wrapped it in an object with a `.landmark` attribute.
+        return type("R", (), {
+            "multi_face_landmarks": [type("F", (), {"landmark": faces[0]})()]
+        })()
+
+
 class FaceMeshLandmarker:
     """MediaPipe Face Mesh, wrapped to return named landmarks.
 
@@ -182,27 +280,20 @@ class FaceMeshLandmarker:
     discouraged anyone from covering the part that can be.
     """
 
-    def __init__(self, mesh: Any | None = None) -> None:
+    def __init__(self, mesh: Any | None = None,
+                 model_path: str | None = None) -> None:
         # Reasons already reported, so a wrong index table does not become a
         # per-frame error flood. At the capture loop's rate that is tens of
         # identical lines a second, which buries the one thing worth reading
         # and makes the log useless for whatever else is wrong.
         self._reported: set[str] = set()
         self._rejections = 0
+        # Why the last frame produced nothing. See locate().
+        self.last_reason: str | None = "no_face"
         if mesh is not None:
             self._mesh = mesh
             return
-        import mediapipe as mp                             # noqa: PLC0415
-
-        self._mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            # The iris landmarks (468-477) only exist with this on, and gaze is
-            # the whole point.
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
-        )
+        self._mesh = _TasksMesh(model_path)
 
     def locate(self, frame: Any, width: int, height: int) -> dict:
         """Named landmarks for the first face found, or `{}`.
@@ -210,15 +301,25 @@ class FaceMeshLandmarker:
         Returns empty rather than raising on a frame with no face: no face is
         an ordinary outcome several times a minute, and the caller already
         counts it.
+
+        **`last_reason` says which kind of empty**, because `{}` covers two
+        unrelated events: the detector saw no face, or it saw one and
+        `check_topology` refused the landmark set. Rendering both as "no face"
+        sends someone to check their lighting when the answer is that a named
+        point is somewhere a face cannot put it -- and at strong yaw the second
+        happens routinely, since `nose_outside_eyes` becomes true near profile.
+        `None` means a face was returned.
         """
         result = self._mesh.process(frame)
         faces = getattr(result, "multi_face_landmarks", None)
         if not faces:
+            self.last_reason = "no_face"
             return {}
 
         named = named_landmarks(faces[0].landmark, width, height)
         wrong = check_topology(named)
         if wrong is not None:
+            self.last_reason = wrong
             self._rejections += 1
             # Once per reason, not once per frame. This means the index table
             # is wrong rather than that the student moved, so it has to be
@@ -232,6 +333,7 @@ class FaceMeshLandmarker:
                              "occurrences of this reason are counted, not logged)",
                              wrong)
             return {}
+        self.last_reason = None
         return named
 
     @property

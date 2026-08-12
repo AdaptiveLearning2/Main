@@ -279,13 +279,48 @@ models downloadable without an agreement, the constraint that blocked RhythmMamb
 names, and the only file that knows a mesh index from a face part, so swapping detector rewrites it
 and nothing else. **Neither is wired into the capture loop yet.**
 
+**MediaPipe 1.0.0 removed `mp.solutions` — the entire legacy Solutions API.** `mp.solutions.face_mesh`
+raises `AttributeError: module 'mediapipe' has no attribute 'solutions'`, which reads like a broken
+install and is not one; the top level exposes only `Image`, `ImageFormat` and `tasks`. The Tasks API
+(`vision.FaceLandmarker`, `RunningMode.VIDEO`, `detect_for_video`) replaces it and still returns the
+478-point mesh, so `MEDIAPIPE_INDICES` is unaffected. Two consequences worth knowing before touching
+it: the model is **no longer in the wheel** — `_TasksMesh` loads `models/face_landmarker.task`
+(gitignored; override with `FACE_LANDMARK_MODEL_PATH`) and refuses with the fetch command when it is
+absent, since a silent download onto a student's laptop is not something to do by accident. And the
+Tasks call shape is adapted at *construction* rather than in `locate()`: `locate()` is the half with
+tests and its injected collaborator's shape is the legacy `process()`/`multi_face_landmarks` one, so
+porting the untested half to fit the tested half keeps every existing test on real code.
+
 **Its index table is unverified against hardware** — MediaPipe 1.0.0 ships no canonical mesh file
 and there is no camera in CI, so the mapping comes from published topology rather than measurement.
 A left/right swap would produce a *mirrored* gaze, which every aggregate reads as healthy. So the
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so **the manual camera check is still owed**, and it is one command:
+relation — so it needs the manual camera check. **Passed 2026-08-12** (one adult, laptop
+webcam): square on `yaw 5.97 / pitch -13.76 / roll -4.40` with no refusals, eyes left
+`gaze.x +0.442`, head left `yaw +32.97`. That confirms the table's left/right, both sign
+conventions, and that the model handedness now matches a real frame — the same three steps refused
+every frame an hour earlier. It says nothing about pitch/roll *accuracy* against a reference, and
+nothing about children. The `-13.8` pitch at square on is the predicted bias, not a fault: a laptop
+camera sits below eye level and `CANONICAL_FACE` is an adult mean face, so a systematic offset of
+this size is expected and is why the step's tolerance is 20°. Re-run it after any change to the
+index table or the canonical model:
+
+**Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
+a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head
+left drives `yaw` **positive**; `pitch > 0` is the face pointing *up*. `CANONICAL_FACE` must therefore
+put the subject's left at **positive x** — it did the opposite until 2026-08-12, and because the fit
+solves for a rotation and a rotation cannot reflect, a person sitting perfectly square on was refused
+`implausible_pose` on 120 frames of 120. **Round-trip tests cannot catch this**: rotating the model
+and recovering the rotation is self-consistent under either handedness, which is how 32 of them
+passed over an unusable model. Tests that pin it construct a frame from the image convention instead
+(`test_the_model_handedness_matches_a_real_frame`).
+
+**`gaze` cannot detect a left/right swap and must never be described as doing so.** Both eyes are
+averaged in image coordinates and `_eye_offset` divides by an absolute width, so permuting the labels
+returns a bit-identical number. `head_pose` is the adjudicator — a mirrored table makes the
+correspondence unfittable, so it *refuses* rather than answering wrongly.
 
 ```bash
 python scripts/verify_landmarks.py
@@ -293,9 +328,9 @@ python scripts/verify_landmarks.py
 
 Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
 that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
-Steps 2 and 3 are separate: the eye/iris indices and the outline indices are different regions of
-the table, and one being right says nothing about the other. **Record the date here when it passes**,
-and until it does, do not wire the landmark path into the capture loop. It deliberately scores no attention:
+Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
+image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
+and it claimed to until the run that found all this. It deliberately scores no attention:
 the geometry has a right answer and can be checked against one, the inference to "attending" is a
 judgement, and keeping them apart is what lets the judgement be revised without re-deriving
 anything.

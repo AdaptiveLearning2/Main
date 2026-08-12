@@ -44,3 +44,9 @@ logs/
 
 # Vendor SDK (excluded from repository)
 libmuse_windows_8.0.5/
+
+# Downloaded model bundles. MediaPipe 1.0.0 ships no landmark model, so the
+# Tasks API loads one from a file -- fetched on first use, not committed:
+# it is Google's binary, it is a few MB, and the URL in face_landmarks.py is
+# the authoritative copy.
+models/

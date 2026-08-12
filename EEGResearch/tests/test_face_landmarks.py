@@ -262,3 +262,40 @@ def test_a_bad_index_table_is_reported_once_not_once_per_frame(caplog):
     assert len(errors) == 1, f"logged {len(errors)} times for one standing fault"
     assert "nose_outside_eyes" in errors[0].getMessage()
     assert landmarker.rejections == 25
+
+
+def test_an_empty_result_says_which_kind_of_empty_it_is():
+    """`{}` covers two unrelated events and a caller cannot act on them the
+    same way: the detector saw no face, or it saw one and the landmark set was
+    refused. Reported identically, a topology refusal reads as "no face" and
+    sends someone to check their lighting.
+
+    Not hypothetical. Near profile the nose tip crosses the far eye corner, so
+    `nose_outside_eyes` is the *correct* answer for a face plainly in frame —
+    which is the case where conflating the two is most misleading.
+    """
+    no_face = FaceMeshLandmarker(mesh=_FakeMesh(None))
+    refused = FaceMeshLandmarker(
+        mesh=_FakeMesh(_mesh({**FACE, "nose_tip": (0.95, 0.50)})))
+    good = FaceMeshLandmarker(mesh=_FakeMesh(_mesh()))
+
+    assert no_face.locate(object(), 640, 480) == {}
+    assert refused.locate(object(), 640, 480) == {}
+    assert good.locate(object(), 640, 480) != {}
+
+    assert no_face.last_reason == "no_face"
+    assert refused.last_reason == "nose_outside_eyes"
+    assert good.last_reason is None, "a frame that worked has nothing to explain"
+
+
+def test_the_reason_is_cleared_by_a_good_frame():
+    """It describes the last frame, not the session. Left standing, a single
+    early refusal would keep explaining every subsequent success."""
+    landmarker = FaceMeshLandmarker(mesh=_FakeMesh(None))
+    landmarker.locate(object(), 640, 480)
+    assert landmarker.last_reason == "no_face"
+
+    landmarker._mesh = _FakeMesh(_mesh())
+    landmarker.locate(object(), 640, 480)
+
+    assert landmarker.last_reason is None

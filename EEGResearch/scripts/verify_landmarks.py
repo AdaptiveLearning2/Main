@@ -28,14 +28,30 @@ Three prompted steps, each with an automatic verdict, so the outcome is a
 sentence rather than a wall of numbers to interpret:
 
 1. **Square on** -- the pose should read near zero on all three angles. Failing
-   here means the canonical model or the pose maths is wrong, not the mapping.
-2. **Eyes hard left, head still** -- `gaze.x` must go *negative*. Positive means
-   the eye landmarks are mirrored, which is the failure this exists to find.
-3. **Turn your head left** -- `yaw` must go negative, on the same convention.
+   here means the canonical model or the pose maths is wrong, *or* the index
+   table is mirrored: both make the correspondence unfittable by a rotation and
+   both surface as `implausible_pose`. Confirmed against hardware 2026-08-12,
+   where a wrong-handed model refused 120 frames of 120.
+2. **Eyes hard left, head still** -- `gaze.x` must go *positive*. The frame is
+   not mirrored, so the subject's own left is the image right, and `gaze.x` is
+   measured in image x (`_eye_offset` divides by an absolute width, so there is
+   no per-eye sign flip). This checks that the iris tracks and that the sign
+   convention holds. **It cannot detect a left/right swap** -- both eyes are
+   averaged in image coordinates, so permuting the labels returns the identical
+   number. It claimed to, and would have prescribed swapping a correct table.
+3. **Turn your head left** -- `yaw` must go *positive*, same reason: turning
+   toward your own left is turning toward the image right. This is the step
+   that adjudicates the mapping, because yaw comes from a fit against a model
+   that has a handedness. A mirrored table makes that fit impossible rather
+   than wrong, so it surfaces as a refusal.
+   A *modest* turn: the bar is 10 degrees, and near profile the landmark set
+   stops being usable. Past roughly 70 degrees the nose tip crosses the far eye
+   corner, `check_topology` refuses the frame as `nose_outside_eyes`, and the
+   step measures nothing -- correctly, but it is not what the step is asking.
 
-Steps 2 and 3 are separate because they can fail independently: the eye/iris
-indices and the face-outline indices are different parts of the table, and one
-being mirrored says nothing about the other.
+Steps 2 and 3 are separate because they test different things over different
+regions of the table -- iris tracking and image-x sign for one, the pose fit's
+handedness for the other -- and neither says anything about the other.
 
 **Do not judge direction from another app's camera preview.** Video-call
 software usually mirrors the image for the person on screen; this reads the raw
@@ -76,8 +92,15 @@ YAW_THRESHOLD = 10.0
 SQUARE_ON_TOLERANCE = 20.0
 
 
-def _collect(landmarker, source, seconds: float, width: int, height: int) -> list:
-    """Poses and gazes over a few seconds, with the refusals counted."""
+def _collect(landmarker, source, seconds: float, width: int, height: int,
+             reasons: dict | None = None) -> list:
+    """Poses and gazes over a few seconds, with the refusals counted.
+
+    `reasons`, when given, is tallied with why each empty frame was empty --
+    `no_face` from the detector versus a `check_topology` refusal. Without it a
+    step that measured nothing reports no refusals at all, because the existing
+    tallies are built from *usable* samples and a refused frame produces none.
+    """
     samples = []
     deadline = time.perf_counter() + seconds
     while time.perf_counter() < deadline:
@@ -85,9 +108,13 @@ def _collect(landmarker, source, seconds: float, width: int, height: int) -> lis
         if frame is None:
             continue
         named = landmarker.locate(frame, width, height)
+        if not named and reasons is not None:
+            why = getattr(landmarker, "last_reason", None) or "no_face"
+            reasons[why] = reasons.get(why, 0) + 1
+        pose, gz = (head_pose(named), gaze(named)) if named else (None, None)
         if not named:
             continue
-        samples.append((head_pose(named), gaze(named)))
+        samples.append((pose, gz))
     return samples
 
 
@@ -104,7 +131,8 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h) -> dic
         time.sleep(1.0)
     print(f"   measuring for {seconds:.0f}s...      ")
 
-    samples = _collect(landmarker, source, seconds, w, h)
+    empty: dict[str, int] = {}
+    samples = _collect(landmarker, source, seconds, w, h, reasons=empty)
     poses = [p for p, _ in samples]
     gazes = [g for _, g in samples]
     measured = {
@@ -125,6 +153,12 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h) -> dic
     if measured["pose_refusals"] or measured["gaze_refusals"]:
         print(f"   refusals: pose={measured['pose_refusals'] or '-'} "
               f"gaze={measured['gaze_refusals'] or '-'}")
+    if empty:
+        # Separately from the two above, which are computed over frames that
+        # produced a face. These are the frames that produced none, and why --
+        # a detector miss reads very differently from a topology refusal.
+        print("   empty frames: "
+              + ", ".join(f"{why}={n}" for why, n in sorted(empty.items())))
     return measured
 
 
@@ -154,13 +188,14 @@ def _verdict(square, eyes, head) -> int:
     gx = eyes["gaze_x"]
     if gx is None:
         report(False, "looking left produced no gaze reading")
-    elif gx <= -GAZE_THRESHOLD:
-        report(True, f"looking left drives gaze.x negative ({gx})")
     elif gx >= GAZE_THRESHOLD:
-        report(False, f"looking left drives gaze.x POSITIVE ({gx})")
-        print("         -> the eye and iris indices are MIRRORED. Swap the "
-              "`left_*` and `right_*` eye entries in "
-              "face_landmarks.MEDIAPIPE_INDICES.")
+        report(True, f"looking left drives gaze.x positive ({gx})")
+    elif gx <= -GAZE_THRESHOLD:
+        report(False, f"looking left drives gaze.x NEGATIVE ({gx})")
+        print("         -> the iris is tracking the wrong way in image x. Not "
+              "a left/right label swap: gaze averages both eyes in image "
+              "coordinates and cannot see one. Suspect the iris indices, or a "
+              "frame that arrived mirrored.")
     else:
         report(False, f"gaze.x barely moved ({gx}) - look harder, or the iris "
                       f"landmarks are not tracking")
@@ -180,13 +215,14 @@ def _verdict(square, eyes, head) -> int:
     yaw = head["yaw"]
     if yaw is None:
         report(False, "turning left produced no pose reading")
-    elif yaw <= -YAW_THRESHOLD:
-        report(True, f"turning left drives yaw negative ({yaw})")
     elif yaw >= YAW_THRESHOLD:
-        report(False, f"turning left drives yaw POSITIVE ({yaw})")
-        print("         -> the outline indices are MIRRORED, or the canonical "
-              "model's x axis is flipped. Note this is a *different* table "
-              "region from the eyes above; check which of the two failed.")
+        report(True, f"turning left drives yaw positive ({yaw})")
+    elif yaw <= -YAW_THRESHOLD:
+        report(False, f"turning left drives yaw NEGATIVE ({yaw})")
+        print("         -> the pose fit is inverted about the vertical axis. "
+              "A mirrored index table would refuse at step 1 rather than reach "
+              "here, so suspect CANONICAL_FACE's x signs or the Euler "
+              "recovery, not the mapping.")
     else:
         report(False, f"yaw barely moved ({yaw}) - turn further, or the "
                       f"outline landmarks are not tracking")
@@ -261,7 +297,8 @@ def main() -> int:
                      "Keep your head still and look as far LEFT as you can.",
                      landmarker, source, args.seconds, width, height)
         head = _step("3/3 head left",
-                     "Look straight ahead and turn your HEAD to the left.",
+                     "Turn your HEAD left about 30 deg -- NOT a full profile; "
+                     "keep both eyes visible.",
                      landmarker, source, args.seconds, width, height)
 
         rejected = getattr(landmarker, "rejections", 0)

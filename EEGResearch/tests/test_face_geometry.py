@@ -282,3 +282,122 @@ def test_no_eyes_reports_why():
 
     assert not g.ok and g.rejected_by == "no_eye"
     assert g.eyes_used == 0
+
+
+# ── against a real frame, not against the model ─────────────────────────────
+#
+# Everything above rotates CANONICAL_FACE and recovers the rotation. That is
+# self-consistent under a mirrored model, which is exactly how the handedness
+# stayed inverted through 32 passing tests until a camera found it: a person
+# sitting perfectly square on produced `implausible_pose` on 120 frames of 120.
+#
+# These build the observed points from the *image* convention instead -- x
+# right, y down, frame not mirrored, so the subject's own left is on the image
+# right -- and assert what the module docstring promises about direction.
+
+def _facing_camera() -> dict:
+    """A square-on face as a real non-mirrored frame presents it.
+
+    Written out by hand rather than projected from CANONICAL_FACE, because
+    deriving it from the model is what makes a test blind to the model being
+    wrong.
+    """
+    return {
+        # subject's RIGHT side -> image LEFT (smaller x)
+        "right_eye_outer": (230.0, 172.0), "right_eye_inner": (290.0, 172.0),
+        "mouth_right":     (266.0, 316.0),
+        # subject's LEFT side -> image RIGHT (larger x)
+        "left_eye_outer":  (410.0, 172.0), "left_eye_inner":  (350.0, 172.0),
+        "mouth_left":      (374.0, 316.0),
+        "nose_tip":        (320.0, 240.0), "chin": (320.0, 390.0),
+    }
+
+
+def test_the_model_handedness_matches_a_real_frame():
+    """The one the round trips cannot see.
+
+    A rotation cannot reflect. If CANONICAL_FACE puts the subject's left at
+    negative x while the camera puts it at positive x, no pose maps one to the
+    other and every frame is refused -- including a subject sitting perfectly
+    still, square on, in good light.
+    """
+    pose = head_pose(_facing_camera())
+
+    assert pose.rejected_by is None, (
+        "a square-on face is unfittable, which means the canonical model's "
+        "handedness disagrees with the frame's")
+    assert pose.ok
+    assert abs(pose.yaw) < 5.0 and abs(pose.pitch) < 5.0 and abs(pose.roll) < 5.0
+
+
+def test_turning_toward_your_own_left_gives_positive_yaw():
+    """The docstring's convention, stated against a physical movement: the
+    subject's own left is the image right, so turning that way is a turn toward
+    the right-hand side of the image.
+
+    This is what the camera check's step 3 adjudicates, and it is the assertion
+    a mirrored index table would break.
+    """
+    turned = _facing_camera()
+    # Turning toward their own left swings the nose toward the image right and
+    # foreshortens the far (image-left) side of the face.
+    turned["nose_tip"] = (352.0, 240.0)
+    turned["right_eye_outer"] = (252.0, 172.0)
+    turned["mouth_right"] = (280.0, 316.0)
+
+    pose = head_pose(turned)
+
+    assert pose.ok, pose.rejected_by
+    assert pose.yaw > 5.0, f"turning toward their own left gave yaw={pose.yaw}"
+
+
+def test_looking_toward_your_own_left_gives_positive_gaze_x():
+    """`gaze.x` is measured in image x -- `_eye_offset` divides by an absolute
+    width, so there is no per-eye sign flip. The subject's own left is the image
+    right, so looking that way moves both irises to larger x and gaze.x is
+    POSITIVE.
+
+    The camera check asserted negative here, and would have prescribed swapping
+    a correct index table on the strength of it.
+    """
+    lm = dict(_facing_camera())
+    for side, (lo, hi) in (("right", (230.0, 290.0)), ("left", (350.0, 410.0))):
+        lm[f"{side}_eye_upper"] = ((lo + hi) / 2, 162.0)
+        lm[f"{side}_eye_lower"] = ((lo + hi) / 2, 182.0)
+        lm[f"{side}_iris"] = ((lo + hi) / 2 + 15.0, 172.0)   # toward image right
+
+    assert gaze(lm).x > 0.3
+
+
+def test_gaze_cannot_see_a_left_right_swap_and_must_not_claim_to():
+    """Both eyes' offsets are computed identically in image coordinates and
+    averaged, so permuting the labels returns the same number to the last bit.
+
+    Kept as a test because the camera check used to advertise step 2 as the
+    mirror detector. It is not one, and a check that cannot fail on the fault
+    it names is worse than no check: it certifies.
+    """
+    lm = dict(_facing_camera())
+    for side, (lo, hi) in (("right", (230.0, 290.0)), ("left", (350.0, 410.0))):
+        lm[f"{side}_eye_upper"] = ((lo + hi) / 2, 162.0)
+        lm[f"{side}_eye_lower"] = ((lo + hi) / 2, 182.0)
+        lm[f"{side}_iris"] = ((lo + hi) / 2 + 15.0, 172.0)
+
+    swapped = {k.replace("left", "TMP").replace("right", "left")
+                .replace("TMP", "right"): v for k, v in lm.items()}
+
+    assert gaze(swapped).x == gaze(lm).x
+
+
+def test_a_mirrored_index_table_is_refused_by_the_pose_fit():
+    """What *does* catch the mirror, now that the model has a handedness.
+
+    Mirrored labels make the correspondence unfittable by a rotation, so it is
+    refused rather than answered wrongly -- the same failure a wrong-handed
+    model produces, which is the point: one guard covers both.
+    """
+    lm = _facing_camera()
+    swapped = {k.replace("left", "TMP").replace("right", "left")
+                .replace("TMP", "right"): v for k, v in lm.items()}
+
+    assert head_pose(swapped).rejected_by is not None

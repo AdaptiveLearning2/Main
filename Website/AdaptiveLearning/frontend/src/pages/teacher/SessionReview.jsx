@@ -36,22 +36,63 @@ function fmtTime(ms) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+// What the archived SVG is called, per section, so a fallback never lands
+// under a heading promising a different view. The emotion *ribbon* has no
+// archived equivalent -- it shows sequence and the archive only kept the pie --
+// so that section deliberately maps to nothing and says so instead of
+// borrowing the pie.
+function ArchivedChart({ url, label }) {
+  return (
+    <figure className="mt-3">
+      <img src={url} alt={label} loading="lazy"
+           className="w-full max-w-2xl mx-auto rounded-xl border border-gray-100 dark:border-gray-800 bg-white" />
+      <figcaption className="text-[11px] text-gray-400 text-center mt-2">
+        Archived chart — rendered when the session closed
+      </figcaption>
+    </figure>
+  )
+}
+
 export default function SessionReview() {
   const { sessionId } = useParams()
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
   const [loading, setLoading] = useState(true)
+  // The archived charts, fetched only when there are no raw rows left. Kept
+  // separate from `data` because a failure here must not become the page's
+  // error state: the answers, the tiles and the accuracy above do not depend
+  // on it, and blanking all of them over a missing picture would be the
+  // opposite of what this fallback is for.
+  const [archive, setArchive] = useState(null)
+  const [archiveErr, setArchiveErr] = useState(false)
 
   useEffect(() => {
     let killed = false
     setLoading(true)
+    setArchive(null)
+    setArchiveErr(false)
     // Returns one session's raw facial samples, plotted below, and
     // deliberately does NOT honour the facial-recognition switch in
     // lib/viewPrefs.js -- that control covers the reporting surfaces, which
     // render it, and this page does not. See the scope note there before
     // wiring it in.
     apiFetch(`/api/signals/session/${sessionId}`)
-      .then(d => { if (!killed) setData(d) })
+      .then(d => {
+        if (killed) return
+        setData(d)
+        // Only when every channel is empty. That is precisely the expired
+        // case -- `expire_signal_rows` takes all three channels for a day at
+        // once and leaves the objects -- so a session that still has rows
+        // never pays for the extra call, and one channel merely being off
+        // does not trigger it. Erasure is the other way round: it deletes the
+        // objects too, so there would be nothing to fall back to anyway.
+        const empty = ['cognitive', 'face', 'heart']
+          .every(k => !Array.isArray(d?.[k]) || d[k].length === 0)
+        if (!empty) return
+        return apiFetch(`/api/signals/session/${sessionId}/charts`)
+          .then(a => { if (!killed) setArchive(a) })
+          .catch(() => { if (!killed) setArchiveErr(true) })
+      })
       .catch(e => { if (!killed) setErr(e.message || String(e)) })
       .finally(() => { if (!killed) setLoading(false) })
     return () => { killed = true }
@@ -200,6 +241,53 @@ export default function SessionReview() {
 
   const hasChart = series.length >= 2
 
+  // The archive's four states, kept apart rather than collapsed into "is there
+  // a picture". Only the first two are facts about the session; the other three
+  // are facts about the archive, and a surface that reports them as "recorded
+  // nothing" is the absence-as-data failure the payload was shaped to prevent.
+  //
+  //   url          -- archived and still readable
+  //   'empty'      -- the archive ran and this channel drew nothing
+  //   'unavailable'-- a path was recorded and the object could not be read
+  //   'unarchived' -- the archive never ran (closed before Phase 8)
+  //   'unknown'    -- we did not ask, or asking failed
+  const archivedChart = (name) => {
+    if (archiveErr) return 'unknown'
+    if (!archive) return 'unknown'
+    if (!archive.archived) return 'unarchived'
+    if ((archive.unavailable || []).includes(name)) return 'unavailable'
+    const url = (archive.charts || {})[name]
+    return url || 'empty'
+  }
+
+  // One sentence for the states that are not a URL, so each empty block says
+  // the same true thing rather than each inventing its own wording.
+  const NO_CHART_COPY = {
+    empty: 'Nothing was recorded on this channel.',
+    unavailable: 'The archived chart for this session could not be loaded.',
+    unarchived: 'No signal samples for this session.',
+    unknown: 'No signal samples for this session.',
+  }
+
+  const isUrl = (v) => typeof v === 'string' && v.startsWith('http')
+
+  // A section can cover more than one chart -- the timeline block draws both
+  // cognitive and heart -- and the backend signs each object independently, so
+  // the states genuinely differ across a set: `cognitive_timeline` empty while
+  // `heart_rate` is unavailable is an ordinary outcome, not a corner case.
+  //
+  // A fault therefore outranks an absence whenever they are mixed. Reading the
+  // state of one member and speaking for the whole set is how "the object could
+  // not be read" becomes "nothing was recorded", which is the single thing this
+  // payload's shape exists to prevent.
+  const anyUnavailable = (names) => names.some(n => archivedChart(n) === 'unavailable')
+
+  // The copy for a set with no drawable chart in it, fault first.
+  const noChartCopy = (names) =>
+    anyUnavailable(names)
+      ? NO_CHART_COPY.unavailable
+      : NO_CHART_COPY[archivedChart(names[0])]
+
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-6">
       <Link to="/teacher/live" className="text-sm text-violet-600 font-bold flex items-center gap-1 hover:text-violet-700">
@@ -233,12 +321,48 @@ export default function SessionReview() {
         </h2>
         {!hasChart ? (
           <div className="text-center py-12">
-            <div className="text-5xl mb-2">🧠</div>
-            {/* Now reachable from heart-only data too (series merges both
-                channels' timestamps), so this can no longer name just the
-                one channel it used to be the only source for. */}
-            <p className="text-sm text-gray-400">No signal samples for this session yet.</p>
-            <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
+            {/* The fallback. Once `expire_signal_rows` has taken the
+                per-sample rows on `ends_on`, the archived SVG is the only
+                remaining view of this session -- so an empty state here would
+                be reporting an absence that is contradicted by a picture
+                sitting in the bucket. Both archived charts are shown, because
+                the live version of this section merges cognitive and heart
+                into one trace and the archive keeps them apart. */}
+            {isUrl(archivedChart('cognitive_timeline')) || isUrl(archivedChart('heart_rate')) ? (
+              <>
+                <p className="text-sm text-gray-500">
+                  The per-sample rows for this session have expired. These are the
+                  charts as they were when it closed.
+                </p>
+                {isUrl(archivedChart('cognitive_timeline')) && (
+                  <ArchivedChart url={archivedChart('cognitive_timeline')} label="Cognitive timeline" />
+                )}
+                {isUrl(archivedChart('heart_rate')) && (
+                  <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
+                )}
+                {/* One chart drawn, the other unreadable. Saying nothing here
+                    would present a partial view as the whole session. */}
+                {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-2">
+                    One archived chart for this session could not be loaded.
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-5xl mb-2">🧠</div>
+                {/* Now reachable from heart-only data too (series merges both
+                    channels' timestamps), so this can no longer name just the
+                    one channel it used to be the only source for. */}
+                <p className="text-sm text-gray-400">
+                  {noChartCopy(['cognitive_timeline', 'heart_rate'])}
+                </p>
+                {/* Only under the empty branch. Beside an archived chart it
+                    would be telling a teacher to wait for a stream on a
+                    session that ended months ago. */}
+                <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
+              </>
+            )}
           </div>
         ) : (
           <div className="h-72">
@@ -335,7 +459,25 @@ export default function SessionReview() {
         {ribbon.length === 0 ? (
           <div className="text-center py-8">
             <div className="text-4xl mb-2">📷</div>
-            <p className="text-sm text-gray-400">No face samples for this session.</p>
+            {/* No archived equivalent, deliberately. This section shows
+                sequence and the archive only kept the proportion pie, so
+                borrowing `emotion_pie` here would answer a different question
+                under this heading. The pie is rendered below, where it says
+                what it is. */}
+            {/* Compared against the state, not against the rendered string.
+                Testing `NO_CHART_COPY[x] === NO_CHART_COPY.empty` worked only
+                as long as no two states shared wording -- and two of them
+                already do, so it was one copy edit away from silently
+                misreporting. */}
+            <p className="text-sm text-gray-400">
+              {isUrl(archivedChart('emotion_pie'))
+                ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
+                : archivedChart('emotion_pie') === 'unavailable'
+                  ? NO_CHART_COPY.unavailable
+                  : archivedChart('emotion_pie') === 'empty'
+                    ? 'Nothing was recorded on the camera channel.'
+                    : 'No face samples for this session.'}
+            </p>
           </div>
         ) : (
           <div className="flex gap-1 overflow-x-auto pb-2">
@@ -356,11 +498,23 @@ export default function SessionReview() {
           alike scrolling through emojis. Rendered only when there is something
           to render: an empty pie is a claim about a session that recorded
           nothing, which an unread channel has not earned. */}
-      {(emotionSlices.length > 0 || stressSlices.length > 0) && (
+      {/* `unavailable` keeps the section mounted rather than hiding it. A
+          hidden section reports nothing at all, which is how an unreadable
+          stress chart would have gone unmentioned on every surface -- the
+          absence swallowing the fault, one level up. */}
+      {(emotionSlices.length > 0 || stressSlices.length > 0
+        || isUrl(archivedChart('emotion_pie')) || isUrl(archivedChart('stress_pie'))
+        || anyUnavailable(['emotion_pie', 'stress_pie'])) && (
         <div className="grid md:grid-cols-2 gap-4">
-          {emotionSlices.length > 0 && (
+          {(emotionSlices.length > 0 || isUrl(archivedChart('emotion_pie'))
+            || archivedChart('emotion_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Emotion mix</h2>
+              {emotionSlices.length === 0 ? (
+                isUrl(archivedChart('emotion_pie'))
+                  ? <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
+                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
+              ) : (
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -375,15 +529,22 @@ export default function SessionReview() {
                   </PieChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
           )}
-          {stressSlices.length > 0 && (
+          {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
+            || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
               {/* Not bare "Stress": heart_signals.stress_category is a
                   physiological measurement, distinct from the EEG-derived
                   "EEG stress" series in the timeline chart above. CLAUDE.md:
                   never render both under one "Stress" label. */}
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
+              {stressSlices.length === 0 ? (
+                isUrl(archivedChart('stress_pie'))
+                  ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
+                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
+              ) : (
               <div className="h-52">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -398,6 +559,7 @@ export default function SessionReview() {
                   </PieChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </div>
           )}
         </div>

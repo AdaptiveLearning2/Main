@@ -4,7 +4,11 @@ param(
     [int]$CameraIndex = 0,
     # Gaze is a second detector on the sampled frames and needs its own model
     # file, so it is opt-in even when the camera is on. Implies -Camera.
-    [switch]$Gaze
+    [switch]$Gaze,
+    # Emotion is on whenever the camera is, so turning it off needs a switch.
+    # Worth having: gaze needs no 35 MB FER+ model, so gaze-only is a real and
+    # much cheaper deployment.
+    [switch]$NoEmotion
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +21,16 @@ $ErrorActionPreference = "Stop"
 if ($Gaze -and -not $Camera) {
     Write-Host "-Gaze implies -Camera; enabling the camera too." -ForegroundColor Yellow
     $Camera = $true
+}
+
+# The sidecar refuses to construct a camera adapter with every channel off,
+# because a camera that computes nothing is indistinguishable from a student out
+# of shot. Caught here so it reads as a bad combination of flags rather than as
+# a stack trace from a sidecar that started and then would not connect.
+if ($Camera -and $NoEmotion -and -not $Gaze) {
+    Write-Host "-NoEmotion without -Gaze leaves the camera with nothing to measure." -ForegroundColor Red
+    Write-Host "  Add -Gaze, or drop -Camera." -ForegroundColor Yellow
+    exit 1
 }
 
 $root        = $PSScriptRoot
@@ -175,12 +189,14 @@ if ($Camera) {
     # download in front of a student's first session would look like the
     # feature being broken, and a checksum failure is an install problem that
     # should be seen here.
-    Write-Host "  Checking emotion model..." -ForegroundColor Gray
-    & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
-        exit 1
+    if (-not $NoEmotion) {
+        Write-Host "  Checking emotion model..." -ForegroundColor Gray
+        & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
+            exit 1
+        }
     }
     # Same argument as the emotion model above, and the same failure if it is
     # skipped: without this the landmarker is built on the first frame of a
@@ -207,11 +223,18 @@ if ($Camera) {
     # not ask for on this run, which is the same trap the EEG_DEVICES cleanup
     # below exists to avoid.
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" $(if ($Gaze) { "true" } else { "false" })
+    # Written explicitly rather than left to the config default, which is
+    # `true`. The default made emotion silently on whenever the camera was, so
+    # this file described two thirds of the camera's configuration and the rest
+    # lived in a Python default -- and a reader checking what a session recorded
+    # would have had to know that to get the right answer.
+    Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
     Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
     Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
+    Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" "false"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

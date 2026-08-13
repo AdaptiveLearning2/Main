@@ -399,13 +399,26 @@ class FakeClassifier:
         return {"emotion_classified": self.calls, "emotion_degraded": False}
 
 
-def test_opening_a_camera_with_both_channels_off_is_refused():
+def test_opening_a_camera_with_every_channel_off_is_refused():
     """Opening a camera to compute nothing is never what was meant, and the
     failure would be silent: frames read, nothing produced, indistinguishable
     from a student out of shot."""
-    with pytest.raises(ValueError, match="both heart and emotion disabled"):
+    with pytest.raises(ValueError, match="heart, emotion and gaze all disabled"):
         FaceCaptureAdapter(FakeSource, FakeLocator,
                            heart_enabled=False, emotion_enabled=False)
+
+
+def test_a_gaze_only_camera_is_allowed():
+    """Gaze needs no 35 MB FER+ model, so emotion-off/gaze-on is a coherent
+    deployment — and `build_camera_payload` already carried a comment saying
+    so while this guard, written before the channel existed, refused to
+    construct one. The comment was right and the guard was stale."""
+    adapter = FaceCaptureAdapter(
+        FakeSource, FakeLocator, heart_enabled=False, emotion_enabled=False,
+        gaze_enabled=True, landmarker_factory=lambda: FakeLandmarker())
+
+    assert adapter.gaze_enabled is True
+    assert adapter.emotion_enabled is False
 
 
 def test_emotion_enabled_without_a_classifier_is_refused():

@@ -247,15 +247,21 @@ class FaceCaptureAdapter:
                 "this channel must not be recorded or shown to a user."
             )
 
-        if not heart_enabled and not emotion_enabled:
+        if not heart_enabled and not emotion_enabled and not gaze_enabled:
             # Opening a camera to compute nothing is never what was meant, and
             # the failure would be silent: frames read, nothing produced,
             # indistinguishable from a student out of shot. The plan's rule is
             # that emotion off with a healthy headband means the camera is not
             # open at all -- this makes that unrepresentable rather than
             # merely intended.
+            #
+            # `gaze_enabled` counts, and had to be added here: the guard
+            # predates the channel, so a gaze-only camera -- emotion off, no
+            # 35 MB FER+ model to install -- was refused at construction while
+            # `build_camera_payload` carried a comment calling it a coherent
+            # deployment. One of the two was wrong; this was.
             raise ValueError(
-                "refusing to open a camera with both heart and emotion disabled"
+                "refusing to open a camera with heart, emotion and gaze all disabled"
             )
         if emotion_enabled and emotion_classifier_factory is None:
             raise ValueError("emotion_enabled requires an emotion_classifier_factory")

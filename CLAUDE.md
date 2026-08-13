@@ -34,10 +34,15 @@ Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own wi
 
 Add `-Muse` for the real headband — it builds the native bridge if needed, copies `libmuse.dll`
 next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you get `EEG_SOURCE=sim`.
-`-Camera` adds the webcam device (`-CameraIndex N` picks one), and `-Gaze` additionally enables the
-landmark channel and implies `-Camera`. Each model-backed flag provisions its model at setup rather
-than on the first frame of a lesson. Every `FACE_*` key the script owns is written on **both**
-branches, so a flag dropped from one run cannot leave a channel enabled from the last one.
+`-Camera` adds the webcam device (`-CameraIndex N` picks one), `-Gaze` additionally enables the
+landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
+so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
+setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+Every `FACE_*` key is written on **both** branches, `FACE_EMOTION_ENABLED` included: its config
+default is `true`, so leaving it unwritten made emotion silently on whenever the camera was and put
+a third of the camera's configuration in a Python default rather than in the `.env` a reader checks.
+`-Camera -NoEmotion` without `-Gaze` is refused — the adapter would refuse it too, and a flag
+combination is a better place to say so than a sidecar that starts and then will not connect.
 `start.sh` is the mac equivalent; per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
 Individually, from each directory:

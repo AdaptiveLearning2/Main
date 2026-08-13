@@ -1,10 +1,24 @@
 param(
     [switch]$Muse,
     [switch]$Camera,
-    [int]$CameraIndex = 0
+    [int]$CameraIndex = 0,
+    # Gaze is a second detector on the sampled frames and needs its own model
+    # file, so it is opt-in even when the camera is on. Implies -Camera.
+    [switch]$Gaze
 )
 
 $ErrorActionPreference = "Stop"
+
+# Made real rather than merely documented. Gaze is a channel of the camera
+# device, so every line that provisions or enables it sits inside the -Camera
+# block -- and without this, `./start.ps1 -Gaze` would run to completion having
+# silently done nothing at all, which is the failure this script exists to turn
+# into a message. Promoted rather than refused: the intent is unambiguous.
+if ($Gaze -and -not $Camera) {
+    Write-Host "-Gaze implies -Camera; enabling the camera too." -ForegroundColor Yellow
+    $Camera = $true
+}
+
 $root        = $PSScriptRoot
 $eegDir      = Join-Path $root "EEGResearch"
 $backendDir  = Join-Path $root "Website\AdaptiveLearning\backend"
@@ -13,6 +27,7 @@ $bridgeExe   = Join-Path $eegDir "native_bridge\build\Release\muse_native_bridge
 $sdkDir      = Join-Path $eegDir "libmuse_windows_8.0.5"
 $model       = "llama3.1:8b"
 $emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
+$landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 
 function Set-EnvKey {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
@@ -167,15 +182,36 @@ if ($Camera) {
         Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
         exit 1
     }
+    # Same argument as the emotion model above, and the same failure if it is
+    # skipped: without this the landmarker is built on the first frame of a
+    # lesson, finds nothing, and the gaze channel is dead for the session. The
+    # sidecar deliberately will not fetch it itself -- a student's laptop must
+    # not reach the internet when a camera opens.
+    if ($Gaze) {
+        Write-Host "  Checking face landmark model..." -ForegroundColor Gray
+        & ".\.venv\Scripts\python.exe" -c "from src.app.services.face_landmarks import ensure_model; ensure_model(r'$landmarkModel')"
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: face landmark model could not be fetched or failed verification" -ForegroundColor Red
+            exit 1
+        }
+    }
     Pop-Location
 
     $headband = if ($Muse) { "default:muse@8765" } else { "default:sim" }
     Set-EnvKey $eegEnv "EEG_DEVICES" "$headband,camera:face@$CameraIndex"
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
+    # Written on both branches, never left to whatever a previous run set. A
+    # stale "true" here with no -Gaze would enable a channel the operator did
+    # not ask for on this run, which is the same trap the EEG_DEVICES cleanup
+    # below exists to avoid.
+    Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" $(if ($Gaze) { "true" } else { "false" })
+    Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
     Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
+    Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

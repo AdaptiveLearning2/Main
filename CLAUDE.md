@@ -34,6 +34,10 @@ Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own wi
 
 Add `-Muse` for the real headband — it builds the native bridge if needed, copies `libmuse.dll`
 next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you get `EEG_SOURCE=sim`.
+`-Camera` adds the webcam device (`-CameraIndex N` picks one), and `-Gaze` additionally enables the
+landmark channel and implies `-Camera`. Each model-backed flag provisions its model at setup rather
+than on the first frame of a lesson. Every `FACE_*` key the script owns is written on **both**
+branches, so a flag dropped from one run cannot leave a channel enabled from the last one.
 `start.sh` is the mac equivalent; per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
 Individually, from each directory:
@@ -269,7 +273,22 @@ future attempt; do not read its passing tests as evidence it measures a heart ra
 `GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
 face detection rather than reusing the Haar box — and `build_face_record` carries the reading.
 `FACE_GAZE_ENABLED` is **off by default**: it needs `models/face_landmarker.task`, which is not in the
-MediaPipe wheel, and a deployment without one must not have the camera path fail on it.
+MediaPipe wheel. Turn it on with `./start.ps1 -Camera -Gaze` (or just `-Gaze`, which implies
+`-Camera`) — that fetches and checksums the model at setup, exactly as it already does for FER+,
+because a 4 MB download in front of a student's first lesson looks like a broken feature rather than
+an incomplete install. The sidecar deliberately **never** fetches it itself; `ensure_model` is a
+setup-time call and `FaceMeshLandmarker` only ever refuses.
+
+**The URL is pinned to `/1/`, not `/latest/`.** Google serves both and they are the same bytes today,
+but a checksum pinned against a moving URL fails on the next release *as a checksum mismatch* — which
+reads as a compromised download rather than an upstream version bump.
+
+**A missing model costs gaze, not the camera.** `connect()` tolerates a landmarker it cannot build,
+logs, and lets the channel report `rejected_by="landmarker_unavailable"`. That is deliberately unlike
+the emotion classifier beside it, which is allowed to refuse the whole device: emotion is the
+camera's primary measurement, gaze is an opt-in extra nothing yet renders, and taking heart and
+emotion down over a hand-edited `.env` is the wrong trade. The channel stays *enabled* while
+unavailable — reporting it as off would be a false claim about how the deployment is configured.
 
 Three things about that path are load-bearing:
 

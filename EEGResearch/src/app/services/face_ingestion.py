@@ -345,7 +345,26 @@ class FaceCaptureAdapter:
         if self.emotion_enabled and self._emotion is None:
             self._emotion = self._make_emotion()
         if self.gaze_enabled and self._landmarker is None:
-            self._landmarker = self._make_landmarker()
+            # Tolerated, unlike the classifier above it, and the asymmetry is
+            # deliberate. Building the landmarker loads a model file that may
+            # simply not be on the machine -- `start.ps1 -Gaze` provisions it,
+            # and a hand-edited `.env` does not. Letting that raise here would
+            # take the **whole camera device** down, heart and emotion with it,
+            # for the sake of a channel that is off by default and that nothing
+            # yet renders. Emotion is the camera's primary measurement and can
+            # justify refusing to start; gaze cannot.
+            #
+            # Not silently, though: the channel stays enabled and reports a
+            # named refusal, so the payload says "gaze on, unavailable, here is
+            # why" rather than "gaze off", which is a claim about configuration
+            # that would be false.
+            try:
+                self._landmarker = self._make_landmarker()
+            except Exception as exc:                  # noqa: BLE001
+                logger.error("gaze is enabled but the landmarker could not be "
+                             "built, so this session records no gaze: %s", exc)
+                with self._lock:
+                    self._counters.last_error = f"{type(exc).__name__}: {exc}"
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="face-capture", daemon=True
@@ -607,6 +626,15 @@ class FaceCaptureAdapter:
         carries `last_error` for the detail; this carries the state.
         """
         from src.app.services.face_geometry import Gaze, gaze  # noqa: PLC0415
+
+        if self._landmarker is None:
+            # connect() could not build one. A named refusal rather than
+            # silence, or the channel reports `no_reading` for the whole
+            # session -- the warming-up state, which is what a missing model is
+            # least like.
+            with self._lock:
+                self._latest_gaze = Gaze(None, None, 0, "landmarker_unavailable")
+            return
 
         try:
             height, width = frame.shape[0], frame.shape[1]

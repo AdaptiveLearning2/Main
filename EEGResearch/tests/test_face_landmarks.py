@@ -299,3 +299,50 @@ def test_the_reason_is_cleared_by_a_good_frame():
     landmarker.locate(object(), 640, 480)
 
     assert landmarker.last_reason is None
+
+
+# ── setup-time model provisioning ───────────────────────────────────────────
+
+def test_the_model_url_is_pinned_not_latest():
+    """`/latest/` and `/1/` serve the same bytes today, but a checksum pinned
+    against a moving URL is a setup failure waiting for the next release --
+    and it would fail as "checksum mismatch", which reads as a compromised
+    download rather than an upstream version bump."""
+    from src.app.services.face_landmarks import MODEL_URL
+
+    assert "/latest/" not in MODEL_URL
+    assert MODEL_URL.startswith("https://")
+
+
+def test_verify_rejects_a_file_of_the_wrong_size_without_hashing_it(tmp_path):
+    from src.app.services.face_landmarks import verify
+
+    wrong = tmp_path / "face_landmarker.task"
+    wrong.write_bytes(b"not the model")
+
+    assert verify(wrong) is False
+    assert verify(tmp_path / "absent.task") is False
+
+
+def test_ensure_model_refuses_rather_than_downloading_when_told_not_to(tmp_path):
+    """The flag that lets a caller ask "is it here?" without reaching the
+    network -- which is what the sidecar needs, since it must never fetch during
+    a lesson."""
+    from src.app.services.face_landmarks import ensure_model
+
+    with pytest.raises(FileNotFoundError, match="missing or unverified"):
+        ensure_model(tmp_path / "face_landmarker.task", allow_download=False)
+
+
+def test_a_corrupt_model_is_deleted_rather_than_left_to_be_trusted(tmp_path):
+    """`verify` checks existence before anything else, so a partial or
+    substituted file left on disk would be trusted by the next run."""
+    from src.app.services.face_landmarks import MODEL_BYTES, ensure_model
+
+    corrupt = tmp_path / "face_landmarker.task"
+    corrupt.write_bytes(b"\x00" * MODEL_BYTES)     # right size, wrong bytes
+
+    with pytest.raises(FileNotFoundError):
+        ensure_model(corrupt, allow_download=False)
+
+    assert not corrupt.exists(), "a file that failed verification survived"

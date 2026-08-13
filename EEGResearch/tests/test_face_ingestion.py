@@ -866,3 +866,40 @@ def test_a_landmarker_that_always_fails_says_so_rather_than_warming_up():
 
     assert reading.x is None
     assert reading.rejected_by == "landmarker_failed"
+
+
+def test_a_missing_landmark_model_costs_gaze_and_not_the_camera():
+    """The blast-radius decision, made deliberately.
+
+    `connect()` builds the landmarker, and the model file it needs is
+    provisioned by `start.ps1 -Gaze` — a hand-edited `.env` does not provision
+    it. Letting that raise would take the whole camera device down, heart and
+    emotion with it, for a channel that is off by default and that nothing yet
+    renders. Emotion is the camera's primary measurement and can justify
+    refusing to start; gaze cannot.
+
+    Not silent, though: the channel stays enabled and says why, so the payload
+    reads "gaze on, unavailable" rather than "gaze off" — which would be a
+    false claim about how the deployment is configured.
+    """
+    def explode():
+        raise FileNotFoundError("no face landmark model at models/…")
+
+    src = FakeSource()
+    adapter = FaceCaptureAdapter(
+        lambda: src, lambda: FakeLocator(), fps=500.0, buffer_seconds=2.0,
+        error_backoff=0.0, warmup_seconds=0.0,
+        gaze_enabled=True, landmarker_factory=explode, gaze_interval_s=0.0)
+
+    adapter.connect()                      # must not raise
+    try:
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 0), \
+            "a missing landmark model stopped the colour channel"
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    assert adapter.gaze_enabled is True, \
+        "the channel reported itself off, which is a claim about configuration"
+    assert reading is not None and reading.x is None
+    assert reading.rejected_by == "landmarker_unavailable"

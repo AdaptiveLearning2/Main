@@ -18,9 +18,16 @@ reduced to angles and offsets and dropped. Nothing is written to disk at all.
 
     python scripts/verify_landmarks.py
 
-Needs the `face` extra plus MediaPipe:
+Needs both camera extras:
 
-    pip install -e ".[face]" mediapipe
+    pip install -e ".[face,gaze]"
+
+It also cross-checks the **Haar cascade** against the mesh on the same frames
+before the three steps. `face_roi.FaceLocator` gates the colour sample and the
+emotion crop and had no camera check of any kind, while depending on
+`cv2.data.haarcascades` shipping inside the wheel -- which a packaging change
+can move silently, and one did: `face` was moved from `opencv-python` to
+`opencv-contrib-python` so that only one distribution provides `cv2`.
 
 What it decides
 ---------------
@@ -162,6 +169,41 @@ def _step(name: str, instruction: str, landmarker, source, seconds, w, h) -> dic
     return measured
 
 
+def _cascade_agrees(source, landmarker, width, height, seconds=2.0) -> dict:
+    """Do the Haar cascade and the mesh find a face on the same frames?
+
+    Run against **both** detectors deliberately. A Haar miss on its own is
+    ambiguous -- bad light, a turned head, someone out of shot -- so it cannot
+    support a verdict. A Haar miss on frames where the mesh *did* find a face is
+    not ambiguous at all: the cascade is broken, not the lighting.
+
+    This exists because `face_roi.FaceLocator` gates the colour sample and the
+    emotion crop and had no camera check of any kind, while depending on two
+    things a packaging change can quietly move: `cv2.data.haarcascades` shipping
+    inside the wheel, and the cascade file loading from it. Both were verified
+    statically when `face` moved from opencv-python to opencv-contrib-python;
+    neither says whether it finds a face.
+    """
+    from src.app.services.face_roi import FaceLocator      # noqa: PLC0415
+    import numpy as np                                     # noqa: PLC0415
+
+    from src.app.services.face_ingestion import LUMA_WEIGHTS  # noqa: PLC0415
+
+    locator = FaceLocator()
+    mesh_hits = haar_hits = frames = 0
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        frame = source.read()
+        if frame is None:
+            continue
+        frames += 1
+        if landmarker.locate(frame, width, height):
+            mesh_hits += 1
+        if locator.locate(frame.astype(np.float32) @ LUMA_WEIGHTS) is not None:
+            haar_hits += 1
+    return {"frames": frames, "mesh": mesh_hits, "haar": haar_hits}
+
+
 def _verdict(square, eyes, head) -> int:
     print("\n-- verdict --")
     failures = 0
@@ -289,6 +331,26 @@ def main() -> int:
         print("No video is recorded. Each frame becomes angles and is dropped.")
         print("Ignore any mirrored preview in other apps - this reads the raw "
               "frame.\n'left' below always means the left side of YOUR body.")
+
+        # Before the three steps, on the same still, square-on subject.
+        print("\n-- detector cross-check --")
+        print("   Look at the camera and hold still.")
+        agree = _cascade_agrees(source, landmarker, width, height)
+        print(f"   {agree['frames']} frames: mesh found a face on "
+              f"{agree['mesh']}, Haar cascade on {agree['haar']}")
+        if agree["mesh"] and not agree["haar"]:
+            print("   FAIL  the Haar cascade found nothing on frames where the "
+                  "mesh did.\n         face_roi.FaceLocator gates the colour "
+                  "sample and the emotion crop, so this is the camera path "
+                  "broken, not the lighting.")
+            return 1
+        if not agree["frames"]:
+            print("   INCONCLUSIVE  no frames arrived")
+            return 2
+        if not agree["mesh"]:
+            print("   (neither detector saw a face -- check lighting and framing)")
+        else:
+            print("   OK  both detectors agree there is a face")
 
         square = _step("1/3 square on",
                        "Look straight at the camera and hold still.",

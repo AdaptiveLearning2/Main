@@ -41,8 +41,20 @@ dev = [
 # a class rather than in a test run. Lift the cap deliberately, with the manual
 # camera check from the plan's verification step, not by letting a resolver do
 # it silently.
+# **`opencv-contrib-python`, not `opencv-python`** -- one cv2 provider, not two.
+# They install the same `cv2` module, contrib being the superset, so having both
+# on a machine means whichever landed last owns the import. That is exactly what
+# `.[face,gaze]` produced: mediapipe requires opencv-contrib-python, `face`
+# required opencv-python, and the resolver happily installed 4.14 of one beside
+# 5.0 of the other -- silently defeating the cap below.
+#
+# The swap costs nothing this code uses: contrib ships the same
+# `cv2.data.haarcascades` and the same CAP_PROP_* constants. Verified in a clean
+# venv (cascade file present, `CascadeClassifier` non-empty, `FaceLocator`
+# constructs and runs) and then against a real camera -- see the manual check in
+# CLAUDE.md, which had to be re-run because that is the claim this changes.
 face = [
-  "opencv-python>=4.9.0,<5",
+  "opencv-contrib-python>=4.9.0,<5",
   "onnxruntime>=1.17.0"
 ]
 
@@ -59,22 +71,11 @@ face = [
 # the next major would surface the same way -- in front of a class.
 gaze = [
   "mediapipe>=1.0,<2",
-  # Not a direct import -- this is mediapipe's own dependency, constrained here
-  # because it collides with `face` and the resolver will not notice.
-  #
-  # mediapipe requires `opencv-contrib-python` (unpinned), `face` requires
-  # `opencv-python<5`, and **both distributions install the same `cv2` module**.
-  # So `.[face,gaze]` -- the command the scripts tell an operator to run --
-  # resolved to opencv-python 4.14 *and* opencv-contrib-python 5.0 side by side,
-  # with whichever landed last owning the import.
-  #
-  # That silently defeats the cap above it. `FaceLocator` needs
-  # `cv2.data.haarcascades` inside the wheel and the exposure lock needs the
-  # CAP_PROP_* constants, neither exercised against 5.x here and neither covered
-  # by CI, which has no OpenCV. Matching the majors is the least this can do;
-  # the real fix is one cv2 provider, which means moving `face` onto
-  # opencv-contrib-python and re-running the manual camera check.
-  "opencv-contrib-python<5"
+  # mediapipe's own dependency, restated here so the cap is visible at the point
+  # someone would lift it. `face` now pins the same distribution, so this is one
+  # package with one version rather than two providers of `cv2` racing to own
+  # the import -- which is what an unconstrained mediapipe produced.
+  "opencv-contrib-python>=4.9.0,<5"
 ]
 
 [tool.setuptools]

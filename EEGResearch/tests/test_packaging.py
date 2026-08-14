@@ -42,7 +42,7 @@ def test_the_face_extra_exists_and_is_pinned_in_its_own_lock():
     assert "face" in extras
 
     text = (ROOT / "requirements-face.lock").read_text(encoding="utf-8").lower()
-    assert "\nopencv-python==" in text
+    assert "\nopencv-contrib-python==" in text
     assert "\nonnxruntime==" in text
 
 
@@ -51,8 +51,9 @@ def test_opencv_is_held_below_five():
     and on the CAP_PROP_* constants used to lock exposure. Neither has been
     exercised against a 5.x release -- there is no OpenCV in CI, so a break
     would surface in front of a class rather than in a test run."""
-    face = " ".join(_pyproject()["project"]["optional-dependencies"]["face"])
-    assert "<5" in face, "the opencv major-version cap was removed"
+    for extra in ("face", "gaze"):
+        deps = " ".join(_pyproject()["project"]["optional-dependencies"][extra])
+        assert "<5" in deps, f"the opencv major-version cap was removed from {extra}"
 
 
 def test_the_gaze_extra_exists_and_is_pinned_in_its_own_lock():
@@ -78,31 +79,33 @@ def test_the_gaze_lock_covers_the_command_the_scripts_print():
     text = (ROOT / "requirements-gaze.lock").read_text(encoding="utf-8").lower()
 
     assert "--extra=face" in text and "--extra=gaze" in text
-    assert "\nopencv-python==" in text
+    assert "\nopencv-contrib-python==" in text
 
 
-def test_both_cv2_providers_agree_on_a_major():
-    """mediapipe requires `opencv-contrib-python`, `face` requires
-    `opencv-python`, and **both install the same `cv2` module**. Unconstrained,
-    `.[face,gaze]` resolved to opencv-python 4.14 alongside
-    opencv-contrib-python 5.0, with whichever landed last owning the import --
-    silently defeating the `<5` cap the test above enforces.
+def test_there_is_exactly_one_cv2_provider():
+    """`opencv-python` and `opencv-contrib-python` install the same `cv2`
+    module, contrib being the superset. With both on a machine, whichever landed
+    last owns the import -- and `.[face,gaze]` produced exactly that, 4.14 of
+    one beside 5.0 of the other, silently defeating the `<5` cap above.
 
-    Matching majors is the least this can do. One provider would be better and
-    means moving `face` onto opencv-contrib-python, which needs the manual
-    camera check re-run.
+    `face` moved onto contrib rather than mediapipe being constrained: one
+    package, one version, nothing to race. Verified against a camera after the
+    swap, because the cap's stated reason is behaviour no test here covers.
     """
-    gaze = " ".join(_pyproject()["project"]["optional-dependencies"]["gaze"])
-    assert "opencv-contrib-python<5" in gaze.replace(" ", ""), (
-        "mediapipe's opencv is unconstrained; it will pull a 5.x cv2 alongside "
-        "the 4.x the face extra pins")
+    extras = _pyproject()["project"]["optional-dependencies"]
+    both = " ".join(dep for e in ("face", "gaze")
+                    for dep in extras[e]).replace(" ", "")
+    assert "opencv-python>" not in both and "opencv-python=" not in both, (
+        "the plain opencv-python distribution is back alongside contrib; both "
+        "install `cv2` and whichever lands last owns the import")
 
-    versions = set()
+    providers = set()
     for line in (ROOT / "requirements-gaze.lock").read_text(encoding="utf-8").splitlines():
         for name in ("opencv-python==", "opencv-contrib-python=="):
             if line.lower().startswith(name):
-                versions.add(line.split("==", 1)[1].split(".")[0])
-    assert len(versions) <= 1, f"two cv2 majors would be installed: {versions}"
+                providers.add(name.rstrip("="))
+    assert providers == {"opencv-contrib-python"}, (
+        f"expected exactly one cv2 provider, got {providers or 'none'}")
 
 
 def test_no_rppg_library_is_depended_on():

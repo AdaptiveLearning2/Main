@@ -30,11 +30,11 @@ numpy==2.5.1
     # via
     #   eeg-learning-platform (pyproject.toml)
     #   onnxruntime
-    #   opencv-python
+    #   opencv-contrib-python
     #   scipy
 onnxruntime==1.28.0
     # via eeg-learning-platform (pyproject.toml)
-opencv-python==4.14.0.94
+opencv-contrib-python==4.14.0.94
     # via eeg-learning-platform (pyproject.toml)
 packaging==26.3
     # via onnxruntime

@@ -39,12 +39,14 @@ landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
 **Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
-is ~50 MB and a second ML runtime for a channel that is off by default. That extra also pins
-`opencv-contrib-python<5`, which is **not** a direct import: mediapipe requires it, `face` requires
-`opencv-python`, and both distributions install the same `cv2`. Unconstrained, the documented command
-resolved 4.14 and 5.0 side by side with whichever landed last owning the import — silently defeating
-the `<5` cap `face` states. One cv2 provider would be better and means moving `face` onto
-opencv-contrib-python, which needs the manual camera check re-run. The scripts check for it
+is ~50 MB and a second ML runtime for a channel that is off by default. **`face` pins `opencv-contrib-python`, not
+`opencv-python`** — they install the same `cv2`, contrib being the superset, so having both means
+whichever landed last owns the import. That is what `.[face,gaze]` produced: mediapipe requires
+contrib, `face` required plain, and the resolver installed 4.14 of one beside 5.0 of the other,
+silently defeating the `<5` cap. One distribution, one version. The cap's stated reason —
+`cv2.data.haarcascades` and the CAP_PROP_* constants — is behaviour no test here covers, so
+`verify_landmarks.py` now cross-checks the Haar cascade against the mesh on the same frames: a Haar
+miss alone is ambiguous (lighting, framing), a Haar miss where the mesh saw a face is not. The scripts check for it
 whenever gaze is asked for, because `ensure_model` imports nothing heavy: without that check setup
 succeeds, writes `FACE_GAZE_ENABLED=true`, and the channel dies on the first frame of a lesson as
 `landmarker_unavailable`, indistinguishable from a missing model file.

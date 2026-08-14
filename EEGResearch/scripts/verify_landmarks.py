@@ -442,6 +442,73 @@ def _emotion_classifier():
         return None
 
 
+def _cross_check_verdict(agree: dict) -> int | None:
+    """Report the cross-check; an exit code to stop on, or None to carry on.
+
+    Split out of `main()` for the reason `_verdict` already is: these are the
+    branches that report a *failure*, and while they lived inline the only way
+    to reach one was to have the failure on real hardware. One shipped with a
+    `NameError` in it -- a crash in the error path, which reads as the script
+    being broken rather than the channel it was trying to report on.
+    """
+    print(f"   {agree['frames']} frames: mesh found a face on "
+          f"{agree['mesh']}, Haar cascade on {agree['haar']}")
+    if agree["mesh"] and not agree["haar"]:
+        print("   FAIL  the Haar cascade found nothing on frames where the "
+              "mesh did.\n         face_roi.FaceLocator gates the colour "
+              "sample and the emotion crop, so this is the camera path "
+              "broken, not the lighting.")
+        return 1
+    if not agree["frames"]:
+        print("   INCONCLUSIVE  no frames arrived")
+        return 2
+    if not agree["mesh"]:
+        print("   (neither detector saw a face -- check lighting and framing)")
+    else:
+        print("   OK  both detectors agree there is a face")
+
+    # The emotion path, on the same frames. FER+ is on by default and reaches a
+    # parent's report, and until now had no camera check at all while gaze --
+    # off by default, rendered nowhere -- had one.
+    if not agree["emotion_available"]:
+        print("   SKIP  no FER+ model here, so the emotion path is "
+              "unchecked (./start.ps1 -Camera provisions it)")
+        return None
+    if not agree["haar"]:
+        return None
+
+    print(f"   emotion: {agree['crops']} crops accepted, "
+          f"{agree['crops_refused']} refused as too small; "
+          f"{agree['labels']} classified")
+    if agree["emotion_refusals"]:
+        print("   refusals: " + ", ".join(
+            f"{k}={v}" for k, v in sorted(agree["emotion_refusals"].items())))
+    if not agree["crops"]:
+        print("   FAIL  every crop was refused as too small.\n"
+              "         `to_gray64` will not upsample, so the emotion channel "
+              "records nothing at this framing.")
+        return 1
+    if agree["emotion_refusals"].get("inference_failed"):
+        print("   FAIL  the model errored on a real crop -- a broken "
+              "install, not an unsure classification.")
+        return 1
+    if agree["confidences"]:
+        lo, hi = min(agree["confidences"]), max(agree["confidences"])
+        print(f"   OK  the emotion path runs end to end "
+              f"(confidence {lo:.2f}-{hi:.2f})")
+    else:
+        print("   OK  crops reach the model; it declined to label them, "
+              "which is a reading it is entitled to make")
+    # Deliberately no claim about the label. FER+ has no ground truth you can
+    # assert from a chair, and its accuracy on this product's users is the
+    # documented weakness no self-check can address. This says the plumbing
+    # works and stops there -- a check that looked like it validated emotion
+    # would be worse than none.
+    print("   (plumbing only -- this says nothing about whether the "
+          "label is correct)")
+    return None
+
+
 def _verdict(square, eyes, head) -> int:
     print("\n-- verdict --")
     failures = 0
@@ -588,58 +655,9 @@ def main() -> int:
         print("\n-- detector cross-check --")
         print("   Look at the camera and hold still.")
         agree = _cascade_agrees(source, landmarker, width, height)
-        print(f"   {agree['frames']} frames: mesh found a face on "
-              f"{agree['mesh']}, Haar cascade on {agree['haar']}")
-        if agree["mesh"] and not agree["haar"]:
-            print("   FAIL  the Haar cascade found nothing on frames where the "
-                  "mesh did.\n         face_roi.FaceLocator gates the colour "
-                  "sample and the emotion crop, so this is the camera path "
-                  "broken, not the lighting.")
-            return 1
-        if not agree["frames"]:
-            print("   INCONCLUSIVE  no frames arrived")
-            return 2
-        if not agree["mesh"]:
-            print("   (neither detector saw a face -- check lighting and framing)")
-        else:
-            print("   OK  both detectors agree there is a face")
-
-        # The emotion path, on the same frames. FER+ is on by default and
-        # reaches a parent's report, and until now had no camera check at all
-        # while gaze -- off by default, rendered nowhere -- had one.
-        if not agree["emotion_available"]:
-            print("   SKIP  no FER+ model here, so the emotion path is "
-                  "unchecked (./start.ps1 -Camera provisions it)")
-        elif agree["haar"]:
-            print(f"   emotion: {agree['crops']} crops accepted, "
-                  f"{agree['crops_refused']} refused as too small; "
-                  f"{agree['labels']} classified")
-            if agree["emotion_refusals"]:
-                print("   refusals: " + ", ".join(
-                    f"{k}={v}" for k, v in sorted(agree["emotion_refusals"].items())))
-            if not agree["crops"]:
-                print("   FAIL  every crop was refused as too small. `to_gray64`"
-                      f"{BS}n         will not upsample, so the emotion channel "
-                      "records nothing at this framing.")
-                return 1
-            if agree["emotion_refusals"].get("inference_failed"):
-                print("   FAIL  the model errored on a real crop -- a broken "
-                      "install, not an unsure classification.")
-                return 1
-            if agree["confidences"]:
-                lo, hi = min(agree["confidences"]), max(agree["confidences"])
-                print(f"   OK  the emotion path runs end to end "
-                      f"(confidence {lo:.2f}-{hi:.2f})")
-            else:
-                print("   OK  crops reach the model; it declined to label them, "
-                      "which is a reading it is entitled to make")
-            # Deliberately no claim about the label. FER+ has no ground truth
-            # you can assert from a chair, and its accuracy on this product's
-            # users is the documented weakness no self-check can address. This
-            # says the plumbing works and stops there -- a check that looked
-            # like it validated emotion would be worse than none.
-            print("   (plumbing only -- this says nothing about whether the "
-                  "label is correct)")
+        stop = _cross_check_verdict(agree)
+        if stop is not None:
+            return stop
 
         square = _step("1/3 square on",
                        "Look straight at the camera and hold still.",

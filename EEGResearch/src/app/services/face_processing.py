@@ -210,8 +210,9 @@ def build_face_record(
     meta: dict[str, Any] | None = None,
     gaze: Any = None,
     gaze_enabled: bool = False,
+    pose: Any = None,
 ) -> dict[str, Any]:
-    """The `face` block from one emotion result and one gaze reading.
+    """The `face` block from one emotion result, one gaze and one head pose.
 
     `emotion_confidence` rather than `confidence`, deliberately. In the original
     the SQI was surfaced under `quality.confidence` while downstream read
@@ -265,6 +266,21 @@ def build_face_record(
         record["attention"] = None
         record["gaze_x"] = None
         record["gaze_y"] = None
+        # Head pose rides with gaze -- same landmark set, same cadence, same
+        # enable flag -- but refuses independently, so it gets its own field.
+        # Near profile the fit refuses while the eyes are still readable, and a
+        # closed eye refuses gaze while the pose is fine. `gaze_x` is where the
+        # eyes point *within the head*; without these it says nothing about
+        # where the head points, and a student turned away with centred eyes
+        # reads identically to one facing the screen.
+        record["head_yaw"] = None
+        record["head_pitch"] = None
+        record["head_roll"] = None
+        record["pose_rejected_by"] = (
+            "no_reading" if pose is None else pose.rejected_by)
+        if pose is not None and pose.yaw is not None:
+            record.update(head_yaw=pose.yaw, head_pitch=pose.pitch,
+                          head_roll=pose.roll)
         # "no_reading" is not a refusal: it is the state before the landmarker
         # has produced anything, which at start-up lasts one gaze interval.
         # Calling it a rejection would report a warming-up camera as a broken
@@ -289,6 +305,7 @@ def build_camera_payload(
     emotion_meta: dict[str, Any] | None = None,
     gaze: Any = None,
     gaze_enabled: bool = False,
+    pose: Any = None,
 ) -> dict[str, Any]:
     """Both blocks, with the disabled one absent rather than nulled.
 
@@ -313,5 +330,5 @@ def build_camera_payload(
     if emotion_enabled or gaze_enabled:
         payload["face"] = build_face_record(
             emotion if emotion_enabled else None, emotion_meta,
-            gaze=gaze, gaze_enabled=gaze_enabled)
+            gaze=gaze, gaze_enabled=gaze_enabled, pose=pose)
     return payload

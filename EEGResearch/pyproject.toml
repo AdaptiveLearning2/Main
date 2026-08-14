@@ -58,7 +58,23 @@ face = [
 # 'solutions'`, which reads as a broken install. There is no MediaPipe in CI, so
 # the next major would surface the same way -- in front of a class.
 gaze = [
-  "mediapipe>=1.0,<2"
+  "mediapipe>=1.0,<2",
+  # Not a direct import -- this is mediapipe's own dependency, constrained here
+  # because it collides with `face` and the resolver will not notice.
+  #
+  # mediapipe requires `opencv-contrib-python` (unpinned), `face` requires
+  # `opencv-python<5`, and **both distributions install the same `cv2` module**.
+  # So `.[face,gaze]` -- the command the scripts tell an operator to run --
+  # resolved to opencv-python 4.14 *and* opencv-contrib-python 5.0 side by side,
+  # with whichever landed last owning the import.
+  #
+  # That silently defeats the cap above it. `FaceLocator` needs
+  # `cv2.data.haarcascades` inside the wheel and the exposure lock needs the
+  # CAP_PROP_* constants, neither exercised against 5.x here and neither covered
+  # by CI, which has no OpenCV. Matching the majors is the least this can do;
+  # the real fix is one cv2 provider, which means moving `face` onto
+  # opencv-contrib-python and re-running the manual camera check.
+  "opencv-contrib-python<5"
 ]
 
 [tool.setuptools]

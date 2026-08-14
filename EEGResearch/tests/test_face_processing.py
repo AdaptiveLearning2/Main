@@ -474,3 +474,62 @@ def test_gaze_alone_still_produces_a_face_block():
 
     assert payload["face"]["gaze_x"] == 0.42
     assert payload["face"]["emotion"] is None
+
+
+# ── head pose (Phase 11, step 2b) ───────────────────────────────────────────
+#
+# `gaze_x`/`gaze_y` are eye-in-head. Without pose they say nothing about where
+# the head points, so a student turned away with centred eyes reads identically
+# to one facing the screen.
+
+from src.app.services.face_geometry import HeadPose      # noqa: E402
+
+
+def test_a_pose_reading_reaches_the_record():
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=Gaze(0.1, 0.0, 2), gaze_enabled=True,
+                               pose=HeadPose(-12.5, 3.0, -1.0, 8))
+
+    assert record["head_yaw"] == -12.5
+    assert record["head_pitch"] == 3.0
+    assert record["head_roll"] == -1.0
+    assert record["pose_rejected_by"] is None
+
+
+def test_pose_keys_are_absent_when_gaze_is_off():
+    """Pose rides on the same landmark set and the same enable flag, so it is
+    absent for the same reason gaze is — not nulled."""
+    record = build_face_record(EmotionResult("happy", 0.82, True))
+
+    for key in ("head_yaw", "head_pitch", "head_roll", "pose_rejected_by"):
+        assert key not in record
+
+
+def test_a_refused_pose_is_null_with_a_reason_never_zero():
+    """0.0 yaw is square on — the single most common real reading. Recording a
+    refusal as 0.0 would say "facing the camera" about a window the fit could
+    not solve at all."""
+    record = build_face_record(EmotionResult("happy", 0.82, True),
+                               gaze=Gaze(0.1, 0.0, 2), gaze_enabled=True,
+                               pose=HeadPose(None, None, None, 3,
+                                             "implausible_pose"))
+
+    assert record["head_yaw"] is None
+    assert record["pose_rejected_by"] == "implausible_pose"
+
+
+def test_pose_and_gaze_refuse_independently():
+    """Near profile the fit refuses while the eyes are still readable; a closed
+    eye refuses gaze while the pose is fine. One field for both would explain
+    the wrong null."""
+    eyes_only = build_face_record(
+        EmotionResult("happy", 0.82, True), gaze=Gaze(0.44, 0.0, 2),
+        gaze_enabled=True, pose=HeadPose(None, None, None, 3, "implausible_pose"))
+    pose_only = build_face_record(
+        EmotionResult("happy", 0.82, True), gaze=Gaze(None, None, 0, "no_eye"),
+        gaze_enabled=True, pose=HeadPose(-30.0, 2.0, 1.0, 8))
+
+    assert eyes_only["gaze_x"] == 0.44 and eyes_only["head_yaw"] is None
+    assert pose_only["head_yaw"] == -30.0 and pose_only["gaze_x"] is None
+    assert eyes_only["gaze_rejected_by"] is None
+    assert pose_only["pose_rejected_by"] is None

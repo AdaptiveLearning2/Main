@@ -50,7 +50,8 @@ BEGIN
     -- Phase 11 -- and a cleanup that could not see the difference would drop
     -- all four and be green everywhere else.
     FOR missing IN
-        SELECT t.c FROM unnest(ARRAY['attention', 'gaze_x', 'gaze_y']) AS t(c)
+        SELECT t.c FROM unnest(ARRAY['attention', 'gaze_x', 'gaze_y',
+                                   'head_yaw', 'head_pitch', 'head_roll']) AS t(c)
         WHERE NOT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public'

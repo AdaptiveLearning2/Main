@@ -39,7 +39,12 @@ landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
 **Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
-is ~50 MB and a second ML runtime for a channel that is off by default. The scripts check for it
+is ~50 MB and a second ML runtime for a channel that is off by default. That extra also pins
+`opencv-contrib-python<5`, which is **not** a direct import: mediapipe requires it, `face` requires
+`opencv-python`, and both distributions install the same `cv2`. Unconstrained, the documented command
+resolved 4.14 and 5.0 side by side with whichever landed last owning the import — silently defeating
+the `<5` cap `face` states. One cv2 provider would be better and means moving `face` onto
+opencv-contrib-python, which needs the manual camera check re-run. The scripts check for it
 whenever gaze is asked for, because `ensure_model` imports nothing heavy: without that check setup
 succeeds, writes `FACE_GAZE_ENABLED=true`, and the channel dies on the first frame of a lesson as
 `landmarker_unavailable`, indistinguishable from a missing model file.
@@ -280,8 +285,8 @@ future attempt; do not read its passing tests as evidence it measures a heart ra
 
 ### `attention` has no producer; `gaze_x`/`gaze_y` now do
 
-**Gaze is wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh landmarker on its own
-`GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
+**Gaze and head pose are wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh
+landmarker on its own `GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
 face detection rather than reusing the Haar box — and `build_face_record` carries the reading.
 `FACE_GAZE_ENABLED` is **off by default**: it needs `models/face_landmarker.task`, which is not in the
 MediaPipe wheel. Turn it on with `./start.ps1 -Camera -Gaze` (or just `-Gaze`, which implies
@@ -319,6 +324,17 @@ Three things about that path are load-bearing:
   right while emotion was the only measurement here; unwidened, a window where FER+ refused and the
   landmarks did not is dropped. It still refuses when *both* refuse, or the all-null flood that gate
   was added to stop comes back.
+
+**`gaze_x`/`gaze_y` are eye-in-head, so they need `head_yaw`/`head_pitch`/`head_roll` to mean
+anything about where a student is looking.** Point-of-regard is head pose plus eye offset; with only
+the second term, a student turned 30° away with centred eyes reads as `gaze_x ≈ 0`, identical to one
+facing the screen. `20260820000000` adds the three pose columns and `head_pose()` — already verified
+against a camera — fills them on the same landmark call. They refuse *independently* of gaze (near
+profile the fit refuses while the eyes are readable; a closed eye refuses gaze while the pose is
+fine), so `pose_rejected_by` is its own field beside `gaze_rejected_by`. Pose is deliberately **not**
+in the rollup: averaging an angle over a day is close to meaningless — ±40° of swinging averages the
+same 0 as never moving — so the useful aggregate is time-past-a-threshold, and that threshold belongs
+with whatever first renders it. Until then pose and gaze both expire with nothing summarising them.
 
 Gaze keys are **absent** when the channel is off, `None` + a reason when refused, a number when
 measured — the same three states as everything else here. 0.0 is a valid gaze (dead centre), so a

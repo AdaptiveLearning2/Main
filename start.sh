@@ -41,7 +41,11 @@ fi
 # the read this copy of the rule would refuse a heart-only camera the Python
 # underneath would accept.
 _heart_on=false
-if [ -f "$(dirname "$0")/EEGResearch/.env" ] &&    grep -Eq '^[[:space:]]*FACE_HEART_ENABLED[[:space:]]*=[[:space:]]*true[[:space:]]*$'         "$(dirname "$0")/EEGResearch/.env"; then
+_env_probe="$(dirname "$0")/EEGResearch/.env"
+# `-i`: PowerShell's -match is case-insensitive by default and grep is not,
+# so without it a hand-edited `FACE_HEART_ENABLED=True` is read on Windows
+# and missed here -- a drift between two matchers whose whole point is parity.
+if [ -f "$_env_probe" ] && grep -Eqi '^[[:space:]]*FACE_HEART_ENABLED[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$_env_probe"; then
     _heart_on=true
 fi
 if [ "$CAMERA" = true ] && [ "$NO_EMOTION" = true ] && [ "$GAZE" != true ]    && [ "$_heart_on" != true ]; then

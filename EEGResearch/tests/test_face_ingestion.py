@@ -916,3 +916,55 @@ def test_a_missing_landmark_model_costs_gaze_and_not_the_camera():
         "the channel reported itself off, which is a claim about configuration"
     assert reading is not None and reading.x is None
     assert reading.rejected_by == "landmarker_unavailable"
+
+
+def test_head_pose_is_stored_alongside_gaze():
+    """One detector call, two derivations. Both are pure numpy over the named
+    points, so the second costs nothing next to the mesh itself."""
+    named = _eyes_looking(0.0)
+    named.update(nose_tip=(75.0, 70.0), chin=(75.0, 110.0),
+                 mouth_left=(88.0, 95.0), mouth_right=(62.0, 95.0))
+    adapter, _ = _gaze_adapter(FakeLandmarker(named))
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        pose = adapter.latest_pose()
+    finally:
+        adapter.disconnect()
+
+    assert pose is not None
+    # A reading or a named refusal, never silence -- the pose fit legitimately
+    # refuses a synthetic face, and that is a state, not an absence.
+    assert pose.yaw is not None or pose.rejected_by
+
+
+def test_disconnect_drops_the_pose_too():
+    """A head pose from before the camera was released is not a pose now — the
+    same reason the gaze reading is dropped."""
+    adapter, _ = _gaze_adapter(FakeLandmarker(_eyes_looking(+6.0)))
+    adapter.connect()
+    assert _wait_for(lambda: adapter.latest_pose() is not None)
+    adapter.disconnect()
+
+    assert adapter.latest_pose() is None
+
+
+def test_a_missing_landmark_model_names_the_pose_refusal_too():
+    """Both channels report the same cause rather than one of them going
+    silent, or the payload explains gaze and says nothing about pose."""
+    def explode():
+        raise FileNotFoundError("no model")
+
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=500.0,
+        buffer_seconds=2.0, error_backoff=0.0, warmup_seconds=0.0,
+        gaze_enabled=True, landmarker_factory=explode, gaze_interval_s=0.0)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        pose = adapter.latest_pose()
+    finally:
+        adapter.disconnect()
+
+    assert pose.yaw is None
+    assert pose.rejected_by == "landmarker_unavailable"

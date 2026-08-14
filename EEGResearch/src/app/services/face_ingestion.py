@@ -296,6 +296,12 @@ class FaceCaptureAdapter:
         self._gaze_interval = gaze_interval_s
         self._last_gaze_at = 0.0
         self._latest_gaze: Any = None
+        # Head pose rides on the same landmark set and the same cadence -- one
+        # detector call feeds both -- but is stored separately because the two
+        # refuse independently: near profile the pose fit refuses while the eyes
+        # are still readable, and a closed eye refuses gaze while the pose is
+        # fine.
+        self._latest_pose: Any = None
 
         self._source: FrameSource | None = None
         self._locator: Any = None
@@ -411,6 +417,7 @@ class FaceCaptureAdapter:
         # takes seconds to build one. The *reading* is dropped, because a gaze
         # from before the camera was released is not a gaze now.
         self._latest_gaze = None
+        self._latest_pose = None
         self._last_gaze_at = 0.0
         while True:
             try:
@@ -641,7 +648,9 @@ class FaceCaptureAdapter:
         the broken-versus-not-started confusion this codebase refuses. `raw`
         carries `last_error` for the detail; this carries the state.
         """
-        from src.app.services.face_geometry import Gaze, gaze  # noqa: PLC0415
+        from src.app.services.face_geometry import (  # noqa: PLC0415
+            Gaze, HeadPose, gaze, head_pose,
+        )
 
         if self._landmarker is None:
             # connect() could not build one. A named refusal rather than
@@ -650,21 +659,29 @@ class FaceCaptureAdapter:
             # least like.
             with self._lock:
                 self._latest_gaze = Gaze(None, None, 0, "landmarker_unavailable")
+                self._latest_pose = HeadPose(None, None, None, 0,
+                                             "landmarker_unavailable")
             return
 
         try:
             height, width = frame.shape[0], frame.shape[1]
             named = self._landmarker.locate(frame, width, height)
+            # One detector call, two derivations. Both are pure numpy over the
+            # named points, so the second costs nothing next to the mesh itself.
             reading = gaze(named)
+            pose = head_pose(named)
         except Exception as exc:                          # noqa: BLE001
-            logger.exception("gaze sampling failed")
+            logger.exception("landmark sampling failed")
             reading = Gaze(None, None, 0, "landmarker_failed")
+            pose = HeadPose(None, None, None, 0, "landmarker_failed")
             with self._lock:
                 self._counters.last_error = f"{type(exc).__name__}: {exc}"
                 self._latest_gaze = reading
+                self._latest_pose = pose
             return
         with self._lock:
             self._latest_gaze = reading
+            self._latest_pose = pose
 
     def rgb_buffer(self) -> np.ndarray:
         """Everything currently buffered, as (n, 3)."""
@@ -765,6 +782,17 @@ class FaceCaptureAdapter:
         has been classified yet."""
         with self._lock:
             return self._latest_emotion
+
+    def latest_pose(self) -> Any:
+        """The most recent head pose, or None if gaze is off or nothing has
+        been measured yet.
+
+        A `HeadPose` whose `yaw` is None is a *refusal* -- `implausible_pose`
+        past +/-90 degrees, or too few landmarks -- and is returned as such, for
+        the same reason `latest_gaze` returns its refusals.
+        """
+        with self._lock:
+            return self._latest_pose
 
     def latest_gaze(self) -> Any:
         """The most recent gaze reading, or None if gaze is off or nothing has

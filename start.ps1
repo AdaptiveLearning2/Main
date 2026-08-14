@@ -36,7 +36,12 @@ if ($Gaze -and -not $Camera) {
 $heartOn = $false
 $preEnv = Join-Path $PSScriptRoot "EEGResearch\.env"
 if (Test-Path $preEnv) {
-    $heartOn = @(Get-Content $preEnv) -match '^FACE_HEART_ENABLED=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
+    # Same shape as start.sh's grep: leading space, space around `=`, and any
+    # casing. The two drifted apart the moment they were written by hand --
+    # PowerShell's -match is case-insensitive by default and grep's is not, so
+    # a hand-edited `FACE_HEART_ENABLED=True` was read on Windows and missed on
+    # a Mac. Parity was this guard's whole point.
+    $heartOn = @(Get-Content $preEnv) -match '^\s*FACE_HEART_ENABLED\s*=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
     if (-not $heartOn) { $heartOn = $false }
 }
 if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {

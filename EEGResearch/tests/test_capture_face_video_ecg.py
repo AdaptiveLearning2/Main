@@ -273,3 +273,62 @@ def test_the_preview_helpers_run_against_a_synthetic_frame():
     # wider than the source. A preview that silently dropped it would look fine
     # and hide the one picture that shows what is actually stored.
     assert drawn[0][1].shape[1] > frame.shape[1]
+
+
+# ── the auto-exposure warm-up ───────────────────────────────────────────────
+
+
+def test_the_warmup_matches_the_live_adapter_rather_than_restating_it():
+    """The number is measured, not chosen: mean green climbs 17% over ~5 s
+    against a pulse under 1%, and that ramp took a recording from confidence
+    0.81 to 0.05. Imported so the capture and the live path cannot drift if it
+    is ever re-measured."""
+    from src.app.services.face_ingestion import WARMUP_SECONDS
+
+    assert capture.WARMUP_SECONDS is WARMUP_SECONDS
+    assert WARMUP_SECONDS >= 5.0
+
+
+def test_the_header_records_what_was_discarded():
+    """"the first frame is 8 s after the lens opened" is not recoverable from
+    the frames, and an ECG alignment search would absorb a constant offset as a
+    lag rather than report it."""
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert '"warmup_seconds"' in source
+    # wall_start is re-stamped after the discard, so it marks the first usable
+    # frame rather than the moment the camera opened.
+    assert source.index('header["wall_start"] =') > source.index("warm_until")
+
+
+def test_skipping_the_warmup_is_possible_but_argued_for():
+    """A camera with genuinely fixed exposure exists; a flag that offered no
+    reason would just get used by anyone in a hurry."""
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "--no-warmup" in source
+    assert "genuinely fixed" in source
+
+
+def test_the_warmup_preview_does_not_look_like_recording(capsys):
+    """Eight seconds of a frozen window, or of a preview identical to the one
+    shown while writing, would have the subject believe the capture had
+    started."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    gui = capture.Gui.__new__(capture.Gui)
+    gui.aborted = False
+    drawn = []
+    gui._cv2 = type("C", (), {
+        **{k: getattr(cv2, k) for k in dir(cv2) if not k.startswith("_")},
+        "imshow": staticmethod(lambda *a: drawn.append(a)),
+        "waitKey": staticmethod(lambda *_: 0),
+    })()
+    frame = (np.random.default_rng(0).random((240, 320, 3)) * 255).astype("uint8")
+
+    gui.warming(frame, remaining=5.0)
+
+    assert len(drawn) == 1, "the warm-up drew nothing"
+    assert "WARMING UP" in SCRIPT.read_text(encoding="utf-8")
+    assert "nothing is being written yet" in SCRIPT.read_text(encoding="utf-8")

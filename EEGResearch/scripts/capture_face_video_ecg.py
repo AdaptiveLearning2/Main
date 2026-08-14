@@ -75,6 +75,22 @@ CROP = 128
 # The model's window is 160 frames; anything shorter cannot produce even one.
 MIN_SECONDS = 30.0
 
+# Seconds discarded before anything is written, for the reason
+# `face_ingestion.WARMUP_SECONDS` states and measures: a camera's auto-exposure
+# converges over the first few seconds and does so **enormously** relative to
+# the signal -- mean green climbed 17% over ~5 s against a pulse under 1%, and
+# the same recording scored confidence 0.05 with that ramp inside the window
+# against 0.81 on a clean stretch after it.
+#
+# The live adapter has always discarded them. This script did not, and it is the
+# one whose entire output exists to evaluate an rPPG model -- so a five-minute
+# capture began with the single artefact most able to produce a confident wrong
+# rate, in the first window or two the model would ever see.
+#
+# Imported, not restated, so the two cannot drift: if the ramp is ever measured
+# again the capture and the live path move together.
+from src.app.services.face_ingestion import WARMUP_SECONDS  # noqa: E402
+
 
 def repo_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2]
@@ -222,6 +238,27 @@ class Gui:
         self._cv2.putText(img, s, org, self._cv2.FONT_HERSHEY_SIMPLEX,
                           scale, colour, weight, self._cv2.LINE_AA)
 
+    def warming(self, frame, *, remaining: float) -> None:
+        """The warm-up, shown rather than a frozen window for 8 seconds.
+
+        Distinct from `frame` on purpose: nothing is being written yet, and a
+        preview that looked identical would have the subject believe the capture
+        had started.
+        """
+        cv2 = self._cv2
+        img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        h, w = img.shape[0], img.shape[1]
+        over = img.copy()
+        cv2.rectangle(over, (0, 0), (w, 58), (0, 0, 0), -1)
+        cv2.addWeighted(over, 0.55, img, 0.45, 0, img)
+        self._text(img, f"WARMING UP  {max(0.0, remaining):.0f}s",
+                   (14, 26), self.WATCH, 0.7, 2)
+        self._text(img, "auto-exposure settling; nothing is being written yet",
+                   (14, 48), self.DIM, 0.5)
+        cv2.imshow(self.WINDOW, img)
+        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            self.aborted = True
+
     def frame(self, frame, box, crop, *, elapsed, total, written, missed,
               exposure_locked) -> None:
         """One frame. RGB in; `imshow` wants BGR, so it is converted here."""
@@ -311,6 +348,9 @@ def capture(args) -> int:
         # unlocked capture is worth knowing about before analysing it, not
         # after.
         "exposure_locked": bool(getattr(source, "locked", False)),
+        # What was discarded before `wall_start`. Recorded because "the first
+        # frame is 8 s after the lens opened" is not recoverable from the data.
+        "warmup_seconds": 0.0,
         "note": "128x128 face crops, lossless. Not video. Delete after analysis.",
     }
     if not header["exposure_locked"]:
@@ -325,6 +365,24 @@ def capture(args) -> int:
             print(f"no GUI available ({exc}); recording without the preview",
                   file=sys.stderr)
 
+    # Discarded before anything is written and before the clock the frames are
+    # stamped against starts, so `t` in the .jsonl is time since the first
+    # *usable* frame rather than since the lens opened. The header carries the
+    # warm-up separately, and `wall_start` is stamped after it -- an ECG
+    # alignment search keys off that, and an 8 s constant offset silently baked
+    # into one side of it is exactly the kind of error that search would absorb
+    # as a lag rather than report.
+    if not args.no_warmup:
+        print(f"warming up {WARMUP_SECONDS:.0f}s (auto-exposure ramp -- these "
+              f"frames are read and dropped)")
+        warm_until = time.perf_counter() + WARMUP_SECONDS
+        while time.perf_counter() < warm_until:
+            frame = source.read()
+            if gui is not None and frame is not None:
+                gui.warming(frame, remaining=warm_until - time.perf_counter())
+
+    header["wall_start"] = (datetime.datetime.now(datetime.timezone.utc)
+                            .astimezone().isoformat(timespec="milliseconds"))
     print(f"recording {args.seconds:.0f}s -- sit still, look at the camera, "
           f"breathe normally")
     written = missed = 0
@@ -383,6 +441,7 @@ def capture(args) -> int:
             mapping.close()
         truncate_npy(pathlib.Path(f"{out}.npy"), written)
 
+    header["warmup_seconds"] = 0.0 if args.no_warmup else WARMUP_SECONDS
     header.update(frames_written=written, frames_missed=missed,
                   measured_fps=round(written / max(time.perf_counter() - t0, 1e-9), 3))
     pathlib.Path(f"{out}.json").write_text(json.dumps(header, indent=2), encoding="utf-8")
@@ -430,6 +489,10 @@ def main() -> int:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--fps", type=float, default=30.0)
     ap.add_argument("--yes", action="store_true", help="skip the confirmation")
+    ap.add_argument("--no-warmup", action="store_true",
+                    help="skip the auto-exposure discard. Only for a camera "
+                         "whose exposure is genuinely fixed -- the ramp is "
+                         "17%% of mean green against a pulse under 1%%.")
     ap.add_argument("--gui", action="store_true",
                     help="live preview: the face box, the stored crop, and the "
                          "counters. Draws and drops; writes nothing extra.")

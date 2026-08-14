@@ -28,9 +28,11 @@ deployment that never enables the camera must not need it installed.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -175,13 +177,100 @@ def check_topology(landmarks: dict) -> str | None:
 
 
 MODEL_ENV = "FACE_LANDMARK_MODEL_PATH"
+
+# Pinned to `/1/`, **not** `/latest/`. Google serves both and they are the same
+# bytes today, but `latest` is by definition a moving target and a checksum
+# pinned against one is a setup failure waiting for the next release. The
+# emotion model has the same property for the same reason -- its URL carries a
+# git revision rather than a branch.
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
-             "face_landmarker/float16/latest/face_landmarker.task")
+             "face_landmarker/float16/1/face_landmarker.task")
+MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+MODEL_BYTES = 3_758_596
+
+# Well above the real size and well below anything that would fill a disk. The
+# size check is not the security control -- the digest is -- but it bounds what
+# a redirected or hostile URL can make this process write before the digest is
+# ever computed.
+MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
+DOWNLOAD_TIMEOUT_S = 60
 
 
 def default_model_path() -> Path:
     """Where the landmark bundle is looked for when nothing says otherwise."""
     return Path(__file__).resolve().parents[3] / "models" / "face_landmarker.task"
+
+
+def verify(path: Path) -> bool:
+    """Whether the file on disk is the model this code was written against."""
+    path = Path(path)
+    if not path.exists() or path.stat().st_size != MODEL_BYTES:
+        return False
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest() == MODEL_SHA256
+
+
+def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Path:
+    """Return a verified model path, downloading once if permitted.
+
+    A **setup-time** step, mirroring `face_emotion.ensure_model`, and called
+    from `start.ps1 -Gaze`. `FaceMeshLandmarker` deliberately does not call it:
+    a sidecar that installs on a student's laptop must not reach the internet
+    the first time a lesson opens a camera, and a network failure there would
+    look like the feature being broken rather than the install being incomplete.
+    """
+    path = Path(path) if path is not None else default_model_path()
+    if verify(path):
+        return path
+    if path.exists():
+        logger.warning("landmark model at %s failed verification; discarding", path)
+        try:
+            path.unlink()
+        except OSError as exc:
+            # Windows locks an open file, and this project's own convention is
+            # a sidecar per window -- so an earlier `-Gaze` session still
+            # holding the model open turns a designed failure mode into an
+            # unhandled PermissionError from a setup script. Reported as what
+            # it is instead.
+            raise OSError(
+                f"could not replace the landmark model at {path}: {exc}. "
+                f"Stop any running sidecar and re-run."
+            ) from exc
+    if not allow_download:
+        raise FileNotFoundError(f"landmark model missing or unverified at {path}")
+
+    if not MODEL_URL.startswith("https://"):
+        raise ValueError("refusing to fetch the model over a non-TLS URL")
+
+    logger.info("downloading face landmark model (%.1f MB)", MODEL_BYTES / 1e6)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".part")
+    try:
+        with urllib.request.urlopen(MODEL_URL, timeout=DOWNLOAD_TIMEOUT_S) as src, \
+                tmp.open("wb") as dst:
+            written = 0
+            while chunk := src.read(1 << 20):
+                written += len(chunk)
+                if written > MAX_DOWNLOAD_BYTES:
+                    raise ValueError("landmark model download exceeded its size cap")
+                dst.write(chunk)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    if not verify(path):
+        # Deleted rather than left behind: the next run checks existence before
+        # it checks anything else, so a partial or substituted file on disk
+        # would be trusted.
+        path.unlink(missing_ok=True)
+        raise ValueError(
+            f"landmark model checksum mismatch; expected {MODEL_SHA256[:16]}..."
+        )
+    return path
 
 
 class _TasksMesh:
@@ -208,15 +297,30 @@ class _TasksMesh:
     """
 
     def __init__(self, model_path: str | None = None) -> None:
-        import numpy as np                                  # noqa: PLC0415
-        import mediapipe as mp                              # noqa: PLC0415
-        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
-        from mediapipe.tasks.python import vision           # noqa: PLC0415
-
-        self._np = np
-        self._mp = mp
-
+        # The model is resolved and verified **before** MediaPipe is imported,
+        # matching `face_emotion`, which does the same ahead of onnxruntime and
+        # explains why: checking first is cheaper, and it means a bad model
+        # reports "unverified model" rather than "mediapipe missing" -- two
+        # very different problems that would otherwise produce the same message
+        # on a machine lacking the extra.
+        #
+        # It also decides whether this is testable. MediaPipe is deliberately
+        # absent from CI, so a check placed after the import can only be
+        # exercised on a machine that has it -- which is how the first version
+        # of this went red.
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
+        if path.is_file() and not verify(path):
+            # Checked again here, not only in `ensure_model`. That is a
+            # setup-time call, so on its own it protects the moment of install
+            # and nothing after it: a truncated, half-written or hand-swapped
+            # `.task` would load without complaint and produce landmarks that
+            # are wrong rather than absent -- silently wrong gaze numbers being
+            # exactly what a checksum exists to prevent.
+            raise ValueError(
+                f"refusing to load unverified landmark model at {path}; "
+                f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
+                f"with ./start.ps1 -Gaze"
+            )
         if not path.is_file():
             raise FileNotFoundError(
                 f"no face landmark model at {path}.\n"
@@ -226,6 +330,14 @@ class _TasksMesh:
                 f"    curl -L -o \"{path}\" {MODEL_URL}\n"
                 f"or set {MODEL_ENV} to a copy you already have."
             )
+
+        import numpy as np                                  # noqa: PLC0415
+        import mediapipe as mp                              # noqa: PLC0415
+        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
+        from mediapipe.tasks.python import vision           # noqa: PLC0415
+
+        self._np = np
+        self._mp = mp
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(

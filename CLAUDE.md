@@ -34,7 +34,29 @@ Whole stack, Windows (Ollama, EEG sidecar, backend, frontend, each in its own wi
 
 Add `-Muse` for the real headband — it builds the native bridge if needed, copies `libmuse.dll`
 next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you get `EEG_SOURCE=sim`.
-`start.sh` is the mac equivalent; per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
+`-Camera` adds the webcam device (`-CameraIndex N` picks one), `-Gaze` additionally enables the
+landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
+so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
+setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+**Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
+is ~50 MB and a second ML runtime for a channel that is off by default. **`face` pins `opencv-contrib-python`, not
+`opencv-python`** — they install the same `cv2`, contrib being the superset, so having both means
+whichever landed last owns the import. That is what `.[face,gaze]` produced: mediapipe requires
+contrib, `face` required plain, and the resolver installed 4.14 of one beside 5.0 of the other,
+silently defeating the `<5` cap. One distribution, one version. The cap's stated reason —
+`cv2.data.haarcascades` and the CAP_PROP_* constants — is behaviour no test here covers, so
+`verify_landmarks.py` now cross-checks the Haar cascade against the mesh on the same frames: a Haar
+miss alone is ambiguous (lighting, framing), a Haar miss where the mesh saw a face is not. The scripts check for it
+whenever gaze is asked for, because `ensure_model` imports nothing heavy: without that check setup
+succeeds, writes `FACE_GAZE_ENABLED=true`, and the channel dies on the first frame of a lesson as
+`landmarker_unavailable`, indistinguishable from a missing model file.
+Every `FACE_*` key is written on **both** branches, `FACE_EMOTION_ENABLED` included: its config
+default is `true`, so leaving it unwritten made emotion silently on whenever the camera was and put
+a third of the camera's configuration in a Python default rather than in the `.env` a reader checks.
+`-Camera -NoEmotion` without `-Gaze` is refused — the adapter would refuse it too, and a flag
+combination is a better place to say so than a sidecar that starts and then will not connect.
+`start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
+guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
 Individually, from each directory:
 
@@ -265,11 +287,30 @@ future attempt; do not read its passing tests as evidence it measures a heart ra
 
 ### `attention` has no producer; `gaze_x`/`gaze_y` now do
 
-**Gaze is wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh landmarker on its own
-`GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
+**Gaze and head pose are wired** (Phase 11 step 2). `FaceCaptureAdapter` runs the face-mesh
+landmarker on its own `GAZE_INTERVAL_S` cadence — 5 Hz, not the frame rate, because it is a *second* detector doing its own
 face detection rather than reusing the Haar box — and `build_face_record` carries the reading.
 `FACE_GAZE_ENABLED` is **off by default**: it needs `models/face_landmarker.task`, which is not in the
-MediaPipe wheel, and a deployment without one must not have the camera path fail on it.
+MediaPipe wheel. Turn it on with `./start.ps1 -Camera -Gaze` (or just `-Gaze`, which implies
+`-Camera`) — that fetches and checksums the model at setup, exactly as it already does for FER+,
+because a 4 MB download in front of a student's first lesson looks like a broken feature rather than
+an incomplete install. The sidecar deliberately **never** fetches it itself; `ensure_model` is a
+setup-time call and `FaceMeshLandmarker` only ever refuses.
+
+**The URL is pinned to `/1/`, not `/latest/`.** Google serves both and they are the same bytes today,
+but a checksum pinned against a moving URL fails on the next release *as a checksum mismatch* — which
+reads as a compromised download rather than an upstream version bump.
+
+The digest is re-checked when the landmarker loads, not only at setup: `ensure_model` protects the
+moment of install and nothing after it, and a truncated or hand-swapped `.task` would otherwise
+produce landmarks that are wrong rather than absent.
+
+**A missing model costs gaze, not the camera.** `connect()` tolerates a landmarker it cannot build,
+logs, and lets the channel report `rejected_by="landmarker_unavailable"`. That is deliberately unlike
+the emotion classifier beside it, which is allowed to refuse the whole device: emotion is the
+camera's primary measurement, gaze is an opt-in extra nothing yet renders, and taking heart and
+emotion down over a hand-edited `.env` is the wrong trade. The channel stays *enabled* while
+unavailable — reporting it as off would be a false claim about how the deployment is configured.
 
 Three things about that path are load-bearing:
 
@@ -285,6 +326,23 @@ Three things about that path are load-bearing:
   right while emotion was the only measurement here; unwidened, a window where FER+ refused and the
   landmarks did not is dropped. It still refuses when *both* refuse, or the all-null flood that gate
   was added to stop comes back.
+
+**`gaze_x`/`gaze_y` are eye-in-head, so they need `head_yaw`/`head_pitch`/`head_roll` to mean
+anything about where a student is looking.** Point-of-regard is head pose plus eye offset; with only
+the second term, a student turned 30° away with centred eyes reads as `gaze_x ≈ 0`, identical to one
+facing the screen. `20260820000000` adds the three pose columns and `head_pose()` — already verified
+against a camera — fills them on the same landmark call. **A column here needs a field on
+`main.FaceSample` or it can never be stored**: `/api/signals/face` is the *only* writer of
+`face_signals` in either `INGEST_MODE` (the poller never writes it), and Pydantic drops undeclared
+keys silently — so the sidecar posts them, the endpoint discards them before the handler runs, and
+the column reads as "not measured" for ever. That happened to these three with every hop between the
+landmarker and the mapper wired and tested. `test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint`
+derives the check from the mapper so the next column cannot fail the same way. They refuse *independently* of gaze (near
+profile the fit refuses while the eyes are readable; a closed eye refuses gaze while the pose is
+fine), so `pose_rejected_by` is its own field beside `gaze_rejected_by`. Pose is deliberately **not**
+in the rollup: averaging an angle over a day is close to meaningless — ±40° of swinging averages the
+same 0 as never moving — so the useful aggregate is time-past-a-threshold, and that threshold belongs
+with whatever first renders it. Until then pose and gaze both expire with nothing summarising them.
 
 Gaze keys are **absent** when the channel is off, `None` + a reason when refused, a number when
 measured — the same three states as everything else here. 0.0 is a valid gaze (dead centre), so a
@@ -342,15 +400,26 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so it needs the manual camera check. **Passed 2026-08-12** (one adult, laptop
-webcam): square on `yaw 5.97 / pitch -13.76 / roll -4.40` with no refusals, eyes left
-`gaze.x +0.442`, head left `yaw +32.97`. That confirms the table's left/right, both sign
-conventions, and that the model handedness now matches a real frame — the same three steps refused
-every frame an hour earlier. It says nothing about pitch/roll *accuracy* against a reference, and
-nothing about children. The `-13.8` pitch at square on is the predicted bias, not a fault: a laptop
-camera sits below eye level and `CANONICAL_FACE` is an adult mean face, so a systematic offset of
-this size is expected and is why the step's tolerance is 20°. Re-run it after any change to the
-index table or the canonical model:
+relation — so it needs the manual camera check. **Passed twice on 2026-08-12** (one adult, laptop
+webcam), the second run after `face` moved to `opencv-contrib-python`:
+
+| run | square on | eyes left | head left |
+| --- | --- | --- | --- |
+| first | `yaw 5.97 / pitch -13.76 / roll -4.40` | `gaze.x +0.442` | `yaw +32.97` |
+| after the opencv swap | `yaw 7.78 / pitch -6.69 / roll -3.61` | `gaze.x +0.457` | `yaw +41.26` |
+
+That confirms the table's left/right, both sign conventions, and that the model handedness matches a
+real frame — the same three steps refused every frame an hour before the first run. The second run
+also carried the detector cross-check: **61 frames, mesh and Haar cascade both found a face on all
+61**, which is the only time `face_roi.FaceLocator` has been exercised against a real face and is
+what clears the opencv swap.
+
+It says nothing about pitch/roll *accuracy* against a reference, and nothing about children. **Pitch
+at square on is posture, not a fixed offset** — −13.8 then −6.7 in the same setup an hour apart. An
+earlier version of this note attributed it to camera height and the adult mean face, which would be
+roughly constant for one rig; halving between runs says the subject's head angle dominates. The 20°
+tolerance is what absorbs it either way. Re-run the check after any change to the index table or the
+canonical model:
 
 **Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
 a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head
@@ -368,11 +437,15 @@ returns a bit-identical number. `head_pose` is the adjudicator — a mirrored ta
 correspondence unfittable, so it *refuses* rather than answering wrongly.
 
 ```bash
-python scripts/verify_landmarks.py
+python scripts/verify_landmarks.py --gui
 ```
 
 Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
-that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
+that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video; `--gui` previews it,
+deliberately **unmirrored**, since the whole question is which way is left. `capture_face_video_ecg.py`
+has the same flag for a different reason — it *does* write frames, so its preview is about not
+wasting a five-minute capture: the face box, the 128×128 crop the model will actually see, and the
+counters. Neither preview adds a way to persist a frame, and a test on each asserts that.
 Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
 image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
 and it claimed to until the run that found all this. It deliberately scores no attention:

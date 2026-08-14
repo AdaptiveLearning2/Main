@@ -270,6 +270,11 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
         "attention": face.get("attention"),
         "gaze_x": face.get("gaze_x"),
         "gaze_y": face.get("gaze_y"),
+        # Where the head points, as opposed to where the eyes point within it.
+        # Degrees; see face_geometry for the sign conventions.
+        "head_yaw": face.get("head_yaw"),
+        "head_pitch": face.get("head_pitch"),
+        "head_roll": face.get("head_roll"),
         "raw": _raw(payload,
                     device_id=payload.get("device_id"),
                     rejected_by=face.get("rejected_by"),
@@ -277,6 +282,7 @@ def map_face_to_face_signal(payload: dict, session_id: str, user_id: str) -> dic
                     # emotion and gaze are two measurements and one refusal
                     # field cannot say which of them failed.
                     gaze_rejected_by=face.get("gaze_rejected_by"),
+                    pose_rejected_by=face.get("pose_rejected_by"),
                     degraded=face.get("degraded"),
                     ingestion=payload.get("ingestion")),
     }

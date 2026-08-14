@@ -228,3 +228,48 @@ def test_growing_is_refused(tmp_path):
     with pytest.raises(SystemExit) as exc:
         capture.truncate_npy(path, 9)
     assert "cannot grow" in str(exc.value)
+
+
+# ── the preview ─────────────────────────────────────────────────────────────
+
+def test_the_preview_adds_no_new_way_to_persist_a_frame():
+    """This script *does* write face images, so the preview is not a privacy
+    question here — but it must not become a second copy. The only bytes that
+    reach disk should be the ones the capture loop was already writing."""
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    for forbidden in ("imwrite", "imencode", "VideoWriter"):
+        assert forbidden not in source, f"{forbidden} would persist a frame"
+
+
+def test_the_preview_helpers_run_against_a_synthetic_frame():
+    """The drawing code has no camera in CI, but every call in it can be
+    exercised on an array — which is what catches a wrong argument type or a
+    shape mismatch before someone finds it five minutes into a capture they
+    then have to redo."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    gui = capture.Gui.__new__(capture.Gui)      # __init__ needs a display
+    gui._cv2 = cv2
+    gui.aborted = False
+    frame = (np.random.default_rng(0).random((240, 320, 3)) * 255).astype("uint8")
+    crop = np.zeros((capture.CROP, capture.CROP, 3), dtype="uint8")
+
+    drawn = []
+    gui._cv2 = type("C", (), {  # capture what would be shown, show nothing
+        **{k: getattr(cv2, k) for k in dir(cv2) if not k.startswith("_")},
+        "imshow": staticmethod(lambda *a: drawn.append(a)),
+        "waitKey": staticmethod(lambda *_: 0),
+    })()
+
+    gui.frame(frame, (40, 30, 100, 100), crop, elapsed=12.0, total=300.0,
+              written=300, missed=4, exposure_locked=True)
+    gui.frame(frame, None, None, elapsed=13.0, total=300.0,
+              written=300, missed=5, exposure_locked=False)
+
+    assert len(drawn) == 2, "the preview drew nothing"
+    # The crop panel is stacked beside the frame, so the composed image is
+    # wider than the source. A preview that silently dropped it would look fine
+    # and hide the one picture that shows what is actually stored.
+    assert drawn[0][1].shape[1] > frame.shape[1]

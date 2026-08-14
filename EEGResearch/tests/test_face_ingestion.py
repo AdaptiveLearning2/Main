@@ -399,13 +399,26 @@ class FakeClassifier:
         return {"emotion_classified": self.calls, "emotion_degraded": False}
 
 
-def test_opening_a_camera_with_both_channels_off_is_refused():
+def test_opening_a_camera_with_every_channel_off_is_refused():
     """Opening a camera to compute nothing is never what was meant, and the
     failure would be silent: frames read, nothing produced, indistinguishable
     from a student out of shot."""
-    with pytest.raises(ValueError, match="both heart and emotion disabled"):
+    with pytest.raises(ValueError, match="heart, emotion and gaze all disabled"):
         FaceCaptureAdapter(FakeSource, FakeLocator,
                            heart_enabled=False, emotion_enabled=False)
+
+
+def test_a_gaze_only_camera_is_allowed():
+    """Gaze needs no 35 MB FER+ model, so emotion-off/gaze-on is a coherent
+    deployment — and `build_camera_payload` already carried a comment saying
+    so while this guard, written before the channel existed, refused to
+    construct one. The comment was right and the guard was stale."""
+    adapter = FaceCaptureAdapter(
+        FakeSource, FakeLocator, heart_enabled=False, emotion_enabled=False,
+        gaze_enabled=True, landmarker_factory=lambda: FakeLandmarker())
+
+    assert adapter.gaze_enabled is True
+    assert adapter.emotion_enabled is False
 
 
 def test_emotion_enabled_without_a_classifier_is_refused():
@@ -866,3 +879,122 @@ def test_a_landmarker_that_always_fails_says_so_rather_than_warming_up():
 
     assert reading.x is None
     assert reading.rejected_by == "landmarker_failed"
+
+
+def test_a_missing_landmark_model_costs_gaze_and_not_the_camera():
+    """The blast-radius decision, made deliberately.
+
+    `connect()` builds the landmarker, and the model file it needs is
+    provisioned by `start.ps1 -Gaze` — a hand-edited `.env` does not provision
+    it. Letting that raise would take the whole camera device down, heart and
+    emotion with it, for a channel that is off by default and that nothing yet
+    renders. Emotion is the camera's primary measurement and can justify
+    refusing to start; gaze cannot.
+
+    Not silent, though: the channel stays enabled and says why, so the payload
+    reads "gaze on, unavailable" rather than "gaze off" — which would be a
+    false claim about how the deployment is configured.
+    """
+    def explode():
+        raise FileNotFoundError("no face landmark model at models/…")
+
+    src = FakeSource()
+    adapter = FaceCaptureAdapter(
+        lambda: src, lambda: FakeLocator(), fps=500.0, buffer_seconds=2.0,
+        error_backoff=0.0, warmup_seconds=0.0,
+        gaze_enabled=True, landmarker_factory=explode, gaze_interval_s=0.0)
+
+    adapter.connect()                      # must not raise
+    try:
+        assert _wait_for(lambda: len(adapter.rgb_buffer()) > 0), \
+            "a missing landmark model stopped the colour channel"
+        reading = adapter.latest_gaze()
+    finally:
+        adapter.disconnect()
+
+    assert adapter.gaze_enabled is True, \
+        "the channel reported itself off, which is a claim about configuration"
+    assert reading is not None and reading.x is None
+    assert reading.rejected_by == "landmarker_unavailable"
+
+
+def test_head_pose_is_stored_alongside_gaze():
+    """One detector call, two derivations. Both are pure numpy over the named
+    points, so the second costs nothing next to the mesh itself."""
+    named = _eyes_looking(0.0)
+    named.update(nose_tip=(75.0, 70.0), chin=(75.0, 110.0),
+                 mouth_left=(88.0, 95.0), mouth_right=(62.0, 95.0))
+    adapter, _ = _gaze_adapter(FakeLandmarker(named))
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        pose = adapter.latest_pose()
+    finally:
+        adapter.disconnect()
+
+    assert pose is not None
+    # A reading or a named refusal, never silence -- the pose fit legitimately
+    # refuses a synthetic face, and that is a state, not an absence.
+    assert pose.yaw is not None or pose.rejected_by
+
+
+def test_disconnect_drops_the_pose_too():
+    """A head pose from before the camera was released is not a pose now — the
+    same reason the gaze reading is dropped."""
+    adapter, _ = _gaze_adapter(FakeLandmarker(_eyes_looking(+6.0)))
+    adapter.connect()
+    assert _wait_for(lambda: adapter.latest_pose() is not None)
+    adapter.disconnect()
+
+    assert adapter.latest_pose() is None
+
+
+def test_a_missing_landmark_model_names_the_pose_refusal_too():
+    """Both channels report the same cause rather than one of them going
+    silent, or the payload explains gaze and says nothing about pose."""
+    def explode():
+        raise FileNotFoundError("no model")
+
+    adapter = FaceCaptureAdapter(
+        lambda: FakeSource(), lambda: FakeLocator(), fps=500.0,
+        buffer_seconds=2.0, error_backoff=0.0, warmup_seconds=0.0,
+        gaze_enabled=True, landmarker_factory=explode, gaze_interval_s=0.0)
+    adapter.connect()
+    try:
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        pose = adapter.latest_pose()
+    finally:
+        adapter.disconnect()
+
+    assert pose.yaw is None
+    assert pose.rejected_by == "landmarker_unavailable"
+
+
+def test_a_failure_in_one_derivation_keeps_the_other():
+    """`gaze()` and `head_pose()` both return named refusals rather than
+    raising, so reaching the handler at all means a code defect — but marking
+    both dead when one had already returned would discard a good reading and
+    blame it on the other's bug."""
+    class HalfBroken:
+        """Landmarks that gaze can read and that make head_pose explode."""
+        def locate(self, frame, w, h):
+            return _eyes_looking(+6.0)
+
+    import src.app.services.face_ingestion as fi
+    real = fi.__dict__.get("head_pose")
+    adapter, _ = _gaze_adapter(HalfBroken())
+
+    import src.app.services.face_geometry as fg
+    original = fg.head_pose
+    fg.head_pose = lambda _named: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        adapter.connect()
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        gaze_reading, pose = adapter.latest_gaze(), adapter.latest_pose()
+        adapter.disconnect()
+    finally:
+        fg.head_pose = original
+
+    assert pose.rejected_by == "landmarker_failed"
+    assert gaze_reading.x is not None and gaze_reading.x > 0, (
+        "a usable gaze was discarded because head_pose raised")

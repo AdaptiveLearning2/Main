@@ -247,15 +247,21 @@ class FaceCaptureAdapter:
                 "this channel must not be recorded or shown to a user."
             )
 
-        if not heart_enabled and not emotion_enabled:
+        if not heart_enabled and not emotion_enabled and not gaze_enabled:
             # Opening a camera to compute nothing is never what was meant, and
             # the failure would be silent: frames read, nothing produced,
             # indistinguishable from a student out of shot. The plan's rule is
             # that emotion off with a healthy headband means the camera is not
             # open at all -- this makes that unrepresentable rather than
             # merely intended.
+            #
+            # `gaze_enabled` counts, and had to be added here: the guard
+            # predates the channel, so a gaze-only camera -- emotion off, no
+            # 35 MB FER+ model to install -- was refused at construction while
+            # `build_camera_payload` carried a comment calling it a coherent
+            # deployment. One of the two was wrong; this was.
             raise ValueError(
-                "refusing to open a camera with both heart and emotion disabled"
+                "refusing to open a camera with heart, emotion and gaze all disabled"
             )
         if emotion_enabled and emotion_classifier_factory is None:
             raise ValueError("emotion_enabled requires an emotion_classifier_factory")
@@ -290,6 +296,12 @@ class FaceCaptureAdapter:
         self._gaze_interval = gaze_interval_s
         self._last_gaze_at = 0.0
         self._latest_gaze: Any = None
+        # Head pose rides on the same landmark set and the same cadence -- one
+        # detector call feeds both -- but is stored separately because the two
+        # refuse independently: near profile the pose fit refuses while the eyes
+        # are still readable, and a closed eye refuses gaze while the pose is
+        # fine.
+        self._latest_pose: Any = None
 
         self._source: FrameSource | None = None
         self._locator: Any = None
@@ -345,7 +357,36 @@ class FaceCaptureAdapter:
         if self.emotion_enabled and self._emotion is None:
             self._emotion = self._make_emotion()
         if self.gaze_enabled and self._landmarker is None:
-            self._landmarker = self._make_landmarker()
+            # Tolerated, unlike the classifier above it, and the asymmetry is
+            # deliberate. Building the landmarker loads a model file that may
+            # simply not be on the machine -- `start.ps1 -Gaze` provisions it,
+            # and a hand-edited `.env` does not. Letting that raise here would
+            # take the **whole camera device** down, heart and emotion with it,
+            # for the sake of a channel that is off by default and that nothing
+            # yet renders. Emotion is the camera's primary measurement and can
+            # justify refusing to start; gaze cannot.
+            #
+            # Not silently, though: the channel stays enabled and reports a
+            # named refusal, so the payload says "gaze on, unavailable, here is
+            # why" rather than "gaze off", which is a claim about configuration
+            # that would be false.
+            #
+            # Broad on purpose, and broader than "the model file is missing":
+            # a missing MediaPipe (its own extra, not in `.[face]`), an API
+            # that moved under it -- `mp.solutions` was deleted in 1.0.0 --
+            # or a corrupt bundle all reach here, and none of them is a reason
+            # to take heart and emotion down. `logger.exception`, matching every
+            # other handler in this file, because this is the *only* diagnostic
+            # for a class of failure with no CI backstop: building a landmarker
+            # needs MediaPipe, which CI does not have, so a traceback here is
+            # the whole evidence trail.
+            try:
+                self._landmarker = self._make_landmarker()
+            except Exception as exc:                  # noqa: BLE001
+                logger.exception("gaze is enabled but the landmarker could not "
+                                 "be built, so this session records no gaze")
+                with self._lock:
+                    self._counters.last_error = f"{type(exc).__name__}: {exc}"
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._capture_loop, name="face-capture", daemon=True
@@ -376,6 +417,7 @@ class FaceCaptureAdapter:
         # takes seconds to build one. The *reading* is dropped, because a gaze
         # from before the camera was released is not a gaze now.
         self._latest_gaze = None
+        self._latest_pose = None
         self._last_gaze_at = 0.0
         while True:
             try:
@@ -606,21 +648,48 @@ class FaceCaptureAdapter:
         the broken-versus-not-started confusion this codebase refuses. `raw`
         carries `last_error` for the detail; this carries the state.
         """
-        from src.app.services.face_geometry import Gaze, gaze  # noqa: PLC0415
+        from src.app.services.face_geometry import (  # noqa: PLC0415
+            Gaze, HeadPose, gaze, head_pose,
+        )
 
+        if self._landmarker is None:
+            # connect() could not build one. A named refusal rather than
+            # silence, or the channel reports `no_reading` for the whole
+            # session -- the warming-up state, which is what a missing model is
+            # least like.
+            with self._lock:
+                self._latest_gaze = Gaze(None, None, 0, "landmarker_unavailable")
+                self._latest_pose = HeadPose(None, None, None, 0,
+                                             "landmarker_unavailable")
+            return
+
+        reading = pose = None
         try:
             height, width = frame.shape[0], frame.shape[1]
             named = self._landmarker.locate(frame, width, height)
+            # One detector call, two derivations. Both are pure numpy over the
+            # named points, so the second costs nothing next to the mesh itself.
             reading = gaze(named)
+            pose = head_pose(named)
         except Exception as exc:                          # noqa: BLE001
-            logger.exception("gaze sampling failed")
-            reading = Gaze(None, None, 0, "landmarker_failed")
+            logger.exception("landmark sampling failed")
+            # Only what did not survive. `gaze()` and `head_pose()` are both
+            # pure numpy and return named refusals rather than raising, so
+            # reaching here at all means a code defect -- but marking both dead
+            # when one had already returned would discard a good reading and
+            # blame it on the other's bug.
+            if not isinstance(reading, Gaze):
+                reading = Gaze(None, None, 0, "landmarker_failed")
+            if not isinstance(pose, HeadPose):
+                pose = HeadPose(None, None, None, 0, "landmarker_failed")
             with self._lock:
                 self._counters.last_error = f"{type(exc).__name__}: {exc}"
                 self._latest_gaze = reading
+                self._latest_pose = pose
             return
         with self._lock:
             self._latest_gaze = reading
+            self._latest_pose = pose
 
     def rgb_buffer(self) -> np.ndarray:
         """Everything currently buffered, as (n, 3)."""
@@ -721,6 +790,17 @@ class FaceCaptureAdapter:
         has been classified yet."""
         with self._lock:
             return self._latest_emotion
+
+    def latest_pose(self) -> Any:
+        """The most recent head pose, or None if gaze is off or nothing has
+        been measured yet.
+
+        A `HeadPose` whose `yaw` is None is a *refusal* -- `implausible_pose`
+        past +/-90 degrees, or too few landmarks -- and is returned as such, for
+        the same reason `latest_gaze` returns its refusals.
+        """
+        with self._lock:
+            return self._latest_pose
 
     def latest_gaze(self) -> Any:
         """The most recent gaze reading, or None if gaze is off or nothing has

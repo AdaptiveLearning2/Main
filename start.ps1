@@ -1,10 +1,55 @@
 param(
     [switch]$Muse,
     [switch]$Camera,
-    [int]$CameraIndex = 0
+    [int]$CameraIndex = 0,
+    # Gaze is a second detector on the sampled frames and needs its own model
+    # file, so it is opt-in even when the camera is on. Implies -Camera.
+    [switch]$Gaze,
+    # Emotion is on whenever the camera is, so turning it off needs a switch.
+    # Worth having: gaze needs no 35 MB FER+ model, so gaze-only is a real and
+    # much cheaper deployment.
+    [switch]$NoEmotion
 )
 
 $ErrorActionPreference = "Stop"
+
+# Made real rather than merely documented. Gaze is a channel of the camera
+# device, so every line that provisions or enables it sits inside the -Camera
+# block -- and without this, `./start.ps1 -Gaze` would run to completion having
+# silently done nothing at all, which is the failure this script exists to turn
+# into a message. Promoted rather than refused: the intent is unambiguous.
+if ($Gaze -and -not $Camera) {
+    Write-Host "-Gaze implies -Camera; enabling the camera too." -ForegroundColor Yellow
+    $Camera = $true
+}
+
+# The sidecar refuses to construct a camera adapter with every channel off,
+# because a camera that computes nothing is indistinguishable from a student out
+# of shot. Caught here so it reads as a bad combination of flags rather than as
+# a stack trace from a sidecar that started and then would not connect.
+#
+# It has to consult FACE_HEART_ENABLED, which this script never writes: heart is
+# the third channel in the adapter's guard, it is off by default, and it is
+# hand-set in the .env when someone is testing that path. Without this read the
+# two copies of one rule disagree -- PowerShell refusing a heart-only camera the
+# Python underneath would accept.
+$heartOn = $false
+$preEnv = Join-Path $PSScriptRoot "EEGResearch\.env"
+if (Test-Path $preEnv) {
+    # Same shape as start.sh's grep: leading space, space around `=`, and any
+    # casing. The two drifted apart the moment they were written by hand --
+    # PowerShell's -match is case-insensitive by default and grep's is not, so
+    # a hand-edited `FACE_HEART_ENABLED=True` was read on Windows and missed on
+    # a Mac. Parity was this guard's whole point.
+    $heartOn = @(Get-Content $preEnv) -match '^\s*FACE_HEART_ENABLED\s*=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
+    if (-not $heartOn) { $heartOn = $false }
+}
+if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {
+    Write-Host "-NoEmotion without -Gaze leaves the camera with nothing to measure." -ForegroundColor Red
+    Write-Host "  Add -Gaze, or drop -Camera." -ForegroundColor Yellow
+    exit 1
+}
+
 $root        = $PSScriptRoot
 $eegDir      = Join-Path $root "EEGResearch"
 $backendDir  = Join-Path $root "Website\AdaptiveLearning\backend"
@@ -13,6 +58,7 @@ $bridgeExe   = Join-Path $eegDir "native_bridge\build\Release\muse_native_bridge
 $sdkDir      = Join-Path $eegDir "libmuse_windows_8.0.5"
 $model       = "llama3.1:8b"
 $emotionModel = Join-Path $eegDir "models\emotion-ferplus-8.onnx"
+$landmarkModel = Join-Path $eegDir "models\face_landmarker.task"
 
 function Set-EnvKey {
     # Rewrite a key in a .env, or append it if absent. Appending matters: a
@@ -156,16 +202,50 @@ if ($Camera) {
         exit 1
     }
 
+    # MediaPipe is its own extra and is not in `.[face]`. Checked here for the
+    # same reason cv2 is: without it the model download below still succeeds --
+    # `ensure_model` imports nothing heavy -- so setup reports success, writes
+    # FACE_GAZE_ENABLED=true, and the channel then fails on the first frame of a
+    # lesson as `landmarker_unavailable`, indistinguishable from a missing
+    # model file. That is precisely the failure this whole block exists to move
+    # from lesson time to setup time.
+    if ($Gaze) {
+        & ".\.venv\Scripts\python.exe" -c "import mediapipe" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: -Gaze needs the 'gaze' extra, which is not installed" -ForegroundColor Red
+            Write-Host "  Install it with:" -ForegroundColor Yellow
+            Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `".[face,gaze]`"" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+
     # Fetch and verify the FER+ model now, not on the first frame. A 35 MB
     # download in front of a student's first session would look like the
     # feature being broken, and a checksum failure is an install problem that
     # should be seen here.
-    Write-Host "  Checking emotion model..." -ForegroundColor Gray
-    & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
-    if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
-        exit 1
+    if (-not $NoEmotion) {
+        Write-Host "  Checking emotion model..." -ForegroundColor Gray
+        & ".\.venv\Scripts\python.exe" -c "from pathlib import Path; from src.app.services.face_emotion import ensure_model; ensure_model(Path(r'$emotionModel'))"
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: emotion model could not be fetched or failed verification" -ForegroundColor Red
+            exit 1
+        }
+    }
+    # Same argument as the emotion model above, and the same failure if it is
+    # skipped: without this the landmarker is built on the first frame of a
+    # lesson, finds nothing, and the gaze channel is dead for the session. The
+    # sidecar deliberately will not fetch it itself -- a student's laptop must
+    # not reach the internet when a camera opens.
+    if ($Gaze) {
+        Write-Host "  Checking face landmark model..." -ForegroundColor Gray
+        & ".\.venv\Scripts\python.exe" -c "from src.app.services.face_landmarks import ensure_model; ensure_model(r'$landmarkModel')"
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: face landmark model could not be fetched or failed verification" -ForegroundColor Red
+            exit 1
+        }
     }
     Pop-Location
 
@@ -173,9 +253,23 @@ if ($Camera) {
     Set-EnvKey $eegEnv "EEG_DEVICES" "$headband,camera:face@$CameraIndex"
     Set-EnvKey $eegEnv "FACE_ENABLED" "true"
     Set-EnvKey $eegEnv "FACE_CAMERA_INDEX" "$CameraIndex"
+    # Written on both branches, never left to whatever a previous run set. A
+    # stale "true" here with no -Gaze would enable a channel the operator did
+    # not ask for on this run, which is the same trap the EEG_DEVICES cleanup
+    # below exists to avoid.
+    Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" $(if ($Gaze) { "true" } else { "false" })
+    # Written explicitly rather than left to the config default, which is
+    # `true`. The default made emotion silently on whenever the camera was, so
+    # this file described two thirds of the camera's configuration and the rest
+    # lived in a Python default -- and a reader checking what a session recorded
+    # would have had to know that to get the right answer.
+    Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
+    Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
     Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
+    Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
+    Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" "false"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

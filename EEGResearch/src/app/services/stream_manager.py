@@ -254,6 +254,7 @@ class DeviceSession:
                 # smaller and more honest failure.
                 gaze=getattr(self.adapter, "latest_gaze", lambda: None)(),
                 gaze_enabled=getattr(self.adapter, "gaze_enabled", False),
+                pose=getattr(self.adapter, "latest_pose", lambda: None)(),
             )
         )
         return payload

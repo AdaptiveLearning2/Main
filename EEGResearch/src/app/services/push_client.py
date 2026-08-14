@@ -323,8 +323,12 @@ class PushClient:
         # in it, a window where FER+ refused and the landmarks did not would be
         # dropped, and the gaze channel would appear to work everywhere except
         # on the faces the classifier finds hardest.
+        # Head pose counts as a reading too: a window where the eyes are shut
+        # refuses gaze while the pose fit is perfectly happy, and dropping it
+        # would lose exactly the windows where someone's eyes are closed.
         if face and (face.get("emotion") is not None
-                     or face.get("gaze_x") is not None):
+                     or face.get("gaze_x") is not None
+                     or face.get("head_yaw") is not None):
             self.enqueue("face", {
                 "ts": ts,
                 "emotion": face.get("emotion"),
@@ -338,9 +342,13 @@ class PushClient:
                 "attention": face.get("attention"),
                 "gaze_x": face.get("gaze_x"),
                 "gaze_y": face.get("gaze_y"),
+                "head_yaw": face.get("head_yaw"),
+                "head_pitch": face.get("head_pitch"),
+                "head_roll": face.get("head_roll"),
                 "raw": {"device_id": device_id,
                         "rejected_by": face.get("rejected_by"),
                         "gaze_rejected_by": face.get("gaze_rejected_by"),
+                        "pose_rejected_by": face.get("pose_rejected_by"),
                         "degraded": face.get("degraded"),
                         "ingestion": payload.get("ingestion")},
             })

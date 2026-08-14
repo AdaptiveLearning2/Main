@@ -420,11 +420,15 @@ returns a bit-identical number. `head_pose` is the adjudicator — a mirrored ta
 correspondence unfittable, so it *refuses* rather than answering wrongly.
 
 ```bash
-python scripts/verify_landmarks.py
+python scripts/verify_landmarks.py --gui
 ```
 
 Three prompted steps with automatic verdicts — square on, eyes left, head left — because a check
-that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video.
+that costs twenty minutes of assembling a camera loop is a check nobody runs. Records no video; `--gui` previews it,
+deliberately **unmirrored**, since the whole question is which way is left. `capture_face_video_ecg.py`
+has the same flag for a different reason — it *does* write frames, so its preview is about not
+wasting a five-minute capture: the face box, the 128×128 crop the model will actually see, and the
+counters. Neither preview adds a way to persist a frame, and a test on each asserts that.
 Steps 2 and 3 test different things, not two halves of one thing: step 2 is iris tracking and the
 image-x sign, step 3 is the pose fit's handedness. **Step 2 cannot detect a mirror** — see above —
 and it claimed to until the run that found all this. It deliberately scores no attention:

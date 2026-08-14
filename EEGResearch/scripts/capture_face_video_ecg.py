@@ -177,6 +177,103 @@ Type 'yes' to record: """, end="")
         raise SystemExit("not recording")
 
 
+class Gui:
+    """Live preview for a capture. Opt-in (`--gui`).
+
+    Different constraints from `verify_landmarks`' preview, because this script
+    **does** write face images -- so the preview is not a privacy question here,
+    it is a correctness one. A five-minute capture is expensive to redo and
+    every way it can be wasted is invisible without a window: the face drifting
+    out of the crop, a light behind the subject, the detector missing more
+    frames than it finds, an exposure lock the driver quietly refused.
+
+    What it must not do is become a second copy. It draws and drops, exactly
+    like the capture loop's own frames; the only bytes that reach disk are the
+    ones the loop was already writing, and a test asserts no new
+    persisting call appears here.
+
+    It also shows the crop the model will actually see, next to the full frame.
+    Those are different pictures -- the crop is what gets stored, and judging
+    framing from the full frame is how you discover afterwards that the model
+    was fed a chin.
+    """
+
+    WINDOW = "capture_face_video_ecg -- RECORDING"
+
+    OK = (80, 200, 80)
+    BAD = (60, 60, 235)
+    WATCH = (40, 200, 235)
+    DIM = (190, 190, 190)
+
+    def __init__(self) -> None:
+        import cv2                                             # noqa: PLC0415
+        self._cv2 = cv2
+        cv2.namedWindow(self.WINDOW, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(self.WINDOW, 900, 560)
+        self.aborted = False
+
+    def close(self) -> None:
+        try:
+            self._cv2.destroyWindow(self.WINDOW)
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    def _text(self, img, s, org, colour=(255, 255, 255), scale=0.55, weight=1):
+        self._cv2.putText(img, s, org, self._cv2.FONT_HERSHEY_SIMPLEX,
+                          scale, colour, weight, self._cv2.LINE_AA)
+
+    def frame(self, frame, box, crop, *, elapsed, total, written, missed,
+              exposure_locked) -> None:
+        """One frame. RGB in; `imshow` wants BGR, so it is converted here."""
+        import numpy as np                                     # noqa: PLC0415
+        cv2 = self._cv2
+        img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        h, w = img.shape[0], img.shape[1]
+
+        if box is not None:
+            x, y, bw, bh = box
+            cv2.rectangle(img, (x, y), (x + bw, y + bh), self.OK, 2)
+        else:
+            self._text(img, "NO FACE", (w // 2 - 60, h // 2), self.BAD, 1.0, 2)
+
+        over = img.copy()
+        cv2.rectangle(over, (0, 0), (w, 58), (0, 0, 0), -1)
+        cv2.rectangle(over, (0, h - 30), (w, h), (0, 0, 0), -1)
+        cv2.addWeighted(over, 0.55, img, 0.45, 0, img)
+
+        cv2.circle(img, (18, 20), 7, self.BAD, -1)          # a record dot
+        self._text(img, f"RECORDING  {elapsed:5.1f} / {total:.0f}s",
+                   (34, 26), (255, 255, 255), 0.6, 2)
+        self._text(img, f"{written} frames written, {missed} without a face",
+                   (34, 48), self.DIM, 0.5)
+        if not exposure_locked:
+            self._text(img, "exposure NOT locked -- may look like a pulse",
+                       (14, h - 10), self.WATCH, 0.5)
+        else:
+            self._text(img, "q to stop early (the capture is kept)",
+                       (14, h - 10), self.DIM, 0.5)
+
+        bar = int(w * max(0.0, min(1.0, elapsed / total))) if total else 0
+        cv2.rectangle(img, (0, 58), (bar, 63), self.BAD, -1)
+
+        # The stored crop, upscaled, beside the frame. Nearest-neighbour so it
+        # is obvious this is a 128x128 image rather than a smooth one.
+        if crop is not None:
+            shown = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR),
+                               (h // 2, h // 2), interpolation=cv2.INTER_NEAREST)
+            panel = np.zeros((h, shown.shape[1], 3), dtype=img.dtype)
+            panel[0:shown.shape[0], 0:shown.shape[1]] = shown
+            self._text(panel, "what is stored", (8, shown.shape[0] + 22),
+                       self.DIM, 0.5)
+            self._text(panel, f"{CROP}x{CROP}", (8, shown.shape[0] + 42),
+                       self.DIM, 0.5)
+            img = np.hstack([img, panel])
+
+        cv2.imshow(self.WINDOW, img)
+        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            self.aborted = True
+
+
 def capture(args) -> int:
     import numpy as np
 
@@ -220,6 +317,14 @@ def capture(args) -> int:
         print("WARNING: exposure is not locked; auto-exposure can look like a "
               "pulse. Recording anyway, and the header records it.")
 
+    gui = None
+    if getattr(args, "gui", False):
+        try:
+            gui = Gui()
+        except Exception as exc:                               # noqa: BLE001
+            print(f"no GUI available ({exc}); recording without the preview",
+                  file=sys.stderr)
+
     print(f"recording {args.seconds:.0f}s -- sit still, look at the camera, "
           f"breathe normally")
     written = missed = 0
@@ -254,10 +359,21 @@ def capture(args) -> int:
                 log.write(json.dumps({"t": round(now, 4), "ok": True,
                                       "box": [int(v) for v in box]}) + "\n")
                 written += 1
+                if gui is not None:
+                    gui.frame(frame, box, frames[written - 1], elapsed=now,
+                              total=args.seconds, written=written,
+                              missed=missed,
+                              exposure_locked=header["exposure_locked"])
+                    if gui.aborted:
+                        print("\nstopped early; keeping the frames captured "
+                              "so far")
+                        break
                 if written % (int(args.fps) * 30) == 0:
                     print(f"  {now:5.0f}s  {written} frames, {missed} without a face")
     finally:
         source.release()
+        if gui is not None:
+            gui.close()
         frames.flush()
         # Release the mapping before truncating — Windows refuses to shorten a
         # file that is still mapped. Nothing touches `frames` after this.
@@ -314,6 +430,9 @@ def main() -> int:
     ap.add_argument("--camera", type=int, default=0)
     ap.add_argument("--fps", type=float, default=30.0)
     ap.add_argument("--yes", action="store_true", help="skip the confirmation")
+    ap.add_argument("--gui", action="store_true",
+                    help="live preview: the face box, the stored crop, and the "
+                         "counters. Draws and drops; writes nothing extra.")
     ap.add_argument("--delete", metavar="PREFIX",
                     help="delete a capture's frames, keeping its header")
     args = ap.parse_args()

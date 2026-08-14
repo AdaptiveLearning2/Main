@@ -394,15 +394,26 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so it needs the manual camera check. **Passed 2026-08-12** (one adult, laptop
-webcam): square on `yaw 5.97 / pitch -13.76 / roll -4.40` with no refusals, eyes left
-`gaze.x +0.442`, head left `yaw +32.97`. That confirms the table's left/right, both sign
-conventions, and that the model handedness now matches a real frame — the same three steps refused
-every frame an hour earlier. It says nothing about pitch/roll *accuracy* against a reference, and
-nothing about children. The `-13.8` pitch at square on is the predicted bias, not a fault: a laptop
-camera sits below eye level and `CANONICAL_FACE` is an adult mean face, so a systematic offset of
-this size is expected and is why the step's tolerance is 20°. Re-run it after any change to the
-index table or the canonical model:
+relation — so it needs the manual camera check. **Passed twice on 2026-08-12** (one adult, laptop
+webcam), the second run after `face` moved to `opencv-contrib-python`:
+
+| run | square on | eyes left | head left |
+| --- | --- | --- | --- |
+| first | `yaw 5.97 / pitch -13.76 / roll -4.40` | `gaze.x +0.442` | `yaw +32.97` |
+| after the opencv swap | `yaw 7.78 / pitch -6.69 / roll -3.61` | `gaze.x +0.457` | `yaw +41.26` |
+
+That confirms the table's left/right, both sign conventions, and that the model handedness matches a
+real frame — the same three steps refused every frame an hour before the first run. The second run
+also carried the detector cross-check: **61 frames, mesh and Haar cascade both found a face on all
+61**, which is the only time `face_roi.FaceLocator` has been exercised against a real face and is
+what clears the opencv swap.
+
+It says nothing about pitch/roll *accuracy* against a reference, and nothing about children. **Pitch
+at square on is posture, not a fixed offset** — −13.8 then −6.7 in the same setup an hour apart. An
+earlier version of this note attributed it to camera height and the adult mean face, which would be
+roughly constant for one rig; halving between runs says the subject's head angle dominates. The 20°
+tolerance is what absorbs it either way. Re-run the check after any change to the index table or the
+canonical model:
 
 **Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
 a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head

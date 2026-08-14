@@ -297,14 +297,17 @@ class _TasksMesh:
     """
 
     def __init__(self, model_path: str | None = None) -> None:
-        import numpy as np                                  # noqa: PLC0415
-        import mediapipe as mp                              # noqa: PLC0415
-        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
-        from mediapipe.tasks.python import vision           # noqa: PLC0415
-
-        self._np = np
-        self._mp = mp
-
+        # The model is resolved and verified **before** MediaPipe is imported,
+        # matching `face_emotion`, which does the same ahead of onnxruntime and
+        # explains why: checking first is cheaper, and it means a bad model
+        # reports "unverified model" rather than "mediapipe missing" -- two
+        # very different problems that would otherwise produce the same message
+        # on a machine lacking the extra.
+        #
+        # It also decides whether this is testable. MediaPipe is deliberately
+        # absent from CI, so a check placed after the import can only be
+        # exercised on a machine that has it -- which is how the first version
+        # of this went red.
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
         if path.is_file() and not verify(path):
             # Checked again here, not only in `ensure_model`. That is a
@@ -312,8 +315,7 @@ class _TasksMesh:
             # and nothing after it: a truncated, half-written or hand-swapped
             # `.task` would load without complaint and produce landmarks that
             # are wrong rather than absent -- silently wrong gaze numbers being
-            # exactly what a checksum exists to prevent. `face_emotion` verifies
-            # before constructing its session for the same reason.
+            # exactly what a checksum exists to prevent.
             raise ValueError(
                 f"refusing to load unverified landmark model at {path}; "
                 f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
@@ -328,6 +330,14 @@ class _TasksMesh:
                 f"    curl -L -o \"{path}\" {MODEL_URL}\n"
                 f"or set {MODEL_ENV} to a copy you already have."
             )
+
+        import numpy as np                                  # noqa: PLC0415
+        import mediapipe as mp                              # noqa: PLC0415
+        from mediapipe.tasks import python as mp_python     # noqa: PLC0415
+        from mediapipe.tasks.python import vision           # noqa: PLC0415
+
+        self._np = np
+        self._mp = mp
 
         self._landmarker = vision.FaceLandmarker.create_from_options(
             vision.FaceLandmarkerOptions(

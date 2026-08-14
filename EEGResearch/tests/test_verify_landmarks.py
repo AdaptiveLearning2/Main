@@ -216,3 +216,132 @@ def test_the_preview_sees_frames_with_no_face_rather_than_freezing():
 
     assert samples == [], "a frame with no face is not a sample"
     assert gui.drawn > 0, "the preview never saw the frames with no face"
+
+
+# ── the emotion path ────────────────────────────────────────────────────────
+
+def test_the_emotion_check_is_skipped_rather_than_failed_without_a_model(tmp_path,
+                                                                        monkeypatch):
+    """A gaze-only install legitimately has no FER+ model — it is a separate
+    35 MB download. Failing there would make the landmark check depend on a
+    channel it is not about."""
+    monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(tmp_path / "absent.onnx"))
+
+    assert verify._emotion_classifier() is None
+
+
+def test_a_model_that_will_not_load_is_reported_not_raised(tmp_path, monkeypatch,
+                                                           capsys):
+    """A corrupt or truncated model must not take the whole camera check down —
+    the three steps it exists for do not involve emotion at all."""
+    bad = tmp_path / "emotion.onnx"
+    bad.write_bytes(b"not a model")
+    monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(bad))
+
+    assert verify._emotion_classifier() is None
+    assert "would not load" in capsys.readouterr().out
+
+
+def test_the_emotion_check_claims_plumbing_and_not_accuracy():
+    """The guard that keeps this honest.
+
+    FER+ has no ground truth you can assert from a chair, and its accuracy on
+    this product's users — children, and children with learning disabilities —
+    is the documented weakness no self-check addresses. A check that read as
+    validating emotion would be worse than no check, which is the trap step 2
+    of this script fell into for a fortnight.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "plumbing only" in source
+    assert "says nothing about whether the " in source
+
+
+# ── the cross-check's own verdict ───────────────────────────────────────────
+#
+# These exist because a `NameError` shipped in the branch below: `\n` from a
+# botched edit, in the one path that reports a real failure. Every branch here
+# was previously reachable only by having the failure on real hardware, so the
+# happy-path hardware run that this script's own record is built on could not
+# have caught it, and neither could CI.
+
+
+def _agree(frames=60, mesh=60, haar=60, crops=60, crops_refused=0, labels=60,
+           refusals=None, confidences=(0.9,), emotion_available=True):
+    return {"frames": frames, "mesh": mesh, "haar": haar, "crops": crops,
+            "crops_refused": crops_refused, "labels": labels,
+            "emotion_refusals": refusals or {}, "confidences": list(confidences),
+            "emotion_available": emotion_available}
+
+
+def test_every_crop_refused_reports_rather_than_crashing(capsys):
+    """The branch that shipped broken. `to_gray64` will not upsample, so at a
+    framing where every Haar box is under 64x64 the emotion channel records
+    nothing — and this is the only thing that would say so."""
+    code = verify._cross_check_verdict(_agree(crops=0, crops_refused=60, labels=0))
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "every crop was refused as too small" in out
+    assert "will not upsample" in out
+
+
+def test_a_model_that_errors_on_a_real_crop_fails():
+    """`inference_failed` is a broken install. `low_confidence` is the model
+    doing its job, and must not fail the run."""
+    broken = verify._cross_check_verdict(
+        _agree(refusals={"inference_failed": 60}, labels=0, confidences=()))
+    unsure = verify._cross_check_verdict(
+        _agree(refusals={"low_confidence": 60}, labels=0, confidences=()))
+
+    assert broken == 1
+    assert unsure is None, "an unsure classifier is not a broken one"
+
+
+def test_a_haar_miss_where_the_mesh_saw_a_face_fails(capsys):
+    code = verify._cross_check_verdict(_agree(mesh=60, haar=0))
+
+    assert code == 1
+    assert "not the lighting" in capsys.readouterr().out
+
+
+def test_no_frames_is_inconclusive_not_a_failure():
+    assert verify._cross_check_verdict(_agree(frames=0, mesh=0, haar=0)) == 2
+
+
+def test_neither_detector_seeing_a_face_is_not_a_failure(capsys):
+    """Lighting and framing, not a broken table — and the emotion half has
+    nothing to say without a box."""
+    code = verify._cross_check_verdict(_agree(mesh=0, haar=0, crops=0, labels=0))
+
+    assert code is None
+    assert "check lighting and framing" in capsys.readouterr().out
+
+
+def test_a_missing_emotion_model_skips_and_carries_on(capsys):
+    code = verify._cross_check_verdict(_agree(emotion_available=False))
+    out = capsys.readouterr().out
+
+    assert code is None
+    assert "SKIP" in out
+    assert "plumbing only" not in out, "claimed a check it did not run"
+
+
+def test_the_happy_path_reports_the_confidence_range_and_the_caveat(capsys):
+    code = verify._cross_check_verdict(_agree(confidences=(0.94, 0.99)))
+    out = capsys.readouterr().out
+
+    assert code is None
+    assert "0.94-0.99" in out
+    assert "plumbing only" in out
+
+
+def test_a_classifier_that_declines_to_label_is_still_a_pass(capsys):
+    """Crops reaching the model is what this checks. Declining to label them is
+    a reading it is entitled to make, and failing on it would make the check
+    depend on the subject pulling a face the model recognises."""
+    code = verify._cross_check_verdict(
+        _agree(labels=0, confidences=(), refusals={"low_confidence": 60}))
+
+    assert code is None
+    assert "declined to label" in capsys.readouterr().out

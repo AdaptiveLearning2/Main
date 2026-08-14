@@ -400,26 +400,34 @@ A left/right swap would produce a *mirrored* gaze, which every aggregate reads a
 table is not trusted: `check_topology` re-derives what any real face satisfies (eyes above mouth,
 nose between the eyes, iris inside its own eye) and refuses a set that does not, turning a wrong
 index into a first-frame refusal. It cannot catch a mirror — a mirrored face satisfies every
-relation — so it needs the manual camera check. **Passed twice on 2026-08-12** (one adult, laptop
-webcam), the second run after `face` moved to `opencv-contrib-python`:
+relation — so it needs the manual camera check. **Passed three times on 2026-08-12** (one adult,
+laptop webcam), across the `opencv-contrib-python` swap:
 
 | run | square on | eyes left | head left |
 | --- | --- | --- | --- |
 | first | `yaw 5.97 / pitch -13.76 / roll -4.40` | `gaze.x +0.442` | `yaw +32.97` |
 | after the opencv swap | `yaw 7.78 / pitch -6.69 / roll -3.61` | `gaze.x +0.457` | `yaw +41.26` |
+| with the emotion check | `yaw 7.74 / pitch -7.15 / roll -5.53` | `gaze.x +0.475` | `yaw +36.99` |
 
 That confirms the table's left/right, both sign conventions, and that the model handedness matches a
-real frame — the same three steps refused every frame an hour before the first run. The second run
-also carried the detector cross-check: **61 frames, mesh and Haar cascade both found a face on all
-61**, which is the only time `face_roi.FaceLocator` has been exercised against a real face and is
-what clears the opencv swap.
+real frame — the same three steps refused every frame an hour before the first run. Two things the
+later runs added, each the first of its kind:
+
+- **the detector cross-check** — 61 frames, mesh and Haar cascade both found a face on all 61. The
+  only time `face_roi.FaceLocator` has been exercised against a real face, and what clears the
+  opencv swap.
+- **the emotion path end to end** — crops accepted, FER+ classified, confidence 0.94–0.99. Every
+  other emotion test injects a fake ONNX session, so this is the first time the real model has run
+  on a real crop. **Plumbing only**: high confidence means it ran, not that it read the face right,
+  and FER+'s accuracy on this product's users is the weakness no self-check reaches.
 
 It says nothing about pitch/roll *accuracy* against a reference, and nothing about children. **Pitch
-at square on is posture, not a fixed offset** — −13.8 then −6.7 in the same setup an hour apart. An
-earlier version of this note attributed it to camera height and the adult mean face, which would be
-roughly constant for one rig; halving between runs says the subject's head angle dominates. The 20°
-tolerance is what absorbs it either way. Re-run the check after any change to the index table or the
-canonical model:
+at square on is posture, not a fixed offset** — −13.8, then −6.7 and −7.2 in the same setup within
+the hour. An earlier version of this note attributed it to camera height and the adult mean face,
+which would be roughly constant for one rig; the spread says the subject's head angle dominates. The
+20° tolerance absorbs it either way. `gaze.x` on the eyes-left step is the steadiest number here
+(+0.44, +0.46, +0.48), which is what makes it a usable signal rather than only a sign test. Re-run
+the check after any change to the index table or the canonical model:
 
 **Everything left of the camera is measured in image coordinates, and the frame is not mirrored**, so
 a subject's own left is the image *right*. Looking left drives `gaze.x` **positive**; turning the head

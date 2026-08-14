@@ -77,6 +77,7 @@ own body.
 from __future__ import annotations
 
 import argparse
+import os
 import statistics
 import sys
 import time
@@ -376,18 +377,136 @@ def _cascade_agrees(source, landmarker, width, height, seconds=2.0) -> dict:
     from src.app.services.face_ingestion import LUMA_WEIGHTS  # noqa: PLC0415
 
     locator = FaceLocator()
-    mesh_hits = haar_hits = frames = 0
+    classifier = _emotion_classifier()
+    out = {"frames": 0, "mesh": 0, "haar": 0, "crops": 0, "crops_refused": 0,
+           "labels": 0, "emotion_refusals": {}, "confidences": [],
+           "emotion_available": classifier is not None}
     deadline = time.perf_counter() + seconds
     while time.perf_counter() < deadline:
         frame = source.read()
         if frame is None:
             continue
-        frames += 1
+        out["frames"] += 1
         if landmarker.locate(frame, width, height):
-            mesh_hits += 1
-        if locator.locate(frame.astype(np.float32) @ LUMA_WEIGHTS) is not None:
-            haar_hits += 1
-    return {"frames": frames, "mesh": mesh_hits, "haar": haar_hits}
+            out["mesh"] += 1
+        box = locator.locate(frame.astype(np.float32) @ LUMA_WEIGHTS)
+        if box is None:
+            continue
+        out["haar"] += 1
+        if classifier is None:
+            continue
+        # The emotion path, end to end, on a real box. Everything below here
+        # has only ever run against an injected fake session.
+        from src.app.services.face_emotion import to_gray64  # noqa: PLC0415
+
+        crop = to_gray64(frame, box)
+        if crop is None:
+            # `to_gray64` refuses rather than upsampling a box smaller than the
+            # model's own input. That refusal has never been observed against
+            # real Haar boxes, and if it fired often the channel would be
+            # quietly thin rather than obviously broken.
+            out["crops_refused"] += 1
+            continue
+        out["crops"] += 1
+        result = classifier.classify(crop)
+        if result.label is None:
+            reason = result.rejected_by or "unknown"
+            out["emotion_refusals"][reason] = out["emotion_refusals"].get(reason, 0) + 1
+        else:
+            out["labels"] += 1
+            if result.confidence is not None:
+                out["confidences"].append(result.confidence)
+    return out
+
+
+def _emotion_classifier():
+    """A real FER+ classifier, or None if this machine has not provisioned one.
+
+    None rather than a failure: the emotion model is a separate 35 MB download
+    and a gaze-only install legitimately lacks it. Skipping says so; failing
+    would make the landmark check depend on a channel it is not about.
+    """
+    from pathlib import Path as _Path                       # noqa: PLC0415
+
+    model = _Path(os.environ.get("FACE_EMOTION_MODEL_PATH")
+                  or _Path(__file__).resolve().parents[1]
+                  / "models" / "emotion-ferplus-8.onnx")
+    if not model.is_file():
+        return None
+    try:
+        from src.app.services.face_emotion import EmotionClassifier  # noqa: PLC0415
+
+        return EmotionClassifier(model)
+    except Exception as exc:                                # noqa: BLE001
+        print(f"   (emotion model present but would not load: {exc})")
+        return None
+
+
+def _cross_check_verdict(agree: dict) -> int | None:
+    """Report the cross-check; an exit code to stop on, or None to carry on.
+
+    Split out of `main()` for the reason `_verdict` already is: these are the
+    branches that report a *failure*, and while they lived inline the only way
+    to reach one was to have the failure on real hardware. One shipped with a
+    `NameError` in it -- a crash in the error path, which reads as the script
+    being broken rather than the channel it was trying to report on.
+    """
+    print(f"   {agree['frames']} frames: mesh found a face on "
+          f"{agree['mesh']}, Haar cascade on {agree['haar']}")
+    if agree["mesh"] and not agree["haar"]:
+        print("   FAIL  the Haar cascade found nothing on frames where the "
+              "mesh did.\n         face_roi.FaceLocator gates the colour "
+              "sample and the emotion crop, so this is the camera path "
+              "broken, not the lighting.")
+        return 1
+    if not agree["frames"]:
+        print("   INCONCLUSIVE  no frames arrived")
+        return 2
+    if not agree["mesh"]:
+        print("   (neither detector saw a face -- check lighting and framing)")
+    else:
+        print("   OK  both detectors agree there is a face")
+
+    # The emotion path, on the same frames. FER+ is on by default and reaches a
+    # parent's report, and until now had no camera check at all while gaze --
+    # off by default, rendered nowhere -- had one.
+    if not agree["emotion_available"]:
+        print("   SKIP  no FER+ model here, so the emotion path is "
+              "unchecked (./start.ps1 -Camera provisions it)")
+        return None
+    if not agree["haar"]:
+        return None
+
+    print(f"   emotion: {agree['crops']} crops accepted, "
+          f"{agree['crops_refused']} refused as too small; "
+          f"{agree['labels']} classified")
+    if agree["emotion_refusals"]:
+        print("   refusals: " + ", ".join(
+            f"{k}={v}" for k, v in sorted(agree["emotion_refusals"].items())))
+    if not agree["crops"]:
+        print("   FAIL  every crop was refused as too small.\n"
+              "         `to_gray64` will not upsample, so the emotion channel "
+              "records nothing at this framing.")
+        return 1
+    if agree["emotion_refusals"].get("inference_failed"):
+        print("   FAIL  the model errored on a real crop -- a broken "
+              "install, not an unsure classification.")
+        return 1
+    if agree["confidences"]:
+        lo, hi = min(agree["confidences"]), max(agree["confidences"])
+        print(f"   OK  the emotion path runs end to end "
+              f"(confidence {lo:.2f}-{hi:.2f})")
+    else:
+        print("   OK  crops reach the model; it declined to label them, "
+              "which is a reading it is entitled to make")
+    # Deliberately no claim about the label. FER+ has no ground truth you can
+    # assert from a chair, and its accuracy on this product's users is the
+    # documented weakness no self-check can address. This says the plumbing
+    # works and stops there -- a check that looked like it validated emotion
+    # would be worse than none.
+    print("   (plumbing only -- this says nothing about whether the "
+          "label is correct)")
+    return None
 
 
 def _verdict(square, eyes, head) -> int:
@@ -536,21 +655,9 @@ def main() -> int:
         print("\n-- detector cross-check --")
         print("   Look at the camera and hold still.")
         agree = _cascade_agrees(source, landmarker, width, height)
-        print(f"   {agree['frames']} frames: mesh found a face on "
-              f"{agree['mesh']}, Haar cascade on {agree['haar']}")
-        if agree["mesh"] and not agree["haar"]:
-            print("   FAIL  the Haar cascade found nothing on frames where the "
-                  "mesh did.\n         face_roi.FaceLocator gates the colour "
-                  "sample and the emotion crop, so this is the camera path "
-                  "broken, not the lighting.")
-            return 1
-        if not agree["frames"]:
-            print("   INCONCLUSIVE  no frames arrived")
-            return 2
-        if not agree["mesh"]:
-            print("   (neither detector saw a face -- check lighting and framing)")
-        else:
-            print("   OK  both detectors agree there is a face")
+        stop = _cross_check_verdict(agree)
+        if stop is not None:
+            return stop
 
         square = _step("1/3 square on",
                        "Look straight at the camera and hold still.",

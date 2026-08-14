@@ -38,12 +38,18 @@ next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you ge
 landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+**Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
+is ~50 MB and a second ML runtime for a channel that is off by default. The scripts check for it
+whenever gaze is asked for, because `ensure_model` imports nothing heavy: without that check setup
+succeeds, writes `FACE_GAZE_ENABLED=true`, and the channel dies on the first frame of a lesson as
+`landmarker_unavailable`, indistinguishable from a missing model file.
 Every `FACE_*` key is written on **both** branches, `FACE_EMOTION_ENABLED` included: its config
 default is `true`, so leaving it unwritten made emotion silently on whenever the camera was and put
 a third of the camera's configuration in a Python default rather than in the `.env` a reader checks.
 `-Camera -NoEmotion` without `-Gaze` is refused — the adapter would refuse it too, and a flag
 combination is a better place to say so than a sidecar that starts and then will not connect.
-`start.sh` is the mac equivalent; per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
+`start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
+guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
 Individually, from each directory:
 
@@ -287,6 +293,10 @@ setup-time call and `FaceMeshLandmarker` only ever refuses.
 **The URL is pinned to `/1/`, not `/latest/`.** Google serves both and they are the same bytes today,
 but a checksum pinned against a moving URL fails on the next release *as a checksum mismatch* — which
 reads as a compromised download rather than an upstream version bump.
+
+The digest is re-checked when the landmarker loads, not only at setup: `ensure_model` protects the
+moment of install and nothing after it, and a truncated or hand-swapped `.task` would otherwise
+produce landmarks that are wrong rather than absent.
 
 **A missing model costs gaze, not the camera.** `connect()` tolerates a landmarker it cannot build,
 logs, and lets the channel report `rejected_by="landmarker_unavailable"`. That is deliberately unlike

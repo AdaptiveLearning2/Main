@@ -227,7 +227,18 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
         return path
     if path.exists():
         logger.warning("landmark model at %s failed verification; discarding", path)
-        path.unlink()
+        try:
+            path.unlink()
+        except OSError as exc:
+            # Windows locks an open file, and this project's own convention is
+            # a sidecar per window -- so an earlier `-Gaze` session still
+            # holding the model open turns a designed failure mode into an
+            # unhandled PermissionError from a setup script. Reported as what
+            # it is instead.
+            raise OSError(
+                f"could not replace the landmark model at {path}: {exc}. "
+                f"Stop any running sidecar and re-run."
+            ) from exc
     if not allow_download:
         raise FileNotFoundError(f"landmark model missing or unverified at {path}")
 
@@ -295,6 +306,19 @@ class _TasksMesh:
         self._mp = mp
 
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
+        if path.is_file() and not verify(path):
+            # Checked again here, not only in `ensure_model`. That is a
+            # setup-time call, so on its own it protects the moment of install
+            # and nothing after it: a truncated, half-written or hand-swapped
+            # `.task` would load without complaint and produce landmarks that
+            # are wrong rather than absent -- silently wrong gaze numbers being
+            # exactly what a checksum exists to prevent. `face_emotion` verifies
+            # before constructing its session for the same reason.
+            raise ValueError(
+                f"refusing to load unverified landmark model at {path}; "
+                f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
+                f"with ./start.ps1 -Gaze"
+            )
         if not path.is_file():
             raise FileNotFoundError(
                 f"no face landmark model at {path}.\n"

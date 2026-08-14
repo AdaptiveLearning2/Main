@@ -46,6 +46,21 @@ face = [
   "onnxruntime>=1.17.0"
 ]
 
+# Gaze, separately from `face`, because it is the only channel that needs
+# MediaPipe and it is off by default. Emotion and the colour path do not, and a
+# camera deployment that never enables gaze should not carry ~50 MB and a second
+# ML runtime for a channel it does not run. Install both: `.[face,gaze]`.
+#
+# Held below 2.0 for the same reason opencv is held below 5, and with a worked
+# example rather than a worry: **1.0.0 deleted `mp.solutions`**, the entire
+# legacy Solutions API, which is what `face_landmarks` was originally written
+# against. The symptom was `AttributeError: module 'mediapipe' has no attribute
+# 'solutions'`, which reads as a broken install. There is no MediaPipe in CI, so
+# the next major would surface the same way -- in front of a class.
+gaze = [
+  "mediapipe>=1.0,<2"
+]
+
 [tool.setuptools]
 package-dir = {"" = "."}
 

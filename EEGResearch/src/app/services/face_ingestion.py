@@ -364,11 +364,21 @@ class FaceCaptureAdapter:
             # named refusal, so the payload says "gaze on, unavailable, here is
             # why" rather than "gaze off", which is a claim about configuration
             # that would be false.
+            #
+            # Broad on purpose, and broader than "the model file is missing":
+            # a missing MediaPipe (its own extra, not in `.[face]`), an API
+            # that moved under it -- `mp.solutions` was deleted in 1.0.0 --
+            # or a corrupt bundle all reach here, and none of them is a reason
+            # to take heart and emotion down. `logger.exception`, matching every
+            # other handler in this file, because this is the *only* diagnostic
+            # for a class of failure with no CI backstop: building a landmarker
+            # needs MediaPipe, which CI does not have, so a traceback here is
+            # the whole evidence trail.
             try:
                 self._landmarker = self._make_landmarker()
             except Exception as exc:                  # noqa: BLE001
-                logger.error("gaze is enabled but the landmarker could not be "
-                             "built, so this session records no gaze: %s", exc)
+                logger.exception("gaze is enabled but the landmarker could not "
+                                 "be built, so this session records no gaze")
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
         self._stop.clear()

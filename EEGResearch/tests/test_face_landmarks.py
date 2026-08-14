@@ -14,6 +14,8 @@ only a camera can settle.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.app.services.face_landmarks import (
@@ -346,3 +348,38 @@ def test_a_corrupt_model_is_deleted_rather_than_left_to_be_trusted(tmp_path):
         ensure_model(corrupt, allow_download=False)
 
     assert not corrupt.exists(), "a file that failed verification survived"
+
+
+def test_a_tampered_model_is_refused_at_load_not_only_at_setup(tmp_path, monkeypatch):
+    """`ensure_model` runs once, at install. On its own it protects that moment
+    and nothing after it — a truncated, half-written or hand-swapped `.task`
+    would load without complaint and produce landmarks that are wrong rather
+    than absent, which is the whole failure a checksum exists to prevent.
+
+    `face_emotion` verifies before constructing its session for the same reason;
+    this is the landmark half of that rule.
+    """
+    from src.app.services.face_landmarks import MODEL_BYTES, _TasksMesh
+
+    tampered = tmp_path / "face_landmarker.task"
+    tampered.write_bytes(b"\x01" * MODEL_BYTES)      # right size, wrong bytes
+
+    with pytest.raises(ValueError, match="refusing to load unverified"):
+        _TasksMesh(str(tampered))
+
+
+def test_a_locked_model_file_reports_what_happened(tmp_path, monkeypatch):
+    """Windows locks an open file, and this project's convention is a sidecar
+    per window — so an earlier `-Gaze` session still holding the model turns a
+    designed failure mode into an unhandled PermissionError out of a setup
+    script."""
+    from src.app.services import face_landmarks as fl
+
+    stale = tmp_path / "face_landmarker.task"
+    stale.write_bytes(b"not the model")
+    monkeypatch.setattr(Path, "unlink",
+                        lambda self, **kw: (_ for _ in ()).throw(
+                            PermissionError("used by another process")))
+
+    with pytest.raises(OSError, match="could not replace the landmark model"):
+        fl.ensure_model(stale, allow_download=False)

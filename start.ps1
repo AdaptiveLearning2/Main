@@ -27,7 +27,19 @@ if ($Gaze -and -not $Camera) {
 # because a camera that computes nothing is indistinguishable from a student out
 # of shot. Caught here so it reads as a bad combination of flags rather than as
 # a stack trace from a sidecar that started and then would not connect.
-if ($Camera -and $NoEmotion -and -not $Gaze) {
+#
+# It has to consult FACE_HEART_ENABLED, which this script never writes: heart is
+# the third channel in the adapter's guard, it is off by default, and it is
+# hand-set in the .env when someone is testing that path. Without this read the
+# two copies of one rule disagree -- PowerShell refusing a heart-only camera the
+# Python underneath would accept.
+$heartOn = $false
+$preEnv = Join-Path $PSScriptRoot "EEGResearch\.env"
+if (Test-Path $preEnv) {
+    $heartOn = @(Get-Content $preEnv) -match '^FACE_HEART_ENABLED=\s*true\s*$' | ForEach-Object { $true } | Select-Object -First 1
+    if (-not $heartOn) { $heartOn = $false }
+}
+if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {
     Write-Host "-NoEmotion without -Gaze leaves the camera with nothing to measure." -ForegroundColor Red
     Write-Host "  Add -Gaze, or drop -Camera." -ForegroundColor Yellow
     exit 1
@@ -183,6 +195,24 @@ if ($Camera) {
         Write-Host "  Install it with:" -ForegroundColor Yellow
         Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `".[face]`"" -ForegroundColor Yellow
         exit 1
+    }
+
+    # MediaPipe is its own extra and is not in `.[face]`. Checked here for the
+    # same reason cv2 is: without it the model download below still succeeds --
+    # `ensure_model` imports nothing heavy -- so setup reports success, writes
+    # FACE_GAZE_ENABLED=true, and the channel then fails on the first frame of a
+    # lesson as `landmarker_unavailable`, indistinguishable from a missing
+    # model file. That is precisely the failure this whole block exists to move
+    # from lesson time to setup time.
+    if ($Gaze) {
+        & ".\.venv\Scripts\python.exe" -c "import mediapipe" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Write-Host "  ERROR: -Gaze needs the 'gaze' extra, which is not installed" -ForegroundColor Red
+            Write-Host "  Install it with:" -ForegroundColor Yellow
+            Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `".[face,gaze]`"" -ForegroundColor Yellow
+            exit 1
+        }
     }
 
     # Fetch and verify the FER+ model now, not on the first frame. A 35 MB

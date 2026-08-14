@@ -216,3 +216,42 @@ def test_the_preview_sees_frames_with_no_face_rather_than_freezing():
 
     assert samples == [], "a frame with no face is not a sample"
     assert gui.drawn > 0, "the preview never saw the frames with no face"
+
+
+# ── the emotion path ────────────────────────────────────────────────────────
+
+def test_the_emotion_check_is_skipped_rather_than_failed_without_a_model(tmp_path,
+                                                                        monkeypatch):
+    """A gaze-only install legitimately has no FER+ model — it is a separate
+    35 MB download. Failing there would make the landmark check depend on a
+    channel it is not about."""
+    monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(tmp_path / "absent.onnx"))
+
+    assert verify._emotion_classifier() is None
+
+
+def test_a_model_that_will_not_load_is_reported_not_raised(tmp_path, monkeypatch,
+                                                           capsys):
+    """A corrupt or truncated model must not take the whole camera check down —
+    the three steps it exists for do not involve emotion at all."""
+    bad = tmp_path / "emotion.onnx"
+    bad.write_bytes(b"not a model")
+    monkeypatch.setenv("FACE_EMOTION_MODEL_PATH", str(bad))
+
+    assert verify._emotion_classifier() is None
+    assert "would not load" in capsys.readouterr().out
+
+
+def test_the_emotion_check_claims_plumbing_and_not_accuracy():
+    """The guard that keeps this honest.
+
+    FER+ has no ground truth you can assert from a chair, and its accuracy on
+    this product's users — children, and children with learning disabilities —
+    is the documented weakness no self-check addresses. A check that read as
+    validating emotion would be worse than no check, which is the trap step 2
+    of this script fell into for a fortnight.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "plumbing only" in source
+    assert "says nothing about whether the " in source

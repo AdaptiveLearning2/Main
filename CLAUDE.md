@@ -331,7 +331,13 @@ Three things about that path are load-bearing:
 anything about where a student is looking.** Point-of-regard is head pose plus eye offset; with only
 the second term, a student turned 30° away with centred eyes reads as `gaze_x ≈ 0`, identical to one
 facing the screen. `20260820000000` adds the three pose columns and `head_pose()` — already verified
-against a camera — fills them on the same landmark call. They refuse *independently* of gaze (near
+against a camera — fills them on the same landmark call. **A column here needs a field on
+`main.FaceSample` or it can never be stored**: `/api/signals/face` is the *only* writer of
+`face_signals` in either `INGEST_MODE` (the poller never writes it), and Pydantic drops undeclared
+keys silently — so the sidecar posts them, the endpoint discards them before the handler runs, and
+the column reads as "not measured" for ever. That happened to these three with every hop between the
+landmarker and the mapper wired and tested. `test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint`
+derives the check from the mapper so the next column cannot fail the same way. They refuse *independently* of gaze (near
 profile the fit refuses while the eyes are readable; a closed eye refuses gaze while the pose is
 fine), so `pose_rejected_by` is its own field beside `gaze_rejected_by`. Pose is deliberately **not**
 in the rollup: averaging an angle over a day is close to meaningless — ±40° of swinging averages the

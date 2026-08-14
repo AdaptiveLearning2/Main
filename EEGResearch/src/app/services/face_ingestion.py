@@ -663,6 +663,7 @@ class FaceCaptureAdapter:
                                              "landmarker_unavailable")
             return
 
+        reading = pose = None
         try:
             height, width = frame.shape[0], frame.shape[1]
             named = self._landmarker.locate(frame, width, height)
@@ -672,8 +673,15 @@ class FaceCaptureAdapter:
             pose = head_pose(named)
         except Exception as exc:                          # noqa: BLE001
             logger.exception("landmark sampling failed")
-            reading = Gaze(None, None, 0, "landmarker_failed")
-            pose = HeadPose(None, None, None, 0, "landmarker_failed")
+            # Only what did not survive. `gaze()` and `head_pose()` are both
+            # pure numpy and return named refusals rather than raising, so
+            # reaching here at all means a code defect -- but marking both dead
+            # when one had already returned would discard a good reading and
+            # blame it on the other's bug.
+            if not isinstance(reading, Gaze):
+                reading = Gaze(None, None, 0, "landmarker_failed")
+            if not isinstance(pose, HeadPose):
+                pose = HeadPose(None, None, None, 0, "landmarker_failed")
             with self._lock:
                 self._counters.last_error = f"{type(exc).__name__}: {exc}"
                 self._latest_gaze = reading

@@ -3310,6 +3310,20 @@ class FaceSample(BaseModel):
     attention:           float | None = None
     gaze_x:              float | None = None
     gaze_y:              float | None = None
+    # Head pose, in degrees. Separate from gaze because they are separate
+    # measurements: gaze is the iris within the eye opening, these are where the
+    # head points, and only the pair says where a student is actually looking.
+    #
+    # **Every column the mapper writes needs a field here.** Pydantic drops
+    # unrecognised keys silently, so a sidecar sending one this model does not
+    # declare has it discarded before the handler runs -- the column stays NULL
+    # for ever and reads as "not measured". That happened to these three: the
+    # whole chain from the landmarker to `map_face_to_face_signal` was wired and
+    # tested, and the feature still could not be stored on any deployment,
+    # because nothing exercised this boundary.
+    head_yaw:            float | None = None
+    head_pitch:          float | None = None
+    head_roll:           float | None = None
     # One confidence now, and still qualified: the sibling it was named against
     # (`identity_confidence`) is gone, but the name is what keeps the ambiguity
     # from returning. See `signal_fusion.face_channel`.
@@ -3567,6 +3581,8 @@ def ingest_face(payload: FaceBatch, request: Request):
             {"timestamp": s.ts or _utc_now().isoformat(),
              "face": {"emotion": s.emotion, "attention": s.attention,
                       "gaze_x": s.gaze_x, "gaze_y": s.gaze_y,
+                      "head_yaw": s.head_yaw, "head_pitch": s.head_pitch,
+                      "head_roll": s.head_roll,
                       "emotion_confidence": s.emotion_confidence,
                       "trusted": s.emotion_trusted},
              "raw": s.raw},

@@ -97,3 +97,9 @@ __pycache__/
 # This entry is what makes the rule travel with the checkout instead of
 # depending on every clone being configured the same way.
 .serena/
+
+# Editor state. `.vscode/settings.json` was committed once by accident with
+# `cmake.sourceDirectory` hardcoded to one machine's absolute path, which
+# silently misconfigures CMake Tools for anyone whose checkout is elsewhere.
+.vscode/
+.idea/

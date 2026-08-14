@@ -968,3 +968,33 @@ def test_a_missing_landmark_model_names_the_pose_refusal_too():
 
     assert pose.yaw is None
     assert pose.rejected_by == "landmarker_unavailable"
+
+
+def test_a_failure_in_one_derivation_keeps_the_other():
+    """`gaze()` and `head_pose()` both return named refusals rather than
+    raising, so reaching the handler at all means a code defect — but marking
+    both dead when one had already returned would discard a good reading and
+    blame it on the other's bug."""
+    class HalfBroken:
+        """Landmarks that gaze can read and that make head_pose explode."""
+        def locate(self, frame, w, h):
+            return _eyes_looking(+6.0)
+
+    import src.app.services.face_ingestion as fi
+    real = fi.__dict__.get("head_pose")
+    adapter, _ = _gaze_adapter(HalfBroken())
+
+    import src.app.services.face_geometry as fg
+    original = fg.head_pose
+    fg.head_pose = lambda _named: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        adapter.connect()
+        assert _wait_for(lambda: adapter.latest_pose() is not None)
+        gaze_reading, pose = adapter.latest_gaze(), adapter.latest_pose()
+        adapter.disconnect()
+    finally:
+        fg.head_pose = original
+
+    assert pose.rejected_by == "landmarker_failed"
+    assert gaze_reading.x is not None and gaze_reading.x > 0, (
+        "a usable gaze was discarded because head_pose raised")

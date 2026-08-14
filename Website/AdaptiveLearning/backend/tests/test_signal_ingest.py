@@ -21,6 +21,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import pytest  # noqa: E402
 
 import main  # noqa: E402
+import signal_mapping  # noqa: E402
 
 STUDENT = {"id": "student-1"}
 SESSION = "session-1"
@@ -455,3 +456,49 @@ def test_gaze_survives_the_face_mapper(store):
     )
     row = store["face_signals"][0]
     assert (row["gaze_x"], row["gaze_y"]) == (0.3, -0.2)
+
+
+def test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint(store):
+    """The boundary that silently ate head pose.
+
+    `FaceSample` is Pydantic, so a key it does not declare is dropped without
+    error before the handler runs. The whole chain behind this -- landmarker,
+    `build_face_record`, `push_client`, `map_face_to_face_signal` -- was wired
+    and tested per hop, and `head_yaw`/`head_pitch`/`head_roll` still could not
+    reach the database on any deployment, because this endpoint is the only
+    writer of `face_signals` and nothing exercised it.
+
+    Derived rather than a list, so the next column added to the mapper cannot
+    quietly fail the same way. Columns the endpoint supplies itself are excluded
+    by name; everything else has to be a field a client can actually send.
+    """
+    supplied_by_the_endpoint = {"session_id", "user_id", "ts", "raw"}
+    written = set(signal_mapping.map_face_to_face_signal(
+        {"timestamp": "t", "face": {"emotion": "happy"}}, SESSION, "u"))
+
+    missing = (written - supplied_by_the_endpoint) - set(main.FaceSample.model_fields)
+    # `trusted` is the sidecar's name for it; the endpoint calls the field
+    # `emotion_trusted` and renames on the way through.
+    missing -= {"emotion_trusted"}
+    assert not missing, (
+        f"{sorted(missing)} are written by the mapper but cannot be sent: "
+        "Pydantic drops undeclared keys, so those columns stay NULL for ever")
+
+
+def test_head_pose_survives_the_round_trip(store):
+    """The end-to-end the finding needed. Values are distinct so a mix-up
+    between the three axes is visible rather than plausible."""
+    _consent(store, camera_enabled=True)
+
+    main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=[{
+            "emotion": "happy", "gaze_x": 0.1, "gaze_y": -0.2,
+            "head_yaw": 12.5, "head_pitch": -3.25, "head_roll": 7.75,
+            "raw": {"pose_rejected_by": None},
+        }]),
+        request=None,
+    )
+
+    row = store["face_signals"][-1]
+    assert (row["head_yaw"], row["head_pitch"], row["head_roll"]) == (12.5, -3.25, 7.75)
+    assert (row["gaze_x"], row["gaze_y"]) == (0.1, -0.2)

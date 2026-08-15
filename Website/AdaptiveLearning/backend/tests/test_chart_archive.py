@@ -510,3 +510,237 @@ def test_every_session_close_schedules_an_archive():
         window = "\n".join(lines[i:i + 12])
         assert "chart_archive.schedule(" in window, (
             f"close site at line {i + 1} rolls up but does not archive")
+
+
+# ── the orphan sweep (#107) ─────────────────────────────────────────────────
+#
+# Storage does not cascade, so a session deleted through the dashboard leaves
+# its SVGs behind. The sweep is the only thing that catches that, and it deletes
+# on *absence* -- so most of what is asserted here is that it refuses.
+
+USER2 = "99999999-8888-7777-6666-555555555555"
+GONE = "12121212-3434-5656-7878-909090909090"
+
+
+class _SweepStorage:
+    """A bucket laid out `{user}/{session}/{chart}.svg`, paged like storage-py."""
+
+    def __init__(self, tree, page=chart_archive._LIST_PAGE):
+        # {user: {session: [filenames]}}
+        self.tree = tree
+        self.removed = []
+        self.page = page
+        self.list_calls = []
+
+    def _entries(self, prefix):
+        if prefix == "":
+            return sorted(self.tree)
+        parts = prefix.split("/")
+        if len(parts) == 1:
+            return sorted(self.tree.get(parts[0], {}))
+        return sorted(self.tree.get(parts[0], {}).get(parts[1], []))
+
+    def list(self, prefix, opts=None):
+        self.list_calls.append(prefix)
+        names = self._entries(prefix)
+        off = (opts or {}).get("offset", 0)
+        lim = (opts or {}).get("limit", self.page)
+        return [{"name": n} for n in names[off:off + lim]]
+
+    def remove(self, paths):
+        self.removed.extend(paths)
+
+
+class _SweepClient:
+    """Sessions that exist, plus a record of the order calls arrived in."""
+
+    def __init__(self, storage, live_ids, fail_sessions=False):
+        self._storage = storage
+        self._live = set(live_ids)
+        self._fail = fail_sessions
+        self.order = []
+
+    def table(self, name):
+        assert name == "sessions"
+        client = self
+
+        class _T:
+            def select(self_inner, *_a):
+                return self_inner
+
+            def in_(self_inner, _col, ids):
+                client.order.append("sessions")
+                if client._fail:
+                    raise RuntimeError("sessions unavailable")
+                self_inner._ids = ids
+                return self_inner
+
+            def execute(self_inner):
+                rows = [{"id": i} for i in self_inner._ids if i in client._live]
+                return type("R", (), {"data": rows})()
+
+        return _T()
+
+    @property
+    def storage(self):
+        client = self
+
+        class _S:
+            def from_(self_inner, bucket):
+                assert bucket == chart_archive.BUCKET
+                client.order.append("bucket")
+                return client._storage
+
+        return _S()
+
+
+def _tree(*sessions):
+    out = {}
+    for user, sid in sessions:
+        out.setdefault(user, {})[sid] = ["cognitive.svg", "heart.svg"]
+    return out
+
+
+def test_a_session_that_still_exists_keeps_its_charts():
+    storage = _SweepStorage(_tree((USER, SESSION)))
+    client = _SweepClient(storage, live_ids=[SESSION])
+
+    report = chart_archive.sweep_orphan_charts(client, dry_run=False)
+
+    assert report["orphaned_sessions"] == 0
+    assert storage.removed == [], "deleted the charts of a live session"
+
+
+def test_a_deleted_session_loses_its_charts():
+    storage = _SweepStorage(_tree((USER, SESSION), (USER, GONE)))
+    client = _SweepClient(storage, live_ids=[SESSION])
+
+    report = chart_archive.sweep_orphan_charts(client, dry_run=False)
+
+    assert report["orphaned_sessions"] == 1
+    assert sorted(storage.removed) == [f"{USER}/{GONE}/cognitive.svg",
+                                       f"{USER}/{GONE}/heart.svg"]
+    assert report["removed"] == 2
+
+
+def test_a_failed_sessions_read_refuses_instead_of_emptying_the_bucket():
+    """The whole reason this job is dangerous. Every object looks orphaned when
+    the table cannot be read, and treating that as a result is a bucket wipe.
+
+    `max_orphan_fraction=1.0` on purpose: a failed read always leaves *nothing*
+    live, so the fraction guard would catch this too and the test would pass
+    with the read guard deleted -- which is what the first version of it did.
+    Disabling the backstop is what makes this test about the guard it names, and
+    1.0 is a real operator choice rather than a contrived one."""
+    storage = _SweepStorage(_tree((USER, SESSION), (USER2, GONE)))
+    client = _SweepClient(storage, live_ids=[SESSION], fail_sessions=True)
+
+    report = chart_archive.sweep_orphan_charts(
+        client, dry_run=False, max_orphan_fraction=1.0)
+
+    assert report["refused"], "a failed sessions read was treated as a result"
+    assert "could not read sessions" in report["refused"], (
+        f"refused for the wrong reason: {report['refused']}")
+    assert storage.removed == [], "deleted objects after failing to read sessions"
+    assert report["removed"] == 0
+
+
+def test_too_many_orphans_refuses_rather_than_proceeding():
+    """A read that returns nothing without raising is the same danger wearing a
+    different shape, and no exception marks it."""
+    storage = _SweepStorage(_tree((USER, SESSION), (USER, GONE), (USER2, GONE)))
+    client = _SweepClient(storage, live_ids=[])          # everything looks gone
+
+    report = chart_archive.sweep_orphan_charts(client, dry_run=False)
+
+    assert report["refused"] and "orphaned" in report["refused"]
+    assert storage.removed == []
+
+
+def test_the_refusal_threshold_can_be_raised_once_a_human_has_looked():
+    storage = _SweepStorage(_tree((USER, SESSION), (USER, GONE)))
+    client = _SweepClient(storage, live_ids=[])
+
+    report = chart_archive.sweep_orphan_charts(
+        client, dry_run=False, max_orphan_fraction=1.0)
+
+    assert report["refused"] is None
+    assert report["removed"] == 4
+
+
+def test_dry_run_is_the_default_and_deletes_nothing():
+    storage = _SweepStorage(_tree((USER, SESSION), (USER, GONE)))
+    client = _SweepClient(storage, live_ids=[SESSION])
+
+    report = chart_archive.sweep_orphan_charts(client)
+
+    assert report["dry_run"] is True
+    assert report["would_remove"] == 2
+    assert storage.removed == [], "a dry run deleted"
+
+
+def test_the_bucket_is_listed_before_sessions_is_read():
+    """Order is a guard, not a detail. Read the table first and a session
+    created in between has objects whose id is missing from the snapshot --
+    deleted as an orphan while its row sits there."""
+    storage = _SweepStorage(_tree((USER, SESSION)))
+    client = _SweepClient(storage, live_ids=[SESSION])
+
+    chart_archive.sweep_orphan_charts(client)
+
+    assert "bucket" in client.order and "sessions" in client.order
+    assert client.order.index("bucket") < client.order.index("sessions")
+
+
+def test_more_than_one_page_of_students_is_swept():
+    """`list` caps at 100 and reports no truncation, so a single call would make
+    a bucket look like its first 100 students for ever -- and report the rest as
+    nothing to do."""
+    users = [f"{i:08d}-0000-0000-0000-000000000000" for i in range(150)]
+    storage = _SweepStorage({u: {SESSION: ["heart.svg"]} for u in users})
+    client = _SweepClient(storage, live_ids=[SESSION])
+
+    report = chart_archive.sweep_orphan_charts(client)
+
+    assert report["scanned_sessions"] == 150, "stopped at a page boundary"
+
+
+def test_a_path_it_cannot_parse_is_left_alone():
+    """Deleting what you cannot identify is how a sweep becomes an incident."""
+    tree = _tree((USER, GONE))
+    tree["not-a-uuid"] = {SESSION: ["heart.svg"]}
+    tree[USER]["also-not-a-uuid"] = ["heart.svg"]
+    storage = _SweepStorage(tree)
+    client = _SweepClient(storage, live_ids=[])
+
+    report = chart_archive.sweep_orphan_charts(
+        client, dry_run=False, max_orphan_fraction=1.0)
+
+    assert report["unrecognised"] == 2
+    assert all("uuid" not in p for p in storage.removed)
+
+
+def test_hitting_the_cap_says_so():
+    """`removed: 500` with nothing saying more was waiting reads as a clean
+    bucket."""
+    tree = {USER: {f"{i:08d}-1111-1111-1111-111111111111": ["heart.svg"]
+                   for i in range(5)}}
+    storage = _SweepStorage(tree)
+    client = _SweepClient(storage, live_ids=[])
+
+    report = chart_archive.sweep_orphan_charts(
+        client, dry_run=False, max_deletes=2, max_orphan_fraction=1.0)
+
+    assert report["hit_cap"] is True
+    assert report["removed"] == 2
+
+
+def test_a_bucket_that_never_stops_paging_raises_rather_than_looping():
+    class _Endless(_SweepStorage):
+        def list(self, prefix, opts=None):
+            return [{"name": f"{i}"} for i in range(chart_archive._LIST_PAGE)]
+
+    client = _SweepClient(_Endless({}), live_ids=[])
+    report = chart_archive.sweep_orphan_charts(client)
+
+    assert report["refused"] and "did not terminate" in report["refused"]

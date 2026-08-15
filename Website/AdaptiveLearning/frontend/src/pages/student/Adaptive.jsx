@@ -220,16 +220,18 @@ export default function Adaptive() {
       })
   }, [])
 
-  // Headband charge, while one is connected.
+  // Headband telemetry while one is connected: charge, and under push whether
+  // the link is still up.
   //
   // Its own effect rather than a field on the status poll below, which reads
   // the *backend* -- under push the backend has no route to a student's laptop,
   // so the number would exist in one deployment and not the other for no reason
   // a reader could see. Same source-by-mode split as `hw` in toggleHeadband.
   //
-  // 30s, because this is a slowly-moving device property that libMuse reports on
-  // its own schedule; polling it at the status cadence would be three orders of
-  // magnitude more requests than the value changes.
+  // 5s rather than the charge's own natural cadence, which would be minutes:
+  // this is also push's only watcher of the link, and a button that offers to
+  // disconnect a headband that is already gone should not persist for longer
+  // than the pull path's equivalent. The read is a cached field on loopback.
   useEffect(() => {
     if (!headband.connected || !stationId) return
     let killed = false
@@ -239,12 +241,23 @@ export default function Adaptive() {
                                      : (await eegStatus(stationId))?.muse
         if (killed) return
         const pct = st?.ingestion?.battery_percent
+        // Under push this is also the only thing that can notice a headband
+        // that dropped on its own: the pairing flow sets `connected` and the
+        // Disconnect button clears it, and with the backend poll no longer
+        // touching it there is nothing else watching the link. `=== false`
+        // rather than falsiness -- an absent field means the sidecar did not
+        // report, which is not the same as a headband that went away.
+        const dropped = headband.pushMode && st?.ingestion?.muse_connected === false
         // `undefined` from a bridge without the field, `null` before the first
         // BATTERY packet, a number once one arrives. Only the last is a
         // reading. Written as a typeof check and not `pct || null`, which would
         // turn a genuinely flat battery into "no reading" -- erasing the one
         // value most worth showing.
-        setHeadband(s => ({ ...s, battery: typeof pct === 'number' ? pct : null }))
+        setHeadband(s => ({
+          ...s,
+          battery: typeof pct === 'number' ? pct : null,
+          ...(dropped ? { connected: false, phase: 'idle', deviceName: null, battery: null } : {}),
+        }))
       } catch {
         // A failed read is not a flat battery, and it is not a fresh one
         // either. Leave whatever was last measured; the badge disappears on
@@ -252,7 +265,7 @@ export default function Adaptive() {
       }
     }
     read()
-    const id = setInterval(read, 30000)
+    const id = setInterval(read, 5000)
     return () => { killed = true; clearInterval(id) }
   }, [headband.connected, headband.pushMode, stationId])
 
@@ -283,7 +296,15 @@ export default function Adaptive() {
         // headband. Tracked separately so the panel can say which it is.
         pushMode: s.ingest_mode === 'push',
         available: !!s.service,
-        connected: !!s.poller?.running,
+        // Only under pull. `poller.running` is the *backend's* poller, and
+        // under push there is no poller by definition -- so this read false
+        // every 3 seconds against a headband that was paired and streaming,
+        // flipping the button back to "Connect Headband" the moment a session
+        // existed and offering to re-run the pairing sequence on a connected
+        // device. Fourth instance of the same mistake: reading a backend field
+        // as the truth about hardware the backend cannot see. Under push the
+        // pairing flow owns this, and the sidecar poll below corrects it.
+        ...(s.ingest_mode === 'push' ? {} : { connected: !!s.poller?.running }),
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
       }))

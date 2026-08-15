@@ -381,6 +381,45 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
+def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
+    """Delete a session that answered nothing and recorded nothing. True if gone.
+
+    Pressing Connect Headband creates the session, and it has to -- signals need
+    one to attach to, and #27 moved creation off page-load precisely so the
+    button owns it. The cost is that every *failed* pairing attempt left a row
+    behind, and History showed each one as a practice session: on one afternoon,
+    four of five sessions had no questions and no samples of any kind.
+
+    That is not academic history being thrown away. `sessions`, `session_answers`
+    and `user_stats` are kept for a reason, but a row with nothing on either side
+    of it is a record of a button press.
+
+    **Deletes on absence, so it is guarded like `sweep_orphan_charts`.** A read
+    that fails keeps the session: never delete because you could not confirm
+    there was nothing there. Any one of the three tables reporting a row is
+    enough to keep it, so a signals-only session -- a student who wore the
+    headband and answered nothing -- survives, which is the case this must not
+    get wrong.
+    """
+    if questions:
+        return False
+    for table in ("cognitive_signals", "face_signals", "heart_signals"):
+        try:
+            rows = supabase.table(table).select("session_id") \
+                .eq("session_id", session_id).limit(1).execute().data or []
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[session:discard] could not check {table} for {session_id}: {e}")
+            return False
+        if rows:
+            return False
+    try:
+        supabase.table("sessions").delete().eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:discard] could not delete {session_id}: {e}")
+        return False
+    return True
+
+
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """Recompute the daily rollup for the school days this session touched.
 
@@ -1583,7 +1622,11 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     # `started_at` too: the rollup below needs the day the session began, or a
     # session that ran past local midnight only summarises the day it was swept.
-    stale_open = supabase.table("sessions").select("id, started_at") \
+    # `questions_answered` too, and it is load-bearing: `_discard_if_nothing_recorded`
+    # below treats a falsy count as "answered nothing", so a column left out of
+    # this select arrives as None and a stale session full of answers would be
+    # deleted for having no signal rows beside it.
+    stale_open = supabase.table("sessions").select("id, started_at, questions_answered") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
         # Also releases any pre-claim reservation (#34) left behind by a
@@ -1598,6 +1641,8 @@ def start_session(payload: StartSessionRequest, request: Request):
         # Only the /end endpoint called this, so a student who closed the tab --
         # the case this sweep exists for -- left a day with raw rows and no
         # summary, and once the delete job runs that day is simply gone.
+        if _discard_if_nothing_recorded(s["id"], s.get("questions_answered")):
+            continue
         _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
         # And archived, for the same reason the rollup is: this is the sweep
         # that closes the session of a student who shut the tab, so it is the
@@ -1687,6 +1732,11 @@ def end_session(session_id: str = Path(...), request: Request = None):
     # `ended`, not a fresh reading: they differ only across local midnight,
     # where a fresh one rolls up a day the stored session does not claim and
     # skips the day it is actually recorded on.
+    # Before the rollup and the archive, because both are derived from rows
+    # this may be about to delete -- a rollup of nothing, and an archive of four
+    # empty charts, are work done for a session that is not going to exist.
+    if _discard_if_nothing_recorded(session_id, total_q):
+        return {"ok": True, "discarded": True}
     _rollup_session_days(user["id"], data.get("started_at"), ended)
     # After the rollup, and off the request path entirely. Both are derived, but
     # they fail differently: the rollup is a synchronous RPC that swallows its

@@ -461,11 +461,11 @@ export default function Adaptive() {
         // left the sidecar holding the student's access token.
         await endPushDevice(camera.id)
       } else {
-        // The session handover first: the sidecar posts as the student, and
-        // starting the capture before it has a token would spend the first
-        // windows recording into a queue that cannot be delivered.
-        const sid = await getOrCreateSession()
-        await startPush(sid)
+        // No session and no handover here. The camera comes on; whether
+        // anything is *stored* is decided by whether a lesson is running, and
+        // the sidecar simply has no consumer attached until then -- so frames
+        // are captured and dropped rather than queued against a session the
+        // student never started.
         await deviceStart(camera.id)
         setCamera(c => ({ ...c, running: true }))
       }
@@ -486,9 +486,17 @@ export default function Adaptive() {
     // an unhandled rejection in the console. A click that does nothing at all
     // is the worst version of this to debug, because it looks like a dead
     // button rather than a failing request.
-    let activeSessionId
+    // Push pairs against a device, not a session -- the sidecar's scan and
+    // connect take only a device_id -- so nothing here needs one. Creating one
+    // anyway is what filled History with rows for button presses that recorded
+    // nothing: four of five on one afternoon, each a failed pairing attempt.
+    //
+    // Pull still needs it: its reservation is scoped by session_id (#88), and
+    // dropping that would trade this problem for a worse one. Sessions left
+    // behind by a failed pair there are discarded at close instead.
+    let activeSessionId = sessionId
     try {
-      activeSessionId = await getOrCreateSession()
+      if (!headband.pushMode) activeSessionId = await getOrCreateSession()
     } catch (e) {
       console.error('[headband] could not start a session', e)
       setHeadband(s => ({ ...s, phase: 'idle' }))
@@ -521,9 +529,12 @@ export default function Adaptive() {
     // close over `rec`, which is created a few lines above and deliberately not
     // held in state.
     const hw = headband.pushMode ? {
-      begin:      async (sid) => { await startPush(sid)
-                                   await deviceStart(stationId)
-                                   return { ok: true, running: true } },
+      // Brings the hardware up and stops there. Delivery is started by the
+      // `sessionId` effect below, which fires when `fetchQuestion` creates a
+      // session -- so samples begin when the student begins, not when they
+      // plug something in.
+      begin:      async () => { await deviceStart(stationId)
+                                return { ok: true, running: true } },
       disconnect: () => museDisconnect(stationId),
       scan:       () => museRefresh(stationId),
       connect:    (name) => museConnect(name, stationId),

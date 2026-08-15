@@ -10,7 +10,8 @@ import { startPush, stopPush, stopPushOnUnload, pushStatus,
          releasePushIfIdle, sidecarDebug
        } from '../../lib/sidecar'
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
-import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, BatteryLow } from 'lucide-react'
+import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, BatteryLow, Clock } from 'lucide-react'
+import { toast } from 'sonner'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
@@ -47,6 +48,21 @@ export default function Adaptive() {
   const [classes, setClasses] = useState([])
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
+
+  // How long the student meant this sitting to be, from their profile.
+  //
+  // Advisory, and deliberately so: when the time is up the page asks between
+  // questions rather than ending anything. A timer that closed the session
+  // would land mid-question about as often as not, discarding an answer a child
+  // was part way through giving -- and the setting is a plan, not a limit
+  // anyone asked to have enforced.
+  //
+  // null until the profile lands, so nothing is timed against a guess.
+  const [durationMin, setDurationMin]         = useState(null)
+  const [sessionStartedAt, setSessionStartedAt] = useState(null)
+  const [elapsedMin, setElapsedMin]           = useState(0)
+  const [timeUpDismissed, setTimeUpDismissed] = useState(false)
+  const [finishing, setFinishing]             = useState(false)
 
   const [accuracyStats, setAccuracyStats] = useState(() => {
     if (!user?.id) return { total: { correct: 0, attempts: 0 }, subjects: initSubjects() }
@@ -118,9 +134,44 @@ export default function Adaptive() {
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
+  // The clock starts when the session does, not when the page opened. A student
+  // who leaves the tab sitting on the setup screen for an hour has not been
+  // practising, and telling them their 15 minutes are up before the first
+  // question would make the setting worse than not having it.
+  useEffect(() => {
+    if (!sessionId) {
+      setSessionStartedAt(null)
+      setElapsedMin(0)
+      setTimeUpDismissed(false)
+      return
+    }
+    setSessionStartedAt(prev => prev ?? Date.now())
+  }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionStartedAt || !durationMin) return
+    // 20s. The banner appears within a third of a minute of the mark, which is
+    // as precise as "you have been at this for 15 minutes" deserves to be, and
+    // it is a state update on a page that is otherwise idle between questions.
+    const tick = () => setElapsedMin((Date.now() - sessionStartedAt) / 60000)
+    tick()
+    const id = setInterval(tick, 20000)
+    return () => clearInterval(id)
+  }, [sessionStartedAt, durationMin])
+
+  const timeUp = !!durationMin && !timeUpDismissed && elapsedMin >= durationMin
+
   // load profile default grade + classes
   useEffect(() => {
-    apiFetch('/api/profile/me').then(p => { if (p?.grade_level) setGrade(p.grade_level) }).catch(()=>{})
+    apiFetch('/api/profile/me').then(p => {
+      if (p?.grade_level) setGrade(p.grade_level)
+      // The student's saved starting point for the Easier/Auto/Harder control
+      // below, and how long they meant to practise for. `??`, not `||`: 0 is
+      // the adaptive bias and a real choice, so `||` would silently reset a
+      // student who had picked it -- indistinguishable from never having set it.
+      if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
+      if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
+    }).catch(()=>{})
     apiFetch('/api/classes').then(c => {
       setClasses(c || [])
       if ((c || []).length && !classId) setClassId(c[0].id)
@@ -268,6 +319,39 @@ export default function Adaptive() {
     const id = setInterval(read, 5000)
     return () => { killed = true; clearInterval(id) }
   }, [headband.connected, headband.pushMode, stationId])
+
+  // Close the session the student is in.
+  //
+  // This page had no way to do that at all: only Practice.jsx ever called
+  // `/end`, so an adaptive session stayed open until the stale sweep on the
+  // student's *next* start closed it -- which is also when its rollup was
+  // written and its charts archived, both stamped at the sweep rather than at
+  // the sitting. A duration prompt with nothing to offer but "keep going" would
+  // have been the same decoration this change is removing.
+  //
+  // Clearing `sessionId` is what stops delivery: the handover effect's cleanup
+  // is keyed on it and takes the student's token back off the sidecar. The
+  // hardware stays paired, because finishing a sitting is not unplugging.
+  const finishSession = async () => {
+    const id = sessionIdRef.current
+    setFinishing(true)
+    try {
+      if (id) await apiFetch(`/api/sessions/${id}/end`, { method: 'POST' })
+    } catch (e) {
+      // Reported, not swallowed. The rollup and the chart archive both run off
+      // this call, so a failure here is a session whose summary never gets
+      // written -- and the student would otherwise see the page reset and
+      // assume it landed.
+      console.error('[session] could not end', e)
+      toast.error('Could not close the session cleanly — it will be tidied up next time you practise.')
+    } finally {
+      setSessionId(null)
+      setSessionCount(0)
+      setData(null)
+      setPhase('idle')
+      setFinishing(false)
+    }
+  }
 
   const creating = useRef(null)
 
@@ -964,6 +1048,30 @@ export default function Adaptive() {
               camera.running ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white'
             }`}>
             {camera.busy ? 'Working...' : camera.running ? 'Turn off' : 'Turn on camera'}
+          </button>
+        </motion.div>
+      )}
+
+      {/* Time's up, asked rather than enforced.
+          A banner and not a modal: it must never sit on top of a question a
+          student is part way through, and "keep going" has to be the cheapest
+          thing in the room -- the setting is a plan, not a limit anyone asked
+          to have imposed on them. Dismissing it does not clear the preference,
+          only this sitting's reminder. */}
+      {timeUp && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className="mb-6 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
+          <Clock size={18} className="text-amber-600 dark:text-amber-400" />
+          <p className="text-sm font-bold text-amber-800 dark:text-amber-200 flex-1 min-w-[14rem]">
+            That is your {durationMin} minutes. Nice work — finish up, or carry on if you are enjoying it.
+          </p>
+          <button onClick={() => setTimeUpDismissed(true)}
+            className="px-4 py-2 rounded-xl text-sm font-bold border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition">
+            Keep going
+          </button>
+          <button onClick={finishSession} disabled={finishing}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-amber-600 hover:bg-amber-700 text-white shadow transition disabled:opacity-60">
+            {finishing ? 'Finishing…' : 'Finish session'}
           </button>
         </motion.div>
       )}

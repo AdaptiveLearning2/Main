@@ -90,7 +90,16 @@ def _profile(uid: str) -> dict:
             return p.data
     except Exception:
         pass
-    return {"id": uid, "display_name": "Student", "email": "", "role": "student", "grade_level": None}
+    # The preference defaults are repeated from 20260822000000's column defaults
+    # deliberately. This branch is a *failed read*, and the caller cannot tell it
+    # from a real profile -- so omitting them would hand the page `undefined` for
+    # three controls and it would render them unset, which reads as "the student
+    # turned this off" rather than "we could not find out". Same shape as the
+    # reporting helpers, minus the flag: nothing downstream of a preference is
+    # worth a 500, and the values below are what a new account gets anyway.
+    return {"id": uid, "display_name": "Student", "email": "", "role": "student",
+            "grade_level": None, "difficulty_bias": 0,
+            "session_duration_minutes": 15, "practice_reminders": True}
 
 
 # ─── biosignal reporting ─────────────────────────────────────────────────
@@ -1518,6 +1527,16 @@ class LinkChildRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
     grade_level:  str | None = None
+    # Learning preferences. Bounded here as well as by the CHECK constraints in
+    # 20260822000000, because a 422 names the field and a constraint violation
+    # surfaces as a 500 from the client library.
+    #
+    # `ge`/`le` rather than a literal set for the bias: it is a shift applied by
+    # `_shift_difficulty`, so the range is what matters, and the endpoint has no
+    # business knowing that DIFFS happens to have three entries.
+    difficulty_bias:          int | None = Field(None, ge=-1, le=1)
+    session_duration_minutes: int | None = Field(None, ge=5, le=180)
+    practice_reminders:       bool | None = None
 
 class EegSessionRequest(BaseModel):
     session_id: str
@@ -1660,10 +1679,17 @@ def start_session(payload: StartSessionRequest, request: Request):
     }
     res = supabase.table("sessions").insert(obj).execute()
 
-    # Pre-warm question queue in background while student sees the setup screen
+    # Pre-warm question queue in background while student sees the setup screen.
+    #
+    # At the student's own bias, not 0. The page initialises its Easier/Auto/
+    # Harder control from the same preference, so a hardcoded 0 here prewarmed
+    # two questions at a difficulty the student had not asked for and served
+    # them first -- the setting appearing to do nothing for exactly as long as
+    # the queue lasted, which is the start of every session.
     profile = _profile(user["id"])
     grade   = profile.get("grade_level") or "5th Grade"
-    _ensure_queue(user["id"], grade, 0, res.data[0]["id"])
+    bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
+    _ensure_queue(user["id"], grade, bias, res.data[0]["id"])
 
     return res.data[0]
 

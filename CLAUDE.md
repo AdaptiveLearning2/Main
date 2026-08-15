@@ -1061,6 +1061,43 @@ on which tables were reached — an empty result cannot distinguish "asked and g
 the sidecar computed it every tick, it was persisted and displayed, and nothing read it to pick a
 question. Don't add it back — the sidecar cannot see correctness, topic history or grade level.
 
+## Learning preferences live on `profiles`, and difficulty is a bias
+
+Three columns (`20260822000000`): `difficulty_bias`, `session_duration_minutes`, `practice_reminders`.
+They were `localStorage.al_prefs`, written by the Preferences tab and read by nothing — the backend
+picks the difficulty and cannot see a key in one browser's storage.
+
+**`difficulty_bias` is a shift, never an absolute difficulty**, and that is a safety property rather
+than a simplification. `_shift_difficulty` applies it on top of what the model chose from the
+student's accuracy history, and `LLM_topic_decider` overrides it *downward* whenever the fused
+signal says stressed — the same asymmetry `signal_fusion` documents. Storing "always hard" would
+store a value the ease-off rule has to contradict, and a setting the system routinely ignores is
+worse than one that does not exist. It is why the control offers three options and not four: medium
+and adaptive would both mean no shift.
+
+**`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
+before the first answer and served first, so a hardcoded default there makes the setting do nothing
+for the opening of every session.
+
+Bounds are stated twice on purpose — Pydantic on `UpdateProfileRequest` and a CHECK in the
+migration — and they must agree, or a value that passes one and fails the other surfaces as a 500
+from the client library instead of a 422 naming the field. The CHECK is a **range**, not the four
+durations the UI offers, so a fifth button is not a migration.
+
+**Duration is advisory.** The page asks between questions; nothing ends on a timer. A session closed
+mid-question discards an answer a child was part way through giving. `Adaptive.jsx` now has a
+`finishSession` — before this it never called `/end` at all, so an adaptive session stayed open until
+the stale sweep on the student's *next* start, which is also when its rollup and chart archive were
+written.
+
+**`practice_reminders` is a dashboard banner and is named for that.** There is no push
+infrastructure — no service worker, no VAPID, no scheduled fan-out — so "Notifications: daily
+reminders to practice" described a system that does not exist. The banner needs *both* reads to have
+landed before it renders: derived from a failed `/api/sessions`, it tells a child they skipped a day
+they did not skip. Its "today" is the **browser's local day**, deliberately not `_school_day` — that
+helper buckets recorded data against the school's timezone, and this is a nudge about the student's
+own afternoon.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses

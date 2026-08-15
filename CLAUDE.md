@@ -1023,13 +1023,28 @@ run in CI.
 
 ## Recording needs consent **and** an open school year
 
-`retention_window` is a single-row table (`starts_on`, `ends_on`, `timezone`) holding the school
-year. Outside it nothing is recorded whatever consent says, and on `ends_on` the per-sample rows
-are deleted — that job is a later change; this is the gate.
+`retention_window` is a single-row table (`enforced`, `starts_on`, `ends_on`, `timezone`) holding
+the school year. Outside it nothing is recorded whatever consent says, and on `ends_on` the
+per-sample rows are deleted — that job is a later change; this is the gate.
 
-**It fails closed in four different ways, and they are named separately.** `_retention_window()`
-answers `open`, `before_year`, `after_year`, `unconfigured` or `unreadable`, and only the first
-records. An unset window is not an open-ended licence — same default as consent — and a typo'd
+**`enforced = false` turns the year off without turning the gate off** (`20260821000000`). It is for
+prototyping and for deployments that do not run on a term, and it exists because the alternative was
+inventing a pair of term dates — which produces a row indistinguishable from a real school year on
+the one table whose job is to say when recording is permitted. The dates are nullable so an
+unenforced row need not carry fake ones. Three states to keep apart: **no row** — nobody decided,
+records nothing; **`enforced = true`** — a real year, needs both dates; **`enforced = false`** —
+deliberately not gating on a term, records. Consent is unaffected and still required.
+
+Two fail-closed edges hold that apart from an accident. It is read as `is False`, never falsiness, so
+a row predating the column — or one PostgREST returns without it, or with an explicit null — keeps
+the gate on rather than being opened by the migration that added it. And `enforced = true` with no
+dates is `unconfigured`, not unbounded: a half-finished edit must not be the most permissive state in
+the system, which is the whole reason an absent row denies.
+
+**It fails closed in five different ways, and they are named separately.** `_retention_window()`
+answers `open`, `not_enforced`, `before_year`, `after_year`, `unconfigured` or `unreadable`, and only
+the first two record — kept distinct because "inside the configured year" and "not gating on a year
+at all" look identical from the recording side and are very different facts about a deployment. An unset window is not an open-ended licence — same default as consent — and a typo'd
 timezone denies rather than falling back to UTC, because a fallback moves every boundary by hours
 while looking like it worked, on a value edited by hand twice a year. "The year hasn't started" and
 "the year is over" reach a parent as different sentences; `_not_recording_reason` puts the window

@@ -473,3 +473,93 @@ def test_the_timezone_fallback_cannot_itself_fail(monkeypatch):
     # astimezone(), which is where a sentinel would fail instead.
     stamped = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc).astimezone(tz)
     assert stamped.utcoffset() == timedelta(0)
+
+
+# ── the switch: a deployment that is not on a school year ───────────────────
+
+def _unenforced(**over):
+    """A row that says "not gating on a year", the prototyping shape: no dates.
+
+    Written as its own helper rather than `_row(None, None)` plus a flag so the
+    tests below read as what the column is for.
+    """
+    row = {"id": True, "starts_on": None, "ends_on": None,
+           "timezone": "UTC", "enforced": False}
+    row.update(over)
+    return row
+
+
+def test_an_unenforced_window_records(monkeypatch):
+    """The point of the column. Without it the only way to record was to invent
+    a pair of term dates, which produces a row indistinguishable from a real
+    school year on the one table whose job is to say when recording is allowed."""
+    w = _window(monkeypatch, [_unenforced()])
+
+    assert w["state"] == main.WINDOW_NOT_ENFORCED
+    assert main._WINDOW_STATES[w["state"]].records is True
+
+
+def test_not_enforced_is_distinguishable_from_inside_the_year(monkeypatch):
+    """Both record, and they are different facts about a deployment. Collapsing
+    them to WINDOW_OPEN would make "we never configured a term" unreadable from
+    anywhere that reports why recording is or is not happening."""
+    today = _today()
+    inside = _window(monkeypatch, [_row(str(today - timedelta(days=1)),
+                                        str(today + timedelta(days=1)))])
+    off = _window(monkeypatch, [_unenforced()])
+
+    assert inside["state"] != off["state"]
+
+
+def test_enforcing_with_no_dates_denies_rather_than_recording_for_ever(monkeypatch):
+    """A half-finished edit is not a licence.
+
+    `enforced = true` with no dates is someone who meant to configure a year and
+    did not finish. Reading that as unbounded would make the most permissive
+    state in the system the one you reach by leaving a form blank -- the exact
+    thing the absent-row default exists to prevent."""
+    w = _window(monkeypatch, [_row(None, None)])
+
+    assert w["state"] == main.WINDOW_UNCONFIGURED
+    assert w["state"] in main._WINDOW_DENIED
+
+
+def test_a_row_without_the_column_still_enforces(monkeypatch):
+    """Fail-closed on the column's absence, checked with `is False` rather than
+    falsiness. A row written before this column existed, or one PostgREST hands
+    back without it, must keep the gate on -- otherwise adding the column would
+    silently open every deployment that had not yet been migrated."""
+    today = _today()
+    legacy = _row(str(today + timedelta(days=30)), str(today + timedelta(days=200)))
+    assert "enforced" not in legacy
+
+    assert _window(monkeypatch, [legacy])["state"] == main.WINDOW_BEFORE
+
+    # And an explicit null is the same case, which is what a nullable column
+    # would hand back if the default were ever dropped.
+    assert _window(monkeypatch, [dict(legacy, enforced=None)])["state"] == main.WINDOW_BEFORE
+
+
+def test_an_unenforced_window_still_needs_a_resolvable_timezone(monkeypatch):
+    """The reporting surfaces bucket days in the school timezone whether or not
+    the year is enforced, so a typo'd zone is still a refusal here -- turning
+    enforcement off is about term dates, not about the rest of the row."""
+    w = _window(monkeypatch, [_unenforced(timezone="Not/AZone")])
+
+    assert w["state"] == main.WINDOW_UNREADABLE
+
+
+def test_turning_enforcement_off_does_not_bypass_consent(monkeypatch):
+    """Two independent gates. `_may_record` needs both, and the switch added
+    here only speaks to the school year -- a student who consented to nothing
+    still records nothing."""
+    monkeypatch.undo()
+    main._retention_cache_clear()
+    monkeypatch.setattr(main, "supabase", _Window([_unenforced()]))
+    monkeypatch.setattr(main, "_consent", lambda *_a, **_k: {
+        "retrieved": True, "eeg_enabled": False,
+        "headband_optical_enabled": False, "camera_enabled": False})
+
+    verdict = main._may_record(STUDENT)
+
+    assert not verdict.get("record_eeg")

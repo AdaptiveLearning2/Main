@@ -134,6 +134,11 @@ def _utc_now() -> datetime:
 # ignored. `unreadable` is separate again -- it is the one state that is our
 # fault rather than a fact about the school.
 WINDOW_OPEN = "open"
+# Records, like WINDOW_OPEN, but for a different reason and it is worth being
+# able to tell them apart: "inside the configured year" and "not gating on a
+# year at all" look identical from the recording side and are very different
+# facts about a deployment.
+WINDOW_NOT_ENFORCED = "not_enforced"
 WINDOW_BEFORE = "before_year"
 WINDOW_AFTER = "after_year"
 WINDOW_UNCONFIGURED = "unconfigured"
@@ -157,6 +162,7 @@ class _WindowMeaning(NamedTuple):
 # declared without one.
 _WINDOW_STATES = {
     WINDOW_OPEN: _WindowMeaning(True, None, None),
+    WINDOW_NOT_ENFORCED: _WindowMeaning(True, None, None),
     WINDOW_BEFORE: _WindowMeaning(
         False, "recording has not started for this school year",
         "school_year_not_started"),
@@ -268,10 +274,35 @@ def _resolve_window(row: dict) -> dict:
 
     today = _utc_now().astimezone(tz).date()
     starts, ends = row.get("starts_on"), row.get("ends_on")
+
+    # Checked after the timezone, before the dates. A row that is not enforcing
+    # has nothing to say about term dates -- they are nullable for exactly that
+    # case -- so reading them first would send an unenforced row down the
+    # unparseable branch and deny. The timezone still has to resolve, because
+    # the reporting surfaces bucket days with it whether or not the year is
+    # being enforced.
+    #
+    # `is False`, not falsiness: a row from before this column existed, or one
+    # PostgREST hands back without it, must not read as "not enforcing". Only an
+    # explicit false disables the gate; anything else -- true, missing, null --
+    # keeps it on, which is the same fail-closed direction as the rest of this
+    # function.
+    if row.get("enforced") is False:
+        return {"state": WINDOW_NOT_ENFORCED, "starts_on": starts,
+                "ends_on": ends, "timezone": name}
+
     try:
         starts_d = date.fromisoformat(str(starts))
         ends_d = date.fromisoformat(str(ends))
     except (TypeError, ValueError):
+        if starts is None and ends is None:
+            # Enforcing, with no year given. Not "record for ever" -- that is
+            # what `enforced = false` says, deliberately and in one place. A row
+            # in this state is a half-finished edit, so it denies and names
+            # itself the same way an absent row does.
+            print("[retention:dates] enforced with no dates set -- recording denied")
+            return {"state": WINDOW_UNCONFIGURED, "starts_on": None,
+                    "ends_on": None, "timezone": name}
         print(f"[retention:dates] unparseable window {starts!r}..{ends!r}")
         return {"state": WINDOW_UNREADABLE, "starts_on": starts, "ends_on": ends,
                 "timezone": name}

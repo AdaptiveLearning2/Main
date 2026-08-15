@@ -74,7 +74,14 @@ export default function Profile() {
   const Toggle = ({ value, onChange }) => (
     <button onClick={() => onChange(!value)}
       className={`w-11 h-6 rounded-full transition-colors duration-200 relative flex-shrink-0 ${value ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
+      {/* `left-0` is load-bearing. Without it `left` resolves to the span's
+          static position, and a button centres its content -- so the knob
+          started at 22px, the middle of a 44px track, and the translate moved
+          it from there. On read as 46px on a 44px track (18px outside the
+          pill); off read as 26px, hard against the right end. Both states drew
+          the knob to the right of centre, so the control could not be read at
+          all -- and no state ever looked broken enough to be obviously a bug. */}
+      <span className={`absolute left-0 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
   )
 

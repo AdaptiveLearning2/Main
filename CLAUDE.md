@@ -58,6 +58,19 @@ combination is a better place to say so than a sidecar that starts and then will
 `start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
 guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
+**Never redirect a native command's stderr in `start.ps1`.** PowerShell 5.1 wraps each stderr line
+from an exe in an ErrorRecord, and `$ErrorActionPreference = "Stop"` at the top of the file makes
+that *terminating* — so `python -c "import cv2" 2>$null` killed the script at the failing import,
+before the block that exists to explain it, and surfaced as a bare `NativeCommandError` naming
+neither the module nor the fix. Silence it inside Python instead
+(`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe **one module per
+call**, so the error can say which import failed. Applies to every dependency check in that file.
+
+**Two venvs exist and only one is the sidecar's.** `EEGResearch/.venv` is what `start.ps1` uses;
+there is also a `.venv` at the repo root with a different OpenCV. `pip install -e ".[face,gaze]"`
+has to run *from* `EEGResearch`, or pip resolves `.` to the repo root and reports "neither setup.py
+nor pyproject.toml found".
+
 Individually, from each directory:
 
 ```bash

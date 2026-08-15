@@ -193,12 +193,31 @@ if ($Camera) {
     # the alternative is the sidecar starting cleanly and the camera failing
     # only when a lesson begins.
     Push-Location $eegDir
-    & ".\.venv\Scripts\python.exe" -c "import cv2, onnxruntime" 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    # Probed one module at a time, with stderr silenced *inside* Python rather
+    # than by `2>$null`. On PowerShell 5.1 redirecting a native command's stderr
+    # wraps each line in an ErrorRecord, and under the `$ErrorActionPreference =
+    # "Stop"` set at the top of this file that is terminating -- so a missing
+    # module killed the script here, before the message below could explain it,
+    # and surfaced as a bare NativeCommandError naming neither the module nor
+    # the fix. One probe per module so the report can say which one.
+    $missing = @()
+    foreach ($mod in @("cv2", "onnxruntime")) {
+        & ".\.venv\Scripts\python.exe" -c `
+            "import sys, os; sys.stderr = open(os.devnull, 'w'); import $mod"
+        if ($LASTEXITCODE -ne 0) { $missing += $mod }
+    }
+    if ($missing.Count -gt 0) {
         Pop-Location
+        # `.[face,gaze]` when -Gaze was asked for: sending someone to `.[face]`
+        # here only makes them fail again at the mediapipe check below.
+        $extra = if ($Gaze) { ".[face,gaze]" } else { ".[face]" }
         Write-Host "  ERROR: the 'face' extra is not installed in EEGResearch/.venv" -ForegroundColor Red
+        Write-Host "    could not import: $($missing -join ', ')" -ForegroundColor Red
         Write-Host "  Install it with:" -ForegroundColor Yellow
-        Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `".[face]`"" -ForegroundColor Yellow
+        Write-Host "    cd EEGResearch; .\.venv\Scripts\Activate.ps1; pip install -e `"$extra`"" -ForegroundColor Yellow
+        Write-Host "  If cv2 is the one failing and pip says it is already installed," -ForegroundColor Yellow
+        Write-Host "  uninstall opencv-python first -- it and opencv-contrib-python" -ForegroundColor Yellow
+        Write-Host "  both provide cv2, and whichever landed last owns the import." -ForegroundColor Yellow
         exit 1
     }
 
@@ -210,7 +229,10 @@ if ($Camera) {
     # model file. That is precisely the failure this whole block exists to move
     # from lesson time to setup time.
     if ($Gaze) {
-        & ".\.venv\Scripts\python.exe" -c "import mediapipe" 2>$null
+        # Same stderr handling as the cv2 probe above, and for the same reason:
+        # `2>$null` here would terminate the script before this message ran.
+        & ".\.venv\Scripts\python.exe" -c `
+            "import sys, os; sys.stderr = open(os.devnull, 'w'); import mediapipe"
         if ($LASTEXITCODE -ne 0) {
             Pop-Location
             Write-Host "  ERROR: -Gaze needs the 'gaze' extra, which is not installed" -ForegroundColor Red

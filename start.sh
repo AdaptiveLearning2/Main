@@ -191,10 +191,28 @@ if [ "$CAMERA" = true ]; then
     # the normal case rather than a broken one. Checked here, at setup, because
     # the alternative is the sidecar starting cleanly and the camera failing
     # only when a lesson begins.
-    if ! "$EEG_DIR/.venv/bin/python" -c "import cv2, onnxruntime" 2>/dev/null; then
+    # One probe per module, so the report can name which import failed rather
+    # than only that something did. Kept at parity with start.ps1, where the
+    # single combined check also had to lose its stderr redirect -- PowerShell
+    # 5.1 turns a native command's stderr into a terminating error.
+    missing=""
+    for mod in cv2 onnxruntime; do
+        if ! "$EEG_DIR/.venv/bin/python" -c "import $mod" 2>/dev/null; then
+            missing="$missing $mod"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        # '.[face,gaze]' when --gaze was asked for: sending someone to '.[face]'
+        # here only makes them fail again at the mediapipe check below.
+        extra=".[face]"
+        [ "$GAZE" = true ] && extra=".[face,gaze]"
         echo -e "  ${RED}ERROR: the 'face' extra is not installed in EEGResearch/.venv${NC}"
+        echo -e "  ${RED}  could not import:${missing}${NC}"
         echo -e "  ${YELLOW}Install it with:${NC}"
-        echo -e "  ${YELLOW}  cd EEGResearch && source .venv/bin/activate && pip install -e '.[face]'${NC}"
+        echo -e "  ${YELLOW}  cd EEGResearch && source .venv/bin/activate && pip install -e '$extra'${NC}"
+        echo -e "  ${YELLOW}If cv2 is the one failing and pip says it is already installed,${NC}"
+        echo -e "  ${YELLOW}uninstall opencv-python first -- it and opencv-contrib-python${NC}"
+        echo -e "  ${YELLOW}both provide cv2, and whichever landed last owns the import.${NC}"
         exit 1
     fi
 

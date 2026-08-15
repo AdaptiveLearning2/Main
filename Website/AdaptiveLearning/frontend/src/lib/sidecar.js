@@ -268,11 +268,29 @@ export async function sidecarState(deviceId) {
  * the panel say so and stop, which was honest but left push with no way to see
  * focus, calm or contact quality at all. The page can reach the sidecar, so the
  * same payload is assembled here rather than the panel learning a second shape.
+ *
+ * **Whether each call answered is tracked apart from what it answered with**,
+ * because neither payload can stand in for reachability: `sidecarState` returns
+ * null for a sidecar that is up with no stream data yet, and `museState`
+ * returns `{}` for one with no headband attached. Both are ordinary states, so
+ * deriving `available` from them would report a healthy sidecar as missing --
+ * and hardcoding it `true`, which this did, reported a missing one as healthy.
+ * That left the panel's "not answering" line unreachable, so an unplugged
+ * sidecar drew a panel of blanks: the same can't-tell-absent-from-empty failure
+ * the `available: null` three-state exists to prevent, one layer further out.
  */
 export async function sidecarDebug(deviceId) {
-  const [snapshot, muse] = await Promise.all([
-    sidecarState(deviceId).catch(() => null),
-    museState(deviceId).catch(() => ({})),
+  const [state, muse] = await Promise.allSettled([
+    sidecarState(deviceId),
+    museState(deviceId),
   ])
-  return { available: true, ingest_mode: 'push', snapshot, muse }
+  return {
+    // Either route answering means the sidecar is up. They fail together when
+    // it is not, and separately when one route alone is unhappy -- which is a
+    // half-working sidecar with something to show, not an absent one.
+    available:   state.status === 'fulfilled' || muse.status === 'fulfilled',
+    ingest_mode: 'push',
+    snapshot:    state.status === 'fulfilled' ? state.value : null,
+    muse:        muse.status === 'fulfilled' ? muse.value : null,
+  }
 }

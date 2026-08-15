@@ -407,6 +407,12 @@ export default function Adaptive() {
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
     if (!EEG_DEBUG) return
+    // Wait for the mode. `pushMode` is absent until the health poll lands, and
+    // guessing "not push" sends the first poll to the backend -- which under
+    // push answers `available: null`, the one value that means "not probed" and
+    // reads as an outage. Same guess, same wrong sentence, as the first paint
+    // of the connect button.
+    if (headband.pushMode === undefined) return
     const poll = async () => {
       try {
         // Under push the backend answers with the mode and nothing else --
@@ -1165,13 +1171,19 @@ export default function Adaptive() {
                   outage sentence here under push ingestion, one layer down from
                   where it was last fixed. The backend change buys nothing until
                   the consumer reads the field that says why. */}
-              {/* The push branch fires only when there is nothing to show. It
+              {/* The push branch fires only when the sidecar did not answer. It
                   used to fire on the mode alone, which was right while the
                   backend was the only source -- it cannot reach a sidecar on a
                   student's laptop, so the panel had nothing. The page can, and
                   now feeds this from `sidecarDebug`, so the mode by itself is
-                  no longer a reason to render an apology. */}
-              {eegDebug?.ingest_mode === 'push' && !eegDebug?.snapshot && !eegDebug?.muse ? (
+                  no longer a reason to render an apology.
+
+                  `=== false`, not `!`: `available` is a real boolean only when
+                  it came from `sidecarDebug`. The backend's own push payload
+                  reports it null -- "not probed here" -- and reading that as an
+                  outage is the mistake this whole panel keeps making. The poll
+                  above no longer sends one, and this holds if it ever does. */}
+              {eegDebug?.ingest_mode === 'push' && eegDebug?.available === false ? (
                 <p className="text-yellow-300">INGEST_MODE=push — the sidecar on this device is not answering, so there is nothing to show. Start it and this panel fills in on its own.</p>
               ) : !eegDebug || !eegDebug.available ? (
                 <p className="text-red-400">⚠ EEGResearch not reachable on port 8001. Start it with: <span className="text-yellow-300">uvicorn src.app.main:app --port 8001</span></p>

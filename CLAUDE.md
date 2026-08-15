@@ -701,7 +701,15 @@ fault when the deployment simply does not work that way. Two shapes:
   probed in this deployment" is a different claim from "probed and down", and **a consumer that
   branches on falsiness renders both identically** — which is exactly how the outage string survived
   in the debug panel after the endpoint behind it was fixed. Same three-state rule as the reporting
-  helpers.
+  helpers. The panel no longer reads this endpoint under push at all — `sidecarDebug` assembles the
+  same shape from the sidecar the page can actually reach — so its `available` there is a **real
+  boolean, observed rather than proxied**, and the panel tests it with `=== false`. Two-valued and
+  three-valued sources under one field name is a trap of its own: `!available` would read the
+  backend's "not probed" as an outage again, one layer further out. Deriving it from the payloads
+  is the other wrong answer — an idle sidecar answers `data: null` and a headband-less one answers
+  an empty muse block, both ordinary, so **a payload that is empty in normal operation cannot stand
+  in for reachability**. Hardcoding it `true` made the "not answering" line unreachable and drew a
+  panel of blanks for a sidecar that was not running.
 - **Raises** (`/api/eeg/{start,muse/refresh,muse/connect,muse/disconnect}`) — call
   `_refuse_under_push(what)` in `main.py`, *before* `eeg_client.is_alive()`, or the misleading 503
   wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper

@@ -262,3 +262,62 @@ describe('releasePushIfIdle', () => {
     expect(out.devices).toEqual(list)
   })
 })
+
+describe('sidecarDebug', () => {
+  // `available` here is the panel's only way to say "the sidecar is not
+  // answering". It was hardcoded true, which made that sentence unreachable and
+  // drew a panel of blanks instead -- the same can't-tell-absent-from-empty
+  // failure the backend's `available: null` three-state exists to prevent.
+
+  const stateReply = (data) => ok({ status: 'ok', data })
+
+  it('reports a sidecar that answered nothing yet as available', async () => {
+    // The trap that makes deriving this from the payloads wrong: a sidecar that
+    // is up and simply has no stream data answers `data: null`, and one with no
+    // headband attached answers an empty muse block. Both are ordinary states.
+    mockFetch(async (url) =>
+      String(url).includes('/muse/status') ? stateReply(null) : stateReply(null))
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(true)
+    expect(out.snapshot).toBeNull()
+    expect(out.muse).toEqual({})
+  })
+
+  it('reports a sidecar that did not answer as unavailable', async () => {
+    mockFetch(async () => { throw new Error('ECONNREFUSED') })
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(false)
+    expect(out.snapshot).toBeNull()
+    expect(out.muse).toBeNull()
+  })
+
+  it('stays available when only one route is unhappy', async () => {
+    // A half-working sidecar has something to show. Requiring both would send
+    // the panel to the outage message over one bad route.
+    mockFetch(async (url) => {
+      if (String(url).includes('/muse/status')) throw new Error('no muse route')
+      return stateReply({ state: { focus: 42 } })
+    })
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(true)
+    expect(out.snapshot).toEqual({ state: { focus: 42 } })
+    expect(out.muse).toBeNull()
+  })
+
+  it('never throws, so the panel keeps a payload to branch on', async () => {
+    // The caller's catch sets `eegDebug` to null, which renders the *pull*
+    // outage message -- wrong under push, and it names a port the backend was
+    // never going to reach.
+    mockFetch(async () => { throw new Error('boom') })
+
+    await expect(sidecar.sidecarDebug('default')).resolves.toMatchObject({
+      ingest_mode: 'push',
+    })
+  })
+})

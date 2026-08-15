@@ -31,9 +31,21 @@ const SIDECAR_TOKEN = import.meta.env.VITE_EEG_LOCAL_TOKEN || ''
  *  running should read as "not there" in a moment, not stall a page load. */
 const TIMEOUT_MS = 3000
 
-async function call(path, { method = 'GET', body = null } = {}) {
+/** Starting a device is not a status read.
+ *
+ * Opening a webcam and loading FER+ and the face landmarker takes seconds, and
+ * the muse path waits on a BLE bridge. At 3 s the browser aborted while the
+ * sidecar carried on and started the device anyway -- so the request "failed",
+ * the card stayed on "off", and the camera was running the whole time. A
+ * client-side timeout shorter than the work it is waiting for does not cancel
+ * anything; it just stops you finding out what happened.
+ */
+const LIFECYCLE_TIMEOUT_MS = 30000
+
+async function call(path, { method = 'GET', body = null,
+                            timeoutMs = TIMEOUT_MS } = {}) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(`${SIDECAR_URL}${path}`, {
       method,
@@ -158,13 +170,13 @@ export async function pushStatus() {
 /** Start capturing on one registered device (`default`, `camera`, ...). */
 export async function deviceStart(deviceId) {
   return call(`/api/v1/session/start?device_id=${encodeURIComponent(deviceId)}`,
-              { method: 'POST' })
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
 /** Stop capturing on one device. Leaves any other device running. */
 export async function deviceStop(deviceId) {
   return call(`/api/v1/session/stop?device_id=${encodeURIComponent(deviceId)}`,
-              { method: 'POST' })
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
 /** Every registered station and whether it is currently capturing. */
@@ -176,18 +188,19 @@ export async function devices() {
 /** Ask the native bridge to scan for nearby headbands. */
 export async function museRefresh(deviceId) {
   return call(`/api/v1/muse/refresh?device_id=${encodeURIComponent(deviceId)}`,
-              { method: 'POST' })
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
 /** Pair with a named headband. `name` comes from the scan's device list. */
 export async function museConnect(name, deviceId) {
   return call('/api/v1/muse/connect',
-              { method: 'POST', body: { name, device_id: deviceId } })
+              { method: 'POST', body: { name, device_id: deviceId },
+                timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
 export async function museDisconnect(deviceId) {
   return call(`/api/v1/muse/disconnect?device_id=${encodeURIComponent(deviceId)}`,
-              { method: 'POST' })
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
 /** One device's snapshot, unwrapped to `{running, ingestion, ...}`.
@@ -235,4 +248,31 @@ export async function releasePushIfIdle() {
   if (list.some(d => d.running)) return { stopped: false, devices: list }
   await stopPush().catch(() => {})
   return { stopped: true, devices: list }
+}
+
+/** The interpreted EEG snapshot: state, features, bands, ingestion.
+ *
+ * `Envelope`-wrapped by the sidecar, and `status: "idle"` with `data: null`
+ * before any stream data has arrived -- which is a real state, not a failure,
+ * so it comes back as null rather than throwing.
+ */
+export async function sidecarState(deviceId) {
+  const res = await call(`/api/v1/state?device_id=${encodeURIComponent(deviceId)}`)
+  return res?.data || null
+}
+
+/** What `/api/eeg/debug` returns under pull, assembled from the sidecar.
+ *
+ * The debug panel was written against the backend's proxy, and under push the
+ * backend has nothing to proxy -- it cannot reach a student's laptop. That made
+ * the panel say so and stop, which was honest but left push with no way to see
+ * focus, calm or contact quality at all. The page can reach the sidecar, so the
+ * same payload is assembled here rather than the panel learning a second shape.
+ */
+export async function sidecarDebug(deviceId) {
+  const [snapshot, muse] = await Promise.all([
+    sidecarState(deviceId).catch(() => null),
+    museState(deviceId).catch(() => ({})),
+  ])
+  return { available: true, ingest_mode: 'push', snapshot, muse }
 }

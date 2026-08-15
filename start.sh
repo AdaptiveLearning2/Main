@@ -170,6 +170,7 @@ echo -e "${GRAY}[1/5] Skipping native bridge (simulator mode on macOS)${NC}"
 # Force simulator mode in EEG .env
 EEG_ENV="$EEG_DIR/.env"
 BACKEND_ENV="$BACKEND_DIR/.env"
+FRONTEND_ENV="$FRONTEND_DIR/.env"
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -285,6 +286,10 @@ ensure_model('$LANDMARK_MODEL')
     set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
     set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
+    # Same as start.ps1: without this the browser sends no Authorization header
+    # to the sidecar and every call 401s, while curl from a terminal works.
+    API_TOKEN_VALUE="$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | head -1)"
+    [ -n "$API_TOKEN_VALUE" ] && set_env_key "$FRONTEND_ENV" "VITE_EEG_LOCAL_TOKEN" "$API_TOKEN_VALUE"
     echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"

@@ -7,7 +7,7 @@ import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../li
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
-         releasePushIfIdle
+         releasePushIfIdle, sidecarDebug
        } from '../../lib/sidecar'
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
@@ -151,7 +151,13 @@ export default function Adaptive() {
   // there's exactly one (mirrors the previous single-device behavior with no UI
   // change); otherwise wait for the user to pick one via the station picker below.
   useEffect(() => {
-    if (!headband.available) return
+    // `available` is the *backend's* liveness probe of the sidecar, and under
+    // push the backend reports it as null on purpose -- it has no route to a
+    // student's laptop, so "not probed here" must stay distinguishable from
+    // "probed and down". `!null` is true, so gating on it alone meant this
+    // effect returned before ever asking the sidecar, and the push branch below
+    // could not run: no stations, and no camera card.
+    if (!headband.available && !headband.pushMode) return
     let alive = true
     // Under push the backend answers `devices: []` deliberately -- it does
     // not probe a sidecar it has no route to -- so asking it would report a
@@ -403,14 +409,20 @@ export default function Adaptive() {
     if (!EEG_DEBUG) return
     const poll = async () => {
       try {
-        const d = await apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`)
+        // Under push the backend answers with the mode and nothing else --
+        // it has no route to a sidecar on a student's laptop. The page does,
+        // so the panel is fed from there in the same shape rather than being
+        // told to go read a log file.
+        const d = headband.pushMode
+          ? await sidecarDebug(stationId || 'default')
+          : await apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`)
         setEegDebug(d)
       } catch { setEegDebug(null) }
     }
     poll()
     debugTimer.current = setInterval(poll, 1500)
     return () => clearInterval(debugTimer.current)
-  }, [stationId])
+  }, [stationId, headband.pushMode])
 
   useEffect(() => {
     if (!user?.id) return
@@ -766,7 +778,7 @@ export default function Adaptive() {
                       // session that recorded nothing.
                       : push?.recorded
                         ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
-                        : 'Your headband connects through the app on this computer, not through this page.')
+                        : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
                   : headband.available
                   ? 'EEG service ready. Turn on your Muse S headband then click Connect.'
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'
@@ -795,8 +807,17 @@ export default function Adaptive() {
             getOrCreateSession() on click. #27 moved session creation off page-load
             (to stop double-registering history) but left a !sessionId guard here, so
             the button that creates the session was disabled until one existed. */}
+        {/* `available` is the backend's probe of the sidecar, and under push it
+            is null on purpose -- the backend has no route to a student's laptop,
+            so "not probed here" stays distinct from "probed and down". `!null`
+            is true, so gating on it alone disabled this button in exactly the
+            mode where the page is the only thing that *can* pair. Third place
+            this has bitten; the discovery effect and the debug panel were the
+            other two. `stationId` still gates, and under push it is only set
+            once the sidecar answered -- which is the reachability check that
+            actually applies there. */}
         <button onClick={toggleHeadband}
-          disabled={!headband.available || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
+          disabled={(!headband.available && !headband.pushMode) || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
             headband.connected ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}>
@@ -1133,8 +1154,14 @@ export default function Adaptive() {
                   outage sentence here under push ingestion, one layer down from
                   where it was last fixed. The backend change buys nothing until
                   the consumer reads the field that says why. */}
-              {eegDebug?.ingest_mode === 'push' ? (
-                <p className="text-yellow-300">INGEST_MODE=push — the sidecar runs on this device and posts to the backend, so there is nothing for the backend to probe. Read the sidecar's own logs, not this panel.</p>
+              {/* The push branch fires only when there is nothing to show. It
+                  used to fire on the mode alone, which was right while the
+                  backend was the only source -- it cannot reach a sidecar on a
+                  student's laptop, so the panel had nothing. The page can, and
+                  now feeds this from `sidecarDebug`, so the mode by itself is
+                  no longer a reason to render an apology. */}
+              {eegDebug?.ingest_mode === 'push' && !eegDebug?.snapshot && !eegDebug?.muse ? (
+                <p className="text-yellow-300">INGEST_MODE=push — the sidecar on this device is not answering, so there is nothing to show. Start it and this panel fills in on its own.</p>
               ) : !eegDebug || !eegDebug.available ? (
                 <p className="text-red-400">⚠ EEGResearch not reachable on port 8001. Start it with: <span className="text-yellow-300">uvicorn src.app.main:app --port 8001</span></p>
               ) : (() => {

@@ -145,6 +145,7 @@ if (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
 # 2. Native bridge + EEG source config
 $eegEnv = Join-Path $eegDir ".env"
 $backendEnv = Join-Path $backendDir ".env"
+$frontendEnv = Join-Path $frontendDir ".env"
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
 
@@ -302,6 +303,13 @@ if ($Camera) {
     Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
     Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
     Set-EnvKey $backendEnv "INGEST_MODE" "push"
+    # The page talks to the sidecar directly under push, and it authenticates
+    # with the sidecar's own API_TOKEN. Copied here rather than left to a
+    # hand-edit: unset, `call()` omits the Authorization header entirely and
+    # every sidecar request 401s -- while the sidecar looks perfectly healthy
+    # from a terminal, because curl sends the token and the browser does not.
+    $apiToken = (Select-String -Path $eegEnv -Pattern '^API_TOKEN=(.*)$').Matches.Groups[1].Value
+    if ($apiToken) { Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken }
     Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"

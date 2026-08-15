@@ -73,6 +73,15 @@ physics. Saying "the pulse is absent from the video" -- as an earlier version of
 this file did -- claims far more than the evidence supports and would be quoted
 back later as settled.
 
+> **Superseded 2026-08-14, and the scope kept here was the right call.** The
+> alternative was run — `RhythmMamba.pure`, and then the `.rlap` weights this
+> paragraph names as the blocked path, including `FacePhys.rlap`, all locally,
+> which is evaluation rather than distribution. None of them tracks a heart rate,
+> and none beats the raw green channel. See *The learned model, and the moving
+> truth* below; **the licence is not worth pursuing.** The caveat above is left
+> standing because it was correct when written, and the reasoning is what made the
+> follow-up worth doing rather than assuming the answer either way.
+
 ## Why, and why it is not fixable here
 
 The obvious suspicion was a half-rate lock — the autocorrelation picking every
@@ -185,3 +194,216 @@ Re-opening this needs different hardware — a camera whose exposure genuinely
 locks and whose frames carry exposure-time stamps — not a different algorithm.
 The POS implementation is kept because it is correct, tested, and the front half
 of any future attempt; what is not kept is the claim that it measures anything.
+
+# The learned model, and the moving truth (2026-08-14)
+
+The section above scoped itself carefully to POS and named the learned model as
+the untested alternative. It has now been tested, and the last sentence of that
+Decision — *different hardware, not a different algorithm* — is what the evidence
+supports.
+
+## Why a second capture was needed at all
+
+The 08-08 capture holds the true rate at **85–88 bpm for five minutes**, which
+that document calls "a rare luxury" because it makes the comparison robust to
+alignment. For rejecting POS at −40 bpm it was exactly that.
+
+It is close to useless for *validating* something that works. Over a 3 bpm span,
+a method that ignores the video entirely and emits a constant near the mean
+scores perfectly on every error metric. Deep rPPG models regress toward their
+training-set mean when the signal is absent, so that is the specific failure a
+narrow-range test cannot see. **The truth has to move.**
+
+Two captures were run, same rig, same scoring, `--seconds 300` then `--seconds 600`:
+
+| | 19:35 | 20:08 |
+| --- | --- | --- |
+| frames / face found | 8998 / 100% | 17997 / 100% |
+| measured fps | 29.905 | 29.92 |
+| exposure locked | yes | yes |
+| true rate | 67–69 throughout | ~68, then **76–89** |
+
+The second half of the 20:08 capture is paced breathing — 4 s in, 6 s out, six
+per minute — which swings the rate through respiratory sinus arrhythmia while the
+subject stays as still as during the first half. That is the point: the range comes
+from breathing, not from movement, so it does not buy a moving truth at the cost of
+motion artefact. Five ECG strips cover it (81, 76, 86, 89, 87); the first half
+reuses the 19:36–19:39 strips at ~68.
+
+## A changing illuminant contaminated the first capture
+
+The 19:35 capture was recorded with a **television on in the room**, which was not
+noticed until the series was compared against 08-08:
+
+| | 08-08 | 19:35 (TV) | 20:08 (TV off) |
+| --- | --- | --- | --- |
+| intensity CV | 2.41% | 14.13% | 2.93% |
+| chromaticity CV (green) | 0.65% | 5.00% | **0.20%** |
+| in-band RMS | 0.916% of mean | 3.682% | **0.533%** |
+| chroma jumps >0.5%/frame | 1.8 per min | 98.0 per min | **0.0** |
+
+A dimming lamp or a hunting exposure scales all three channels together and leaves
+chromaticity flat. This did not: a colour jump roughly every 0.6 s, at scene-cut
+cadence. **POS is built on a fixed illuminant** — it projects onto a plane chosen
+for one — so a changing illuminant colour does not add noise to POS, it violates
+the premise. Worth knowing before blaming a result on the method.
+
+The 20:08 capture is the cleanest this rig has produced, better than 08-08 on
+every stability measure. Everything below is from it.
+
+## Nothing tracks the rate, `.rlap` weights included
+
+Scored identically — same 25 s windows, same `estimate_window`, same strips. Only
+the front end differs.
+
+| | truth | POS | `.pure` | `RhythmMamba.rlap` | `FacePhys.rlap` |
+| --- | --- | --- | --- | --- | --- |
+| first half (normal) | ~68 | 55.4 | 62.1 | 74.0 | 79.9 |
+| paced half | ~84 | 46.5 | 61.8 | 75.4 | 89.1 |
+| **change** | **+16.0** | **−8.9** | **−0.3** | **+1.4** | **+9.2** |
+
+**The heart rate rose 16 bpm; POS moved 9 the wrong way and `.pure` did not move
+at all.** The RLAP-trained weights were run because a `.pure` failure settles
+nothing about them — PURE is ten subjects under controlled conditions, RLAP is far
+larger and more varied, and "try the better weights" is the obvious next proposal.
+They were run locally, which is evaluation and not distribution; the Data Usage
+Agreement question only bites on shipping to student machines.
+
+`RhythmMamba.rlap` finds a *better constant* — ~75, near the middle of the true
+range — and accepts 33 of 33 paced windows, reaching confidence 0.92 and 1.00 on
+errors of −23.7 and −13.5. `FacePhys.rlap` is the package default, the strongest
+model here, and the only one whose median moves substantially: +9.2 of the +16.
+
+## The between-half shift is confounded; the within-half test is not
+
+Paced breathing changes chest and head motion as well as heart rate, so a model
+responding to breathing produces the same between-half signature as one tracking a
+pulse. `FacePhys.rlap`'s +9.2 has exactly that shape.
+
+The five strips inside the paced half span 76–89 under **one** breathing regime, so
+correlating against them removes the confound. Ungated — `estimate_window`'s
+confidence is inapplicable to a single optical channel, so letting it discard
+windows throws away the only comparison available — the band peak per strip window:
+
+| source | 81 | 76 | 86 | 89 | 87 | r | slope |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `RhythmMamba.pure` | 67.5 | 51.0 | 55.5 | 64.8 | 54.0 | +0.30 | +0.40 |
+| `RhythmMamba.rlap` | 65.8 | 73.8 | 122.6 | 83.3 | 73.0 | +0.37 | +1.60 |
+| `FacePhys.rlap` | 64.5 | 111.3 | 85.6 | 128.8 | 93.8 | +0.21 | +0.99 |
+| **green (raw)** | 46.5 | 55.3 | 43.2 | 66.8 | 60.5 | **+0.36** | +0.67 |
+
+At n = 5, significance needs |r| > 0.88. All four are noise, and **the raw green
+channel scores as well as any of the three networks** — whatever weak correlation
+exists is already in the mean of three ROI boxes, and none of the models adds to
+it. `FacePhys.rlap`'s slope of +0.99 reads like tracking until r = +0.21 is put
+beside it: a line fitted through noise, which is why slope alone must never be
+quoted here.
+
+The best available model, on the largest available dataset, reported **128.8 bpm
+against a true 89**. There is nothing here to seek a licence for.
+
+## "But it looks fine at rest" — the constant baseline
+
+The tables above invite one optimistic reading, and it is worth refuting in place
+because someone will make it: `RhythmMamba.rlap`'s errors are **+6.0 at rest and
+−8.6 elevated**, single digits either side, which looks like a method that works
+for resting and slightly elevated rates.
+
+It is not. Both numbers are what emitting a constant ~75 produces when the truth
+sits either side of 75. The test that separates the two is whether a model beats
+the best constant a cheater could pick — the median of the *answers*, which no
+real method gets:
+
+| | n | MAE | best constant | r vs truth |
+| --- | --- | --- | --- | --- |
+| POS | 28 | 19.8 | 4.0 | −0.69 |
+| `RhythmMamba.pure` | 91 | 11.2 | 4.3 | +0.09 |
+| `RhythmMamba.rlap` | 94 | **8.5** | **5.8** | **−0.14** |
+| `FacePhys.rlap` | 45 | 16.1 | 3.5 | −0.12 |
+
+**A model that always answered "68" would beat all four.** Split by regime,
+`RhythmMamba.rlap` against a flat 75:
+
+| | model MAE | flat 75 |
+| --- | --- | --- |
+| resting (68) | 6.1 | 7.0 |
+| elevated (76–89) | **12.8** | **9.2** |
+
+At rest it edges a constant by 0.9 bpm. Elevated it is *worse* than one by 3.6 —
+it degrades exactly where a heart-rate feature would earn its place, and the
+apparent competence at rest is its output happening to sit near this subject's
+resting rate.
+
+Both product uses fail on this. `stress_score` is defined against the session's
+own baseline, so it needs change detection, and r = −0.14 detects nothing. The
+parent-facing chart shows absolute bpm, where 8.5 MAE with confident errors past
+25 bpm is not a number to put in front of a parent.
+
+RhythmMamba's accepted windows in the paced half:
+
+| ECG | RhythmMamba | confidence | error |
+| --- | --- | --- | --- |
+| 81 | 62.5 | 0.75 | −18.5 |
+| 76 | rejected | 0.44 | |
+| 86 | 55.3 | 0.70 | −30.7 |
+| 89 | 67.0 | 0.88 | −22.0 |
+| 87 | 59.4 | **1.00** | **−27.6** |
+
+Confidence 1.00 on a reading 28 bpm wrong — the same inapplicable-gate failure the
+POS section documents, reached by a different front end, which is what makes it a
+property of the gate rather than of POS.
+
+## What the first half alone would have said
+
+70 of 83 windows accepted, median error **−5.9 bpm**. That reads like a nearly
+shippable result and it is an artefact: the model emits ~62 regardless, and 62
+happens to sit near 68.
+
+**A narrow-range validation would have passed a method that measures nothing.**
+That is the reusable lesson here, and it is not specific to rPPG — it applies to
+anything validated against a physiological quantity that barely moves during the
+recording.
+
+## What this closes, and what it does not
+
+Closed: *"a learned model over per-pixel input might do better."* It was the
+right caveat, it was the reason to keep POS's rejection narrowly scoped, and it is
+now answered — for the RLAP weights too, so the licence is not worth pursuing.
+Four front ends, spanning a hand-derived colour projection and three trained
+spatiotemporal networks, none of which tracks a 16 bpm swing, and **none of which
+beats the raw green channel** on the one unconfounded test. That points past the
+algorithm to the input.
+
+Not closed, and worth stating so nobody re-runs this expecting a different answer:
+
+- **It is not a lighting problem.** In-band fluctuation on the clean capture is
+  0.533% of mean against a photon-noise floor of 0.03–0.12%, so the recording is
+  30–120× above the noise floor with exposure locked and mean green at 118/255.
+  More light lowers a floor nothing is limited by. (A *steady* lamp is still worth
+  having if the room is dim — that raises the camera's true frame rate. It is not
+  the same claim.)
+- **The remaining hypothesis is the camera's own processing.** Consumer webcams
+  apply temporal denoising and sharpening that suppress exactly the sub-1%
+  frame-to-frame variation a pulse consists of. **31.4% of consecutive frames have
+  bit-identical ROI means** — in this capture, and identically in 08-08 — so the
+  sensor is delivering roughly 20 distinct frames per second inside a 30 fps
+  stream. Testing that needs a camera exposing raw uncompressed frames, not more
+  analysis of these.
+- **Nothing here is about children**, one adult, one room, one webcam.
+
+## Reproducing
+
+`session2_rgb.jsonl.gz` beside this file is the ROI-mean series from the 20:08
+capture (18k samples, 600 s, `t` / `rgb` / `usable` per frame) — the same shape as
+`face_rgb_ecg_20260808.jsonl.gz`. The frames themselves are not kept, per the rule
+that no face video is committable; `scripts/capture_face_video_ecg.py --delete`
+removed them and stamped the header.
+
+Every model was run through the package's own pipeline
+(`rppg.Model(NAME).process_faces_tensor(frames, fps)`), deliberately
+rather than through `scripts/export_rhythmmamba_onnx.py`: the export settles
+deployment cost, which was not the question, and going through the authors' own
+preprocessing means a wrong answer cannot be a scaling bug on our side. Feeding a
+model trained on normalised input raw 0–255 produces something that looks like a
+signal and means nothing, which is the exact failure this whole exercise exists to
+detect.

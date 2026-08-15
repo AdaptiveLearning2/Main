@@ -224,12 +224,52 @@ Against a simultaneous watch ECG (2026-08-08): **47.7 bpm at confidence 0.74 aga
 over five minutes with the face found in 8988 of 8988 frames, autocorrelation peak 0.02 where a real
 pulse gives 0.3–0.7.
 
-**Scope that precisely.** It is not "the pulse is absent from the video" — it is that the pulse is
-not recoverable *from the mean RGB of our three ROI boxes by POS*. Three spatial averages per frame
-is a small fraction of a frame, and a learned model over per-pixel multi-region input has far more to
-work with; the reference implementation reports ~95% accuracy with RhythmMamba over full video, which
-is a different method on different information. Raw R/G/B of those means show the same, so POS is not
-at fault.
+**That scope was right, and it is now closed — including for the RLAP weights, so don't chase the
+licence.** The claim was only that the pulse is not recoverable *from the mean RGB of our three ROI
+boxes by POS*, since a learned model over per-pixel input has far more to work with. All of it was
+then run against ECG (2026-08-14) on a paced-breathing capture where the true rate rose **16 bpm**:
+
+| | moved, vs truth's +16 | r against the 5 strips |
+| --- | --- | --- |
+| POS | −8.9 | +0.36 (that is raw green) |
+| `RhythmMamba.pure` | −0.3 | +0.30 |
+| `RhythmMamba.rlap` | +1.4 | +0.37 |
+| `FacePhys.rlap` | +9.2 | +0.21 |
+
+**None tracks the rate, and the raw green channel scores as well as any of them** (n=5 needs |r|>0.88
+for significance; all four are noise). `FacePhys.rlap` is the package's best model on the largest
+dataset and reported **128.8 bpm for a true 89**. Correlate ungated — the confidence gate is
+inapplicable to a single channel, so letting it discard windows throws away the only test there is.
+The remaining suspect is the camera's own temporal denoising: **31.4% of consecutive frames carry
+bit-identical ROI means**, ~20 distinct frames per second inside a 30 fps stream. Testing that needs
+a camera exposing raw frames, not another model.
+
+**Between-half comparisons on a paced capture are confounded** — deep breathing moves the chest and
+head as well as the heart rate, so a model responding to breathing motion produces the same
+signature as one tracking a pulse. `FacePhys.rlap`'s +9.2 is exactly that shape, and it collapses to
+r = +0.21 within the half, where breathing is constant. Correlate against strips inside one
+breathing regime, never across the switch.
+
+**A narrow-range capture cannot validate this, and one nearly passed a broken method.** Over the half
+where the truth held near 68, RhythmMamba accepted 70/83 windows at a median error of **−5.9 bpm** —
+a shippable-looking number from a model that emits ~62 whatever the heart does. Score any future
+attempt against a *moving* truth: paced breathing (4 s in, 6 s out) swings the rate 10–20 bpm while
+the subject stays seated and still, which is what caught this. A capture whose rate never moves
+cannot tell a measurement from a constant.
+
+**Always compare against the best constant, never against zero.** `.rlap`'s errors are +6.0 at rest
+and −8.6 elevated, which reads as "works for resting and slightly elevated" and is instead what
+emitting ~75 produces when the truth sits either side of 75. Scored properly it has **MAE 8.5 against
+a best-constant 5.8** and **r = −0.14** — *a model that always answered "68" beats all four front
+ends*, and `.rlap` is worse than a flat 75 exactly in the elevated half (12.8 vs 9.2). Single-digit
+absolute error is not evidence of measurement when the truth barely leaves the predictor's output.
+
+**An illuminant that changes colour breaks POS at the premise, not at the noise floor.** A television
+in the room put chromaticity CV at 5.00% against 0.20% with it off, with a colour jump every ~0.6 s;
+POS projects onto a plane chosen for a *fixed* illuminant. Check chromaticity stability before
+blaming a result on the method. It is also not a lighting-level problem: in-band fluctuation on the
+clean capture is 0.533% of mean against a photon-noise floor of 0.03–0.12%, so more light lowers a
+floor nothing is limited by. Raw R/G/B of those means show the same as POS, so POS is not at fault.
 
 **Nor is the licence a blocker, and `.pure` is why.** Both `zizheng-guo/RhythmMamba` (Zou et al.,
 AAAI 2025) and `KegangWangCCNU/open-rppg` are MIT and ship pretrained weights; the `.rlap`/`.pure`

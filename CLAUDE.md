@@ -257,6 +257,13 @@ attempt against a *moving* truth: paced breathing (4 s in, 6 s out) swings the r
 the subject stays seated and still, which is what caught this. A capture whose rate never moves
 cannot tell a measurement from a constant.
 
+**Always compare against the best constant, never against zero.** `.rlap`'s errors are +6.0 at rest
+and −8.6 elevated, which reads as "works for resting and slightly elevated" and is instead what
+emitting ~75 produces when the truth sits either side of 75. Scored properly it has **MAE 8.5 against
+a best-constant 5.8** and **r = −0.14** — *a model that always answered "68" beats all four front
+ends*, and `.rlap` is worse than a flat 75 exactly in the elevated half (12.8 vs 9.2). Single-digit
+absolute error is not evidence of measurement when the truth barely leaves the predictor's output.
+
 **An illuminant that changes colour breaks POS at the premise, not at the noise floor.** A television
 in the room put chromaticity CV at 5.00% against 0.20% with it off, with a colour jump every ~0.6 s;
 POS projects onto a plane chosen for a *fixed* illuminant. Check chromaticity stability before

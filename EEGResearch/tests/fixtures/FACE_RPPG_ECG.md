@@ -302,6 +302,43 @@ quoted here.
 The best available model, on the largest available dataset, reported **128.8 bpm
 against a true 89**. There is nothing here to seek a licence for.
 
+## "But it looks fine at rest" — the constant baseline
+
+The tables above invite one optimistic reading, and it is worth refuting in place
+because someone will make it: `RhythmMamba.rlap`'s errors are **+6.0 at rest and
+−8.6 elevated**, single digits either side, which looks like a method that works
+for resting and slightly elevated rates.
+
+It is not. Both numbers are what emitting a constant ~75 produces when the truth
+sits either side of 75. The test that separates the two is whether a model beats
+the best constant a cheater could pick — the median of the *answers*, which no
+real method gets:
+
+| | n | MAE | best constant | r vs truth |
+| --- | --- | --- | --- | --- |
+| POS | 28 | 19.8 | 4.0 | −0.69 |
+| `RhythmMamba.pure` | 91 | 11.2 | 4.3 | +0.09 |
+| `RhythmMamba.rlap` | 94 | **8.5** | **5.8** | **−0.14** |
+| `FacePhys.rlap` | 45 | 16.1 | 3.5 | −0.12 |
+
+**A model that always answered "68" would beat all four.** Split by regime,
+`RhythmMamba.rlap` against a flat 75:
+
+| | model MAE | flat 75 |
+| --- | --- | --- |
+| resting (68) | 6.1 | 7.0 |
+| elevated (76–89) | **12.8** | **9.2** |
+
+At rest it edges a constant by 0.9 bpm. Elevated it is *worse* than one by 3.6 —
+it degrades exactly where a heart-rate feature would earn its place, and the
+apparent competence at rest is its output happening to sit near this subject's
+resting rate.
+
+Both product uses fail on this. `stress_score` is defined against the session's
+own baseline, so it needs change detection, and r = −0.14 detects nothing. The
+parent-facing chart shows absolute bpm, where 8.5 MAE with confident errors past
+25 bpm is not a number to put in front of a parent.
+
 RhythmMamba's accepted windows in the paced half:
 
 | ECG | RhythmMamba | confidence | error |

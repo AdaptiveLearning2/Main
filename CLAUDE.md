@@ -707,6 +707,29 @@ fault when the deployment simply does not work that way. Two shapes:
   wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
   that claimed to have replaced it.
 
+**Those four refusals left push with no pairing path, which is why the browser now has one.** The
+backend is remote under push by definition, so refusing is right — but nothing replaced it, and the
+sidecar's own start/scan/connect routes were admin-only while the browser holds the *learner* token.
+Every push deployment therefore answered 401 to the one channel push exists for. `sidecar.js` now
+calls them directly (`deviceStart`, `museRefresh`, `museConnect`, …) and `toggleHeadband` picks the
+transport from `headband.pushMode` — one adapter, the same seven steps, because a second copy of the
+pairing sequence would drift and that sequence is where the ordering matters.
+
+**`require_local_controller` is what admits it, and it is scoped to the mode on purpose.** Admin in
+both modes; the learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing,
+because the backend is the legitimate controller there. What it grants is bounded by what the
+learner token already was — it ships in the bundle and the sidecar is on loopback, so it separates
+pages in one browser, not users, and any page that could call `/api/v1/push/start` could already make
+the sidecar stream a student's signals. Pinned by `test_under_pull_the_learner_token_may_not_drive_the_hardware`;
+removing the mode check fails exactly that.
+
+**`start.ps1 -Camera` selects push, and without it the mode goes back to pull.** Written on both
+branches like the `FACE_*` keys and for the same reason: a stale `INGEST_MODE=push` from a camera run
+would disable the poller on a later headband-only run, and a headband recording nothing while the page
+says "streaming" is what explicit modes exist to prevent. The camera has no choice in this —
+`/api/signals/face` is its only writer, so a camera configured under pull captures frames and stores
+nothing.
+
 **"Before" means before every sidecar call, not just before the liveness probe.** `/api/eeg/status`
 had the check and still 500'd under push, because `get_muse_status()` ran a few lines above it.
 `eeg_client._learner_headers()` raises when `EEG_API_TOKEN` is unset — the normal state of a hosted

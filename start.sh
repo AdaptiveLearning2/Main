@@ -169,6 +169,7 @@ echo -e "${GRAY}[1/5] Skipping native bridge (simulator mode on macOS)${NC}"
 
 # Force simulator mode in EEG .env
 EEG_ENV="$EEG_DIR/.env"
+BACKEND_ENV="$BACKEND_DIR/.env"
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -279,11 +280,22 @@ ensure_model('$LANDMARK_MODEL')
         set_env_key "$EEG_ENV" "FACE_EMOTION_ENABLED" "true"
     fi
     set_env_key "$EEG_ENV" "FACE_LANDMARK_MODEL_PATH" "$LANDMARK_MODEL"
+    # Push, for the same reason as start.ps1: the camera's only writer is
+    # /api/signals/face, so a camera under pull records nothing.
+    set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
+    set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
+    set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
     echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_GAZE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_EMOTION_ENABLED" "false"
+    # Back to pull: the backend polls the sidecar, which is what a
+    # single-machine headband deployment wants. Written on both branches so a
+    # stale push left over from a camera run cannot disable the poller on a
+    # later headband-only one.
+    set_env_key "$EEG_ENV" "PUSH_ENABLED" "false"
+    set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

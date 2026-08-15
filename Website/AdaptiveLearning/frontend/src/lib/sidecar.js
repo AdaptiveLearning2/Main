@@ -141,3 +141,64 @@ export async function pushStatus() {
   const out = await call('/api/v1/push/status')
   return out?.data || out
 }
+
+// ── driving the local hardware, push only ───────────────────────────────────
+//
+// Under `pull` the backend owns this: it polls the sidecar and proxies scan and
+// connect through `/api/eeg/muse/*`. Push inverts it. The backend is remote by
+// definition there -- that is why push exists -- so those endpoints answer 409
+// (`_refuse_under_push`), and the page in front of the student is the only
+// thing that can reach their headband and their camera.
+//
+// The sidecar accepts the learner token for these only when PUSH_ENABLED is on
+// (see `require_local_controller`); under pull it still answers 401, which is
+// correct rather than a limitation. So every function here is for the push path
+// and Adaptive.jsx must not call them otherwise.
+
+/** Start capturing on one registered device (`default`, `camera`, ...). */
+export async function deviceStart(deviceId) {
+  return call(`/api/v1/session/start?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST' })
+}
+
+/** Stop capturing on one device. Leaves any other device running. */
+export async function deviceStop(deviceId) {
+  return call(`/api/v1/session/stop?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST' })
+}
+
+/** Every registered station and whether it is currently capturing. */
+export async function devices() {
+  const res = await call('/api/v1/devices')
+  return res?.data || []
+}
+
+/** Ask the native bridge to scan for nearby headbands. */
+export async function museRefresh(deviceId) {
+  return call(`/api/v1/muse/refresh?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST' })
+}
+
+/** Pair with a named headband. `name` comes from the scan's device list. */
+export async function museConnect(name, deviceId) {
+  return call('/api/v1/muse/connect',
+              { method: 'POST', body: { name, device_id: deviceId } })
+}
+
+export async function museDisconnect(deviceId) {
+  return call(`/api/v1/muse/disconnect?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST' })
+}
+
+/** One device's snapshot, unwrapped to `{running, ingestion, ...}`.
+ *
+ * Deliberately the same shape the backend's `/api/eeg/status` puts under its
+ * `muse` key, so a caller polling for `ingestion.muse_devices` reads one shape
+ * in both modes. The sidecar wraps it in `{status, data}`; unwrapping here
+ * rather than at the call site keeps the mode difference to which function is
+ * called, not what the answer looks like.
+ */
+export async function museState(deviceId) {
+  const res = await call(`/api/v1/muse/status?device_id=${encodeURIComponent(deviceId)}`)
+  return res?.data || {}
+}

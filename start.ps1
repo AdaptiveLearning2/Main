@@ -144,6 +144,7 @@ if (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
 
 # 2. Native bridge + EEG source config
 $eegEnv = Join-Path $eegDir ".env"
+$backendEnv = Join-Path $backendDir ".env"
 if ($Muse) {
     Write-Host "[2/5] Native Muse Bridge" -ForegroundColor Cyan
 
@@ -288,10 +289,29 @@ if ($Camera) {
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" $(if ($NoEmotion) { "false" } else { "true" })
     Set-EnvKey $eegEnv "FACE_LANDMARK_MODEL_PATH" "$landmarkModel"
     Write-Host "  EEG_DEVICES = $headband,camera:face@$CameraIndex" -ForegroundColor Gray
+
+    # The camera only records under push, so -Camera selects it. `face_signals`
+    # has exactly one writer -- /api/signals/face, which the sidecar POSTs to --
+    # and the poller never writes that table, so a camera configured under pull
+    # captures frames and stores nothing.
+    #
+    # Written on both branches for the same reason FACE_* is: a stale
+    # INGEST_MODE=push left over from a camera run would disable the poller on a
+    # later headband-only run, and a headband that records nothing while the
+    # page says "streaming" is exactly what explicit modes exist to prevent.
+    Set-EnvKey $eegEnv "PUSH_ENABLED" "true"
+    Set-EnvKey $eegEnv "BACKEND_URL" "http://127.0.0.1:8000"
+    Set-EnvKey $backendEnv "INGEST_MODE" "push"
+    Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_GAZE_ENABLED" "false"
     Set-EnvKey $eegEnv "FACE_EMOTION_ENABLED" "false"
+    # Back to pull: the backend polls the sidecar, which is what a
+    # single-machine headband deployment wants and what the poller's consent
+    # and rollup paths are exercised against.
+    Set-EnvKey $eegEnv "PUSH_ENABLED" "false"
+    Set-EnvKey $backendEnv "INGEST_MODE" "pull"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

@@ -11,7 +11,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.app.config import get_settings
 from src.app.schemas import Envelope
-from src.app.security import require_admin_token, require_learner_token
+from src.app.security import (
+    require_admin_token,
+    require_learner_token,
+    require_local_controller,
+)
 from src.app.services.push_client import PushClient
 from src.app.services.stream_manager import StreamManager, UnknownDeviceError
 
@@ -89,7 +93,7 @@ async def list_devices(_: str = Depends(require_learner_token)) -> JSONResponse:
 
 @app.post("/api/v1/session/start")
 async def start_session(
-    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
 ) -> JSONResponse:
     try:
         await stream_manager.start(device_id)
@@ -100,7 +104,7 @@ async def start_session(
 
 @app.post("/api/v1/session/stop")
 async def stop_session(
-    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
 ) -> JSONResponse:
     try:
         await stream_manager.stop(device_id)
@@ -213,7 +217,7 @@ async def muse_status(
 
 @app.post("/api/v1/muse/refresh")
 async def muse_refresh(
-    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
 ) -> JSONResponse:
     try:
         out = stream_manager.send_muse_bridge_command("refresh", device_id)
@@ -223,7 +227,7 @@ async def muse_refresh(
 
 
 @app.post("/api/v1/muse/connect")
-async def muse_connect(body: MuseConnectBody, _: str = Depends(require_admin_token)) -> JSONResponse:
+async def muse_connect(body: MuseConnectBody, _: str = Depends(require_local_controller)) -> JSONResponse:
     try:
         out = stream_manager.send_muse_bridge_command("connect", body.device_id, name=body.name.strip())
     except UnknownDeviceError:
@@ -233,7 +237,7 @@ async def muse_connect(body: MuseConnectBody, _: str = Depends(require_admin_tok
 
 @app.post("/api/v1/muse/disconnect")
 async def muse_disconnect(
-    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_admin_token)
+    device_id: str = StreamManager.DEFAULT_DEVICE_ID, _: str = Depends(require_local_controller)
 ) -> JSONResponse:
     try:
         out = stream_manager.send_muse_bridge_command("disconnect", device_id)

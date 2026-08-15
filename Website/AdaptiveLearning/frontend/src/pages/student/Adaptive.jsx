@@ -4,7 +4,10 @@ import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
-import { startPush, stopPush, stopPushOnUnload, pushStatus } from '../../lib/sidecar'
+import { startPush, stopPush, stopPushOnUnload, pushStatus,
+         deviceStart, deviceStop, museRefresh, museConnect,
+         museDisconnect, museState, devices as sidecarDevices
+       } from '../../lib/sidecar'
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
 
@@ -74,6 +77,11 @@ export default function Adaptive() {
   // a station is *which sidecar stream* to use, chosen before the BLE pairing flow
   // (scan/connect by headband name) even starts.
   const [stations, setStations]     = useState([])
+  // The camera is a registered station like any other, but it is never a
+  // headband, so it is tracked apart from `stations` -- which the picker
+  // filters to headbands precisely so nobody is offered a camera to pair.
+  const [camera, setCamera]         = useState(
+    { id: null, running: false, busy: false })
   const [stationId, setStationId]   = useState(null)
 
   // Push ingestion: what the local sidecar reports about its own delivery.
@@ -144,8 +152,20 @@ export default function Adaptive() {
   useEffect(() => {
     if (!headband.available) return
     let alive = true
-    eegDevices().then(d => {
+    // Under push the backend answers `devices: []` deliberately -- it does
+    // not probe a sidecar it has no route to -- so asking it would report a
+    // machine with no hardware at all. The sidecar is on loopback and is the
+    // only thing that knows in that mode.
+    const source = headband.pushMode
+      ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
+      : eegDevices()
+    source.then(d => {
       if (!alive) return
+      // Tracked before the headband filter below, or enabling the camera would
+      // depend on the picker's rules -- two unrelated things.
+      const face = (d?.devices || []).find(x => x.kind === 'face')
+      setCamera(c => ({ ...c, id: face?.device_id || null,
+                        running: !!face?.running }))
       // This control connects a *headband*, and EEG_DEVICES registers cameras in
       // the same registry (`default:muse@8765,camera:face@0` is the shipped
       // example), so an unfiltered list offers "camera" as something to connect a
@@ -167,7 +187,7 @@ export default function Adaptive() {
       })
     })
     return () => { alive = false }
-  }, [headband.available])
+  }, [headband.available, headband.pushMode])
 
   // Re-offers the session to the sidecar. Shared by the initial handover and
   // by the status poll, because the two failures are the same one seen at
@@ -398,6 +418,33 @@ export default function Adaptive() {
 
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
+  const toggleCamera = async () => {
+    // Push only. The button is disabled otherwise, and this returns rather than
+    // trusting that -- the two guards protect different things: the disabled
+    // attribute is the explanation to the student, this is the correctness.
+    if (!camera.id || !headband.pushMode || camera.busy) return
+    setCamera(c => ({ ...c, busy: true }))
+    try {
+      if (camera.running) {
+        await deviceStop(camera.id)
+        setCamera(c => ({ ...c, running: false }))
+      } else {
+        // The session handover first: the sidecar posts as the student, and
+        // starting the capture before it has a token would spend the first
+        // windows recording into a queue that cannot be delivered.
+        const sid = await getOrCreateSession()
+        await startPush(sid)
+        await deviceStart(camera.id)
+        setCamera(c => ({ ...c, running: true }))
+      }
+    } catch (e) {
+      console.error('[camera]', e)
+      alert('Camera could not be switched: ' + (e?.message || String(e)))
+    } finally {
+      setCamera(c => ({ ...c, busy: false }))
+    }
+  }
+
   const toggleHeadband = async () => {
     if (!stationId) return
     // Guarded separately from the main try below, which starts several steps
@@ -428,10 +475,45 @@ export default function Adaptive() {
       window.AL_currentSessionId = activeSessionId
     }
 
+    // Who drives the headband depends on the ingest mode and nothing else.
+    //
+    // pull: the backend polls this sidecar and proxies scan/connect, so every
+    //       step goes through /api/eeg/muse/*.
+    // push: the backend is remote by definition -- that is why push exists --
+    //       so those answer 409 (`_refuse_under_push`) and the page talks to
+    //       the sidecar on loopback itself. `require_local_controller` is what
+    //       admits the bundled learner token there, and only when PUSH_ENABLED
+    //       is set; under pull the same calls would 401, correctly.
+    //
+    // Defined here rather than as a component-level memo so the pull branch can
+    // close over `rec`, which is created a few lines above and deliberately not
+    // held in state.
+    const hw = headband.pushMode ? {
+      begin:      async (sid) => { await startPush(sid)
+                                   await deviceStart(stationId)
+                                   return { ok: true, running: true } },
+      disconnect: () => museDisconnect(stationId),
+      scan:       () => museRefresh(stationId),
+      connect:    (name) => museConnect(name, stationId),
+      status:     () => museState(stationId),
+      end:        async () => { await deviceStop(stationId).catch(() => {})
+                                await stopPush().catch(() => {}) },
+    } : {
+      begin:      () => rec.start(),
+      disconnect: () => apiFetch('/api/eeg/muse/disconnect',
+                                 { method: 'POST', body: { device_id: stationId } }),
+      scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
+                                    { method: 'POST', body: { device_id: stationId, session_id: sid } }),
+      connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
+                                          { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
+      status:     async () => (await eegStatus(stationId))?.muse || {},
+      end:        () => rec.stop(),
+    }
+
     // — Disconnect —
     if (headband.connected) {
       clearTimeout(phaseTimer.current)
-      await rec.stop()
+      await hw.end()
       // Drop the recorder rather than leaving it cached: it closed over
       // deviceId at creation time, so reusing it after the user picks a
       // different station on the picker would start the next poller on the
@@ -455,32 +537,32 @@ export default function Adaptive() {
     try {
       // 1. Start the backend EEG poller
       setHeadband(s => ({ ...s, phase: 'starting' }))
-      const res = await rec.start()
+      const res = await hw.begin(activeSessionId)
       if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
 
       // 2. Disconnect any previous session so the headband isn't stuck in streaming state
       //    (causes BadStateError on the next connect if skipped)
-      await apiFetch('/api/eeg/muse/disconnect', { method: 'POST', body: { device_id: stationId } }).catch(() => {})
+      await hw.disconnect().catch(() => {})
       await new Promise(r => setTimeout(r, 1500))
 
       // 3. Tell the native bridge to scan for nearby headbands
       setHeadband(s => ({ ...s, phase: 'scanning' }))
       // session_id scopes the station reservation this scan claims (#88), so
       // closing a *different* session of the same student cannot release it.
-      await apiFetch('/api/eeg/muse/refresh', { method: 'POST', body: { device_id: stationId, session_id: activeSessionId } })
+      await hw.scan(activeSessionId)
 
       // 4. Poll up to 12 s for at least one device to appear
       let devices = []
       let bluetoothEnabled = true
       for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 1000))
-        const s = await eegStatus(stationId)
-        devices = s?.muse?.ingestion?.muse_devices || []
+        const st = await hw.status()
+        devices = st?.ingestion?.muse_devices || []
         if (devices.length > 0) break
         // Bridge reports the PC's Bluetooth radio state directly (see
         // MuseBridgeService::bluetooth_enabled) — stop waiting immediately
         // instead of burning the full 12 s when the radio itself is off.
-        if (s?.muse?.ingestion?.bluetooth_enabled === false) {
+        if (st?.ingestion?.bluetooth_enabled === false) {
           bluetoothEnabled = false
           break
         }
@@ -499,7 +581,7 @@ export default function Adaptive() {
       // 5. Connect to first discovered device (usually there's only one)
       const target = devices[0]
       setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
-      await apiFetch('/api/eeg/muse/connect', { method: 'POST', body: { name: target, device_id: stationId, session_id: activeSessionId } })
+      await hw.connect(target, activeSessionId)
 
       // 6. Poll for actual BLE connection — bridge connects asynchronously.
       //    If we get BadStateError the headband is still streaming from a prior session;
@@ -507,8 +589,8 @@ export default function Adaptive() {
       let muse_ok = false
       for (let i = 0; i < 10; i++) {
         await new Promise(r => setTimeout(r, 1000))
-        const s = await eegStatus(stationId)
-        if (s?.muse?.ingestion?.muse_connected) { muse_ok = true; break }
+        const st = await hw.status()
+        if (st?.ingestion?.muse_connected) { muse_ok = true; break }
       }
 
       if (!muse_ok) {
@@ -702,6 +784,46 @@ export default function Adaptive() {
           :                                   'Connect Headband' }
         </button>
       </motion.div>
+
+      {/* Camera. Rendered only when one is registered, because a student
+          whose deployment has no camera should not be told about a channel that
+          does not exist for them -- the same rule the signal tiles follow.
+
+          Under pull it renders disabled with the reason. That is deliberate
+          rather than hiding it: `face_signals` has exactly one writer,
+          `/api/signals/face`, which is the push endpoint, so a camera started
+          under pull would capture and store nothing. A control that silently
+          did nothing would be worse than one that says why it cannot. */}
+      {camera.id && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className="mb-6 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4 flex items-center gap-4 shadow-sm">
+          <div className="w-11 h-11 rounded-xl bg-fuchsia-600 grid place-items-center text-white text-lg">📷</div>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-sm flex items-center gap-2">
+              Camera
+              {camera.running
+                ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
+                : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">off</span>}
+            </p>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              {!headband.pushMode
+                ? 'The camera records through the app on this computer, which this deployment is not set up for. Nothing would be saved.'
+                : camera.busy
+                  ? 'Starting the camera...'
+                  : camera.running
+                    ? 'Reading how you are finding the questions. No video is saved.'
+                    : 'Turn on to read how you are finding the questions. No video is saved.'}
+            </p>
+          </div>
+          <button onClick={toggleCamera}
+            disabled={!headband.pushMode || camera.busy}
+            className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
+              camera.running ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-fuchsia-600 hover:bg-fuchsia-700 text-white'
+            }`}>
+            {camera.busy ? 'Working...' : camera.running ? 'Turn off' : 'Turn on camera'}
+          </button>
+        </motion.div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">

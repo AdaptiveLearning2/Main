@@ -217,6 +217,24 @@ process that reads `getenv` directly and never loads `config.py`, so a `MUSE_ENA
 flag sets the variable in the window that launches the exe. Same for `MUSE_OPTICS_PRESET`, and for
 `MUSE_BRIDGE_PORT` if it ever needs one.
 
+### Battery is device telemetry, and null for the first stretch of every session
+
+`battery_percent` rides on the bridge's ingestion block through to the badge beside Disconnect on
+the student page. Registered on **every** preset, not just the optics ones — libMuse fires BATTERY
+on its own schedule rather than as part of a preset's stream, so it costs nothing on `PRESET_21`.
+
+**Null until the first packet arrives, which is most of the first minute.** That is normal, not a
+fault, and it is why the badge renders nothing rather than `--%`: a permanent empty slot reads as a
+broken sensor. The three-state rule applies with unusual force here because **0% is a real and
+alarming reading** — `pct || null` anywhere on this path erases exactly the value the badge exists
+for, so the checks are `typeof pct === 'number'` and `!= null`. The bridge stores −1 for "not
+reported" and `main.cpp` turns that into JSON null; `EEG_SOURCE=sim` reports null too, on the same
+grounds as it emitting no heart block.
+
+Cleared on disconnect in both places — `reset_device_fields_locked` and the page's own state. A
+charge percentage left standing describes the headband that just went away, and it is the one
+number here a student is asked to act on.
+
 ### Headband BPM: cleared seated, fails under gait
 
 Two regimes with different mechanisms, and the rule is scoped to the right one.

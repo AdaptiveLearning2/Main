@@ -10,7 +10,7 @@ import { startPush, stopPush, stopPushOnUnload, pushStatus,
          releasePushIfIdle, sidecarDebug
        } from '../../lib/sidecar'
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
-import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
+import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, BatteryLow } from 'lucide-react'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
@@ -71,6 +71,11 @@ export default function Adaptive() {
     available: false, connected: false, samples: 0, lastTs: null,
     phase: 'idle', // idle | starting | scanning | connecting | connected
     deviceName: null,
+    // Charge remaining, or null for "no reading". Null covers three cases that
+    // all mean the same thing to a reader -- nothing connected, a bridge that
+    // predates the field, and a headband that has not sent a BATTERY packet
+    // yet -- and none of them may render as 0%, which is a real charge.
+    battery: null,
   })
 
   // Sidecar stations (device-keyed EEG registry, e.g. multiple headband rigs in the
@@ -214,6 +219,42 @@ export default function Adaptive() {
         }
       })
   }, [])
+
+  // Headband charge, while one is connected.
+  //
+  // Its own effect rather than a field on the status poll below, which reads
+  // the *backend* -- under push the backend has no route to a student's laptop,
+  // so the number would exist in one deployment and not the other for no reason
+  // a reader could see. Same source-by-mode split as `hw` in toggleHeadband.
+  //
+  // 30s, because this is a slowly-moving device property that libMuse reports on
+  // its own schedule; polling it at the status cadence would be three orders of
+  // magnitude more requests than the value changes.
+  useEffect(() => {
+    if (!headband.connected || !stationId) return
+    let killed = false
+    const read = async () => {
+      try {
+        const st = headband.pushMode ? await museState(stationId)
+                                     : (await eegStatus(stationId))?.muse
+        if (killed) return
+        const pct = st?.ingestion?.battery_percent
+        // `undefined` from a bridge without the field, `null` before the first
+        // BATTERY packet, a number once one arrives. Only the last is a
+        // reading. Written as a typeof check and not `pct || null`, which would
+        // turn a genuinely flat battery into "no reading" -- erasing the one
+        // value most worth showing.
+        setHeadband(s => ({ ...s, battery: typeof pct === 'number' ? pct : null }))
+      } catch {
+        // A failed read is not a flat battery, and it is not a fresh one
+        // either. Leave whatever was last measured; the badge disappears on
+        // disconnect, which is the state that actually invalidates it.
+      }
+    }
+    read()
+    const id = setInterval(read, 30000)
+    return () => { killed = true; clearInterval(id) }
+  }, [headband.connected, headband.pushMode, stationId])
 
   const creating = useRef(null)
 
@@ -574,7 +615,11 @@ export default function Adaptive() {
       // gets recorded. Recreating it on the next connect binds it to
       // whatever stationId is selected then.
       setRecorder(null)
-      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null }))
+      // `battery: null` with the rest: a charge percentage describes the
+      // headband that just went away, and it is the one number here a student
+      // acts on. The bridge clears its own copy on disconnect for the same
+      // reason; this is the half that matters if the page never re-polls.
+      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null, battery: null }))
       return
     }
 
@@ -833,6 +878,22 @@ export default function Adaptive() {
             other two. `stationId` still gates, and under push it is only set
             once the sidecar answered -- which is the reachability check that
             actually applies there. */}
+        {/* Charge, beside the button that acts on it. Rendered only when there
+            is a reading -- no "--%" placeholder, because the gap between
+            connecting and the first BATTERY packet is normal and a permanent
+            empty slot would read as a broken sensor rather than as a headband
+            that has not said yet. `!= null` catches undefined too, and lets 0
+            through: a flat battery is exactly what this is for. */}
+        {headband.connected && headband.battery != null && (
+          <span title="Headband charge"
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold ${
+              headband.battery <= 20 ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400'
+              : headband.battery <= 40 ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400'
+              : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}`}>
+            {headband.battery <= 20 ? <BatteryLow size={14} /> : <BatteryFull size={14} />}
+            {Math.round(headband.battery)}%
+          </span>
+        )}
         <button onClick={toggleHeadband}
           disabled={(!headband.available && !headband.pushMode) || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${

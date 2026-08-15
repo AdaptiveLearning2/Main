@@ -240,6 +240,16 @@ public:
      * one would hand the camera fallback a job it should not be given.
      */
     bool optical_supported() const;
+    /**
+     * Charge remaining, 0-100, or **negative when no BATTERY packet has
+     * arrived** -- which is the state for the whole first stretch of a session,
+     * since libMuse fires this periodically rather than on connect.
+     *
+     * Negative rather than 0, because 0% is a real and alarming reading and a
+     * consumer branching on the number should not have to guess which it got.
+     * main.cpp turns it into JSON null. Same rule as eeg_channel_count.
+     */
+    double battery_percent() const;
     BandPowers band_powers() const;
     /** Per-electrode fit/validity as reported by the headband itself. */
     ContactQuality contact_quality() const;
@@ -303,6 +313,8 @@ private:
     std::string muse_model_;
     std::string requested_preset_;
     bool optical_supported_{false};
+    // -1 until a BATTERY packet arrives. See battery_percent().
+    double battery_percent_{-1.0};
     // steady_clock ms at which the last notch-filtered packet arrived; 0 means
     // none yet. Not a bool: see notch_available().
     std::atomic<long long> last_notch_ms_{0};
@@ -349,6 +361,8 @@ private:
     void update_optical(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     /** Records IS_PPG_GOOD / IS_HEART_GOOD into latest_optical_. */
     void update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
+    /** Records BATTERY into battery_percent_. */
+    void update_battery(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet);
     void update_connection_state(interaxon::bridge::ConnectionState state);
     void rebuild_muse_name_list();
     /** Re-queries the OS Bluetooth radio state; called on start() and refresh_scan(). */

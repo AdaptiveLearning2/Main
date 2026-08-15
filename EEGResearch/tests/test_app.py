@@ -276,6 +276,32 @@ def test_apply_bridge_ingestion_fields_keeps_unknown_distinct_from_false_and_zer
     assert reported_bad["optics_age_ms"] == 0
 
 
+def test_apply_bridge_ingestion_fields_carries_battery_and_keeps_zero_from_unknown():
+    """0% is a real charge, and it is the reading the badge exists for.
+
+    The bridge sends null until a BATTERY packet arrives -- libMuse fires those
+    on its own schedule, so that covers most of the first minute of a session.
+    Collapsing null and 0 would draw an empty battery for a headband that has
+    simply not said yet, which is the alarming direction to be wrong in."""
+    measured: dict = {}
+    _apply_bridge_ingestion_fields(measured, {"battery_percent": 82.0})
+    assert measured["battery_percent"] == 82.0
+
+    flat: dict = {}
+    _apply_bridge_ingestion_fields(flat, {"battery_percent": 0})
+    assert flat["battery_percent"] == 0.0
+
+    unreported: dict = {}
+    _apply_bridge_ingestion_fields(unreported, {"battery_percent": None})
+    assert unreported["battery_percent"] is None
+
+    # A bridge predating the field leaves the key absent, which is a third
+    # thing again -- and must not be invented as either of the two above.
+    absent: dict = {}
+    _apply_bridge_ingestion_fields(absent, {"muse_model": "MS-03"})
+    assert "battery_percent" not in absent
+
+
 def test_apply_bridge_ingestion_fields_ignores_malformed_optical_values():
     target = {"optics_packets": 12, "optics_age_ms": 5}
     _apply_bridge_ingestion_fields(target, {

@@ -181,3 +181,84 @@ describe('stopPushOnUnload', () => {
     await expect(sidecar.stopPushOnUnload()).resolves.toBeUndefined()
   })
 })
+
+describe('releasePushIfIdle', () => {
+  // The push client is one shared object for the whole sidecar --
+  // `/api/v1/push/stop` clears `set_payload_consumer` for every device at once.
+  // So neither device may tear it down on its own, and both call sites were
+  // wrong in opposite directions before this existed.
+
+  const devicesReply = (list) => ok({ status: 'ok', data: list })
+
+  it('leaves the push client alone while another device is still streaming', async () => {
+    // The reported bug: disconnecting the headband called stopPush()
+    // unconditionally, which killed a running camera's delivery. Its frames
+    // went nowhere while the card still said RECORDING.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) {
+        return devicesReply([{ device_id: 'default', kind: 'muse', running: false },
+                             { device_id: 'camera', kind: 'face', running: true }])
+      }
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(false)
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(false)
+  })
+
+  it('stops it once nothing is streaming', async () => {
+    // The other direction, which was also wrong: the camera's off-path never
+    // called stopPush at all, so turning the camera off with no headband left
+    // the sidecar holding the student's access token.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) {
+        return devicesReply([{ device_id: 'default', kind: 'muse', running: false },
+                             { device_id: 'camera', kind: 'face', running: false }])
+      }
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(true)
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(true)
+  })
+
+  it('stops it when it cannot tell, rather than leaving a token held', async () => {
+    // A sidecar holding a student's token after they walked away is the worse
+    // of the two failures -- and a device still capturing reports
+    // `running: false` on the next poll rather than claiming to record into a
+    // client that is gone.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) throw new Error('sidecar went away')
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(true)
+    expect(out.devices).toBeNull()
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(true)
+  })
+
+  it('returns the list it decided from, so the caller need not read it twice', async () => {
+    // Two reads could disagree, and the second would be the one the card
+    // rendered -- which is how a camera ends up claiming to record into a push
+    // client that was just torn down.
+    const list = [{ device_id: 'camera', kind: 'face', running: true }]
+    mockFetch(async (url) =>
+      String(url).includes('/devices') ? devicesReply(list) : ok({}))
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.devices).toEqual(list)
+  })
+})

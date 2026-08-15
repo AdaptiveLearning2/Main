@@ -6,7 +6,8 @@ import { apiFetch } from '../../lib/api'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, museRefresh, museConnect,
-         museDisconnect, museState, devices as sidecarDevices
+         museDisconnect, museState, devices as sidecarDevices,
+         releasePushIfIdle
        } from '../../lib/sidecar'
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain } from 'lucide-react'
@@ -418,6 +419,23 @@ export default function Adaptive() {
 
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
+  // Stop one device and then release the shared push client if -- and only
+  // if -- nothing else is still streaming through it. The device list that
+  // decision is made from is also what updates the camera's own state, so the
+  // card cannot claim to be recording into a client that has been torn down.
+  const endPushDevice = async (deviceId) => {
+    await deviceStop(deviceId).catch(() => {})
+    const { devices: list } = await releasePushIfIdle()
+    if (list) {
+      const face = list.find(d => d.kind === 'face')
+      setCamera(c => ({ ...c, running: !!face?.running }))
+    } else {
+      // The list could not be read, so the client was released to be safe --
+      // which means nothing is being delivered, whatever is still capturing.
+      setCamera(c => ({ ...c, running: false }))
+    }
+  }
+
   const toggleCamera = async () => {
     // Push only. The button is disabled otherwise, and this returns rather than
     // trusting that -- the two guards protect different things: the disabled
@@ -426,8 +444,10 @@ export default function Adaptive() {
     setCamera(c => ({ ...c, busy: true }))
     try {
       if (camera.running) {
-        await deviceStop(camera.id)
-        setCamera(c => ({ ...c, running: false }))
+        // Via the same helper as the headband: the camera's off-path never
+        // released the push client, so turning it off with no headband running
+        // left the sidecar holding the student's access token.
+        await endPushDevice(camera.id)
       } else {
         // The session handover first: the sidecar posts as the student, and
         // starting the capture before it has a token would spend the first
@@ -496,8 +516,11 @@ export default function Adaptive() {
       scan:       () => museRefresh(stationId),
       connect:    (name) => museConnect(name, stationId),
       status:     () => museState(stationId),
-      end:        async () => { await deviceStop(stationId).catch(() => {})
-                                await stopPush().catch(() => {}) },
+      // Not `stopPush()` outright. `/api/v1/push/stop` is global -- one
+      // client for the whole sidecar -- so disconnecting the headband used to
+      // tear down a running camera's delivery too, while its card went on
+      // saying RECORDING because nothing told it.
+      end:        () => endPushDevice(stationId),
     } : {
       begin:      () => rec.start(),
       disconnect: () => apiFetch('/api/eeg/muse/disconnect',

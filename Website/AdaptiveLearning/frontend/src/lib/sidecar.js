@@ -202,3 +202,37 @@ export async function museState(deviceId) {
   const res = await call(`/api/v1/muse/status?device_id=${encodeURIComponent(deviceId)}`)
   return res?.data || {}
 }
+
+/** Tear down the shared push client, but only once nothing is left using it.
+ *
+ * `/api/v1/push/stop` is **global**: there is one `push_client` for the whole
+ * sidecar, and stopping it clears `set_payload_consumer` for every device at
+ * once. So "whoever disconnects last, unconditionally" is wrong in both
+ * directions, and both were wrong:
+ *
+ * - the headband's off-path called `stopPush()` outright, which silently killed
+ *   a running camera's delivery. Its frames went nowhere while the card still
+ *   said RECORDING, because nothing told it.
+ * - the camera's off-path never called it at all, so turning the camera off
+ *   with no headband left the sidecar holding the student's access token --
+ *   a consent problem, not untidiness.
+ *
+ * Returns the device list it decided from, so a caller can update what it shows
+ * from the same read rather than a second one that could disagree.
+ */
+export async function releasePushIfIdle() {
+  let list = null
+  try {
+    list = await devices()
+  } catch {
+    // Could not tell. Stop it: a sidecar holding a token after the student
+    // walked away is the worse of the two failures, and a device still
+    // capturing will report `running: false` on the next poll rather than
+    // claiming to record into a client that is gone.
+    await stopPush().catch(() => {})
+    return { stopped: true, devices: null }
+  }
+  if (list.some(d => d.running)) return { stopped: false, devices: list }
+  await stopPush().catch(() => {})
+  return { stopped: true, devices: list }
+}

@@ -373,6 +373,23 @@ class _Args:
         self.__dict__.update(kw)
 
 
+def _stub_cv2(monkeypatch):
+    """A `cv2` with just the resize the capture loop calls.
+
+    CI has no OpenCV by design, and the loop reaches `cv2.resize` on every frame
+    with a face in it. Skipping there would leave the abort path that actually
+    writes frames uncovered in the only place that runs on every push.
+    """
+    import sys
+    import types
+
+    stub = types.ModuleType("cv2")
+    stub.INTER_AREA = 3
+    stub.resize = lambda img, size, interpolation=None: np.zeros(
+        (size[1], size[0], img.shape[2]), dtype=img.dtype)
+    monkeypatch.setitem(sys.modules, "cv2", stub)
+
+
 def _fake_camera(monkeypatch, faces=True):
     """A source and locator that need no webcam."""
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
@@ -446,6 +463,7 @@ def test_aborting_mid_recording_keeps_what_was_captured(monkeypatch, tmp_path):
     """The trim runs in the `finally`, so an aborted capture is a short valid
     file rather than a preallocated one full of black frames."""
     _fake_camera(monkeypatch)
+    _stub_cv2(monkeypatch)
     gui = _AbortingGui(on_frame=5)
     monkeypatch.setattr(capture, "Gui", lambda: gui)
     monkeypatch.setattr(capture, "WARMUP_SECONDS", 0.0)

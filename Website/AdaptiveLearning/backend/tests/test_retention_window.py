@@ -443,3 +443,33 @@ def test_every_window_state_has_a_meaning():
             assert meaning.reason and meaning.stopped_reason, (
                 f"{state} denies without saying why"
             )
+
+
+def test_the_timezone_fallback_cannot_itself_fail(monkeypatch):
+    """`_school_timezone` is documented to degrade to UTC rather than refuse --
+    a wrong day boundary on a chart being a smaller harm than a blank one.
+
+    Its fallback was `ZoneInfo("UTC")`, which needs a timezone database that
+    Windows does not ship. Without the `tzdata` package that raised too, so the
+    function that exists to degrade took the whole request down instead: a
+    student clicking Connect Headband got a 500 out of `/api/sessions/start`,
+    via the rollup on the stale-session sweep.
+
+    `tzdata` is a dependency now, but the reason to pin this is that CI runs on
+    Linux, where the system database makes this path work whatever is
+    installed -- so the platform that can catch a regression here is the one
+    the tests never run on.
+    """
+    def _no_tzdata(*_a, **_k):
+        raise Exception("No time zone found with key UTC")
+
+    monkeypatch.setattr(main, "ZoneInfo", _no_tzdata)
+    main._retention_cache = None
+
+    tz = main._school_timezone()
+
+    assert tz is not None, "the fallback raised instead of degrading"
+    # Usable as a tzinfo, not merely non-None: the callers pass it straight to
+    # astimezone(), which is where a sentinel would fail instead.
+    stamped = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc).astimezone(tz)
+    assert stamped.utcoffset() == timedelta(0)

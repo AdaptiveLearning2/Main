@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
@@ -289,7 +289,7 @@ def _resolve_window(row: dict) -> dict:
     return {"state": state, "starts_on": starts, "ends_on": ends, "timezone": name}
 
 
-def _school_timezone() -> ZoneInfo:
+def _school_timezone() -> tzinfo:
     """The school's zone, for bucketing report days. Defaults to UTC.
 
     **The opposite default to `_retention_window`, deliberately.** There, an
@@ -302,14 +302,25 @@ def _school_timezone() -> ZoneInfo:
     Shares `_retention_window`'s cache, so a corrected timezone typo can take
     up to `_RETENTION_TTL_SECONDS` to reach a report -- a bounded lag, not the
     unbounded one a process-lifetime cache here would add on top of it.
+
+    Both branches are guarded, and the fallback is `timezone.utc` rather than
+    `ZoneInfo("UTC")`, because `ZoneInfo` needs a timezone database that Windows
+    does not ship -- so without the `tzdata` package the *fallback* raised too
+    and this function took the request down instead of degrading. `tzdata` is a
+    dependency now, but a fallback that can fail is not a fallback: CI runs on
+    Linux, where the system database makes this path work whatever is installed,
+    so the one platform that can catch it is the one nobody tests on.
     """
     try:
         return ZoneInfo(_retention_window().get("timezone") or "UTC")
     except Exception:
-        return ZoneInfo("UTC")
+        try:
+            return ZoneInfo("UTC")
+        except Exception:
+            return timezone.utc
 
 
-def _school_date(ts, tz: ZoneInfo) -> date | None:
+def _school_date(ts, tz: tzinfo) -> date | None:
     """The calendar day `ts` falls on *at the school*. None if unparseable.
 
     Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
@@ -329,7 +340,7 @@ def _school_date(ts, tz: ZoneInfo) -> date | None:
     return None if parsed is None else parsed.astimezone(tz).date()
 
 
-def _school_day(ts, tz: ZoneInfo) -> str:
+def _school_day(ts, tz: tzinfo) -> str:
     """`_school_date` as YYYY-MM-DD, for bucketing.
 
     Empty string for anything unparseable, which no day matches, so a bad

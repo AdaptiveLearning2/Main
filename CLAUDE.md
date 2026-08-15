@@ -38,6 +38,12 @@ next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you ge
 landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+`-Optics` turns the headband's optical channels on (`-OpticsPreset 103N` picks the rung) and is
+refused without `-Muse`, rather than promoted the way `-Gaze` promotes `-Camera`: the alternative to
+a headband is the simulator, which models no optical channel, so guessing would produce a run that
+looks exactly like the flag not working. A preset outside `1031`–`1036` is refused too — the bridge
+falls back to `1035` and says so on its own stderr, in its own window, so the session would record
+on a rung nobody chose. `1031`/`1032` warn and proceed, since reproducing the cliff needs them.
 **Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
 is ~50 MB and a second ML runtime for a channel that is off by default. **`face` pins `opencv-contrib-python`, not
 `opencv-python`** — they install the same `cv2`, contrib being the superset, so having both means
@@ -204,6 +210,12 @@ on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE 
 ~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung — `1031`/`1032` 16 CH, `1033`/`1034` 8 CH,
 `1035`/`1036` 4 CH (odd = low power). The default sits at the bottom deliberately: the 16-channel
 failure took EEG down with it. An unrecognised value warns once and falls back.
+
+**Turn it on with `./start.ps1 -Muse -Optics`, not by editing a `.env`.** The bridge is a C++
+process that reads `getenv` directly and never loads `config.py`, so a `MUSE_ENABLE_OPTICS` line in
+`EEGResearch/.env` is read by nothing — the version of this mistake that looks like it worked. The
+flag sets the variable in the window that launches the exe. Same for `MUSE_OPTICS_PRESET`, and for
+`MUSE_BRIDGE_PORT` if it ever needs one.
 
 ### Headband BPM: cleared seated, fails under gait
 

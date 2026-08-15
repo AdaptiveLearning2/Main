@@ -8,7 +8,22 @@ param(
     # Emotion is on whenever the camera is, so turning it off needs a switch.
     # Worth having: gaze needs no 35 MB FER+ model, so gaze-only is a real and
     # much cheaper deployment.
-    [switch]$NoEmotion
+    [switch]$NoEmotion,
+    # The headband's optical channels -- PPG, and therefore heart rate. Off by
+    # default, and a flag rather than a default because turning it on moves a
+    # 2025 Athena off PRESET_21: a bandwidth trade with a measured cliff, and an
+    # EEG risk in its own right, since the preset change moves bit depth 12 -> 14
+    # and a silent EEG regression would be blamed on whatever shipped beside it.
+    #
+    # Unlike every other flag here this one is passed to the bridge process
+    # rather than written to a .env. The bridge is a C++ process that reads its
+    # own environment directly and never loads config.py, so a MUSE_ENABLE_OPTICS
+    # line in EEGResearch/.env is read by nothing -- the version of this mistake
+    # that looks like it worked.
+    [switch]$Optics,
+    # Which rung: 1031/1032 are 16 CH, 1033/1034 8 CH, 1035/1036 4 CH, odd being
+    # low power. Empty leaves the bridge on its own default (1035, the bottom).
+    [string]$OpticsPreset = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,6 +63,42 @@ if ($Camera -and $NoEmotion -and -not $Gaze -and -not $heartOn) {
     Write-Host "-NoEmotion without -Gaze leaves the camera with nothing to measure." -ForegroundColor Red
     Write-Host "  Add -Gaze, or drop -Camera." -ForegroundColor Yellow
     exit 1
+}
+
+# Refused rather than promoted, which is the opposite call to -Gaze above. That
+# promotion was safe because the intent was unambiguous and the cost was a camera
+# nobody asked for. This flag configures a *headband*, and the alternative to one
+# is the simulator -- which models no optical channel at all, so every window
+# would be refused `no_samples` and the run would look exactly like -Optics not
+# working. Guessing here would manufacture that.
+if ($Optics -and -not $Muse) {
+    Write-Host "-Optics needs -Muse: the simulator has no optical channel to enable." -ForegroundColor Red
+    Write-Host "  Add -Muse, or drop -Optics." -ForegroundColor Yellow
+    exit 1
+}
+if ($OpticsPreset -and -not $Optics) {
+    Write-Host "-OpticsPreset does nothing without -Optics." -ForegroundColor Red
+    Write-Host "  Add -Optics, or drop -OpticsPreset." -ForegroundColor Yellow
+    exit 1
+}
+# A value outside the range is a typo, not a preference. The bridge already says
+# so and falls back to 1035 -- but it says so on stderr in its own window, so the
+# session records on a rung nobody chose while the operator believes otherwise.
+# Refusing here is the difference between a wrong number and no number.
+if ($OpticsPreset -and $OpticsPreset -notmatch '^103[1-6]$') {
+    Write-Host "-OpticsPreset '$OpticsPreset' is not a preset (expected 1031-1036)." -ForegroundColor Red
+    Write-Host "  16 CH: 1031/1032   8 CH: 1033/1034   4 CH: 1035/1036   (odd = low power)" -ForegroundColor Yellow
+    exit 1
+}
+# Warned, not refused. 16 CH at 64Hz was measured dropping the BLE link within
+# ~20s and collapsing electrode contact from [1,1,1,1] to [4,4,4,4] -- it takes
+# EEG down with it. But selecting it is how that was measured, so the rung stays
+# reachable and the script says what is known about it instead.
+if ($OpticsPreset -in @("1031", "1032")) {
+    Write-Host "  WARNING: PRESET_$OpticsPreset is 16 CH optics." -ForegroundColor Red
+    Write-Host "  Measured on hardware: BLE link drops within ~20s and electrode contact" -ForegroundColor Yellow
+    Write-Host "  collapses to [4,4,4,4] -- it takes EEG down with it. 1033-1036 held for" -ForegroundColor Yellow
+    Write-Host "  minutes. Proceeding, since reproducing that measurement needs this rung." -ForegroundColor Yellow
 }
 
 $root        = $PSScriptRoot
@@ -173,7 +224,20 @@ if ($Muse) {
         Copy-Item $dll $dllDst
     }
 
+    # Set in the window that launches the exe, not in a .env: the bridge reads
+    # getenv directly. Backticked so PowerShell expands them in the *child*.
     $bridgeCmd = "& '$bridgeExe'"
+    if ($Optics) {
+        if ($OpticsPreset) {
+            $bridgeCmd = "`$env:MUSE_OPTICS_PRESET='$OpticsPreset'; $bridgeCmd"
+        }
+        $bridgeCmd = "`$env:MUSE_ENABLE_OPTICS='1'; $bridgeCmd"
+        $rung = if ($OpticsPreset) { "PRESET_$OpticsPreset" } else { "PRESET_1035 (bridge default)" }
+        Write-Host "  Optics ON -- $rung. Heart rate needs a 2025 Athena; older" -ForegroundColor Yellow
+        Write-Host "  models have no PRESET_10xx range and stay on PRESET_21." -ForegroundColor Gray
+        Write-Host "  First reading is withheld until a second window agrees, so" -ForegroundColor Gray
+        Write-Host "  expect ~35s before a bpm appears." -ForegroundColor Gray
+    }
     Start-Window "Muse Bridge :8765" $eegDir $bridgeCmd
     Write-Host "  Waiting 3s for bridge to start..." -ForegroundColor Gray
     Start-Sleep -Seconds 3

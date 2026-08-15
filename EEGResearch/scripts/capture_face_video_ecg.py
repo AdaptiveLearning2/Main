@@ -380,6 +380,20 @@ def capture(args) -> int:
             frame = source.read()
             if gui is not None and frame is not None:
                 gui.warming(frame, remaining=warm_until - time.perf_counter())
+                if gui.aborted:
+                    break
+
+    # Checked here rather than only inside the loop: aborting during the warm-up
+    # means nothing has been written and nothing should be, so this returns
+    # instead of falling through into a recording the subject just asked not to
+    # make. `q` is the only interactive control this preview offers and it was
+    # ignored for the whole eight seconds it is most likely to be pressed --
+    # while the subject is still deciding whether the framing is right.
+    if gui is not None and gui.aborted:
+        source.release()
+        gui.close()
+        print("aborted during warm-up; nothing was recorded")
+        return 1
 
     header["wall_start"] = (datetime.datetime.now(datetime.timezone.utc)
                             .astimezone().isoformat(timespec="milliseconds"))
@@ -403,6 +417,21 @@ def capture(args) -> int:
                     # an unexplained discontinuity.
                     log.write(json.dumps({"t": round(now, 4), "ok": False}) + "\n")
                     missed += 1
+                    if gui is not None:
+                        # Drawn on the no-face path too, and the abort
+                        # checked here. Without it the preview freezes
+                        # on the last good frame *and* `q` does nothing
+                        # until a face is found again -- which is
+                        # exactly the situation someone wants to stop
+                        # in, since a stretch with no face is the one
+                        # failure they can see and fix.
+                        gui.frame(frame, None, None, elapsed=now,
+                                  total=args.seconds, written=written,
+                                  missed=missed,
+                                  exposure_locked=header["exposure_locked"])
+                        if gui.aborted:
+                            print("\nstopped early; keeping the frames captured so far")
+                            break
                     continue
                 x, y, w, h = box
                 crop = frame[y:y + h, x:x + w]

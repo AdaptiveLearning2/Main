@@ -21,8 +21,20 @@ report, then pass `--apply`.
     python sweep_orphan_charts.py                 # report only
     python sweep_orphan_charts.py --apply
 
-Needs `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, and exits non-zero if the
-sweep refused, so a scheduled run surfaces rather than looking like a clean one.
+Needs `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Exit codes, because the
+point of them is that a scheduled run surfaces rather than looking like a clean
+one -- and they are distinct because they want different responses:
+
+    0  clean, or a dry run, or the per-run cap was hit
+    1  refused: nothing was deleted, and re-running changes nothing until
+       whatever caused the refusal is looked at
+    2  not configured
+    3  some objects could not be deleted: work happened and was incomplete,
+       so re-running is the right response
+
+The cap is deliberately 0. It is normal operation -- the next run finishes the
+work -- and exiting non-zero on it would train whoever reads the alerts to
+ignore this job.
 """
 
 from __future__ import annotations
@@ -70,17 +82,27 @@ def main(argv=None) -> int:
     if report["refused"]:
         print(f"REFUSED: {report['refused']}", file=sys.stderr)
         return 1
+
+    code = 0
     if report["dry_run"]:
         print(f"would remove:       {report.get('would_remove', 0)} object(s)")
         print("\nDry run. Re-run with --apply to delete.")
     else:
         print(f"removed:            {report['removed']} object(s)")
         if report["failed"]:
+            # `remove_objects` reports a failed batch rather than raising, so
+            # this is a real state and not a theoretical one. Printing it to
+            # stderr and then returning 0 was the whole exit-code contract
+            # failing in the one case it exists for: a cron job watching status
+            # would call an incomplete sweep clean.
             print(f"failed:             {len(report['failed'])}", file=sys.stderr)
+            code = 3
     if report["hit_cap"]:
+        # Still 0. The cap is normal operation and the next run finishes the
+        # work; alerting on it would train an operator to ignore this job.
         print(f"\nHit the {args.max_deletes} cap -- more orphans remain. "
               "Re-run to continue.")
-    return 0
+    return code
 
 
 if __name__ == "__main__":

@@ -9,3 +9,7 @@ seed.sql
 .env.keys
 .env.local
 .env.*.local
+
+# Dashboard SQL-editor snippets, synced down by the Supabase CLI. Local
+# scratch tied to one machine and one dashboard session -- not project config.
+snippets/

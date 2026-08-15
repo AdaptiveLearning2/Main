@@ -28,6 +28,7 @@ in.
 
 from __future__ import annotations
 
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -313,6 +314,147 @@ def remove_objects(client, paths) -> tuple[int, list]:
             print(f"[charts] erasure could not remove {len(batch)} object(s): {e}")
             failed.extend(batch)
     return removed, failed
+
+
+# ── sweeping objects whose session is gone ──────────────────────────────────
+#
+# Storage does not cascade (#107). Deleting a `sessions` row -- or a `profiles`
+# row, which cascades to sessions -- leaves the SVGs behind, and `main.py` has no
+# delete endpoint to hook, so today those deletes come from the dashboard or a
+# direct connection. A sweep is the only shape that catches them.
+#
+# It deletes on **absence**, which is the dangerous kind of job: one failed read
+# of `sessions` makes every object in the bucket look orphaned. Every guard below
+# exists so that failure aborts instead of emptying the bucket, and the default
+# is `dry_run=True` for the same reason.
+#
+# Deliberately *not* in scope: an object belonging to a session that still
+# exists. `expire_signal_rows` leaves the archive standing on purpose -- it and
+# `signal_daily_rollup` are what survive the year, and that survival is why a
+# same-day delete with no grace period is defensible. A sweep that "corrected"
+# that would remove the thing making its own schedule safe.
+
+_LIST_PAGE = 100
+# storage-py pages silently; a backend that ignored `offset` would loop for ever.
+_LIST_MAX_PAGES = 1000
+_ID_BATCH = 200
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _list_all(storage, prefix: str) -> list[str]:
+    """Every entry name under `prefix`, paged.
+
+    `list` caps at 100 by default and reports no truncation, so a single call is
+    a silent cap -- a bucket would look like its first 100 students for ever, and
+    the sweep would report "nothing orphaned" about objects it never saw.
+    """
+    names: list[str] = []
+    for page_no in range(_LIST_MAX_PAGES):
+        page = storage.list(prefix, {"limit": _LIST_PAGE,
+                                     "offset": page_no * _LIST_PAGE}) or []
+        names.extend(e["name"] for e in page if isinstance(e, dict) and e.get("name"))
+        if len(page) < _LIST_PAGE:
+            return names
+    raise RuntimeError(
+        f"listing {prefix!r} did not terminate after {_LIST_MAX_PAGES} pages")
+
+
+def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
+                        max_orphan_fraction: float = 0.5) -> dict:
+    """Remove archived charts whose session row no longer exists.
+
+    Returns a report; never raises for an ordinary failure, because the caller
+    is a cron job or an operator and a traceback is a worse answer than a
+    refusal that says why. `refused` is the field to read first: when it is set
+    nothing was deleted.
+
+    `dry_run` defaults to **True**. A sweep that deletes by default is one
+    mistyped argument away from being the bug it exists to fix.
+    """
+    report = {"scanned_sessions": 0, "orphaned_sessions": 0, "removed": 0,
+              "failed": [], "unrecognised": 0, "hit_cap": False,
+              "dry_run": dry_run, "refused": None}
+    storage = client.storage.from_(BUCKET)
+
+    # The bucket is listed **before** `sessions` is read, and the order is the
+    # guard. Read the table first and a session created in between has objects
+    # whose id is missing from the snapshot -- deleted as orphans while its row
+    # sits there. Listing first can only ever be stale in the safe direction: an
+    # object written after the listing is not considered at all.
+    try:
+        found: list[tuple[str, str]] = []
+        for user_id in _list_all(storage, ""):
+            if not _UUID.match(user_id):
+                report["unrecognised"] += 1
+                continue
+            for session_id in _list_all(storage, user_id):
+                if _UUID.match(session_id):
+                    found.append((user_id, session_id))
+                else:
+                    report["unrecognised"] += 1
+    except Exception as e:                                     # noqa: BLE001
+        report["refused"] = f"could not list the bucket: {e}"
+        return report
+
+    report["scanned_sessions"] = len(found)
+    if not found:
+        return report
+
+    ids = sorted({s for _, s in found})
+    live: set[str] = set()
+    try:
+        for i in range(0, len(ids), _ID_BATCH):
+            batch = ids[i:i + _ID_BATCH]
+            rows = (client.table("sessions").select("id")
+                    .in_("id", batch).execute().data) or []
+            live.update(str(r["id"]) for r in rows if r.get("id"))
+    except Exception as e:                                     # noqa: BLE001
+        # Not "treat them as orphaned". A failed read here is precisely the
+        # state that makes a live bucket look deletable.
+        report["refused"] = f"could not read sessions: {e}"
+        return report
+
+    orphans = [(u, s) for u, s in found if s not in live]
+    report["orphaned_sessions"] = len(orphans)
+    if not orphans:
+        return report
+
+    # A handful of orphans is a deleted session. Most of the bucket being
+    # orphaned is a broken read that did not raise -- a filtered-out service
+    # role, a schema change, a table pointed at the wrong project. Refuse and
+    # let a human look, rather than being the fastest way to lose the archive.
+    fraction = len(orphans) / len(found)
+    if fraction > max_orphan_fraction:
+        report["refused"] = (
+            f"{len(orphans)} of {len(found)} sessions look orphaned "
+            f"({fraction:.0%} > {max_orphan_fraction:.0%}); refusing in case the "
+            "sessions read is wrong. Re-run with a higher max_orphan_fraction "
+            "once the count has been checked by hand.")
+        return report
+
+    if len(orphans) > max_deletes:
+        # Reported, not silent: the next run finishes the work, but "removed 500"
+        # with nothing saying more was waiting reads as "the bucket is clean".
+        report["hit_cap"] = True
+        orphans = orphans[:max_deletes]
+
+    paths: list[str] = []
+    try:
+        for user_id, session_id in orphans:
+            paths.extend(f"{user_id}/{session_id}/{name}"
+                         for name in _list_all(storage, f"{user_id}/{session_id}"))
+    except Exception as e:                                     # noqa: BLE001
+        report["refused"] = f"could not list an orphaned session: {e}"
+        return report
+
+    if dry_run:
+        report["would_remove"] = len(paths)
+        return report
+
+    removed, failed = remove_objects(client, paths)
+    report["removed"], report["failed"] = removed, failed
+    return report
 
 
 # ── running it off the request path ─────────────────────────────────────────

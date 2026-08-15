@@ -1186,9 +1186,28 @@ between, so the TTL is the only bound on a leaked one — that is the argument f
 not convenience. A *public* bucket would be worse in kind rather than degree: a URL that has been
 shared cannot be un-shared by any policy added later.
 
-**Storage does not cascade, and nothing deletes an object today.** Deleting a session or a profile
-leaves its SVGs in the bucket. There is no delete endpoint in `main.py` at all, so there is nothing
-to hook — erasure is #75, and `chart_paths` is what will tell it which objects to remove.
+**Storage does not cascade, so a deleted session orphans its SVGs — `sweep_orphan_charts` is what
+collects them.** There is still no delete endpoint in `main.py`, which is exactly why a sweep rather
+than a hook: those deletes come from the dashboard or a direct connection, where the backend never
+runs. `python sweep_orphan_charts.py` reports, `--apply` deletes.
+
+**It deletes on *absence*, which is the dangerous kind of job**, and the guards are the point rather
+than the sweeping. One failed read of `sessions` makes every object in the bucket look orphaned, so:
+the read failing **refuses** instead of proceeding, more than `max_orphan_fraction` (default 0.5)
+looking orphaned refuses, a path that is not `{uuid}/{uuid}/…` is left alone rather than deleted, and
+`dry_run` is the default. **The bucket is listed *before* `sessions` is read**, and that order is a
+guard too — read the table first and a session created in between has objects whose id is missing
+from the snapshot, deleted as an orphan while its row sits there. Listing first can only be stale in
+the safe direction. Each guard has a test and each test was checked by breaking the guard; the first
+version of the read-failure test passed with the guard removed, because the fraction guard caught it
+and its message also mentioned sessions.
+
+An orphan is not a leak — `/charts` resolves the session row before signing, and the bucket has no
+policies — so this is storage that should not exist rather than data anyone can reach. It stops
+being fine when account deletion becomes a feature (#75), because then "delete my account" leaves
+charts of the child behind. **Objects for a session that still exists are out of scope on purpose**:
+`expire_signal_rows` leaves the archive standing deliberately, and a sweep that "corrected" that
+would remove the thing that makes a same-day delete defensible.
 
 **The archived charts deliberately survive `expire_signal_rows`.** The plan says in one place that
 the expiry job removes them; that is wrong and the plan contradicts itself two paragraphs later.

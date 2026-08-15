@@ -146,7 +146,18 @@ export default function Adaptive() {
     let alive = true
     eegDevices().then(d => {
       if (!alive) return
-      const list = d?.devices || []
+      // This control connects a *headband*, and EEG_DEVICES registers cameras in
+      // the same registry (`default:muse@8765,camera:face@0` is the shipped
+      // example), so an unfiltered list offers "camera" as something to connect a
+      // headband to. It also breaks the single-device auto-select below: two
+      // entries mean stationId stays null and the button sits disabled next to a
+      // picker whose second option is wrong.
+      //
+      // Filtered by excluding `face` rather than allow-listing `muse`/`sim`: a
+      // new camera kind appearing here would be visibly wrong and get reported,
+      // whereas a new *headband* kind being silently dropped would take the
+      // count back to one and auto-select something else in its place.
+      const list = (d?.devices || []).filter(s => s.kind !== 'face')
       setStations(list)
       setStationId(prev => {
         if (prev && list.some(s => s.device_id === prev)) return prev
@@ -389,7 +400,22 @@ export default function Adaptive() {
 
   const toggleHeadband = async () => {
     if (!stationId) return
-    const activeSessionId = await getOrCreateSession()
+    // Guarded separately from the main try below, which starts several steps
+    // later. `getOrCreateSession` POSTs to /api/sessions/start, and a failure
+    // there used to reject the whole handler before any phase was set: the
+    // label stayed "Connect Headband", no alert fired, and the only trace was
+    // an unhandled rejection in the console. A click that does nothing at all
+    // is the worst version of this to debug, because it looks like a dead
+    // button rather than a failing request.
+    let activeSessionId
+    try {
+      activeSessionId = await getOrCreateSession()
+    } catch (e) {
+      console.error('[headband] could not start a session', e)
+      setHeadband(s => ({ ...s, phase: 'idle' }))
+      alert('Could not start a session:\n\n' + (e?.message || String(e)))
+      return
+    }
     // Use a local var, not the recorder state var directly: setRecorder()
     // below doesn't take effect until the next render, so a read of
     // `recorder` later in this same call would still see the pre-update
@@ -643,8 +669,9 @@ export default function Adaptive() {
           </p>
         </div>
         {/* Station picker: only shown when the sidecar has more than one registered
-            device (e.g. several headband rigs in the same room). Single-device
-            deployments auto-select their one station and never see this. */}
+            *headband* (e.g. several rigs in the same room). Cameras are filtered
+            out where `stations` is set, so a deployment with one headband and a
+            camera auto-selects the headband and never sees this. */}
         {stations.length > 1 && !headband.connected && (
           <select
             value={stationId || ''}

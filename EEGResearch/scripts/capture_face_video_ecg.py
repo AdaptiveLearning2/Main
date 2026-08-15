@@ -392,6 +392,26 @@ def capture(args) -> int:
     if gui is not None and gui.aborted:
         source.release()
         gui.close()
+        # The array is allocated *before* the warm-up, deliberately -- a disk
+        # too full for the capture should be found before the subject sits
+        # through eight seconds, not after. So aborting here leaves a
+        # full-capacity zero-filled file behind, and returning without removing
+        # it printed "nothing was recorded" over half a gigabyte of black
+        # frames with no header to explain them: `truncate_npy`'s own warning,
+        # in the one path that skips `truncate_npy`.
+        #
+        # It compounds, too. The reason `q` matters during warm-up is that the
+        # subject is still adjusting the framing, which means aborting two or
+        # three times in a row.
+        mapping = getattr(frames, "_mmap", None)
+        del frames
+        if mapping is not None:
+            mapping.close()
+        pathlib.Path(f"{out}.npy").unlink(missing_ok=True)
+        # No header either. `--delete` keeps one because frames existed and were
+        # removed, and a cleaned-up capture with no trace is indistinguishable
+        # from one nobody cleaned up. Nothing was captured here, so there is
+        # nothing to have a record of.
         print("aborted during warm-up; nothing was recorded")
         return 1
 

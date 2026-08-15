@@ -433,6 +433,33 @@ def test_q_during_warmup_records_nothing(monkeypatch, tmp_path, capsys):
     # cannot tell that apart from an abort that was honoured at once.
     assert elapsed < 2.0, (
         f"took {elapsed:.1f}s to honour q during a 5s warm-up")
+    # The claim in the message, checked. The array is allocated before the
+    # warm-up so a full disk is found early, which means an abort here has a
+    # full-capacity zero-filled file to clean up -- and the early return
+    # skipped the `finally` that would have trimmed it. "nothing was recorded"
+    # sat on top of half a gigabyte of black frames with no header to explain
+    # them.
+    assert not (tmp_path / "s1.npy").exists(), (
+        "'nothing was recorded' left the preallocated array on disk")
+    assert not (tmp_path / "s1.json").exists(), (
+        "a header was written for a capture that never happened")
+
+
+def test_aborting_warmup_repeatedly_leaves_nothing_behind(monkeypatch, tmp_path):
+    """The reason `q` matters during warm-up is that the subject is adjusting
+    the framing -- which means aborting two or three times in a row. Each one
+    leaving a full-capacity file behind is how a few hundred megabytes becomes
+    a few gigabytes without anything saying so."""
+    _fake_camera(monkeypatch)
+    monkeypatch.setattr(capture, "WARMUP_SECONDS", 5.0)
+
+    for attempt in range(3):
+        gui = _AbortingGui(on_warming=1)
+        monkeypatch.setattr(capture, "Gui", lambda g=gui: g)
+        assert capture.capture(_Args(str(tmp_path / "framing"))) == 1
+
+    leftovers = sorted(f.name for f in tmp_path.iterdir())
+    assert leftovers == [], f"three aborts left {leftovers}"
 
 
 def test_q_with_no_face_in_frame_still_stops(monkeypatch, tmp_path):

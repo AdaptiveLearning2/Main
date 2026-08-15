@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 import os, math, re, requests, random, string, threading, time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
@@ -134,6 +134,11 @@ def _utc_now() -> datetime:
 # ignored. `unreadable` is separate again -- it is the one state that is our
 # fault rather than a fact about the school.
 WINDOW_OPEN = "open"
+# Records, like WINDOW_OPEN, but for a different reason and it is worth being
+# able to tell them apart: "inside the configured year" and "not gating on a
+# year at all" look identical from the recording side and are very different
+# facts about a deployment.
+WINDOW_NOT_ENFORCED = "not_enforced"
 WINDOW_BEFORE = "before_year"
 WINDOW_AFTER = "after_year"
 WINDOW_UNCONFIGURED = "unconfigured"
@@ -157,6 +162,7 @@ class _WindowMeaning(NamedTuple):
 # declared without one.
 _WINDOW_STATES = {
     WINDOW_OPEN: _WindowMeaning(True, None, None),
+    WINDOW_NOT_ENFORCED: _WindowMeaning(True, None, None),
     WINDOW_BEFORE: _WindowMeaning(
         False, "recording has not started for this school year",
         "school_year_not_started"),
@@ -268,10 +274,35 @@ def _resolve_window(row: dict) -> dict:
 
     today = _utc_now().astimezone(tz).date()
     starts, ends = row.get("starts_on"), row.get("ends_on")
+
+    # Checked after the timezone, before the dates. A row that is not enforcing
+    # has nothing to say about term dates -- they are nullable for exactly that
+    # case -- so reading them first would send an unenforced row down the
+    # unparseable branch and deny. The timezone still has to resolve, because
+    # the reporting surfaces bucket days with it whether or not the year is
+    # being enforced.
+    #
+    # `is False`, not falsiness: a row from before this column existed, or one
+    # PostgREST hands back without it, must not read as "not enforcing". Only an
+    # explicit false disables the gate; anything else -- true, missing, null --
+    # keeps it on, which is the same fail-closed direction as the rest of this
+    # function.
+    if row.get("enforced") is False:
+        return {"state": WINDOW_NOT_ENFORCED, "starts_on": starts,
+                "ends_on": ends, "timezone": name}
+
     try:
         starts_d = date.fromisoformat(str(starts))
         ends_d = date.fromisoformat(str(ends))
     except (TypeError, ValueError):
+        if starts is None and ends is None:
+            # Enforcing, with no year given. Not "record for ever" -- that is
+            # what `enforced = false` says, deliberately and in one place. A row
+            # in this state is a half-finished edit, so it denies and names
+            # itself the same way an absent row does.
+            print("[retention:dates] enforced with no dates set -- recording denied")
+            return {"state": WINDOW_UNCONFIGURED, "starts_on": None,
+                    "ends_on": None, "timezone": name}
         print(f"[retention:dates] unparseable window {starts!r}..{ends!r}")
         return {"state": WINDOW_UNREADABLE, "starts_on": starts, "ends_on": ends,
                 "timezone": name}
@@ -289,7 +320,7 @@ def _resolve_window(row: dict) -> dict:
     return {"state": state, "starts_on": starts, "ends_on": ends, "timezone": name}
 
 
-def _school_timezone() -> ZoneInfo:
+def _school_timezone() -> tzinfo:
     """The school's zone, for bucketing report days. Defaults to UTC.
 
     **The opposite default to `_retention_window`, deliberately.** There, an
@@ -302,14 +333,25 @@ def _school_timezone() -> ZoneInfo:
     Shares `_retention_window`'s cache, so a corrected timezone typo can take
     up to `_RETENTION_TTL_SECONDS` to reach a report -- a bounded lag, not the
     unbounded one a process-lifetime cache here would add on top of it.
+
+    Both branches are guarded, and the fallback is `timezone.utc` rather than
+    `ZoneInfo("UTC")`, because `ZoneInfo` needs a timezone database that Windows
+    does not ship -- so without the `tzdata` package the *fallback* raised too
+    and this function took the request down instead of degrading. `tzdata` is a
+    dependency now, but a fallback that can fail is not a fallback: CI runs on
+    Linux, where the system database makes this path work whatever is installed,
+    so the one platform that can catch it is the one nobody tests on.
     """
     try:
         return ZoneInfo(_retention_window().get("timezone") or "UTC")
     except Exception:
-        return ZoneInfo("UTC")
+        try:
+            return ZoneInfo("UTC")
+        except Exception:
+            return timezone.utc
 
 
-def _school_date(ts, tz: ZoneInfo) -> date | None:
+def _school_date(ts, tz: tzinfo) -> date | None:
     """The calendar day `ts` falls on *at the school*. None if unparseable.
 
     Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
@@ -329,7 +371,7 @@ def _school_date(ts, tz: ZoneInfo) -> date | None:
     return None if parsed is None else parsed.astimezone(tz).date()
 
 
-def _school_day(ts, tz: ZoneInfo) -> str:
+def _school_day(ts, tz: tzinfo) -> str:
     """`_school_date` as YYYY-MM-DD, for bucketing.
 
     Empty string for anything unparseable, which no day matches, so a bad

@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import pathlib
+import time
 
 import numpy as np
 import pytest
@@ -273,3 +274,231 @@ def test_the_preview_helpers_run_against_a_synthetic_frame():
     # wider than the source. A preview that silently dropped it would look fine
     # and hide the one picture that shows what is actually stored.
     assert drawn[0][1].shape[1] > frame.shape[1]
+
+
+# ── the auto-exposure warm-up ───────────────────────────────────────────────
+
+
+def test_the_warmup_matches_the_live_adapter_rather_than_restating_it():
+    """The number is measured, not chosen: mean green climbs 17% over ~5 s
+    against a pulse under 1%, and that ramp took a recording from confidence
+    0.81 to 0.05. Imported so the capture and the live path cannot drift if it
+    is ever re-measured."""
+    from src.app.services.face_ingestion import WARMUP_SECONDS
+
+    assert capture.WARMUP_SECONDS is WARMUP_SECONDS
+    assert WARMUP_SECONDS >= 5.0
+
+
+def test_the_header_records_what_was_discarded():
+    """"the first frame is 8 s after the lens opened" is not recoverable from
+    the frames, and an ECG alignment search would absorb a constant offset as a
+    lag rather than report it."""
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert '"warmup_seconds"' in source
+    # wall_start is re-stamped after the discard, so it marks the first usable
+    # frame rather than the moment the camera opened.
+    assert source.index('header["wall_start"] =') > source.index("warm_until")
+
+
+def test_skipping_the_warmup_is_possible_but_argued_for():
+    """A camera with genuinely fixed exposure exists; a flag that offered no
+    reason would just get used by anyone in a hurry."""
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "--no-warmup" in source
+    assert "genuinely fixed" in source
+
+
+def test_the_warmup_preview_does_not_look_like_recording(capsys):
+    """Eight seconds of a frozen window, or of a preview identical to the one
+    shown while writing, would have the subject believe the capture had
+    started."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    gui = capture.Gui.__new__(capture.Gui)
+    gui.aborted = False
+    drawn = []
+    gui._cv2 = type("C", (), {
+        **{k: getattr(cv2, k) for k in dir(cv2) if not k.startswith("_")},
+        "imshow": staticmethod(lambda *a: drawn.append(a)),
+        "waitKey": staticmethod(lambda *_: 0),
+    })()
+    frame = (np.random.default_rng(0).random((240, 320, 3)) * 255).astype("uint8")
+
+    gui.warming(frame, remaining=5.0)
+
+    assert len(drawn) == 1, "the warm-up drew nothing"
+    assert "WARMING UP" in SCRIPT.read_text(encoding="utf-8")
+    assert "nothing is being written yet" in SCRIPT.read_text(encoding="utf-8")
+
+MIN_FOR_TEST = 30.0
+
+
+# ── q, everywhere the preview offers it ─────────────────────────────────────
+#
+# `q to abort` is the only interactive control this preview has, and it was
+# ignored during the whole warm-up and on every frame where no face was found.
+# Nothing exercised abort at all, which is why both survived.
+
+
+class _AbortingGui:
+    """A preview that aborts on the Nth draw of a given kind."""
+
+    def __init__(self, on_warming=None, on_frame=None):
+        self.aborted = False
+        self._on_warming, self._on_frame = on_warming, on_frame
+        self.warmings = self.frames = 0
+
+    def warming(self, frame, *, remaining):
+        self.warmings += 1
+        if self._on_warming is not None and self.warmings >= self._on_warming:
+            self.aborted = True
+
+    def frame(self, frame, box, crop, **kw):
+        self.frames += 1
+        if self._on_frame is not None and self.frames >= self._on_frame:
+            self.aborted = True
+
+    def close(self):
+        pass
+
+
+class _Args:
+    def __init__(self, out, **kw):
+        self.out, self.seconds, self.camera, self.fps = out, 60.0, 0, 30.0
+        self.yes, self.gui, self.no_warmup, self.delete = True, True, False, None
+        self.__dict__.update(kw)
+
+
+def _stub_cv2(monkeypatch):
+    """A `cv2` with just the resize the capture loop calls.
+
+    CI has no OpenCV by design, and the loop reaches `cv2.resize` on every frame
+    with a face in it. Skipping there would leave the abort path that actually
+    writes frames uncovered in the only place that runs on every push.
+    """
+    import sys
+    import types
+
+    stub = types.ModuleType("cv2")
+    stub.INTER_AREA = 3
+    stub.resize = lambda img, size, interpolation=None: np.zeros(
+        (size[1], size[0], img.shape[2]), dtype=img.dtype)
+    monkeypatch.setitem(sys.modules, "cv2", stub)
+
+
+def _fake_camera(monkeypatch, faces=True):
+    """A source and locator that need no webcam."""
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+
+    class Source:
+        locked = True
+        def read(self):
+            time.sleep(0.001)
+            return frame
+        def release(self):
+            self.released = True
+
+    class Locator:
+        def locate(self, gray):
+            return (10, 10, 80, 80) if faces else None
+
+    import src.app.services.face_ingestion as fi
+    import src.app.services.face_roi as fr
+    monkeypatch.setattr(fi, "OpenCvFrameSource", lambda **kw: Source())
+    monkeypatch.setattr(fr, "FaceLocator", Locator)
+
+
+def test_q_during_warmup_records_nothing(monkeypatch, tmp_path, capsys):
+    """The eight seconds it is most likely to be pressed -- while the subject is
+    still deciding whether the framing is right. It set the flag and the loop
+    ran to completion, then recorded anyway."""
+    _fake_camera(monkeypatch)
+    gui = _AbortingGui(on_warming=2)
+    monkeypatch.setattr(capture, "Gui", lambda: gui)
+    monkeypatch.setattr(capture, "WARMUP_SECONDS", 5.0)
+
+    started = time.perf_counter()
+    code = capture.capture(_Args(str(tmp_path / "s1")))
+    elapsed = time.perf_counter() - started
+
+    assert code == 1
+    assert "aborted during warm-up" in capsys.readouterr().out
+    assert not (tmp_path / "s1.jsonl").exists(), "recording started after an abort"
+    # The point of the finding: the flag was set on the second draw and the loop
+    # ran out all five seconds regardless. Checking only the file state afterwards
+    # cannot tell that apart from an abort that was honoured at once.
+    assert elapsed < 2.0, (
+        f"took {elapsed:.1f}s to honour q during a 5s warm-up")
+    # The claim in the message, checked. The array is allocated before the
+    # warm-up so a full disk is found early, which means an abort here has a
+    # full-capacity zero-filled file to clean up -- and the early return
+    # skipped the `finally` that would have trimmed it. "nothing was recorded"
+    # sat on top of half a gigabyte of black frames with no header to explain
+    # them.
+    assert not (tmp_path / "s1.npy").exists(), (
+        "'nothing was recorded' left the preallocated array on disk")
+    assert not (tmp_path / "s1.json").exists(), (
+        "a header was written for a capture that never happened")
+
+
+def test_aborting_warmup_repeatedly_leaves_nothing_behind(monkeypatch, tmp_path):
+    """The reason `q` matters during warm-up is that the subject is adjusting
+    the framing -- which means aborting two or three times in a row. Each one
+    leaving a full-capacity file behind is how a few hundred megabytes becomes
+    a few gigabytes without anything saying so."""
+    _fake_camera(monkeypatch)
+    monkeypatch.setattr(capture, "WARMUP_SECONDS", 5.0)
+
+    for attempt in range(3):
+        gui = _AbortingGui(on_warming=1)
+        monkeypatch.setattr(capture, "Gui", lambda g=gui: g)
+        assert capture.capture(_Args(str(tmp_path / "framing"))) == 1
+
+    leftovers = sorted(f.name for f in tmp_path.iterdir())
+    assert leftovers == [], f"three aborts left {leftovers}"
+
+
+def test_q_with_no_face_in_frame_still_stops(monkeypatch, tmp_path):
+    """The worse half. With no face found the preview froze on the last good
+    frame *and* `q` did nothing until one appeared -- which is exactly the
+    situation someone wants to stop in, since a stretch with no face is the one
+    failure they can see and fix."""
+    _fake_camera(monkeypatch, faces=False)
+    gui = _AbortingGui(on_frame=3)
+    monkeypatch.setattr(capture, "Gui", lambda: gui)
+    monkeypatch.setattr(capture, "WARMUP_SECONDS", 0.0)
+
+    started = time.perf_counter()
+    code = capture.capture(_Args(str(tmp_path / "s2"), seconds=MIN_FOR_TEST))
+    elapsed = time.perf_counter() - started
+
+    assert code == 0
+    assert gui.frames >= 3, "the preview never drew a no-face frame"
+    assert elapsed < MIN_FOR_TEST / 3, (
+        f"took {elapsed:.1f}s of a {MIN_FOR_TEST:.0f}s capture to honour q with "
+        "no face in frame")
+    header = json.loads((tmp_path / "s2.json").read_text(encoding="utf-8"))
+    assert header["frames_written"] == 0
+    assert np.load(str(tmp_path / "s2.npy")).shape[0] == 0
+
+
+def test_aborting_mid_recording_keeps_what_was_captured(monkeypatch, tmp_path):
+    """The trim runs in the `finally`, so an aborted capture is a short valid
+    file rather than a preallocated one full of black frames."""
+    _fake_camera(monkeypatch)
+    _stub_cv2(monkeypatch)
+    gui = _AbortingGui(on_frame=5)
+    monkeypatch.setattr(capture, "Gui", lambda: gui)
+    monkeypatch.setattr(capture, "WARMUP_SECONDS", 0.0)
+
+    started = time.perf_counter()
+    capture.capture(_Args(str(tmp_path / "s3"), seconds=MIN_FOR_TEST))
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < MIN_FOR_TEST / 3, f"took {elapsed:.1f}s to honour q"
+    stored = np.load(str(tmp_path / "s3.npy"))
+    assert stored.shape[0] == 5, f"kept {stored.shape[0]} frames, expected 5"

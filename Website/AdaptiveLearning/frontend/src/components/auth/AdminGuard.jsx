@@ -12,8 +12,8 @@ import PageLoader from '../ui/PageLoader'
  * rewritable at any time through `supabase.auth.updateUser` without this
  * backend seeing it. That is fine for choosing which dashboard to show a
  * teacher; it is not fine for the switches that decide whether consent is
- * enforced. Membership lives in `admin_users`, which only the service-role
- * client can read, so the only way to know is to ask.
+ * enforced. Admin is `profiles.role`, which the client cannot write and this
+ * page cannot read, so the only way to know is to ask the backend.
  *
  * This is a UI convenience, not the security boundary: every `/api/admin/*`
  * endpoint checks again on each request. Removing this component would make

@@ -176,6 +176,79 @@ def test_the_role_column_write_is_revoked_from_the_client_roles(command, grantee
         "still self-elevate")
 
 
+def test_signup_cannot_choose_the_admin_role():
+    """Widening the CHECK to admit 'admin' is only safe because the sign-up
+    trigger stops naming it. `handle_new_user` copies
+    `raw_user_meta_data->>'role'` into the column, and that metadata is whatever
+    the registration form sent -- so without a whitelist,
+    `signUp({data:{role:'admin'}})` from a browser console would have produced
+    an administrator.
+
+    Asserted as a whitelist, not as the absence of 'admin': a blacklist would
+    admit every future privileged role by default.
+    """
+    sql = _migration_sql()
+    # The newest definition of the function wins, so read the last one.
+    bodies = re.findall(
+        r'CREATE OR REPLACE FUNCTION\s+"?public"?\.\s*"?handle_new_user"?.*?\$\$(.*?)\$\$',
+        sql, re.IGNORECASE | re.DOTALL)
+    assert bodies, "handle_new_user is not defined in any migration"
+    body = bodies[-1]
+
+    assert "raw_user_meta_data" in body, "this test is looking at the wrong function"
+    listed = set(re.findall(r"'(student|teacher|parent|admin)'", body))
+    assert listed == {"student", "teacher", "parent"}, (
+        f"the sign-up trigger's role whitelist is {sorted(listed)} -- it must "
+        "name exactly the three roles a person chooses for themselves, and "
+        "must not admit 'admin'")
+
+
+def test_the_signup_trigger_is_created_by_a_migration():
+    """`handle_new_user` was written for a trigger that no migration created --
+    20260804000000 recorded the drift and left it, because `profiles` was
+    decoration at the time. It is not any more: `_role` gates three endpoints on
+    it. A profiles row that never gets written is a teacher who cannot create a
+    class."""
+    sql = _migration_sql()
+    assert re.search(
+        r'CREATE\s+TRIGGER\s+"?on_auth_user_created"?\s+AFTER\s+INSERT\s+ON\s+'
+        r'"?auth"?\s*\.\s*"?users"?', sql, re.IGNORECASE), (
+        "no migration creates the auth.users trigger, so profiles rows depend "
+        "on something hand-made in the dashboard")
+
+
+def test_the_backfill_applies_the_same_role_whitelist_as_the_trigger():
+    """The backfill reads the same client-supplied metadata the trigger does, so
+    trusting it would be the escalation the whitelist exists to prevent -- one
+    INSERT granting whatever anyone typed at sign-up."""
+    sql = _migration_sql()
+    inserts = re.findall(
+        r'INSERT INTO\s+"?public"?\.\s*"?profiles"?(.*?);', sql,
+        re.IGNORECASE | re.DOTALL)
+    # `NOT EXISTS` is the backfill's signature. Without it this also matches the
+    # trigger's own INSERT -- including the original 20260625000000 definition,
+    # which predates the whitelist and would fail for a reason that is history
+    # rather than a live hole. The trigger has its own test above.
+    backfills = [i for i in inserts
+                 if "raw_user_meta_data" in i and re.search(r"NOT\s+EXISTS", i, re.I)]
+    assert backfills, "no profiles backfill found"
+    for body in backfills:
+        listed = set(re.findall(r"'(student|teacher|parent|admin)'", body))
+        assert listed == {"student", "teacher", "parent"}, (
+            f"a profiles backfill's role whitelist is {sorted(listed)} -- it "
+            "must match the trigger's and must not admit 'admin'")
+
+
+def test_the_role_check_constraint_admits_admin():
+    """The other half. Without it, promoting someone in the SQL editor fails."""
+    sql = _migration_sql()
+    checks = re.findall(r'CONSTRAINT\s+"?profiles_role_check"?\s+CHECK\s*\((.*?)\)\s*;',
+                        sql, re.IGNORECASE | re.DOTALL)
+    assert checks, "no profiles_role_check found"
+    assert "'admin'" in checks[-1].replace('"', ""), (
+        "the newest profiles_role_check does not admit 'admin'")
+
+
 def test_no_endpoint_gates_on_user_metadata(monkeypatch):
     """The three call sites were found by hand. A fourth would be found by this.
 

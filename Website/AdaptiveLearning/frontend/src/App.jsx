@@ -95,9 +95,9 @@ export default function App() {
               <Route path="/parent/settings"     element={<ParentSettings />} />
             </Route>
 
-            {/* AdminGuard, not RoleGuard: admin is a row in `admin_users` that
-                only the backend can read, never a `user_metadata.role` claim
-                the client can write. */}
+            {/* AdminGuard, not RoleGuard: admin is `profiles.role`, which the
+                backend reads and the client cannot write, never the
+                `user_metadata.role` claim RoleGuard goes on. */}
             <Route element={<AdminGuard><AdminLayout /></AdminGuard>}>
               <Route path="/admin"       element={<AdminOverview />} />
               <Route path="/admin/flags" element={<AdminFlags />} />

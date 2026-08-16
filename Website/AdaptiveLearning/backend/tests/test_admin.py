@@ -87,16 +87,22 @@ class _Fake:
                         client.inserts.append((table, row))
                     return type("R", (), {"data": []})()
 
-                if table == "admin_users":
-                    uid = self._filters.get("user_id")
-                    rows = [{"user_id": uid}] if uid in client.admins else []
+                if table == "profiles":
+                    uid = self._filters.get("id")
+                    if uid is not None:
+                        # Admin is `profiles.role`, so the fake decides it the
+                        # same way production does rather than from a side table.
+                        rows = [{"id": uid, "display_name": "Ada",
+                                 "email": "ada@example.com",
+                                 "role": ("admin" if uid in client.admins
+                                          else "student")}]
+                    else:
+                        rows = [{"id": STUDENT, "display_name": "Ada",
+                                 "email": "ada@example.com", "role": "student"}]
                 elif table == "feature_flags":
                     rows = list(client.flags.values())
                 elif table == "signal_consent":
                     rows = [client.consent] if client.consent else []
-                elif table == "profiles":
-                    rows = [{"id": STUDENT, "display_name": "Ada",
-                             "email": "ada@example.com", "role": "student"}]
                 else:
                     rows = []
                 data = (rows[0] if rows else None) if getattr(self, "_single", False) else rows
@@ -188,7 +194,7 @@ def test_an_unreadable_admin_table_denies(monkeypatch):
     """Fails closed, like `_consent`. This guard stands in front of the switch
     that turns consent enforcement off, so a database blip must not open it."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"],
-                                                raises=["admin_users"]))
+                                                raises=["profiles"]))
     assert main._is_admin("admin-1") is False
 
 
@@ -425,10 +431,18 @@ def test_live_signals_sends_no_readings(monkeypatch):
     flat = repr(out)
     for field in _SIGNAL_CONTENT:
         assert field not in flat, f"{field} reached an admin payload"
-    assert "negative" not in flat and "88" not in flat
+    # A value, not just a field name -- a payload could carry the reading
+    # without naming it. Deliberately a distinctive string rather than a number:
+    # asserting `"88" not in flat` also matched the microseconds of the
+    # timestamp the payload legitimately carries, which made this pass or fail
+    # depending on what time the suite ran.
+    assert "negative" not in flat
     session = out["sessions"][0]
     assert session["eeg"]["flowing"] is True
+    # The exact key set is what pins the numbers out: any extra key here is a
+    # reading that escaped.
     assert set(session["eeg"]) == {"flowing", "stale", "seen", "last_ts"}
+    assert set(session["camera"]) == {"flowing", "stale", "seen", "last_ts"}
 
 
 def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):

@@ -1,4 +1,4 @@
--- Admin dashboard: who the admins are, and the flags they can flip.
+-- Admin dashboard: the flags an administrator can flip.
 --
 -- Until now the only global configuration was `retention_window`, whose own
 -- comment says it is "edited through the dashboard SQL editor -- there is no
@@ -15,38 +15,11 @@
 -- not exist.
 
 
--- ── who may administer ──────────────────────────────────────────────────────
---
--- A separate table rather than a fourth value in `profiles.role`. The frontend
--- reads its role from `user_metadata.role`, which the client sets at sign-up
--- and can rewrite afterwards through `supabase.auth.updateUser` without ever
--- touching the backend -- so a role granting platform-wide access must not live
--- anywhere a client can write. Membership here is service-role only, and the
--- backend is the only thing that reads it.
---
--- Seeded by hand, like retention_window's single row. Three people, added once:
--- a self-service invite flow would be more machinery than the thing it
--- administers.
-
-CREATE TABLE IF NOT EXISTS "public"."admin_users" (
-    "user_id"  uuid        PRIMARY KEY REFERENCES "auth"."users"("id") ON DELETE CASCADE,
-    "added_by" uuid        REFERENCES "auth"."users"("id") ON DELETE SET NULL,
-    "added_at" timestamptz NOT NULL DEFAULT now()
-);
-
-COMMENT ON TABLE "public"."admin_users" IS
-    'Platform administrators. Deliberately not a profiles.role value: role is '
-    'read from client-writable user_metadata, so admin must live somewhere no '
-    'client can write. Seeded by hand via the dashboard SQL editor.';
-
-REVOKE ALL ON TABLE "public"."admin_users" FROM "anon";
-REVOKE ALL ON TABLE "public"."admin_users" FROM "authenticated";
-GRANT ALL ON TABLE "public"."admin_users" TO "service_role";
-
--- RLS on with no policies: every command denied for any role that is not
--- BYPASSRLS. The revokes above are what stops TRUNCATE, which RLS never
--- filters, so both are needed (CLAUDE.md).
-ALTER TABLE "public"."admin_users" ENABLE ROW LEVEL SECURITY;
+-- Who may administer is `profiles.role = 'admin'`, added by 20260824020000.
+-- It is a real role rather than a side table, which is only safe because two
+-- other things in this series are true: 20260824010000 revokes the column write
+-- from the client roles, and 20260824020000 stops sign-up choosing the value.
+-- Neither was true when this file was first written.
 
 
 -- ── the flags ───────────────────────────────────────────────────────────────

@@ -1177,14 +1177,34 @@ confirmation. Erasure here is a parent-only, confirmed action.
 
 ## Admin is a table, not a role — and the flags can only ever say no
 
-`admin_users` (`20260824000000`) is who may administer: service-role only, RLS on with no policies,
-seeded by hand like `retention_window`'s row. **Deliberately not a fourth `profiles.role` value.**
-The frontend reads its role from `user_metadata.role`, which the client sets at sign-up and can
-rewrite through `supabase.auth.updateUser` without this backend ever seeing it — so a role granting
-platform-wide access must not live anywhere a client can write. `AdminGuard` asks
-`GET /api/admin/me` for the same reason; it is a UI convenience, and every `/api/admin/*` endpoint
-re-checks. `_can_view_student` gains admin as a **fourth relationship** rather than each admin path
-growing its own copy of a report query.
+Admin is `profiles.role = 'admin'` (`20260824020000`), read through the same `_role` every other
+role gate uses. Set from the dashboard SQL editor, like `retention_window`'s row.
+
+**It is a role rather than a side table only because the column is server-controlled on both
+edges**, and both edges are load-bearing: `20260824010000` revokes UPDATE/INSERT on it from the
+client roles, and `20260824020000` whitelists `student|teacher|parent` in `handle_new_user` so
+sign-up cannot ask for it. Widening the CHECK without the whitelist would have been a self-service
+admin signup — the trigger copies `raw_user_meta_data->>'role'` straight into the column, so
+`signUp({data:{role:'admin'}})` from a console would have made an administrator. The
+`20260824030000` backfill repeats the whitelist for the same reason: it reads the same
+client-supplied metadata, and trusting it would be the escalation in one INSERT.
+
+`AdminGuard` asks `GET /api/admin/me` rather than reading a role client-side; it is a UI
+convenience, and every `/api/admin/*` endpoint re-checks. `_can_view_student` gains admin as a
+**fourth relationship** rather than each admin path growing its own copy of a report query.
+
+### `profiles` rows come from a trigger, and it was missing from source control
+
+`handle_new_user` was written for an `auth.users` trigger that **no migration created**;
+`20260804000000` recorded that drift and left it, correctly, because `profiles` was decoration at
+the time. It stopped being decoration when `_role` started gating on it — a missing row means
+`_profile` degrades to a student-shaped dict, so a teacher is refused their own classes with nothing
+to read. `20260824030000` creates the trigger and backfills the rows, and is safe against a
+hand-made survivor: `on conflict (id) do nothing` makes a second firing a no-op. Check for one under
+a different name after applying.
+
+It deliberately **does not UPDATE existing rows**. `raw_user_meta_data` still holds whatever was
+typed at sign-up, so refreshing from it would silently demote every administrator.
 
 `feature_flags` is key/value, read through `_FEATURE_FLAG_DEFAULTS`, which is the contract: **a key
 absent from the table still has a value, and it is the value the system had before the table

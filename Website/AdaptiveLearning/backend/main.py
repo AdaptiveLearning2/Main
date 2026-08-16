@@ -83,6 +83,13 @@ def get_user(request: Request):
 def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
+# The four values `profiles.role` may hold. `admin` is the only one a person
+# cannot choose for themselves at sign-up -- `handle_new_user` whitelists the
+# other three (20260824020000).
+ADMIN_ROLE = "admin"
+SELF_SERVICE_ROLES = ("student", "teacher", "parent")
+
+
 def _role(uid: str) -> str:
     """A caller's role, from `profiles` -- never from `user_metadata`.
 
@@ -4978,29 +4985,35 @@ def my_children(request: Request, include_face: bool = True):
 
 # ─── admin ───────────────────────────────────────────────────────────────
 #
-# Everything below is gated on `_require_admin`. Membership is a row in
-# `admin_users`, which only the service-role client can read or write -- not a
-# `profiles.role` value and emphatically not `user_metadata.role`, which the
-# client sets at sign-up and can rewrite through `supabase.auth.updateUser`
-# without this backend ever seeing it.
+# Everything below is gated on `_require_admin`, which reads `profiles.role`
+# -- the same column as every other role gate, and emphatically not
+# `user_metadata.role`, which the client sets at sign-up and can rewrite through
+# `supabase.auth.updateUser` without this backend ever seeing it.
+#
+# `admin` is a role rather than a side table because the column is now
+# server-controlled on both edges: the client cannot write it (20260824010000)
+# and sign-up cannot ask for it (20260824020000). It is set from the dashboard
+# SQL editor, like `retention_window`'s row.
 
 
 def _is_admin(user_id: str) -> bool:
     """Whether this user is a platform administrator.
 
-    Fails **closed** on a read error, like `_consent` and unlike the reporting
-    helpers: this is the only thing standing in front of the switches that
-    decide whether consent is enforced, so an unreadable table must not admit
-    anyone. Uncached, deliberately -- admin traffic is three people, and a TTL
-    here would keep a removed admin admitted for the length of it.
+    One source of truth, and it is `profiles.role` -- the same column every
+    other role gate reads through `_role`. A separate membership table was the
+    first design here and it was two answers to one question: a row present with
+    the role absent, or the reverse, has no correct interpretation.
+
+    Safe as a role only because of the two migrations that made it one:
+    `20260824010000` revokes UPDATE/INSERT on the column from the client roles,
+    and `20260824020000` stops `handle_new_user` accepting 'admin' from the
+    sign-up form. Without both, this reads a value the caller chose.
+
+    Fails **closed** through `_role`, which degrades to 'student' on a failed
+    read. This stands in front of the switch that decides whether consent is
+    enforced, so an unreadable profile must not admit anyone.
     """
-    try:
-        rows = supabase.table("admin_users").select("user_id") \
-            .eq("user_id", user_id).limit(1).execute().data or []
-        return bool(rows)
-    except Exception as e:
-        print(f"[admin:is_admin] {e}")
-        return False
+    return _role(user_id) == ADMIN_ROLE
 
 
 def _require_admin(request: Request) -> dict:

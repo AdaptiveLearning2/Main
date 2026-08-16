@@ -1175,6 +1175,75 @@ There is no "Reset stats" button any more. Against localStorage it cleared a bro
 `user_math_performance` the same button deletes a student's academic record with one click and no
 confirmation. Erasure here is a parent-only, confirmed action.
 
+## Admin is a table, not a role — and the flags can only ever say no
+
+`admin_users` (`20260824000000`) is who may administer: service-role only, RLS on with no policies,
+seeded by hand like `retention_window`'s row. **Deliberately not a fourth `profiles.role` value.**
+The frontend reads its role from `user_metadata.role`, which the client sets at sign-up and can
+rewrite through `supabase.auth.updateUser` without this backend ever seeing it — so a role granting
+platform-wide access must not live anywhere a client can write. `AdminGuard` asks
+`GET /api/admin/me` for the same reason; it is a UI convenience, and every `/api/admin/*` endpoint
+re-checks. `_can_view_student` gains admin as a **fourth relationship** rather than each admin path
+growing its own copy of a report query.
+
+`feature_flags` is key/value, read through `_FEATURE_FLAG_DEFAULTS`, which is the contract: **a key
+absent from the table still has a value, and it is the value the system had before the table
+existed.** That is what let the flags ship without changing behaviour, and it is why an unreadable
+table falls back to the *declared defaults* rather than to off — a database blip is not a
+reconfiguration. The map is also the whitelist: an unrecognised row is inert and a write to an
+unknown key is a 404, so a typo cannot create a switch that reads back as set and controls nothing.
+Cached 30s, same reasoning as `_RETENTION_TTL_SECONDS`; `_feature_flags_cache_clear()` on every
+write.
+
+**The three `recording_*` flags are ANDed into `_may_record`, never ORed.** A flag can withhold
+recording and can never grant it, so no combination of switches records something a student
+declined — the same asymmetry `signal_fusion` documents, and a brute-force-ish test pins it.
+
+### `consent_enforcement_enabled` — the one switch that records without consent
+
+Off, `_may_record` substitutes a fully-consenting answer. It is for prototyping, it is against the
+grain of everything else here, and so it is **bounded rather than trusted**:
+
+- **Expiry is evaluated on every read** (`_consent_enforcement_active`), not by a job that flips the
+  row back. A scheduled job that fails to run leaves consent unenforced indefinitely, and
+  not-indefinitely is the single guarantee this has to make.
+- **A bypass with no `bypass_until` has already expired.** An unbounded bypass is the state the
+  column exists to prevent, so a hand-edited row resumes enforcement rather than running for ever.
+- **Disabling it requires an explicit duration**, capped at `_MAX_BYPASS_MINUTES` (4h). No default —
+  a default would be `main.py` choosing how long consent goes unenforced.
+- **`_consent()` itself is untouched.** The bypass is a decision about whether to *ask*, not a claim
+  that anyone agreed, so the consent screen, the reporting surfaces and the poller status keep
+  showing what the family actually decided. `consent_bypassed` rides on the `_may_record` payload so
+  a caller reporting *why* something is recorded does not say the student agreed.
+- **It does not override the school year.** The window is a separate gate and stays closed.
+
+Every write lands in `feature_flag_changes`, append-only, written by the backend rather than by a
+trigger — the backend already resolved the admin's identity to admit the request, so a trigger would
+be a second and worse answer to that question. A failed audit insert never undoes the flag: it is
+already written, and raising would invite a retry that changes nothing and audits nothing.
+
+### The admin read surfaces send counts and timestamps, never readings
+
+`/api/admin/live-signals` answers "is data arriving" for every open session. **The content is
+dropped in the endpoint**, not left to the frontend not to render it — only the newest `ts` per
+channel survives, so no band powers, no emotion label, no bpm. An admin has no relationship to those
+students entitling them to the readings. It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` and
+`_latest_session_signals` with `class_live`, because two sets of numbers would let one page call a
+session live while the other called it stale. Four states per channel, and they are not a scale:
+flowing, quiet, stale, and **never-reported** — a session that never had that sensor is a different
+fact from one whose sensor stopped.
+
+`/api/admin/health` reports `ok` / `degraded` / `unknown`, and **a check that could not run is
+`unknown`, never `ok`.** `/api/admin/consent-summary` is counts only. `/api/admin/env-flags` lists
+the env-var switches read-only, from a **named list** — `os.environ` also holds the service-role
+key, and a dashboard that enumerated the environment would eventually render a secret.
+
+Tests: `backend/tests/test_admin.py`. `conftest`'s `_feature_flags_are_default` pins the defaults for
+every other test file, and **deliberately does not take `monkeypatch`** — requesting it from an
+autouse fixture pytest orders early hoists `monkeypatch`'s setup ahead of `_join_poller_threads` and
+inverts their teardown, which failed three unrelated tests in teardown for a reason nothing in their
+bodies could explain. `pytest --setup-plan` shows the ordering directly.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses
@@ -1614,10 +1683,14 @@ payload does not know about, so the row is omitted.
 
 ## The strategies model pass is optional and bounded
 
-`/api/students/{id}/learning-strategies` always has a deterministic rule-based answer;
-`STRATEGY_LLM_ENABLED` (default off) only decides whether a model gets a chance to replace it. Off,
-the endpoint never opens a socket — which is what CI and any deployment without a local Ollama
-should do. Every failure path degrades to the rules rather than erroring.
+`/api/students/{id}/learning-strategies` always has a deterministic rule-based answer; the
+`strategy_llm_enabled` **feature flag** (default off) only decides whether a model gets a chance to
+replace it. Off, the endpoint never opens a socket — which is what CI and any deployment without a
+local Ollama should do. Every failure path degrades to the rules rather than erroring.
+
+It was the `STRATEGY_LLM_ENABLED` env var until the admin dashboard landed, and is now read per
+request rather than at import: the reason to reach for this switch is a model behaving badly in
+front of students, which is not a moment to be waiting on a deploy.
 
 The bounds exist because this is a sync endpoint, so each waiting request holds one of anyio's ~40
 threadpool slots: `STRATEGY_LLM_TIMEOUT` enforced by waiting on a future (an httpx timeout is

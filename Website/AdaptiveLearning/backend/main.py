@@ -52,7 +52,10 @@ async def _lifespan(app: FastAPI):
             try:
                 _shutdown_live_signals_pool()
             finally:
-                chart_archive.shutdown_pool()
+                try:
+                    _shutdown_admin_live_pool()
+                finally:
+                    chart_archive.shutdown_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -5308,10 +5311,98 @@ def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate)
 _LIVE_WINDOW_SEC = 90
 _STALE_AFTER_SEC = 600
 
-# The dashboard polls this and each session costs four reads. A school does not
-# have 200 simultaneous sessions, so reaching this cap means something is wrong
-# -- which is why the payload says it was reached rather than quietly truncating.
+# This endpoint is platform-wide where `class_live` is one class, and the
+# dashboard polls it every few seconds. A school does not have 200 simultaneous
+# sessions, so reaching this cap means something is wrong -- which is why the
+# payload says it was reached rather than quietly truncating.
 _ADMIN_LIVE_SESSION_CAP = 200
+
+# **Its own pool, deliberately not `_live_signals_pool`.** Two reasons, and the
+# second is a correctness bug rather than a tuning choice:
+#
+# 1. That pool has four workers and every teacher's live monitor polls through
+#    it. This endpoint is platform-wide, so at any real session count it would
+#    starve the page teachers actually watch a lesson with.
+# 2. `_latest_session_signals` *blocks* on futures it submitted to that same
+#    pool. Fanning this endpoint's outer loop into it would put the waiters and
+#    the work they wait for in one four-slot queue -- four sessions occupying
+#    every worker while their own reads sit behind them, which is a deadlock,
+#    not a slowdown. Nothing submitted below waits on anything else in here:
+#    the reads are submitted flat and gathered afterwards.
+_ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
+_admin_live_pool_lock = threading.Lock()
+
+
+def _admin_live_pool() -> ThreadPoolExecutor:
+    global _ADMIN_LIVE_POOL
+    with _admin_live_pool_lock:
+        if _ADMIN_LIVE_POOL is None:
+            _ADMIN_LIVE_POOL = ThreadPoolExecutor(max_workers=8,
+                                                  thread_name_prefix="admin-live")
+        return _ADMIN_LIVE_POOL
+
+
+def _shutdown_admin_live_pool():
+    """Drop the queue on the way out. Same shape as
+    `_shutdown_live_signals_pool`, and called from the same place."""
+    global _ADMIN_LIVE_POOL
+    with _admin_live_pool_lock:
+        pool, _ADMIN_LIVE_POOL = _ADMIN_LIVE_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+# What a channel read answers with when the query itself failed. Distinct from
+# `None`, which this module uses for "nothing has ever arrived" -- reporting an
+# unreadable channel as never-reported is the absence-as-data failure, one layer
+# further in.
+_TS_UNREADABLE = object()
+
+
+def _latest_signal_ts(session_ids: list[str]) -> dict:
+    """Newest timestamp per session per channel, and nothing else.
+
+    `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`.
+
+    **Selects `ts` alone**, so the readings never leave the database rather than
+    being fetched and then dropped on the way out. `class_live` needs the rows
+    themselves and `_latest_session_signals` fetches them; this endpoint needs
+    only whether something arrived, and asking for less is a stronger version of
+    the same privacy property than filtering afterwards.
+
+    Two reads per session, not four: `_latest_session_signals` also fetches
+    `heart_signals` and `session_answers`, which this endpoint discarded.
+
+    Every read is submitted before any is waited on, so the pool runs them
+    concurrently across sessions as well as across channels.
+    """
+    pool = _admin_live_pool()
+
+    def _newest(table: str, session_id: str):
+        try:
+            rows = supabase.table(table).select("ts") \
+                .eq("session_id", session_id) \
+                .order("ts", desc=True).limit(1).execute().data or []
+            return rows[0]["ts"] if rows else None
+        except Exception as e:
+            print(f"[admin:live:{table}] {session_id}: {e}")
+            return _TS_UNREADABLE
+
+    channels = (("eeg", "cognitive_signals"), ("camera", "face_signals"))
+    futures = {(sid, name): pool.submit(_newest, table, sid)
+               for sid in session_ids
+               for name, table in channels}
+
+    out = {sid: {} for sid in session_ids}
+    for (sid, name), future in futures.items():
+        try:
+            out[sid][name] = future.result()
+        except Exception as e:
+            # `_newest` catches its own, so this is the pool itself failing --
+            # a rejected submission on shutdown, say.
+            print(f"[admin:live:{name}] {sid}: {e}")
+            out[sid][name] = _TS_UNREADABLE
+    return out
 
 
 @app.get("/api/admin/live-signals")
@@ -5343,32 +5434,38 @@ def admin_live_signals(request: Request):
         return {"sessions": [], "retrieved": False}
 
     names = _display_names({s.get("user_id") for s in sessions})
+    stamps = _latest_signal_ts([s["id"] for s in sessions])
 
-    def _channel(row):
-        """A channel's liveness, from its newest row's ts alone."""
-        ts = _parse_ts((row or {}).get("ts"))
+    def _channel(raw):
+        """A channel's liveness, from its newest timestamp alone.
+
+        Three sources of "not flowing" and they are kept apart, because a
+        reader acts differently on each: a sensor that stopped, a session that
+        never had one, and a read that failed.
+        """
+        if raw is _TS_UNREADABLE:
+            return {"flowing": False, "stale": False, "seen": None}
+        ts = _parse_ts(raw)
         if ts is None:
-            # Never reported. Distinct from stale: one is a sensor that stopped,
-            # the other is a session that never had one.
             return {"flowing": False, "stale": False, "seen": False}
         return {"flowing": ts >= live_cutoff,
                 "stale": ts < stale_cutoff,
                 "seen": True,
-                # The one timestamp that leaves this endpoint. It is what lets
-                # the dashboard pulse on a *new* sample rather than re-pulsing
-                # on every poll, and it says nothing about the reading.
-                "last_ts": (row or {}).get("ts")}
+                # The one value that leaves this endpoint. It is what lets the
+                # dashboard pulse on a *new* sample rather than re-pulsing on
+                # every poll, and it says nothing about the reading.
+                "last_ts": raw}
 
     out = []
     for s in sessions:
-        cog, face, _heart, _answers = _latest_session_signals(s["id"])
+        seen = stamps.get(s["id"], {})
         out.append({
             "session_id": s["id"],
             "student_id": s.get("user_id"),
             "student_name": names.get(s.get("user_id"), "Student"),
             "started_at": s.get("started_at"),
-            "eeg": _channel(cog[0] if cog else None),
-            "camera": _channel(face[0] if face else None),
+            "eeg": _channel(seen.get("eeg")),
+            "camera": _channel(seen.get("camera")),
         })
     return {"sessions": out, "retrieved": True,
             "capped": len(sessions) >= _ADMIN_LIVE_SESSION_CAP}
@@ -5428,10 +5525,14 @@ def admin_health(request: Request):
         checks.append({"key": "last_rollup", "status": "unknown",
                        "detail": "Could not read the rollup table"})
 
+    # One call, not one per field: it is a clock comparison against a cached
+    # read, so two calls could straddle the expiry and report a status and a
+    # detail that disagree.
+    enforced = _consent_enforcement_active()
     checks.append({
         "key": "consent_enforcement",
-        "status": "ok" if _consent_enforcement_active() else "degraded",
-        "detail": "Enforced" if _consent_enforcement_active()
+        "status": "ok" if enforced else "degraded",
+        "detail": "Enforced" if enforced
                   else "BYPASSED -- recording without consent",
     })
 

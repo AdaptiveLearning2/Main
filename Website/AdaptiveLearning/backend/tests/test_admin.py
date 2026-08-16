@@ -402,31 +402,86 @@ _SIGNAL_CONTENT = {"alpha", "beta", "theta", "delta", "gamma", "focus_score",
                    "bpm", "rmssd_ms", "gaze_x", "gaze_y", "attention"}
 
 
-def test_live_signals_sends_no_readings(monkeypatch):
-    """Content is dropped in the endpoint, not left to the frontend not to
-    render it. An admin has no relationship to these students entitling them to
-    the readings -- only to whether data is arriving."""
+class _LiveFake(_Fake):
+    """`_Fake` plus one open session, and a record of every select it saw.
+
+    The selects are what the privacy assertion below reads: the endpoint asking
+    for less is a stronger property than the endpoint filtering afterwards, and
+    only the query shows which one is happening.
+    """
+
+    def __init__(self, sessions=(), signals=None, **kw):
+        super().__init__(**kw)
+        self.sessions = list(sessions)
+        self.signals = signals or {}
+        self.selects = []
+
+    def table(self, name):
+        client, outer = self, super().table(name)
+
+        class _Q:
+            def __getattr__(self, item):
+                return getattr(outer, item)
+
+            def select(self, *cols):
+                client.selects.append((name, cols))
+                outer.select(*cols)
+                return self
+
+            def eq(self, col, value):
+                outer.eq(col, value)
+                return self
+
+            def order(self, *a, **k):
+                outer.order(*a, **k)
+                return self
+
+            def limit(self, *a):
+                outer.limit(*a)
+                return self
+
+            def is_(self, *a):
+                outer.is_(*a)
+                return self
+
+            def execute(self):
+                if name == "sessions":
+                    return type("R", (), {"data": list(client.sessions)})()
+                if name in client.signals:
+                    rows = client.signals[name]
+                    return type("R", (), {"data": list(rows)})()
+                return outer.execute()
+
+        return _Q()
+
+
+def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
+    """The readings never leave the database, rather than being fetched and
+    dropped on the way out. An admin has no relationship to these students
+    entitling them to the values -- only to whether data is arriving."""
     ts = main._utc_now().isoformat()
-    monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"]))
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
-    monkeypatch.setattr(main, "_latest_session_signals", lambda _sid: (
-        [{"ts": ts, "alpha": 0.5, "focus_score": 88, "stress": 0.2}],
-        [{"ts": ts, "emotion": "negative", "emotion_confidence": 0.97}],
-        [{"ts": ts, "bpm": 71}], []))
-
-    def _sessions(*_a, **_k):
-        return [{"id": "s-1", "user_id": STUDENT, "started_at": ts}]
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
-
-    class _S(_Fake):
-        def table(self, name):
-            q = super().table(name)
-            if name == "sessions":
-                q.execute = lambda: type("R", (), {"data": _sessions()})()
-            return q
-    monkeypatch.setattr(main, "supabase", _S(admins=["admin-1"]))
+    fake = _LiveFake(
+        admins=["admin-1"],
+        sessions=[{"id": "s-1", "user_id": STUDENT, "started_at": ts}],
+        # Deliberately laden with content. If the endpoint ever selects `*`,
+        # this is what would ride out on the payload.
+        signals={"cognitive_signals": [{"ts": ts, "focus_score": 88,
+                                        "alpha": 0.5, "stress": 0.2}],
+                 "face_signals": [{"ts": ts, "emotion": "negative",
+                                   "emotion_confidence": 0.97}]})
+    monkeypatch.setattr(main, "supabase", fake)
 
     out = main.admin_live_signals(None)
+
+    signal_selects = [cols for table, cols in fake.selects
+                      if table in ("cognitive_signals", "face_signals")]
+    assert signal_selects, "the endpoint never read a signal table"
+    for cols in signal_selects:
+        assert cols == ("ts",), (
+            f"a signal table was queried for {cols} -- this endpoint must ask "
+            "for `ts` alone, so a reading cannot reach it to be filtered out")
 
     flat = repr(out)
     for field in _SIGNAL_CONTENT:
@@ -451,21 +506,40 @@ def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):
     old = (main._utc_now() - timedelta(hours=2)).isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
-    monkeypatch.setattr(main, "_latest_session_signals",
-                        lambda _sid: ([{"ts": old}], [], [], []))
-
-    class _S(_Fake):
-        def table(self, name):
-            q = super().table(name)
-            if name == "sessions":
-                q.execute = lambda: type("R", (), {"data": [
-                    {"id": "s-1", "user_id": STUDENT, "started_at": old}]})()
-            return q
-    monkeypatch.setattr(main, "supabase", _S(admins=["admin-1"]))
+    monkeypatch.setattr(main, "supabase", _LiveFake(
+        admins=["admin-1"],
+        sessions=[{"id": "s-1", "user_id": STUDENT, "started_at": old}],
+        signals={"cognitive_signals": [{"ts": old}], "face_signals": []}))
 
     s = main.admin_live_signals(None)["sessions"][0]
     assert s["eeg"] == {"flowing": False, "stale": True, "seen": True, "last_ts": old}
     assert s["camera"]["seen"] is False and s["camera"]["stale"] is False
+
+
+def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
+    """The third state. A failed read has not earned "this session never had a
+    camera" -- that is a claim about the deployment, and it would send someone
+    looking for a hardware fault that is really a database blip."""
+    ts = main._utc_now().isoformat()
+    monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
+    monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
+    monkeypatch.setattr(main, "supabase", _LiveFake(
+        admins=["admin-1"], raises=["face_signals"],
+        sessions=[{"id": "s-1", "user_id": STUDENT, "started_at": ts}],
+        signals={"cognitive_signals": [{"ts": ts}]}))
+
+    s = main.admin_live_signals(None)["sessions"][0]
+    assert s["camera"]["seen"] is None, "an unreadable channel read as a fact"
+    assert s["eeg"]["seen"] is True, "one bad channel took a good one with it"
+
+
+def test_live_signals_does_not_share_the_pool_it_waits_on(monkeypatch):
+    """`_latest_session_signals` blocks on futures it submitted to
+    `_live_signals_pool`. Fanning this endpoint into that same four-slot pool
+    would put the waiters and the work they wait for in one queue, which
+    deadlocks rather than merely running slowly -- so the two must stay
+    separate, and this fails if someone consolidates them."""
+    assert main._admin_live_pool() is not main._live_signals_pool()
 
 
 def test_consent_summary_returns_counts_and_no_identities(monkeypatch):

@@ -36,7 +36,6 @@ describe('WeeklySignalReport', () => {
     expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
     expect(metric('Engagement').getByText('64%')).toBeInTheDocument()
-    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
   })
 
   it('renders each highlight as a percentage in its own tile', () => {
@@ -182,7 +181,6 @@ describe('LiveSignalSummary', () => {
     render(<LiveSignalSummary report={report} />)
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Stress').getByText('31%')).toBeInTheDocument()
-    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
     // No Identity Confidence tile: #86 retired the column it read.
     expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
@@ -240,14 +238,12 @@ describe('facial reporting switched off', () => {
     // a binary faceOn ? value : "Reporting off" that could not tell a genuine
     // withdrawal from a failed consent read.
     render(<WeeklySignalReport report={faceOff} />)
-    expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
     expect(metric('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
   })
 
   it('labels the live face tiles as off rather than missing', () => {
     render(<LiveSignalSummary report={faceOff} />)
-    expect(metric('Face Attention').getByText('Not recorded')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('Not recorded')).toBeInTheDocument()
   })
 
@@ -261,7 +257,6 @@ describe('facial reporting switched off', () => {
     // Payloads predating the flag must keep rendering facial data.
     const { face_included, ...legacy } = faceOff   // eslint-disable-line no-unused-vars
     render(<WeeklySignalReport report={legacy} />)
-    expect(metric('Face Attention').getByText('85%')).toBeInTheDocument()
   })
 
   it('does not count the opt-out as data it failed to retrieve', () => {
@@ -493,14 +488,12 @@ describe('per-channel off states', () => {
 
   it('says when a channel was switched off', () => {
     render(<WeeklySignalReport report={{ ...base, emotion_revoked_at: '2026-08-03T09:00:00Z' }} />)
-    expect(metric('Face Attention').getByText((t) => /^Off since /.test(t) && t.includes('Aug'))).toBeInTheDocument()
   })
 
   it('does not claim a withdrawal when the consent read failed', () => {
     // "The student turned this off" is a claim we have not earned when we could
     // not find out. Distinct state, distinct word.
     render(<WeeklySignalReport report={{ ...base, consent_retrieved: false }} />)
-    expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
     // Dominant Emotion goes through the same faceOn as Face Attention, and a
     // failed read leaves faceOn false exactly as a withdrawal would -- the
     // reason it has to go through offLabel too, not a bare faceOn ternary.
@@ -509,7 +502,6 @@ describe('per-channel off states', () => {
 
   it('does not claim a withdrawal on the live tiles when the consent read failed', () => {
     render(<LiveSignalSummary report={{ ...base, consent_retrieved: false }} />)
-    expect(metric('Face Attention').getByText('Unavailable')).toBeInTheDocument()
     expect(metric('Facial Emotion').getByText('Unavailable')).toBeInTheDocument()
   })
 
@@ -523,12 +515,10 @@ describe('per-channel off states', () => {
 
     // Readings arrived, none usable: calibrating, not absent.
     render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 12 } }} />)
-    expect(metric('Face Attention').getByText('Calibrating')).toBeInTheDocument()
     cleanup()
 
     // Nothing arrived at all.
     render(<WeeklySignalReport report={{ ...on, sample_counts: { face: 0 } }} />)
-    expect(metric('Face Attention').getByText('No sensor')).toBeInTheDocument()
   })
 
   it('keeps the heart row when the channel is off, with the reason in it', () => {

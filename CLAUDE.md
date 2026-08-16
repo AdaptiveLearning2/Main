@@ -453,11 +453,19 @@ proves the SQL parses, not that it counts.
 **`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
 reference rather than on code: "attention" inferred from head direction is least valid for exactly
 this product's users, and unlike a FER+ label it renders as a percentage, which reads as objective.
-One adult is not a validation set for a construct whose failure mode is population-specific. The
-teacher's Live attention gauge, `SessionReview`'s attention ribbon, the parent/teacher
-`face_attention` tiles and one line of the LLM strategy prompt all still read a value nothing
-computes — the three-state tile logic renders `No sensor` / `Calibrating` rather than a number, so
-nothing lies. Don't drop the column or the UI, and don't fill it without the measurement.
+One adult is not a validation set for a construct whose failure mode is population-specific.
+
+**Every surface that rendered it has been removed** — the teacher's Live gauge, `SessionReview`'s
+ribbon field, the parent and teacher `face_attention` tiles, the weekly chart series and the LLM
+strategy prompt's sentence. The three-state logic meant none of them lied, but a tile that can only
+ever say `Calibrating` teaches a reader to ignore it, and it occupied space on the surfaces where
+trust matters most. `hasSignalSummary` on the parent dashboard dropped `face_attention` with them:
+that list tracks what the tiles can render, so leaving it in would admit a child whose only reading
+is attention to a card with no tile to show.
+
+**The column, the payload field and `face_geometry` all stay.** The measurement is still the plan;
+only the claims about it are gone. Fill it when there is a labelled reference, and put the UI back
+in the same change — not before.
 
 `face_geometry.py` is the arithmetic half: named landmarks in, head pose and iris offset out, pure
 numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,

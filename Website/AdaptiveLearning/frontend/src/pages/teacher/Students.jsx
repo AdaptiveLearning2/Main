@@ -107,7 +107,6 @@ async function getStudentStats(studentId)
     focusScore: asPct(signals.focus),
     stressLevel: asPct(signals.stress),
     engagement: asPct(signals.engagement),
-    faceAttention: asPct(signals.face_attention),
     dominantEmotion: signals.dominant_emotion ?? null,
     // Exact counts of non-null measurements over the window, from the
     // aggregate -- not a length that stops at a row cap.
@@ -436,15 +435,6 @@ export default function Students() {
                                   note below it -- with the switch off no facial
                                   data was requested, so a summary outage did
                                   not cost these two tiles anything. */}
-                              <StatCard
-                                icon={<Eye size={16} />}
-                                label="Face Attention"
-                                value={stats.faceIncluded ? (stats.faceAttention ?? '—') : 'Off'}
-                                sub={stats.faceIncluded
-                                  ? faceSub(stats.faceSignalCount, `${stats.faceSignalCount} face readings`, stats.signalsFailed)
-                                  : 'reporting off'}
-                                color="sky"
-                              />
                               <StatCard
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"

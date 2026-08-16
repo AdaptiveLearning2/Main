@@ -94,7 +94,6 @@ function StudentCard({ student, history }) {
         <Gauge label="Focus"      value={cog?.focus}      color="bg-indigo-500" />
         <Gauge label="Engagement" value={cog?.engagement} color="bg-emerald-500" />
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
-        <Gauge label="Attention"  value={face?.attention} color="bg-amber-500" />
       </div>
 
       {/* Absolute units, so it is stated rather than drawn on the 0..1

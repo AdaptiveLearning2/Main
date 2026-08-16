@@ -18,7 +18,12 @@ import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/
 // "something is broken" display this check exists to avoid. Keep this list and
 // the tiles below in step.
 function hasSignalSummary(summary) {
-  return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null || summary.face_attention != null))
+  // `face_attention` was in this list while a Face Attention tile existed.
+  // The tile is gone -- the column has no producer -- so counting it would let
+  // a child whose only reading is attention through to a card with no facial
+  // tile to show, which is the same failure the engagement note above
+  // describes. Keep this list and the tiles below in step.
+  return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null))
 }
 
 // Whether the aggregate behind those values was actually read. The endpoint
@@ -149,14 +154,6 @@ export default function ParentDashboard() {
                       // calibrating and no-sensor so this tile can't fall back
                       // to the generic string the rest of the reporting surfaces
                       // stopped showing.
-                      { icon: Eye,      label: 'Face Attention',
-                        value: valueOrReason(faceIncluded(signals) && pct(signals.face_attention), {
-                          on: faceIncluded(signals),
-                          revokedAt: signals.emotion_revoked_at,
-                          consentRetrieved: signals.consent_retrieved,
-                          samples: signals.face_samples,
-                        }),
-                        color: 'text-sky-600' },
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">

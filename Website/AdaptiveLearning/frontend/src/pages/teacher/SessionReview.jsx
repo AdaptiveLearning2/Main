@@ -244,7 +244,9 @@ export default function SessionReview() {
   face.forEach(f => {
     const t = new Date(f.ts).getTime()
     if (Number.isFinite(t) && t - lastBucket > 10_000) {
-      ribbon.push({ t, emotion: f.emotion, attention: f.attention })
+      // Emotion only. `attention` has no producer, so carrying it here put a
+      // permanently-null field on every ribbon segment.
+      ribbon.push({ t, emotion: f.emotion })
       lastBucket = t
     }
   })

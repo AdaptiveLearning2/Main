@@ -390,6 +390,50 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
+def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> None:
+    """Add one closed session's answers to the student's lifetime totals.
+
+    Extracted because `/end` was the only caller and **the stale-session sweep
+    is the other close path**. A student who shuts the tab is closed by the
+    sweep, and the sweep set `ended_at`, rolled up and archived -- but never
+    touched `user_stats`. Every question they answered in that session was
+    dropped from their lifetime totals permanently, while `session_answers` and
+    `user_math_performance` kept it. The same oversight was caught once already
+    for the rollup ("Only the /end endpoint called this"); the stats update sat
+    two lines above that comment and was missed.
+
+    Never raises: it runs alongside the writes that close a session, and a
+    failure here must not cost the student the session record itself.
+    """
+    if not total_q:
+        # Nothing to credit. Skipped rather than written as a zero-row so a
+        # student who has never answered anything has no `user_stats` row at
+        # all, which is what `/api/stats/*` already treats as "no data yet".
+        return
+    try:
+        existing = supabase.table("user_stats").select("*").eq("user_id", user_id).execute()
+        now = _utc_now().isoformat()
+        if existing.data:
+            s = existing.data[0]
+            supabase.table("user_stats").update({
+                "total_questions": (s.get("total_questions") or 0) + total_q,
+                "total_correct":   (s.get("total_correct")   or 0) + correct,
+                "last_session_at": now,
+                "updated_at":      now,
+            }).eq("user_id", user_id).execute()
+        else:
+            supabase.table("user_stats").insert({
+                "user_id":          user_id,
+                "total_questions":  total_q,
+                "total_correct":    correct,
+                "current_streak":   0,
+                "best_streak":      0,
+                "last_session_at":  now,
+            }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not credit {total_q} answers for {user_id[:8]}: {e}")
+
+
 def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
     """Delete a session that answered nothing and recorded nothing. True if gone.
 
@@ -1338,8 +1382,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
         bits.append(f"average stress was {_as_pct(avg_stress)}%")
-    if avg_attention is not None:
-        bits.append(f"average face attention was {_as_pct(avg_attention)}%")
+    # No attention sentence. `face_signals.attention` has no producer, so
+    # `avg_attention` is always None and this branch never fired -- but it was
+    # the line that would have put an unmeasured percentage into a prompt whose
+    # output a parent reads as advice. The average is still computed and still
+    # published in the payload; only the claims about it are gone.
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
     else:
@@ -1679,6 +1726,11 @@ def start_session(payload: StartSessionRequest, request: Request):
         # summary, and once the delete job runs that day is simply gone.
         if _discard_if_nothing_recorded(s["id"], s.get("questions_answered")):
             continue
+        # The other close path, and the one a student who shuts the tab always
+        # takes. Without this their answers reached `session_answers` and
+        # `user_math_performance` and never reached their lifetime totals.
+        _credit_session_to_user_stats(user["id"], s.get("questions_answered") or 0,
+                                      s.get("correct_answers") or 0)
         _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
         # And archived, for the same reason the rollup is: this is the sweep
         # that closes the session of a student who shut the tab, so it is the
@@ -1790,24 +1842,7 @@ def end_session(session_id: str = Path(...), request: Request = None):
     total_q = data.get("questions_answered") or 0
     correct = data.get("correct_answers")    or 0
 
-    existing = supabase.table("user_stats").select("*").eq("user_id", user["id"]).execute()
-    if existing.data:
-        s = existing.data[0]
-        supabase.table("user_stats").update({
-            "total_questions": (s.get("total_questions") or 0) + total_q,
-            "total_correct":   (s.get("total_correct")   or 0) + correct,
-            "last_session_at": datetime.utcnow().isoformat(),
-            "updated_at":      datetime.utcnow().isoformat(),
-        }).eq("user_id", user["id"]).execute()
-    else:
-        supabase.table("user_stats").insert({
-            "user_id":          user["id"],
-            "total_questions":  total_q,
-            "total_correct":    correct,
-            "current_streak":   0,
-            "best_streak":      0,
-            "last_session_at":  datetime.utcnow().isoformat(),
-        }).execute()
+    _credit_session_to_user_stats(user["id"], total_q, correct)
 
     # Last, and after the writes that matter. The rollup is derived data and
     # `_rollup_session_days` swallows its own failures, so it cannot cost the
@@ -1838,21 +1873,53 @@ def list_sessions(request: Request):
 
 # ─── stats ───────────────────────────────────────────────────────────────
 
+def _stats_including_open_session(student_id: str) -> dict:
+    """Lifetime totals, plus whatever the student has answered *so far today*.
+
+    `user_stats` is only written when a session closes, so a child answering
+    questions right now contributed nothing to it -- and a parent watching the
+    report during a lesson saw "0 questions, 0% accuracy" while six answers sat
+    in `session_answers`. The totals were not wrong so much as a session behind,
+    which on the surface a parent checks mid-lesson is the same thing.
+
+    Open sessions only (`ended_at is null`), so this can never double-count one
+    the close path has already credited.
+    """
+    base = {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
+    try:
+        res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
+        if res.data:
+            base = res.data[0]
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not read user_stats for {student_id[:8]}: {e}")
+        return base
+    try:
+        open_rows = supabase.table("sessions") \
+            .select("questions_answered, correct_answers") \
+            .eq("user_id", student_id).is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # The stored totals are still true as far as they go, so they are
+        # returned rather than refused -- this only ever *adds* to them.
+        print(f"[stats] could not read the open session for {student_id[:8]}: {e}")
+        return base
+    live_q = sum(r.get("questions_answered") or 0 for r in open_rows)
+    live_c = sum(r.get("correct_answers") or 0 for r in open_rows)
+    if not live_q:
+        return base
+    return {**base,
+            "total_questions": (base.get("total_questions") or 0) + live_q,
+            "total_correct":   (base.get("total_correct") or 0) + live_c}
+
+
 @app.get("/api/stats/me")
 def my_stats(request: Request):
     user = get_user(request)
-    res  = supabase.table("user_stats").select("*").eq("user_id", user["id"]).execute()
-    if not res.data:
-        return {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
-    return res.data[0]
+    return _stats_including_open_session(user["id"])
 
 @app.get("/api/stats/student/{student_id}")
 def student_stats(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
-    res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
-    if not res.data:
-        return {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
-    return res.data[0]
+    return _stats_including_open_session(student_id)
 
 @app.get("/api/sessions/student/{student_id}")
 def student_sessions(student_id: str, request: Request):

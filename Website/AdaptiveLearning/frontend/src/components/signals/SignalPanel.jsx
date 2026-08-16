@@ -252,12 +252,14 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
                     icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={valueOrReason(pct(cog.engagement), eegReason(report))}
                     icon={Activity} tone="indigo" />
-        {/* Never "N/A" for a channel that was not recorded: that reports an
-            absence in data nobody collected. `offLabel` picks between
-            withdrawn, unavailable, calibrating and no-sensor. */}
-<MiniMetric label="Face Attention"
-                    value={valueOrReason(faceOn && pct(face.attention), faceReason(report, faceOn))}
-                    icon={Eye} tone="sky" />
+        {/* No attention tile. `face_signals.attention` has no producer -- nothing
+            computes it and the column is always null -- so the tile could only
+            ever say "Calibrating", which reads as a measurement warming up
+            rather than one that will never arrive. Phase 11 step 3 is blocked
+            on a labelled reference, not on code: attention inferred from head
+            direction is least valid for exactly this product's users, and it
+            renders as a percentage, which reads as objective. The column, the
+            payload field and `face_geometry` all stay; only the claim goes. */}
         {/* bpm, not a percentage -- the same unit trap the weekly chart gives
             its own axis for. `unit()` never touches the 0..1 path. */}
         {heartShown && (
@@ -296,7 +298,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     ...d,
     focus: toPct(d.focus),
     stress: toPct(d.stress),
-    attention: toPct(d.attention),
     // Deliberately NOT through toPct. These arrive in beats per minute and
     // milliseconds; scaling them by 100 would put them three orders of
     // magnitude off, and on a shared axis they would flatten every other series
@@ -351,9 +352,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <MiniMetric label="Avg Focus" value={pct(avg.focus)} icon={Brain} tone="emerald" />
         <MiniMetric label="Avg Stress" value={pct(avg.stress)} icon={Zap} tone="rose" />
         <MiniMetric label="Engagement" value={pct(avg.engagement)} icon={Activity} tone="indigo" />
-<MiniMetric label="Face Attention"
-                    value={valueOrReason(faceOn && pct(avg.face_attention), faceReason(report, faceOn))}
-                    icon={Eye} tone="sky" />
         {/* sessions_recorded, not sample_counts.sessions: the latter is rows
             retrieved under the session row cap, so a heavy week showed exactly
             the cap here while the parent dashboard -- which counts in Postgres
@@ -420,7 +418,6 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               {/* Omitted entirely with facial reporting off, rather than drawn
                   as an all-null series -- an empty legend entry reads as a
                   measurement that flatlined. */}
-              {faceOn && <Line yAxisId="pct" type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} name="Face Attention" />}
               {/* Same reasoning as the facial series: omitted rather than drawn
                   as an all-null line, because an empty legend entry reads as a
                   measurement that flatlined. */}

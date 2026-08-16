@@ -66,14 +66,19 @@ function renderDashboard() {
 
 
 
-it('still renders facial data for payloads predating the flag', async () => {
+it('does not read a pre-flag payload as facial data being withheld', async () => {
+  // Was asserted through the Face Attention tile, which is gone -- `attention`
+  // has no producer. The behaviour it guarded is still live: a payload built
+  // before `emotion_included` existed must not be reported as a channel the
+  // parent switched off, so the note below the tiles keeps its "not read"
+  // wording for genuine exclusions only.
   apiFetch.mockImplementation(() => {
     const { face_included, ...summary } = withFace[0].signal_summary  // eslint-disable-line no-unused-vars
     return Promise.resolve([{ ...withFace[0], signal_summary: summary }])
   })
   renderDashboard()
   await screen.findByText('Ada')
-  expect(tile('Face Attention').getByText('85%')).toBeInTheDocument()
+  expect(screen.queryByText(/facial signals were not read/i)).not.toBeInTheDocument()
 })
 
 it('does not show a row of N/As for a reading it has no tile for', async () => {

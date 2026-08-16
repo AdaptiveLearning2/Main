@@ -144,7 +144,6 @@ describe('signal averages', () => {
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
     expect(tile('Engagement').getByText('60%')).toBeInTheDocument()
-    expect(tile('Face Attention').getByText('90%')).toBeInTheDocument()
     expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
   })
 
@@ -157,7 +156,6 @@ describe('signal averages', () => {
     await expandAda()
     await waitFor(() =>
       expect(tile('Focus Score').getByText(`${WEEK_OF_SAMPLES} EEG readings · last 7d`)).toBeInTheDocument())
-    expect(tile('Face Attention').getByText(`${WEEK_OF_SAMPLES} face readings · last 7d`)).toBeInTheDocument()
   })
 
   it('asks the aggregate for the window the tiles claim', async () => {
@@ -229,7 +227,6 @@ describe('facial recognition switch', () => {
     setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     expect(tile('Dominant Emotion').getByText('Off')).toBeInTheDocument()
   })
 
@@ -252,7 +249,6 @@ describe('the "nothing recorded" note', () => {
     render(<Students />)
     await expandAda()
 
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
     // What was actually checked, stated as such.
     expect(screen.getByText(/facial signals were not read/i)).toBeInTheDocument()
@@ -339,7 +335,6 @@ describe('the "nothing recorded" note', () => {
 
     await waitFor(() => expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument())
     expect(tile('Focus Score').queryByText(/no EEG data/i)).not.toBeInTheDocument()
-    expect(tile('Face Attention').getByText(/signal data unavailable/i)).toBeInTheDocument()
     // Read from user_stats, so the outage does not reach them.
     expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
   })
@@ -368,7 +363,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
   render(<Students />)
   await expandAda()
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV',
                         'Total Accuracy', 'Current Streak']) {
     expect(screen.getByText(label)).toBeInTheDocument()
@@ -376,7 +371,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
 
   await userEvent.click(screen.getByRole('switch'))
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
     expect(screen.queryByText(label)).not.toBeInTheDocument()
   }

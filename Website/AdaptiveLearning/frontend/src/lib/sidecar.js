@@ -31,9 +31,21 @@ const SIDECAR_TOKEN = import.meta.env.VITE_EEG_LOCAL_TOKEN || ''
  *  running should read as "not there" in a moment, not stall a page load. */
 const TIMEOUT_MS = 3000
 
-async function call(path, { method = 'GET', body = null } = {}) {
+/** Starting a device is not a status read.
+ *
+ * Opening a webcam and loading FER+ and the face landmarker takes seconds, and
+ * the muse path waits on a BLE bridge. At 3 s the browser aborted while the
+ * sidecar carried on and started the device anyway -- so the request "failed",
+ * the card stayed on "off", and the camera was running the whole time. A
+ * client-side timeout shorter than the work it is waiting for does not cancel
+ * anything; it just stops you finding out what happened.
+ */
+const LIFECYCLE_TIMEOUT_MS = 30000
+
+async function call(path, { method = 'GET', body = null,
+                            timeoutMs = TIMEOUT_MS } = {}) {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(`${SIDECAR_URL}${path}`, {
       method,
@@ -140,4 +152,145 @@ export function stopPushOnUnload() {
 export async function pushStatus() {
   const out = await call('/api/v1/push/status')
   return out?.data || out
+}
+
+// ── driving the local hardware, push only ───────────────────────────────────
+//
+// Under `pull` the backend owns this: it polls the sidecar and proxies scan and
+// connect through `/api/eeg/muse/*`. Push inverts it. The backend is remote by
+// definition there -- that is why push exists -- so those endpoints answer 409
+// (`_refuse_under_push`), and the page in front of the student is the only
+// thing that can reach their headband and their camera.
+//
+// The sidecar accepts the learner token for these only when PUSH_ENABLED is on
+// (see `require_local_controller`); under pull it still answers 401, which is
+// correct rather than a limitation. So every function here is for the push path
+// and Adaptive.jsx must not call them otherwise.
+
+/** Start capturing on one registered device (`default`, `camera`, ...). */
+export async function deviceStart(deviceId) {
+  return call(`/api/v1/session/start?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
+}
+
+/** Stop capturing on one device. Leaves any other device running. */
+export async function deviceStop(deviceId) {
+  return call(`/api/v1/session/stop?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
+}
+
+/** Every registered station and whether it is currently capturing. */
+export async function devices() {
+  const res = await call('/api/v1/devices')
+  return res?.data || []
+}
+
+/** Ask the native bridge to scan for nearby headbands. */
+export async function museRefresh(deviceId) {
+  return call(`/api/v1/muse/refresh?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
+}
+
+/** Pair with a named headband. `name` comes from the scan's device list. */
+export async function museConnect(name, deviceId) {
+  return call('/api/v1/muse/connect',
+              { method: 'POST', body: { name, device_id: deviceId },
+                timeoutMs: LIFECYCLE_TIMEOUT_MS })
+}
+
+export async function museDisconnect(deviceId) {
+  return call(`/api/v1/muse/disconnect?device_id=${encodeURIComponent(deviceId)}`,
+              { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
+}
+
+/** One device's snapshot, unwrapped to `{running, ingestion, ...}`.
+ *
+ * Deliberately the same shape the backend's `/api/eeg/status` puts under its
+ * `muse` key, so a caller polling for `ingestion.muse_devices` reads one shape
+ * in both modes. The sidecar wraps it in `{status, data}`; unwrapping here
+ * rather than at the call site keeps the mode difference to which function is
+ * called, not what the answer looks like.
+ */
+export async function museState(deviceId) {
+  const res = await call(`/api/v1/muse/status?device_id=${encodeURIComponent(deviceId)}`)
+  return res?.data || {}
+}
+
+/** Tear down the shared push client, but only once nothing is left using it.
+ *
+ * `/api/v1/push/stop` is **global**: there is one `push_client` for the whole
+ * sidecar, and stopping it clears `set_payload_consumer` for every device at
+ * once. So "whoever disconnects last, unconditionally" is wrong in both
+ * directions, and both were wrong:
+ *
+ * - the headband's off-path called `stopPush()` outright, which silently killed
+ *   a running camera's delivery. Its frames went nowhere while the card still
+ *   said RECORDING, because nothing told it.
+ * - the camera's off-path never called it at all, so turning the camera off
+ *   with no headband left the sidecar holding the student's access token --
+ *   a consent problem, not untidiness.
+ *
+ * Returns the device list it decided from, so a caller can update what it shows
+ * from the same read rather than a second one that could disagree.
+ */
+export async function releasePushIfIdle() {
+  let list = null
+  try {
+    list = await devices()
+  } catch {
+    // Could not tell. Stop it: a sidecar holding a token after the student
+    // walked away is the worse of the two failures, and a device still
+    // capturing will report `running: false` on the next poll rather than
+    // claiming to record into a client that is gone.
+    await stopPush().catch(() => {})
+    return { stopped: true, devices: null }
+  }
+  if (list.some(d => d.running)) return { stopped: false, devices: list }
+  await stopPush().catch(() => {})
+  return { stopped: true, devices: list }
+}
+
+/** The interpreted EEG snapshot: state, features, bands, ingestion.
+ *
+ * `Envelope`-wrapped by the sidecar, and `status: "idle"` with `data: null`
+ * before any stream data has arrived -- which is a real state, not a failure,
+ * so it comes back as null rather than throwing.
+ */
+export async function sidecarState(deviceId) {
+  const res = await call(`/api/v1/state?device_id=${encodeURIComponent(deviceId)}`)
+  return res?.data || null
+}
+
+/** What `/api/eeg/debug` returns under pull, assembled from the sidecar.
+ *
+ * The debug panel was written against the backend's proxy, and under push the
+ * backend has nothing to proxy -- it cannot reach a student's laptop. That made
+ * the panel say so and stop, which was honest but left push with no way to see
+ * focus, calm or contact quality at all. The page can reach the sidecar, so the
+ * same payload is assembled here rather than the panel learning a second shape.
+ *
+ * **Whether each call answered is tracked apart from what it answered with**,
+ * because neither payload can stand in for reachability: `sidecarState` returns
+ * null for a sidecar that is up with no stream data yet, and `museState`
+ * returns `{}` for one with no headband attached. Both are ordinary states, so
+ * deriving `available` from them would report a healthy sidecar as missing --
+ * and hardcoding it `true`, which this did, reported a missing one as healthy.
+ * That left the panel's "not answering" line unreachable, so an unplugged
+ * sidecar drew a panel of blanks: the same can't-tell-absent-from-empty failure
+ * the `available: null` three-state exists to prevent, one layer further out.
+ */
+export async function sidecarDebug(deviceId) {
+  const [state, muse] = await Promise.allSettled([
+    sidecarState(deviceId),
+    museState(deviceId),
+  ])
+  return {
+    // Either route answering means the sidecar is up. They fail together when
+    // it is not, and separately when one route alone is unhappy -- which is a
+    // half-working sidecar with something to show, not an absent one.
+    available:   state.status === 'fulfilled' || muse.status === 'fulfilled',
+    ingest_mode: 'push',
+    snapshot:    state.status === 'fulfilled' ? state.value : null,
+    muse:        muse.status === 'fulfilled' ? muse.value : null,
+  }
 }

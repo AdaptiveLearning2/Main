@@ -181,3 +181,143 @@ describe('stopPushOnUnload', () => {
     await expect(sidecar.stopPushOnUnload()).resolves.toBeUndefined()
   })
 })
+
+describe('releasePushIfIdle', () => {
+  // The push client is one shared object for the whole sidecar --
+  // `/api/v1/push/stop` clears `set_payload_consumer` for every device at once.
+  // So neither device may tear it down on its own, and both call sites were
+  // wrong in opposite directions before this existed.
+
+  const devicesReply = (list) => ok({ status: 'ok', data: list })
+
+  it('leaves the push client alone while another device is still streaming', async () => {
+    // The reported bug: disconnecting the headband called stopPush()
+    // unconditionally, which killed a running camera's delivery. Its frames
+    // went nowhere while the card still said RECORDING.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) {
+        return devicesReply([{ device_id: 'default', kind: 'muse', running: false },
+                             { device_id: 'camera', kind: 'face', running: true }])
+      }
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(false)
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(false)
+  })
+
+  it('stops it once nothing is streaming', async () => {
+    // The other direction, which was also wrong: the camera's off-path never
+    // called stopPush at all, so turning the camera off with no headband left
+    // the sidecar holding the student's access token.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) {
+        return devicesReply([{ device_id: 'default', kind: 'muse', running: false },
+                             { device_id: 'camera', kind: 'face', running: false }])
+      }
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(true)
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(true)
+  })
+
+  it('stops it when it cannot tell, rather than leaving a token held', async () => {
+    // A sidecar holding a student's token after they walked away is the worse
+    // of the two failures -- and a device still capturing reports
+    // `running: false` on the next poll rather than claiming to record into a
+    // client that is gone.
+    const seen = []
+    mockFetch(async (url) => {
+      seen.push(String(url))
+      if (String(url).includes('/devices')) throw new Error('sidecar went away')
+      return ok({})
+    })
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.stopped).toBe(true)
+    expect(out.devices).toBeNull()
+    expect(seen.some(u => u.includes('/push/stop'))).toBe(true)
+  })
+
+  it('returns the list it decided from, so the caller need not read it twice', async () => {
+    // Two reads could disagree, and the second would be the one the card
+    // rendered -- which is how a camera ends up claiming to record into a push
+    // client that was just torn down.
+    const list = [{ device_id: 'camera', kind: 'face', running: true }]
+    mockFetch(async (url) =>
+      String(url).includes('/devices') ? devicesReply(list) : ok({}))
+
+    const out = await sidecar.releasePushIfIdle()
+
+    expect(out.devices).toEqual(list)
+  })
+})
+
+describe('sidecarDebug', () => {
+  // `available` here is the panel's only way to say "the sidecar is not
+  // answering". It was hardcoded true, which made that sentence unreachable and
+  // drew a panel of blanks instead -- the same can't-tell-absent-from-empty
+  // failure the backend's `available: null` three-state exists to prevent.
+
+  const stateReply = (data) => ok({ status: 'ok', data })
+
+  it('reports a sidecar that answered nothing yet as available', async () => {
+    // The trap that makes deriving this from the payloads wrong: a sidecar that
+    // is up and simply has no stream data answers `data: null`, and one with no
+    // headband attached answers an empty muse block. Both are ordinary states.
+    mockFetch(async (url) =>
+      String(url).includes('/muse/status') ? stateReply(null) : stateReply(null))
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(true)
+    expect(out.snapshot).toBeNull()
+    expect(out.muse).toEqual({})
+  })
+
+  it('reports a sidecar that did not answer as unavailable', async () => {
+    mockFetch(async () => { throw new Error('ECONNREFUSED') })
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(false)
+    expect(out.snapshot).toBeNull()
+    expect(out.muse).toBeNull()
+  })
+
+  it('stays available when only one route is unhappy', async () => {
+    // A half-working sidecar has something to show. Requiring both would send
+    // the panel to the outage message over one bad route.
+    mockFetch(async (url) => {
+      if (String(url).includes('/muse/status')) throw new Error('no muse route')
+      return stateReply({ state: { focus: 42 } })
+    })
+
+    const out = await sidecar.sidecarDebug('default')
+
+    expect(out.available).toBe(true)
+    expect(out.snapshot).toEqual({ state: { focus: 42 } })
+    expect(out.muse).toBeNull()
+  })
+
+  it('never throws, so the panel keeps a payload to branch on', async () => {
+    // The caller's catch sets `eegDebug` to null, which renders the *pull*
+    // outage message -- wrong under push, and it names a port the backend was
+    // never going to reach.
+    mockFetch(async () => { throw new Error('boom') })
+
+    await expect(sidecar.sidecarDebug('default')).resolves.toMatchObject({
+      ingest_mode: 'push',
+    })
+  })
+})

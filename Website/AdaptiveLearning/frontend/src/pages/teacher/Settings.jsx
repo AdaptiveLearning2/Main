@@ -12,7 +12,11 @@ function Toggle({ value, onChange }) {
   return (
     <button onClick={() => onChange(!value)}
       className={`w-11 h-6 rounded-full transition-colors duration-200 relative flex-shrink-0 ${value ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
+      {/* `left-0` is load-bearing -- see the copy in student/Profile.jsx. A
+          button centres its content, so without it the knob's static position
+          is the middle of the track and both states draw it right of centre:
+          on lands 18px outside the pill, off sits against the right end. */}
+      <span className={`absolute left-0 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
   )
 }

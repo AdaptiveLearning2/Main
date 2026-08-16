@@ -90,7 +90,16 @@ def _profile(uid: str) -> dict:
             return p.data
     except Exception:
         pass
-    return {"id": uid, "display_name": "Student", "email": "", "role": "student", "grade_level": None}
+    # The preference defaults are repeated from 20260822000000's column defaults
+    # deliberately. This branch is a *failed read*, and the caller cannot tell it
+    # from a real profile -- so omitting them would hand the page `undefined` for
+    # three controls and it would render them unset, which reads as "the student
+    # turned this off" rather than "we could not find out". Same shape as the
+    # reporting helpers, minus the flag: nothing downstream of a preference is
+    # worth a 500, and the values below are what a new account gets anyway.
+    return {"id": uid, "display_name": "Student", "email": "", "role": "student",
+            "grade_level": None, "difficulty_bias": 0,
+            "session_duration_minutes": 15, "practice_reminders": True}
 
 
 # ─── biosignal reporting ─────────────────────────────────────────────────
@@ -381,6 +390,98 @@ def _school_day(ts, tz: tzinfo) -> str:
     return "" if resolved is None else resolved.isoformat()
 
 
+def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> None:
+    """Add one closed session's answers to the student's lifetime totals.
+
+    Extracted because `/end` was the only caller and **the stale-session sweep
+    is the other close path**. A student who shuts the tab is closed by the
+    sweep, and the sweep set `ended_at`, rolled up and archived -- but never
+    touched `user_stats`. Every question they answered in that session was
+    dropped from their lifetime totals permanently, while `session_answers` and
+    `user_math_performance` kept it. The same oversight was caught once already
+    for the rollup ("Only the /end endpoint called this"); the stats update sat
+    two lines above that comment and was missed.
+
+    Never raises: it runs alongside the writes that close a session, and a
+    failure here must not cost the student the session record itself.
+    """
+    if not total_q:
+        # Nothing to credit. Skipped rather than written as a zero-row so a
+        # student who has never answered anything has no `user_stats` row at
+        # all, which is what `/api/stats/*` already treats as "no data yet".
+        return
+    try:
+        existing = supabase.table("user_stats").select("*").eq("user_id", user_id).execute()
+        now = _utc_now().isoformat()
+        if existing.data:
+            s = existing.data[0]
+            supabase.table("user_stats").update({
+                "total_questions": (s.get("total_questions") or 0) + total_q,
+                "total_correct":   (s.get("total_correct")   or 0) + correct,
+                "last_session_at": now,
+                "updated_at":      now,
+            }).eq("user_id", user_id).execute()
+        else:
+            supabase.table("user_stats").insert({
+                "user_id":          user_id,
+                "total_questions":  total_q,
+                "total_correct":    correct,
+                "current_streak":   0,
+                "best_streak":      0,
+                "last_session_at":  now,
+            }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not credit {total_q} answers for {user_id[:8]}: {e}")
+
+
+def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
+    """Delete a session that answered nothing and recorded nothing. True if gone.
+
+    Pressing Connect Headband creates the session, and it has to -- signals need
+    one to attach to, and #27 moved creation off page-load precisely so the
+    button owns it. The cost is that every *failed* pairing attempt left a row
+    behind, and History showed each one as a practice session: on one afternoon,
+    four of five sessions had no questions and no samples of any kind.
+
+    That is not academic history being thrown away. `sessions`, `session_answers`
+    and `user_stats` are kept for a reason, but a row with nothing on either side
+    of it is a record of a button press.
+
+    **Deletes on absence, so it is guarded like `sweep_orphan_charts`.** A read
+    that fails keeps the session: never delete because you could not confirm
+    there was nothing there. Any one of the four tables reporting a row is
+    enough to keep it, so a signals-only session -- a student who wore the
+    headband and answered nothing -- survives, which is the case this must not
+    get wrong.
+
+    **`session_answers` is checked, not just the counter.** `record_answer`
+    inserts the answer row and bumps `sessions.questions_answered` in two
+    separate statements with no transaction around them, so the counter can sit
+    at 0 while real answers exist -- the update failing, or the read it is
+    computed from failing, is enough. The counter is a denormalised cache; the
+    rows are the record. Trusting the cache meant a hiccup mid-lesson could end
+    with a student's answered session deleted for looking empty, which is the
+    one outcome a delete-on-absence job may not have.
+    """
+    if questions:
+        return False
+    for table in ("session_answers", "cognitive_signals", "face_signals", "heart_signals"):
+        try:
+            rows = supabase.table(table).select("session_id") \
+                .eq("session_id", session_id).limit(1).execute().data or []
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[session:discard] could not check {table} for {session_id}: {e}")
+            return False
+        if rows:
+            return False
+    try:
+        supabase.table("sessions").delete().eq("id", session_id).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:discard] could not delete {session_id}: {e}")
+        return False
+    return True
+
+
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """Recompute the daily rollup for the school days this session touched.
 
@@ -443,6 +544,44 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         # This one covers the date arithmetic and the timezone read, which are
         # shared by every day and cannot be retried per day.
         print(f"[rollup] {user_id[:8]}: {e}")
+
+
+def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
+    """Everything a session close does after `ended_at` is stamped.
+
+    Three endpoints close sessions -- `/end`, the stale sweep in
+    `start_session`, and `class_live` -- and the sequence was hand-copied into
+    each of them. Every copy drifted, in a different direction, and none of the
+    drifts raised anything:
+
+    - the stale sweep credited `correct_answers` it had never selected, so
+      every session it closed added its questions to the lifetime total and
+      **zero** correct answers, quietly deflating the student's accuracy;
+    - `class_live` never ran the empty-session discard, so a failed pairing
+      closed by a teacher opening the Live view survived in History for ever;
+    - and the archive, then the rollup, then the credit each shipped as
+      "the third close site to be missed".
+
+    One copy, one order. The order is load-bearing: the discard runs first
+    because a rollup of nothing and an archive of four empty charts are work
+    done for a session that is about to stop existing.
+
+    Stopping the poller stays at the call sites -- it takes a different pair of
+    ids at each, and it has to happen before the row is stamped.
+    """
+    sid = session["id"]
+    total_q = session.get("questions_answered") or 0
+    correct = session.get("correct_answers") or 0
+
+    if _discard_if_nothing_recorded(sid, total_q):
+        return {"discarded": True}
+
+    _credit_session_to_user_stats(user_id, total_q, correct)
+    _rollup_session_days(user_id, session.get("started_at"), ended_at)
+    # Off the request path and last: it reads three tables and makes four calls
+    # to object storage, which is not work to hold a request open for.
+    chart_archive.schedule(supabase, sid, user_id)
+    return {"discarded": False}
 
 
 def _may_record(student_id: str) -> dict:
@@ -995,8 +1134,25 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_by_day = _by_school_day(heart, "ts")
     sessions_by_day = _by_school_day(sessions, "started_at")
 
-    latest_cognitive = cog[0] if cog else None
-    latest_face = face[0] if face else None
+    # Newest row that actually produced a *measurement*, not newest row.
+    #
+    # The heart line below has always worked this way and said why; cognitive
+    # and face did not, and they are the two tables that deliberately keep rows
+    # with the measurement columns nulled -- a headband recording with poor
+    # electrode contact, a face window FER+ refused. Those rows exist so the
+    # session's timeline survives, which is right, but taking the newest one as
+    # "the latest reading" meant a panel labelled *Most recent readings* showed
+    # nothing while the weekly average beside it showed 64%: two true numbers
+    # that read as a contradiction, and the empty one describing the last few
+    # minutes of bad contact rather than the session.
+    #
+    # Falls back to the newest row when none carries a measurement, so a channel
+    # that recorded only unusable windows still reports `sample_counts > 0` and
+    # the tile says "Calibrating" rather than "No sensor".
+    latest_cognitive = next((r for r in cog if r.get("focus") is not None), None) \
+        or (cog[0] if cog else None)
+    latest_face = next((r for r in face if r.get("emotion") is not None), None) \
+        or (face[0] if face else None)
     # Newest *trusted* reading, matching every other heart figure in this
     # payload. An untrusted latest would be the one number here not subject to
     # the quality gate, and it is the one rendered largest.
@@ -1273,8 +1429,11 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
         bits.append(f"average stress was {_as_pct(avg_stress)}%")
-    if avg_attention is not None:
-        bits.append(f"average face attention was {_as_pct(avg_attention)}%")
+    # No attention sentence. `face_signals.attention` has no producer, so
+    # `avg_attention` is always None and this branch never fired -- but it was
+    # the line that would have put an unmeasured percentage into a prompt whose
+    # output a parent reads as advice. The average is still computed and still
+    # published in the payload; only the claims about it are gone.
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
     else:
@@ -1479,6 +1638,16 @@ class LinkChildRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
     grade_level:  str | None = None
+    # Learning preferences. Bounded here as well as by the CHECK constraints in
+    # 20260822000000, because a 422 names the field and a constraint violation
+    # surfaces as a 500 from the client library.
+    #
+    # `ge`/`le` rather than a literal set for the bias: it is a shift applied by
+    # `_shift_difficulty`, so the range is what matters, and the endpoint has no
+    # business knowing that DIFFS happens to have three entries.
+    difficulty_bias:          int | None = Field(None, ge=-1, le=1)
+    session_duration_minutes: int | None = Field(None, ge=5, le=180)
+    practice_reminders:       bool | None = None
 
 class EegSessionRequest(BaseModel):
     session_id: str
@@ -1583,7 +1752,19 @@ def start_session(payload: StartSessionRequest, request: Request):
 
     # `started_at` too: the rollup below needs the day the session began, or a
     # session that ran past local midnight only summarises the day it was swept.
-    stale_open = supabase.table("sessions").select("id, started_at") \
+    # `questions_answered` too, and it is load-bearing: `_discard_if_nothing_recorded`
+    # below treats a falsy count as "answered nothing", so a column left out of
+    # this select arrives as None and a stale session full of answers would be
+    # deleted for having no signal rows beside it.
+    #
+    # `correct_answers` for the same class of reason, and it was missing: the
+    # close credits it to the lifetime totals, an unselected column arrives as
+    # None, and `or 0` turned that into an honest-looking zero. Every session
+    # this sweep closed -- which is every session of a student who shuts the tab
+    # -- added its questions to `total_questions` and nothing to `total_correct`,
+    # so a student's accuracy fell by exactly the work they did away from /end.
+    stale_open = supabase.table("sessions") \
+        .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
         # Also releases any pre-claim reservation (#34) left behind by a
@@ -1594,16 +1775,11 @@ def start_session(payload: StartSessionRequest, request: Request):
         supabase.table("sessions").update(
             {"ended_at": stale_ended}
         ).eq("id", s["id"]).execute()
-        # Closed by timeout rather than by /end, and it still needs its rollup.
-        # Only the /end endpoint called this, so a student who closed the tab --
-        # the case this sweep exists for -- left a day with raw rows and no
-        # summary, and once the delete job runs that day is simply gone.
-        _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
-        # And archived, for the same reason the rollup is: this is the sweep
-        # that closes the session of a student who shut the tab, so it is the
-        # only close many sessions ever get. Off the request path -- a storage
-        # failure here would otherwise stop a student *starting* a new session.
-        chart_archive.schedule(supabase, s["id"], user["id"])
+        # Closed by timeout rather than by /end, and it still needs its rollup,
+        # its lifetime credit and its archive. This is the only close many
+        # sessions ever get -- it is the path a student who shuts the tab always
+        # takes -- so a step missing here is a step that never runs at all.
+        _close_session(user["id"], s, stale_ended)
 
 
     obj  = {
@@ -1615,10 +1791,17 @@ def start_session(payload: StartSessionRequest, request: Request):
     }
     res = supabase.table("sessions").insert(obj).execute()
 
-    # Pre-warm question queue in background while student sees the setup screen
+    # Pre-warm question queue in background while student sees the setup screen.
+    #
+    # At the student's own bias, not 0. The page initialises its Easier/Auto/
+    # Harder control from the same preference, so a hardcoded 0 here prewarmed
+    # two questions at a difficulty the student had not asked for and served
+    # them first -- the setting appearing to do nothing for exactly as long as
+    # the queue lasted, which is the start of every session.
     profile = _profile(user["id"])
     grade   = profile.get("grade_level") or "5th Grade"
-    _ensure_queue(user["id"], grade, 0, res.data[0]["id"])
+    bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
+    _ensure_queue(user["id"], grade, bias, res.data[0]["id"])
 
     return res.data[0]
 
@@ -1641,7 +1824,48 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "questions_answered": (cur.get("questions_answered") or 0) + 1,
         "correct_answers":    (cur.get("correct_answers") or 0) + (1 if payload.correct else 0),
     }).eq("id", session_id).execute()
+    _record_topic_attempt(user["id"], payload.question_id, payload.correct)
     return {"ok": True}
+
+
+def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> None:
+    """Add one attempt to the student's per-topic record.
+
+    The topic is looked up from the **question row**, never taken from the
+    caller. The client already tells us whether it got the answer right, which
+    it has to; letting it also name the topic would let a page credit one
+    subject for work done in another, and this table is what the adaptive
+    engine reads to pick the next question.
+
+    Never raises. It runs after the answer is safely recorded, and a student's
+    answer must not be lost because a topic lookup failed -- the row in
+    `session_answers` is the record that matters and it is already written.
+    """
+    try:
+        q = supabase.table("questions").select("subject").eq("id", question_id) \
+            .limit(1).execute().data or []
+        if not q or not q[0].get("subject"):
+            return
+        topic = supabase.table("math_topics").select("id") \
+            .eq("topic_name", q[0]["subject"]).limit(1).execute().data or []
+        if not topic:
+            # A question whose subject is not in `math_topics`. Nothing to
+            # attribute it to, and inventing a topic row here would put a
+            # subject in the table the generator cannot pick from.
+            return
+        topic_id = topic[0]["id"]
+        existing = supabase.table("user_math_performance") \
+            .select("correct_questions, attempted_questions") \
+            .eq("user_id", user_id).eq("topic_id", topic_id).limit(1).execute().data or []
+        prior = existing[0] if existing else {}
+        supabase.table("user_math_performance").upsert({
+            "user_id":             user_id,
+            "topic_id":            topic_id,
+            "attempted_questions": (prior.get("attempted_questions") or 0) + 1,
+            "correct_questions":   (prior.get("correct_questions") or 0) + (1 if correct else 0),
+        }, on_conflict="user_id,topic_id").execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
@@ -1652,48 +1876,27 @@ def end_session(session_id: str = Path(...), request: Request = None):
     if not sess.data:
         raise HTTPException(404, "Session not found")
     data = sess.data
+    # Already closed, by the stale sweep or by a teacher opening the Live view.
+    # Both of those credit the lifetime totals, and this endpoint credits the
+    # session's *cumulative* counts rather than a delta -- so closing twice
+    # counted every answer twice, inflating the accuracy a parent reads. The
+    # close is idempotent now because it happens once.
+    #
+    # Not an error: the student did nothing wrong, and their page has no way to
+    # know a teacher's view closed the session out from under it.
+    if data.get("ended_at"):
+        return {"ok": True, "already_closed": True}
     # Named, and `_utc_now` rather than the naive deprecated `datetime.utcnow`:
     # this value is now read back by the rollup, which converts it to a school
     # day, and a naive stamp has no zone to convert from.
     ended = _utc_now().isoformat()
     supabase.table("sessions").update({"ended_at": ended}).eq("id", session_id).execute()
 
-    total_q = data.get("questions_answered") or 0
-    correct = data.get("correct_answers")    or 0
-
-    existing = supabase.table("user_stats").select("*").eq("user_id", user["id"]).execute()
-    if existing.data:
-        s = existing.data[0]
-        supabase.table("user_stats").update({
-            "total_questions": (s.get("total_questions") or 0) + total_q,
-            "total_correct":   (s.get("total_correct")   or 0) + correct,
-            "last_session_at": datetime.utcnow().isoformat(),
-            "updated_at":      datetime.utcnow().isoformat(),
-        }).eq("user_id", user["id"]).execute()
-    else:
-        supabase.table("user_stats").insert({
-            "user_id":          user["id"],
-            "total_questions":  total_q,
-            "total_correct":    correct,
-            "current_streak":   0,
-            "best_streak":      0,
-            "last_session_at":  datetime.utcnow().isoformat(),
-        }).execute()
-
-    # Last, and after the writes that matter. The rollup is derived data and
-    # `_rollup_session_days` swallows its own failures, so it cannot cost the
-    # session record or the stats update -- but ordering it here means it also
-    # sees the `ended_at` this endpoint just wrote.
     # `ended`, not a fresh reading: they differ only across local midnight,
     # where a fresh one rolls up a day the stored session does not claim and
     # skips the day it is actually recorded on.
-    _rollup_session_days(user["id"], data.get("started_at"), ended)
-    # After the rollup, and off the request path entirely. Both are derived, but
-    # they fail differently: the rollup is a synchronous RPC that swallows its
-    # own errors, while this one reads three tables and makes four network calls
-    # to object storage, which is not work to hold a request open for.
-    chart_archive.schedule(supabase, session_id, user["id"])
-    return {"ok": True}
+    result = _close_session(user["id"], data, ended)
+    return {"ok": True, **({"discarded": True} if result["discarded"] else {})}
 
 @app.get("/api/sessions")
 def list_sessions(request: Request):
@@ -1704,21 +1907,118 @@ def list_sessions(request: Request):
 
 # ─── stats ───────────────────────────────────────────────────────────────
 
+def _stats_including_open_session(student_id: str) -> dict:
+    """Lifetime totals, plus whatever the student has answered *so far today*.
+
+    `user_stats` is only written when a session closes, so a child answering
+    questions right now contributed nothing to it -- and a parent watching the
+    report during a lesson saw "0 questions, 0% accuracy" while six answers sat
+    in `session_answers`. The totals were not wrong so much as a session behind,
+    which on the surface a parent checks mid-lesson is the same thing.
+
+    Open sessions only (`ended_at is null`), so this can never double-count one
+    the close path has already credited.
+
+    **`retrieved` separates "answered nothing" from "could not find out."** A
+    student with no `user_stats` row and a student whose read failed both left
+    here as four zeros, so a broken query reached a parent as "0 questions, 0%
+    accuracy" -- an absence asserted from data that never loaded, which is the
+    same failure the reporting helpers carry `retrieved` to avoid. The stored
+    totals are the *academic* record, so this matters more here than on a signal
+    tile: it is the number a parent judges a week of their child's work by.
+
+    False only when the lifetime read itself failed. A failed *open-session*
+    read leaves the stored totals true as far as they go -- this call only ever
+    adds to them -- so that stays `True` and simply omits the live delta.
+    """
+    base = {"total_questions": 0, "total_correct": 0, "current_streak": 0,
+            "best_streak": 0, "retrieved": True}
+    try:
+        res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
+        if res.data:
+            base = {**res.data[0], "retrieved": True}
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not read user_stats for {student_id[:8]}: {e}")
+        return {**base, "retrieved": False}
+    try:
+        open_rows = supabase.table("sessions") \
+            .select("questions_answered, correct_answers") \
+            .eq("user_id", student_id).is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # The stored totals are still true as far as they go, so they are
+        # returned rather than refused -- this only ever *adds* to them.
+        print(f"[stats] could not read the open session for {student_id[:8]}: {e}")
+        return base
+    live_q = sum(r.get("questions_answered") or 0 for r in open_rows)
+    live_c = sum(r.get("correct_answers") or 0 for r in open_rows)
+    if not live_q:
+        return base
+    return {**base,
+            "total_questions": (base.get("total_questions") or 0) + live_q,
+            "total_correct":   (base.get("total_correct") or 0) + live_c}
+
+
+def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict]:
+    """The same figures as above, for a roster, in two queries rather than 2N.
+
+    `class_students` and `my_children` both call this per student inside a loop
+    that already makes several reads each, so the single-student version turned
+    a class of thirty into sixty extra round trips on a page a teacher opens
+    constantly.
+
+    Same three-state rule and the same `retrieved` flag, resolved per student.
+    A failed lifetime read marks *every* student unretrieved rather than
+    reporting a roster of zeros -- the batch cannot tell which rows it would
+    have got, and guessing in the optimistic direction is what the flag exists
+    to prevent.
+    """
+    if not student_ids:
+        return {}
+    base: dict[str, dict] = {
+        sid: {"total_questions": 0, "total_correct": 0, "current_streak": 0,
+              "best_streak": 0, "retrieved": True}
+        for sid in student_ids
+    }
+    try:
+        rows = supabase.table("user_stats").select("*") \
+            .in_("user_id", student_ids).execute().data or []
+        for r in rows:
+            if r.get("user_id") in base:
+                base[r["user_id"]] = {**r, "retrieved": True}
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not batch-read user_stats for {len(student_ids)}: {e}")
+        return {sid: {**v, "retrieved": False} for sid, v in base.items()}
+    try:
+        open_rows = supabase.table("sessions") \
+            .select("user_id, questions_answered, correct_answers") \
+            .in_("user_id", student_ids).is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # The stored totals stand on their own; this only ever adds to them.
+        print(f"[stats] could not batch-read open sessions: {e}")
+        return base
+    for r in open_rows:
+        sid = r.get("user_id")
+        if sid not in base:
+            continue
+        live_q = r.get("questions_answered") or 0
+        if not live_q:
+            continue
+        base[sid] = {**base[sid],
+                     "total_questions": (base[sid].get("total_questions") or 0) + live_q,
+                     "total_correct": (base[sid].get("total_correct") or 0)
+                     + (r.get("correct_answers") or 0)}
+    return base
+
+
 @app.get("/api/stats/me")
 def my_stats(request: Request):
     user = get_user(request)
-    res  = supabase.table("user_stats").select("*").eq("user_id", user["id"]).execute()
-    if not res.data:
-        return {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
-    return res.data[0]
+    return _stats_including_open_session(user["id"])
 
 @app.get("/api/stats/student/{student_id}")
 def student_stats(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
-    res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
-    if not res.data:
-        return {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
-    return res.data[0]
+    return _stats_including_open_session(student_id)
 
 @app.get("/api/sessions/student/{student_id}")
 def student_sessions(student_id: str, request: Request):
@@ -2315,12 +2615,11 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
             "routine is holding up."
         )
 
-    attention = averages.get("face_attention")
-    if report.get("face_included") and attention is not None and float(attention) < 0.5:
-        strategies.append(
-            "Try working problems on paper together or tying them to a real "
-            "situation when attention drifts."
-        )
+    # The attention rule that sat here is gone with the prompt line above.
+    # `face_attention` has no producer, so `attention is not None` was never
+    # true and the strategy could never be emitted -- dead code that read as a
+    # live feature, over a measurement this product has decided not to claim
+    # until there is a labelled reference for it.
 
     strategies.append(
         "Close each session by asking which problem felt hardest and what helped "
@@ -2346,10 +2645,15 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"{str(weakest.get('topic_name')).replace('_', ' ')} at {weakest.get('accuracy')}%"
         if weakest else "no attempted topics yet"
     )
-    face_line = (
-        f"average facial attention {_pct(averages.get('face_attention'))}"
-        if report.get("face_included") else "facial reporting is switched off"
-    )
+    # No attention line. `face_attention` has never had a producer, so this read
+    # `- average facial attention unavailable` on every prompt ever sent -- an
+    # unmeasured metric named to a model whose output a parent reads as advice
+    # about their child. The rest of the surfaces that rendered it were removed
+    # for the same reason; this one was missed because it is a string rather
+    # than a component.
+    #
+    # Put it back when there is a labelled reference behind the column, in the
+    # same change that restores the tiles.
     return (
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
@@ -2361,7 +2665,6 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"- average focus {_pct(averages.get('focus'))}\n"
         f"- average stress {_pct(averages.get('stress'))}\n"
         f"- average engagement {_pct(averages.get('engagement'))}\n"
-        f"- {face_line}\n"
         f"- weakest attempted topic: {topic_line}\n"
         f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
         "For reference, here is a safe baseline answer:\n"
@@ -2799,10 +3102,12 @@ def class_students(class_id: str, request: Request):
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
+    # One read for the whole roster, not two per student.
+    all_stats = _stats_including_open_session_many(
+        [m["student_id"] for m in (memberships.data or [])])
     for m in (memberships.data or []):
         sid = m["student_id"]
-        stats_res = supabase.table("user_stats").select("*").eq("user_id", sid).execute()
-        stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0}
+        stats = all_stats.get(sid) or {}
         p = _profile(sid)
         students.append({
             "user_id":   sid,
@@ -3930,15 +4235,17 @@ def class_live(class_id: str, request: Request):
                 supabase.table("sessions").update({
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
-                # Same reason as the sweep in start_session. `sid` is the
-                # student: this runs on a teacher's request, and the rollup
-                # belongs to whoever the data is about.
-                _rollup_session_days(sid, sess.get("started_at"), now.isoformat())
-                # Third and last close site. Missing one leaves sessions whose
-                # raw rows expire on `ends_on` with no picture behind them, and
-                # nothing would say so -- `chart_paths` would simply be NULL,
-                # which reads as "closed before this shipped".
-                chart_archive.schedule(supabase, sid2, sid)
+                # `sid` is the student, not the teacher whose request this is:
+                # everything the close writes belongs to whoever the data is
+                # about.
+                #
+                # This is the site that has been missed most often -- the
+                # lifetime credit, the rollup and the archive each shipped
+                # without it, and it never ran the empty-session discard at
+                # all, so a failed pairing closed by a teacher opening this view
+                # stayed in the student's History for ever. Going through the
+                # shared helper is what stops it drifting a fourth time.
+                _close_session(sid, sess, now.isoformat())
                 # sid, not the teacher reading this view -- the reservation
                 # (#34), like the poller, belongs to the student whose stale
                 # session this is.
@@ -4443,10 +4750,12 @@ def my_children(request: Request, include_face: bool = True):
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
     children = []
+    # One read for all the children, not two per child.
+    all_stats = _stats_including_open_session_many(
+        [lnk["child_id"] for lnk in (links.data or [])])
     for lnk in (links.data or []):
         cid = lnk["child_id"]
-        stats_res = supabase.table("user_stats").select("*").eq("user_id", cid).execute()
-        stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
+        stats = all_stats.get(cid) or {}
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         perf_res = supabase.table("user_math_performance").select("*, math_topics(topic_name)").eq("user_id", cid).execute()
         p = _profile(cid)

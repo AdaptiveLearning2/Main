@@ -102,6 +102,8 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "active_preset",
         "eeg_channel_count",
         "optical_supported",
+        # Charge remaining, or None before the first BATTERY packet arrives.
+        "battery_percent",
         # Optical capture evidence. Counters and a latest sample rather than a
         # stream: what needs establishing first is whether the packets arrive at
         # all and with how many channels.
@@ -133,6 +135,18 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 continue
             try:
                 target[key] = int(v)
+            except (TypeError, ValueError):
+                continue
+        elif key == "battery_percent":
+            # Same null-is-real rule as eeg_channel_count above, and it matters
+            # more here: 0 is a valid charge and would render as an empty
+            # battery for a headband that simply has not reported yet.
+            v = payload[key]
+            if v is None:
+                target[key] = None
+                continue
+            try:
+                target[key] = float(v)
             except (TypeError, ValueError):
                 continue
         elif key in {"optics_packets", "ppg_packets", "optics_values", "ppg_values"}:
@@ -320,6 +334,11 @@ class SimulatedMuseIngestionAdapter:
             "muse_devices": [],
             "active_muse_name": "",
             "firmware_version": "sim-1.0",
+            # None, never a plausible-looking number. The simulator has no
+            # battery, and a made-up percentage is a reading a student would be
+            # asked to act on -- same call as EEG_SOURCE=sim emitting no heart
+            # block rather than a simulated pulse.
+            "battery_percent": None,
             # Also Bels. delta is not used by either log-ratio, but it is
             # persisted to cognitive_signals alongside the others, so it has to
             # be on the same scale or stored sim rows are internally inconsistent.
@@ -431,6 +450,8 @@ class TcpMuseBridgeAdapter:
             "muse_devices": [],
             "active_muse_name": "",
             "firmware_version": "",
+            # None until a BATTERY packet arrives; 0 is a real charge.
+            "battery_percent": None,
             "delta": 0.0,
             "theta": 0.0,
             "alpha": 0.0,

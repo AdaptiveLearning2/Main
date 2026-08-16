@@ -253,6 +253,20 @@ def extract_json(text):
     return None
 
 def add_question_to_supabase(question, difficulty):
+    """Store the question and return **its id**, or None if it could not be stored.
+
+    Returned rather than a bool, and the duplicate branch returns the existing
+    id rather than False, because the id is what an answer refers to. Without
+    one the adaptive page had nothing to put in `session_answers.question_id`,
+    which is why it never recorded an answer at all: every question a student
+    answered there was counted in that browser's localStorage and nowhere else,
+    so `user_stats`, `session_answers` and every report downstream of them read
+    zero however long the child practised.
+
+    A duplicate is the ordinary case rather than an error -- the generator
+    reproduces a question sooner or later -- and answering one is exactly as
+    real as answering a novel one.
+    """
     # Let the database check for the duplicate instead of pulling every row in
     # the (unboundedly growing) questions table into Python on every single
     # generated question.
@@ -263,7 +277,7 @@ def add_question_to_supabase(question, difficulty):
         .execute()
 
     if existing.data:
-        return False
+        return existing.data[0]["id"]
 
     response = supabase.table("questions").insert({
         "subject" : question["question_topic"],
@@ -273,12 +287,12 @@ def add_question_to_supabase(question, difficulty):
         "correct_answer": question["correct_answer"],
         "created_at": str(datetime.now())
     }).execute()
-    
+
     if response.data:
-        return True
+        return response.data[0]["id"]
     else:
-        print("Supabase insert error:", response.error)
-        return False
+        print("Supabase insert error:", getattr(response, "error", None))
+        return None
 
 
 #Possibility - can just select topic/difficulty manually if LLM generation is too slow. 
@@ -495,8 +509,12 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     print(question)
 
 
-    if (add_question_to_supabase(question, difficulty)):
-        print("Question added to supabase successfully")
+    # The id rides on the question. It is what an answer refers to, and without
+    # it the page had nothing to send to /api/sessions/{id}/answer -- so nothing
+    # was ever recorded from the adaptive path.
+    question["id"] = add_question_to_supabase(question, difficulty)
+    if question["id"]:
+        print("Question stored, id " + str(question["id"]))
 
 
     return question
@@ -735,8 +753,12 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     question = question_generation(topic, difficulty, user_id, grade)
     print(question)
 
-    if (add_question_to_supabase(question, difficulty)):
-        print("Question added to supabase successfully")
+    # The id rides on the question. It is what an answer refers to, and without
+    # it the page had nothing to send to /api/sessions/{id}/answer -- so nothing
+    # was ever recorded from the adaptive path.
+    question["id"] = add_question_to_supabase(question, difficulty)
+    if question["id"]:
+        print("Question stored, id " + str(question["id"]))
 
     # Metadata for the frontend's "EEG eased/raised difficulty" badge -- reuses
     # the same session-scoped EEG read above rather than a second lookup.

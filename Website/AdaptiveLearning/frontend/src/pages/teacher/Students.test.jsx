@@ -4,8 +4,14 @@ import { vi } from 'vitest'
 import Students from './Students'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 
-// This page reads user_stats and topic performance from the browser client, and
-// its four signal averages from /api/students/{id}/signal-summary.
+// This page reads topic performance from the browser client, and its academic
+// totals and signal averages from the backend -- /api/stats/student/{id} and
+// /api/students/{id}/signal-summary respectively.
+//
+// The totals used to come straight from `user_stats` through PostgREST, which
+// only gains a row when a session *closes* -- so a student answering questions
+// right now showed "0 questions" here while the parent's report, going through
+// the endpoint, showed the real figure for the same child at the same moment.
 //
 // The averages used to come from a direct cognitive_signals / face_signals read
 // capped at 200 rows. At the poller's 1 Hz default that cap binds after about
@@ -21,11 +27,11 @@ vi.mock('../../lib/api', () => {
   // The next signal-summary response. A plain object resolves, an Error
   // rejects, and a Promise is adopted as-is -- which is what the staleness
   // tests need in order to land two responses out of order.
-  const state = { summary: null }
+  const state = { summary: null, userStats: null }
   return {
     apiFetch: (path) => {
       apiCalls.push(path)
-      const r = state.summary
+      const r = String(path).includes('/api/stats/student/') ? state.userStats : state.summary
       return r instanceof Error ? Promise.reject(r) : Promise.resolve(r)
     },
     __apiCalls: apiCalls,
@@ -106,10 +112,13 @@ function setData({ summary = SUMMARY, userStats = USER_STATS } = {}) {
   for (const k of Object.keys(results)) delete results[k]
   Object.assign(results, {
     class_memberships: MEMBERSHIPS,
-    user_stats: userStats,
     user_math_performance: { data: [], error: null },
   })
   apiState.summary = summary
+  // `{ data, error }` was the shape of the old PostgREST read; the endpoint
+  // returns the row itself, so tests that hand a stats fixture keep working
+  // while ones that hand an Error still exercise the rejection path.
+  apiState.userStats = userStats instanceof Error ? userStats : (userStats?.data ?? userStats)
 }
 
 // StatCard renders the value, label and subtitle in one div, so scope by the
@@ -144,7 +153,6 @@ describe('signal averages', () => {
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(tile('Stress Level').getByText('40%')).toBeInTheDocument()
     expect(tile('Engagement').getByText('60%')).toBeInTheDocument()
-    expect(tile('Face Attention').getByText('90%')).toBeInTheDocument()
     expect(tile('Dominant Emotion').getByText('happy')).toBeInTheDocument()
   })
 
@@ -157,7 +165,6 @@ describe('signal averages', () => {
     await expandAda()
     await waitFor(() =>
       expect(tile('Focus Score').getByText(`${WEEK_OF_SAMPLES} EEG readings · last 7d`)).toBeInTheDocument())
-    expect(tile('Face Attention').getByText(`${WEEK_OF_SAMPLES} face readings · last 7d`)).toBeInTheDocument()
   })
 
   it('asks the aggregate for the window the tiles claim', async () => {
@@ -206,16 +213,58 @@ describe('a failed read', () => {
     // handled. A read that throws without clearing it leaves the row showing a
     // spinner that collapsing and re-expanding never clears -- the same stuck
     // row the supersede path is careful to avoid.
+    // Counted from apiFetch now, not `supabase.from`: the stats read moved to
+    // /api/stats/student, which is the only source that sees an open session.
+    const statsCalls = () => apiCalls.filter(p => String(p).includes('/api/stats/student/'))
     setData({ userStats: new Error('network down') })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(fromCalls.filter(t => t === 'user_stats')).toHaveLength(1))
+    await waitFor(() => expect(statsCalls()).toHaveLength(1))
 
     setData()
     await expandAda()   // collapse
     await expandAda()   // and retry
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
-    expect(fromCalls.filter(t => t === 'user_stats').length).toBeGreaterThan(1)
+    expect(statsCalls().length).toBeGreaterThan(1)
+  })
+
+  it('costs the academic tiles only, not the signal ones beside them', async () => {
+    // The mirror of the first test in this block, and the direction that was
+    // wrong: the stats read had no catch, so its failure rejected the whole
+    // Promise.all and blanked four signal tiles that had loaded fine.
+    setData({ userStats: new Error('stats down') })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+    expect(tile('Total Accuracy').getByText('—')).toBeInTheDocument()
+  })
+
+  it('says the academic figures could not be loaded rather than showing zero', async () => {
+    // The three-state rule, on the numbers a parent judges a week of their
+    // child's work by. Catching the failure to a zeroed object would report a
+    // child who answered nothing -- an absence asserted from data that never
+    // loaded, and indistinguishable from a genuinely quiet week.
+    setData({ userStats: new Error('stats down') })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Total Accuracy').getByText(/couldn't be loaded/i)).toBeInTheDocument())
+    expect(tile('Total Accuracy').queryByText('0 questions')).not.toBeInTheDocument()
+    // And the streak, which has no natural "—" of its own.
+    expect(tile('Current Streak').getByText('—')).toBeInTheDocument()
+  })
+
+  it('still reports a genuinely empty record as zero', async () => {
+    // So the flag above cannot be satisfied by treating every empty record as
+    // a failure -- a student who has answered nothing must still read as zero.
+    setData({ userStats: { total_questions: 0, total_correct: 0, current_streak: 0,
+                           best_streak: 0, retrieved: true } })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Total Accuracy').getByText('0 questions')).toBeInTheDocument())
+    expect(tile('Total Accuracy').queryByText(/couldn't be loaded/i)).not.toBeInTheDocument()
   })
 })
 
@@ -229,7 +278,6 @@ describe('facial recognition switch', () => {
     setData({ summary: SUMMARY_FACE_OFF })
     render(<Students />)
     await expandAda()
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     expect(tile('Dominant Emotion').getByText('Off')).toBeInTheDocument()
   })
 
@@ -252,7 +300,6 @@ describe('the "nothing recorded" note', () => {
     render(<Students />)
     await expandAda()
 
-    await waitFor(() => expect(tile('Face Attention').getByText('Off')).toBeInTheDocument())
     expect(screen.queryByText(/hasn't completed any sessions yet/i)).not.toBeInTheDocument()
     // What was actually checked, stated as such.
     expect(screen.getByText(/facial signals were not read/i)).toBeInTheDocument()
@@ -339,7 +386,6 @@ describe('the "nothing recorded" note', () => {
 
     await waitFor(() => expect(tile('Focus Score').getByText(/signal data unavailable/i)).toBeInTheDocument())
     expect(tile('Focus Score').queryByText(/no EEG data/i)).not.toBeInTheDocument()
-    expect(tile('Face Attention').getByText(/signal data unavailable/i)).toBeInTheDocument()
     // Read from user_stats, so the outage does not reach them.
     expect(tile('Total Accuracy').getByText('50%')).toBeInTheDocument()
   })
@@ -368,7 +414,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
   render(<Students />)
   await expandAda()
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV',
                         'Total Accuracy', 'Current Streak']) {
     expect(screen.getByText(label)).toBeInTheDocument()
@@ -376,7 +422,7 @@ it('actually hides the sensor tiles on screen when the switch is flipped, and le
 
   await userEvent.click(screen.getByRole('switch'))
 
-  for (const label of ['Stress Level', 'Focus Score', 'Engagement', 'Face Attention',
+  for (const label of ['Stress Level', 'Focus Score', 'Engagement',
                         'Dominant Emotion', 'Avg Heart Rate', 'Avg HRV']) {
     expect(screen.queryByText(label)).not.toBeInTheDocument()
   }

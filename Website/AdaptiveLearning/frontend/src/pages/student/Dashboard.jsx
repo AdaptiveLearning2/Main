@@ -44,14 +44,37 @@ export default function StudentDashboard() {
   const [stats, setStats]     = useState(null)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
+  // The practice nudge, which is what the Preferences toggle actually controls.
+  // `null` while unknown, so a failed read of either half renders nothing --
+  // "you have not practised today" derived from a request that did not come
+  // back is the reporting rule this project keeps writing down, arriving on a
+  // student's own screen as a small untruth about their week.
+  const [nudge, setNudge] = useState(null)
 
   useEffect(() => {
     Promise.all([
       apiFetch('/api/stats/me').catch(() => ({ total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 })),
-      apiFetch('/api/sessions').catch(() => [])
-    ]).then(([s, sess]) => {
+      // Sentinel rather than `[]`: an empty list and a failed request are the
+      // same value and very different facts, and only one of them is a student
+      // who has not practised.
+      apiFetch('/api/sessions').catch(() => null),
+      apiFetch('/api/profile/me').catch(() => null),
+    ]).then(([s, sess, profile]) => {
       setStats(s)
       setSessions((sess || []).slice(0, 4))
+      // The browser's local day, deliberately not `_school_day`. That helper
+      // exists so recorded data buckets against the school's timezone; this is
+      // a nudge about the student's own afternoon, and telling a child at 6pm
+      // that they have not practised when they did so at lunchtime -- because
+      // the school is in another zone -- would be the wrong answer to a
+      // different question.
+      const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
+      const practisedToday = Array.isArray(sess) && sess.some(x =>
+        x?.started_at && new Date(x.started_at).toLocaleDateString('en-CA') === today)
+      setNudge(
+        Array.isArray(sess) && profile
+          ? { show: profile.practice_reminders !== false && !practisedToday }
+          : null)
       setLoading(false)
     })
   }, [])
@@ -72,6 +95,26 @@ export default function StudentDashboard() {
           outside settings. A sensor resuming is worth telling them about; a
           live readout of their own focus is not. */}
       <ParentRestoredBanner studentId={user?.id} />
+
+      {/* The practice reminder. This is the whole of what the Preferences
+          toggle switches on, and the toggle's copy says so -- it is a banner
+          here, not something that reaches a closed browser. Rendered only when
+          both reads landed *and* the student has not practised today: `nudge`
+          stays null otherwise, because a nudge invented from a failed request
+          would be telling a child they skipped a day they did not skip. */}
+      {nudge?.show && (
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+          className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
+          <span className="text-xl">👋</span>
+          <p className="text-sm font-bold text-indigo-900 dark:text-indigo-200 flex-1 min-w-[12rem]">
+            You have not practised today. A few questions is plenty.
+          </p>
+          <button onClick={() => window.location.href = '/adaptive'}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow transition">
+            Start a session
+          </button>
+        </motion.div>
+      )}
 
       {/* header */}
       <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}

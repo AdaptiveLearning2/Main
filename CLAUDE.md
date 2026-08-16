@@ -38,6 +38,12 @@ next to the exe, and flips `EEG_SOURCE` in `EEGResearch/.env`. Without it you ge
 landmark channel and implies `-Camera`, and `-NoEmotion` turns FER+ off — gaze needs no 35 MB model,
 so gaze-only is a real and much cheaper deployment. Each model-backed flag provisions its model at
 setup rather than on the first frame of a lesson, and `-NoEmotion` skips the FER+ fetch entirely.
+`-Optics` turns the headband's optical channels on (`-OpticsPreset 103N` picks the rung) and is
+refused without `-Muse`, rather than promoted the way `-Gaze` promotes `-Camera`: the alternative to
+a headband is the simulator, which models no optical channel, so guessing would produce a run that
+looks exactly like the flag not working. A preset outside `1031`–`1036` is refused too — the bridge
+falls back to `1035` and says so on its own stderr, in its own window, so the session would record
+on a rung nobody chose. `1031`/`1032` warn and proceed, since reproducing the cliff needs them.
 **Gaze needs `pip install -e ".[face,gaze]"`** — MediaPipe is its own extra, deliberately, since it
 is ~50 MB and a second ML runtime for a channel that is off by default. **`face` pins `opencv-contrib-python`, not
 `opencv-python`** — they install the same `cv2`, contrib being the superset, so having both means
@@ -204,6 +210,30 @@ on hardware: 4 CH EEG at 256Hz alongside **16** CH optics at 64Hz drops the BLE 
 ~63 packets/s. `MUSE_OPTICS_PRESET` picks the rung — `1031`/`1032` 16 CH, `1033`/`1034` 8 CH,
 `1035`/`1036` 4 CH (odd = low power). The default sits at the bottom deliberately: the 16-channel
 failure took EEG down with it. An unrecognised value warns once and falls back.
+
+**Turn it on with `./start.ps1 -Muse -Optics`, not by editing a `.env`.** The bridge is a C++
+process that reads `getenv` directly and never loads `config.py`, so a `MUSE_ENABLE_OPTICS` line in
+`EEGResearch/.env` is read by nothing — the version of this mistake that looks like it worked. The
+flag sets the variable in the window that launches the exe. Same for `MUSE_OPTICS_PRESET`, and for
+`MUSE_BRIDGE_PORT` if it ever needs one.
+
+### Battery is device telemetry, and null for the first stretch of every session
+
+`battery_percent` rides on the bridge's ingestion block through to the badge beside Disconnect on
+the student page. Registered on **every** preset, not just the optics ones — libMuse fires BATTERY
+on its own schedule rather than as part of a preset's stream, so it costs nothing on `PRESET_21`.
+
+**Null until the first packet arrives, which is most of the first minute.** That is normal, not a
+fault, and it is why the badge renders nothing rather than `--%`: a permanent empty slot reads as a
+broken sensor. The three-state rule applies with unusual force here because **0% is a real and
+alarming reading** — `pct || null` anywhere on this path erases exactly the value the badge exists
+for, so the checks are `typeof pct === 'number'` and `!= null`. The bridge stores −1 for "not
+reported" and `main.cpp` turns that into JSON null; `EEG_SOURCE=sim` reports null too, on the same
+grounds as it emitting no heart block.
+
+Cleared on disconnect in both places — `reset_device_fields_locked` and the page's own state. A
+charge percentage left standing describes the headband that just went away, and it is the one
+number here a student is asked to act on.
 
 ### Headband BPM: cleared seated, fails under gait
 
@@ -423,11 +453,19 @@ proves the SQL parses, not that it counts.
 **`attention` is still unproduced, and deliberately.** That is Phase 11 step 3, blocked on a labelled
 reference rather than on code: "attention" inferred from head direction is least valid for exactly
 this product's users, and unlike a FER+ label it renders as a percentage, which reads as objective.
-One adult is not a validation set for a construct whose failure mode is population-specific. The
-teacher's Live attention gauge, `SessionReview`'s attention ribbon, the parent/teacher
-`face_attention` tiles and one line of the LLM strategy prompt all still read a value nothing
-computes — the three-state tile logic renders `No sensor` / `Calibrating` rather than a number, so
-nothing lies. Don't drop the column or the UI, and don't fill it without the measurement.
+One adult is not a validation set for a construct whose failure mode is population-specific.
+
+**Every surface that rendered it has been removed** — the teacher's Live gauge, `SessionReview`'s
+ribbon field, the parent and teacher `face_attention` tiles, the weekly chart series and the LLM
+strategy prompt's sentence. The three-state logic meant none of them lied, but a tile that can only
+ever say `Calibrating` teaches a reader to ignore it, and it occupied space on the surfaces where
+trust matters most. `hasSignalSummary` on the parent dashboard dropped `face_attention` with them:
+that list tracks what the tiles can render, so leaving it in would admit a child whose only reading
+is attention to a card with no tile to show.
+
+**The column, the payload field and `face_geometry` all stay.** The measurement is still the plan;
+only the claims about it are gone. Fill it when there is a labelled reference, and put the UI back
+in the same change — not before.
 
 `face_geometry.py` is the arithmetic half: named landmarks in, head pose and iris offset out, pure
 numpy so CI can test it. `face_landmarks.py` is the other half — MediaPipe Face Mesh (Apache 2.0,
@@ -701,11 +739,42 @@ fault when the deployment simply does not work that way. Two shapes:
   probed in this deployment" is a different claim from "probed and down", and **a consumer that
   branches on falsiness renders both identically** — which is exactly how the outage string survived
   in the debug panel after the endpoint behind it was fixed. Same three-state rule as the reporting
-  helpers.
+  helpers. The panel no longer reads this endpoint under push at all — `sidecarDebug` assembles the
+  same shape from the sidecar the page can actually reach — so its `available` there is a **real
+  boolean, observed rather than proxied**, and the panel tests it with `=== false`. Two-valued and
+  three-valued sources under one field name is a trap of its own: `!available` would read the
+  backend's "not probed" as an outage again, one layer further out. Deriving it from the payloads
+  is the other wrong answer — an idle sidecar answers `data: null` and a headband-less one answers
+  an empty muse block, both ordinary, so **a payload that is empty in normal operation cannot stand
+  in for reachability**. Hardcoding it `true` made the "not answering" line unreachable and drew a
+  panel of blanks for a sidecar that was not running.
 - **Raises** (`/api/eeg/{start,muse/refresh,muse/connect,muse/disconnect}`) — call
   `_refuse_under_push(what)` in `main.py`, *before* `eeg_client.is_alive()`, or the misleading 503
   wins the race. Don't write the 409 out by hand; one inline copy already drifted from the helper
   that claimed to have replaced it.
+
+**Those four refusals left push with no pairing path, which is why the browser now has one.** The
+backend is remote under push by definition, so refusing is right — but nothing replaced it, and the
+sidecar's own start/scan/connect routes were admin-only while the browser holds the *learner* token.
+Every push deployment therefore answered 401 to the one channel push exists for. `sidecar.js` now
+calls them directly (`deviceStart`, `museRefresh`, `museConnect`, …) and `toggleHeadband` picks the
+transport from `headband.pushMode` — one adapter, the same seven steps, because a second copy of the
+pairing sequence would drift and that sequence is where the ordering matters.
+
+**`require_local_controller` is what admits it, and it is scoped to the mode on purpose.** Admin in
+both modes; the learner token *only* when `PUSH_ENABLED`. Under pull the browser gains nothing,
+because the backend is the legitimate controller there. What it grants is bounded by what the
+learner token already was — it ships in the bundle and the sidecar is on loopback, so it separates
+pages in one browser, not users, and any page that could call `/api/v1/push/start` could already make
+the sidecar stream a student's signals. Pinned by `test_under_pull_the_learner_token_may_not_drive_the_hardware`;
+removing the mode check fails exactly that.
+
+**`start.ps1 -Camera` selects push, and without it the mode goes back to pull.** Written on both
+branches like the `FACE_*` keys and for the same reason: a stale `INGEST_MODE=push` from a camera run
+would disable the poller on a later headband-only run, and a headband recording nothing while the page
+says "streaming" is what explicit modes exist to prevent. The camera has no choice in this —
+`/api/signals/face` is its only writer, so a camera configured under pull captures frames and stores
+nothing.
 
 **"Before" means before every sidecar call, not just before the liveness probe.** `/api/eeg/status`
 had the check and still 500'd under push, because `get_muse_status()` ran a few lines above it.
@@ -806,6 +875,42 @@ The headband is the primary heart source (the camera is emotion-only), and it re
   `heart_session_source_ts_key`. The camera's block has no `ts` and still takes the tick's.
 - **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
   channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
+
+**A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data`
+is typed `InterpretedEegData | CameraData | None`, so the sidecar's snapshot is serialised through a
+declared model and **pydantic drops undeclared keys silently** — the same trap as `main.FaceSample`
+on the website side, one layer further out. `heart` was undeclared, so under `INGEST_MODE=pull` (the
+default, and `eeg_client.get_state` reads precisely that endpoint) a headband on an optics preset
+could never record a heart rate. Every stage upstream worked: window built, anchor confirmed, block
+held and stamped, then deleted at the boundary with nothing raised. Measured on hardware 2026-08-15
+— 2697 optics packets at 64.3/s, and no `heart` key on 227 consecutive polls.
+
+It hid because **push bypasses the envelope** (`push_client` posts `snapshot()` directly) and every
+heart test asserts on `session.latest_payload`, the dict *before* the model — so the channel was well
+covered on both sides of the one layer eating it. `tests/test_state_envelope.py` derives the check
+from `stream_manager`'s source so the next key cannot go the same way.
+
+### Optics measured against EEG: the two coexist at the 4 CH rung
+
+Run 2026-08-15 on a MuseS-0FFC (model `MS-03`), `./start.ps1 -Muse -Optics`, default `PRESET_1035`:
+
+| | `PRESET_21` (no optics) | `PRESET_1035` (4 CH optics) |
+| --- | --- | --- |
+| good EEG channels | 63.8% | 60.7% |
+| link drops in 3 min | — | 0 |
+| optics rate | n/a | 64.3 packets/s |
+
+So **optics is not what degrades EEG contact** — the earlier working hypothesis, formed across
+several failed attempts, was wrong. The 16 CH cliff documented above is real and separate; the
+bottom rung holds. Residual `is_good` failures with `hsi [1,1,1,1]` are dry electrodes, not
+bandwidth.
+
+**Verify the flag reached the bridge by reading the process, not the launcher.** Every earlier
+"phase B" measured a bridge that never had the variable — the flag was set in a string the outer
+shell expanded first, and the run looked exactly like optics being harmless. The bridge is a C++
+process reading `getenv`, so the check is its own environment block (`NtQueryInformationProcess` →
+PEB → `ProcessParameters`), or `requested_preset`/`active_preset` on `/api/v1/muse/status`, which
+must both read `PRESET_1035`. `active_preset: ""` means the device never applied one.
 
 **`rmssd_ms` is an enrichment, and a null one is the normal case.** `build_heart_record` derives it
 through `hrv_processing.estimate_hrv` over the same 25s window and the same rate — sharing them is
@@ -1000,6 +1105,76 @@ on which tables were reached — an empty result cannot distinguish "asked and g
 the sidecar computed it every tick, it was persisted and displayed, and nothing read it to pick a
 question. Don't add it back — the sidecar cannot see correctness, topic history or grade level.
 
+## Learning preferences live on `profiles`, and difficulty is a bias
+
+Three columns (`20260822000000`): `difficulty_bias`, `session_duration_minutes`, `practice_reminders`.
+They were `localStorage.al_prefs`, written by the Preferences tab and read by nothing — the backend
+picks the difficulty and cannot see a key in one browser's storage.
+
+**`difficulty_bias` is a shift, never an absolute difficulty**, and that is a safety property rather
+than a simplification. `_shift_difficulty` applies it on top of what the model chose from the
+student's accuracy history, and `LLM_topic_decider` overrides it *downward* whenever the fused
+signal says stressed — the same asymmetry `signal_fusion` documents. Storing "always hard" would
+store a value the ease-off rule has to contradict, and a setting the system routinely ignores is
+worse than one that does not exist. It is why the control offers three options and not four: medium
+and adaptive would both mean no shift.
+
+**`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
+before the first answer and served first, so a hardcoded default there makes the setting do nothing
+for the opening of every session.
+
+Bounds are stated twice on purpose — Pydantic on `UpdateProfileRequest` and a CHECK in the
+migration — and they must agree, or a value that passes one and fails the other surfaces as a 500
+from the client library instead of a 422 naming the field. The CHECK is a **range**, not the four
+durations the UI offers, so a fifth button is not a migration.
+
+**Duration is advisory.** The page asks between questions; nothing ends on a timer. A session closed
+mid-question discards an answer a child was part way through giving. `Adaptive.jsx` now has a
+`finishSession` — before this it never called `/end` at all, so an adaptive session stayed open until
+the stale sweep on the student's *next* start, which is also when its rollup and chart archive were
+written.
+
+**`practice_reminders` is a dashboard banner and is named for that.** There is no push
+infrastructure — no service worker, no VAPID, no scheduled fan-out — so "Notifications: daily
+reminders to practice" described a system that does not exist. The banner needs *both* reads to have
+landed before it renders: derived from a failed `/api/sessions`, it tells a child they skipped a day
+they did not skip. Its "today" is the **browser's local day**, deliberately not `_school_day` — that
+helper buckets recorded data against the school's timezone, and this is a nudge about the student's
+own afternoon.
+
+## An answer is recorded by the backend, and the topic comes from the question
+
+`Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all — only `Practice.jsx` did — so every
+question answered on the adaptive path was counted in `localStorage` and nowhere else.
+`session_answers`, `sessions.questions_answered`, `user_stats` and every report built on them read
+zero however long a student practised, while the page's own Topic Accuracy panel showed figures.
+Two records of one afternoon, one of them private to a browser.
+
+**The question id is what made it possible.** `add_question_to_supabase` returned a bool, so the
+generated question reached the page with no id and there was nothing to put in
+`session_answers.question_id`. It now returns the id — **and returns the existing row's id on a
+duplicate** rather than False, because answering a question the generator has produced before is
+exactly as real as answering a novel one.
+
+**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The
+client has to be trusted about correctness; letting it also name the topic would let a page credit
+one subject for work done in another, and `user_math_performance` is what the adaptive engine reads
+to choose what to serve next. It never raises: it runs after `session_answers` is written, and a
+topic lookup failing must not turn a recorded answer into "that answer could not be saved".
+
+**Topic accuracy is read from `user_math_performance`, not from the browser.** It was
+`localStorage.accuracyStats_<uid>` — the only panel in the app whose numbers were not the
+database's. It disagreed with the dashboard on the same screen, started from zero on a school
+computer, and nothing server-side could correct it: a parent erasing a channel left the figures
+standing in the child's browser. The client-side `sendAccuracyToBackend` upsert is **deleted, not
+merely unused** — the backend owns that table now, and a client upsert would overwrite real counts
+with one browser's memory. Its `Number(v) || null` also turned every genuine zero into a null, which
+is why the table sat empty while the panel showed numbers.
+
+There is no "Reset stats" button any more. Against localStorage it cleared a browser key; against
+`user_math_performance` the same button deletes a student's academic record with one click and no
+confirmation. Erasure here is a parent-only, confirmed action.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses
@@ -1170,10 +1345,27 @@ goes to a two-worker pool and `schedule()` swallows even a submit failure. That 
 only place a failure can surface, and it *has* to surface: the window in which an archive can still
 be rebuilt closes on `ends_on`.
 
-**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live`. Each
-one also writes the rollup, and `test_every_session_close_schedules_an_archive` derives the list
-from that rather than keeping its own: a fourth site added later would otherwise leave sessions
-whose raw rows expire with no picture behind them, and nothing would say so.
+**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live` — and
+they all go through **`_close_session()`**. Don't hand-write a fourth: the sequence was copied into
+each site and every copy drifted separately, none of them raising anything. The sweep credited a
+`correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero),
+so every session of a student who shut the tab added its questions and *no* correct answers to their
+record; `class_live` never ran the empty-session discard, so a failed pairing it closed stayed in
+History for ever; and the credit, the rollup and the archive each shipped at different times as "the
+third close site to be missed".
+
+Order is load-bearing: **discard first**, because a rollup of nothing and an archive of four empty
+charts are work done for a session about to stop existing. Stopping the poller stays at the call
+sites — it takes different ids at each and must happen before the row is stamped.
+
+`/end` **refuses a session that already has `ended_at`**. It credits the session's *cumulative*
+counts rather than a delta, so a session closed by the sweep or by a teacher opening Live and then
+finished normally was credited twice, inflating the accuracy a parent reads. Not an error to the
+caller: the student's page cannot know a teacher's view closed the session underneath it.
+
+The exhaustiveness tests find closers by `'"ended_at":' in source` and assert each reaches the
+helper, with a second test pinning the helper's own contents — the indirection is only safe while
+both halves exist. They catch a step being **removed**, not neutered.
 
 **`chart_paths` has four states and no column default.** A path, `null` for a channel that produced
 nothing, an absent key for a chart never attempted, and column-NULL for a session the archive never

@@ -89,6 +89,17 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
         o << "null";
     }
     o << ",\"optical_supported\":" << (svc.optical_supported() ? "true" : "false");
+    // Charge remaining, or null before the first BATTERY packet -- which is
+    // most of the first minute of a session, since libMuse fires it on its own
+    // schedule rather than on connect. null, not 0: 0% is a real reading, and
+    // this is a number a student is asked to act on.
+    o << ",\"battery_percent\":";
+    const double battery = svc.battery_percent();
+    if (battery >= 0.0) {
+        o << battery;
+    } else {
+        o << "null";
+    }
 
     // Optical evidence: counts, the latest sample, and libMuse's own quality
     // verdicts. Counters rather than a stream, because the question this answers

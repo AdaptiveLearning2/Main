@@ -8,12 +8,15 @@
 #   ./start.sh --camera --index 1  (a specific camera)
 #   ./start.sh --gaze              (gaze landmarks too; implies --camera)
 #   ./start.sh --gaze --no-emotion (gaze only -- no 35 MB FER+ model)
+#   ./start.sh --muse --optics     (headband PPG -> heart rate; Windows only)
 
 MUSE=false
 CAMERA=false
 CAMERA_INDEX=0
 GAZE=false
 NO_EMOTION=false
+OPTICS=false
+OPTICS_PRESET=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --muse)       MUSE=true; shift ;;
@@ -21,6 +24,8 @@ while [[ $# -gt 0 ]]; do
         --index)      CAMERA_INDEX="$2"; shift 2 ;;
         --gaze)       GAZE=true; shift ;;
         --no-emotion) NO_EMOTION=true; shift ;;
+        --optics)     OPTICS=true; shift ;;
+        --preset)     OPTICS_PRESET="$2"; shift 2 ;;
         *)            echo "unknown option: $1"; exit 1 ;;
     esac
 done
@@ -52,6 +57,34 @@ if [ "$CAMERA" = true ] && [ "$NO_EMOTION" = true ] && [ "$GAZE" != true ]    &&
     echo "--no-emotion without --gaze leaves the camera with nothing to measure."
     echo "  Add --gaze, or drop --camera."
     exit 1
+fi
+
+# The optics guards, same three as start.ps1 and in the same order. They run on
+# macOS even though the bridge cannot: a flag combination that would be refused
+# on Windows should be refused here too, or the two scripts disagree about what
+# a valid invocation is and the mac one teaches a habit Windows rejects.
+if [ "$OPTICS" = true ] && [ "$MUSE" != true ]; then
+    echo "--optics needs --muse: the simulator has no optical channel to enable."
+    echo "  Add --muse, or drop --optics."
+    exit 1
+fi
+if [ -n "$OPTICS_PRESET" ] && [ "$OPTICS" != true ]; then
+    echo "--preset does nothing without --optics."
+    echo "  Add --optics, or drop --preset."
+    exit 1
+fi
+# A value outside the range is a typo, not a preference. The bridge falls back to
+# 1035 and says so on its own stderr, so the session would record on a rung
+# nobody chose while the operator believed otherwise.
+if [ -n "$OPTICS_PRESET" ] && ! echo "$OPTICS_PRESET" | grep -Eq '^103[1-6]$'; then
+    echo "--preset '$OPTICS_PRESET' is not a preset (expected 1031-1036)."
+    echo "  16 CH: 1031/1032   8 CH: 1033/1034   4 CH: 1035/1036   (odd = low power)"
+    exit 1
+fi
+if [ "$OPTICS_PRESET" = "1031" ] || [ "$OPTICS_PRESET" = "1032" ]; then
+    echo "  WARNING: PRESET_$OPTICS_PRESET is 16 CH optics. Measured on hardware:"
+    echo "  the BLE link drops within ~20s and electrode contact collapses to"
+    echo "  [4,4,4,4] -- it takes EEG down with it. 1033-1036 held for minutes."
 fi
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -164,11 +197,19 @@ echo ""
 if [ "$MUSE" = true ]; then
     echo -e "${CYAN}[1/5] Native Muse Bridge${NC}"
     echo -e "  ${YELLOW}libMuse SDK is Windows-only -- switching to simulator mode.${NC}"
+    # Said separately rather than folded into the line above: --optics is
+    # accepted here, passes every guard, and still records no heart rate,
+    # because the process it configures is the one that cannot run.
+    if [ "$OPTICS" = true ]; then
+        echo -e "  ${YELLOW}--optics configures the bridge, so it has no effect here either.${NC}"
+    fi
 fi
 echo -e "${GRAY}[1/5] Skipping native bridge (simulator mode on macOS)${NC}"
 
 # Force simulator mode in EEG .env
 EEG_ENV="$EEG_DIR/.env"
+BACKEND_ENV="$BACKEND_DIR/.env"
+FRONTEND_ENV="$FRONTEND_DIR/.env"
 if [ -f "$EEG_ENV" ]; then
     if grep -q "^EEG_SOURCE=muse" "$EEG_ENV" 2>/dev/null; then
         sed -i '' 's/^EEG_SOURCE=muse/EEG_SOURCE=sim/' "$EEG_ENV"
@@ -279,11 +320,26 @@ ensure_model('$LANDMARK_MODEL')
         set_env_key "$EEG_ENV" "FACE_EMOTION_ENABLED" "true"
     fi
     set_env_key "$EEG_ENV" "FACE_LANDMARK_MODEL_PATH" "$LANDMARK_MODEL"
+    # Push, for the same reason as start.ps1: the camera's only writer is
+    # /api/signals/face, so a camera under pull records nothing.
+    set_env_key "$EEG_ENV" "PUSH_ENABLED" "true"
+    set_env_key "$EEG_ENV" "BACKEND_URL" "http://127.0.0.1:8000"
+    set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
+    # Same as start.ps1: without this the browser sends no Authorization header
+    # to the sidecar and every call 401s, while curl from a terminal works.
+    API_TOKEN_VALUE="$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | head -1)"
+    [ -n "$API_TOKEN_VALUE" ] && set_env_key "$FRONTEND_ENV" "VITE_EEG_LOCAL_TOKEN" "$API_TOKEN_VALUE"
     echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_GAZE_ENABLED" "false"
     set_env_key "$EEG_ENV" "FACE_EMOTION_ENABLED" "false"
+    # Back to pull: the backend polls the sidecar, which is what a
+    # single-machine headband deployment wants. Written on both branches so a
+    # stale push left over from a camera run cannot disable the poller on a
+    # later headband-only one.
+    set_env_key "$EEG_ENV" "PUSH_ENABLED" "false"
+    set_env_key "$BACKEND_ENV" "INGEST_MODE" "pull"
 
     # Remove only the camera entry this script writes, leaving any other devices
     # alone. Blanking EEG_DEVICES outright would silently destroy a hand-written

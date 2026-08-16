@@ -20,10 +20,19 @@ export default function Profile() {
   const [editGrade, setEditGrade] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const [prefs, setPrefs] = useState(() => {
-    const s = localStorage.getItem('al_prefs')
-    return s ? JSON.parse(s) : { difficulty: 'adaptive', duration: '15', notifications: true }
-  })
+  // Preferences live on the profile, not in localStorage.
+  //
+  // `al_prefs` was written here and read by nothing -- not the adaptive engine,
+  // not the session, not any reminder -- so all three controls were decoration.
+  // localStorage could not have fixed that on its own either: the backend picks
+  // the difficulty and it cannot read a key in one browser's storage, and a
+  // preference that does not survive the student opening the app on a school
+  // computer is not a preference.
+  //
+  // `null` until the profile lands, which is what stops the controls rendering
+  // a default as though the student had chosen it.
+  const [prefs, setPrefs] = useState(null)
+  const [prefsBusy, setPrefsBusy] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -36,12 +45,42 @@ export default function Profile() {
       setProfile(p)
       setEditName(p?.display_name || '')
       setEditGrade(p?.grade_level || '')
+      // `??`, not `||`: 0 is the adaptive bias and false is reminders off, and
+      // both are choices a student made. `||` would quietly restore the default
+      // every time the page loaded, so turning reminders off would never stick.
+      if (p) setPrefs({
+        difficulty_bias:          p.difficulty_bias ?? 0,
+        session_duration_minutes: p.session_duration_minutes ?? 15,
+        practice_reminders:       p.practice_reminders ?? true,
+      })
     })
   }, [])
 
-  const savePrefs = (updated) => {
+  // Optimistic, then reconciled against what the server stored.
+  //
+  // Optimistic because these are three-tap controls and a round trip per tap
+  // makes them feel broken; reconciled because the endpoint clamps, so what
+  // came back is the authority. Reverted on failure rather than left showing a
+  // setting that was not saved -- a preference silently not applying is the
+  // exact failure this whole change is fixing.
+  const savePrefs = async (updated) => {
+    const previous = prefs
     setPrefs(updated)
-    localStorage.setItem('al_prefs', JSON.stringify(updated))
+    setPrefsBusy(true)
+    try {
+      const saved = await apiFetch('/api/profile/me', { method: 'PUT', body: updated })
+      setProfile(saved)
+      setPrefs({
+        difficulty_bias:          saved.difficulty_bias ?? 0,
+        session_duration_minutes: saved.session_duration_minutes ?? 15,
+        practice_reminders:       saved.practice_reminders ?? true,
+      })
+    } catch (e) {
+      setPrefs(previous)
+      toast.error(e.message || 'Could not save that setting')
+    } finally {
+      setPrefsBusy(false)
+    }
   }
 
   const saveProfile = async () => {
@@ -74,7 +113,14 @@ export default function Profile() {
   const Toggle = ({ value, onChange }) => (
     <button onClick={() => onChange(!value)}
       className={`w-11 h-6 rounded-full transition-colors duration-200 relative flex-shrink-0 ${value ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
+      {/* `left-0` is load-bearing. Without it `left` resolves to the span's
+          static position, and a button centres its content -- so the knob
+          started at 22px, the middle of a 44px track, and the translate moved
+          it from there. On read as 46px on a 44px track (18px outside the
+          pill); off read as 26px, hard against the right end. Both states drew
+          the knob to the right of centre, so the control could not be read at
+          all -- and no state ever looked broken enough to be obviously a bug. */}
+      <span className={`absolute left-0 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
   )
 
@@ -202,40 +248,71 @@ export default function Profile() {
             )}
 
             {/* PREFERENCES */}
-            {tab === 'Preferences' && (
+            {tab === 'Preferences' && !prefs && (
+              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
+                {/* Not the controls at their defaults. Rendering those before the
+                    profile lands shows the student settings they did not choose,
+                    and a tap during that window saves whatever was on screen. */}
+                <p className="text-sm text-gray-400">Loading your preferences…</p>
+              </div>
+            )}
+            {tab === 'Preferences' && prefs && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm space-y-6">
                 <h3 className="font-black text-gray-900 dark:text-white">Learning Preferences</h3>
 
                 <div>
-                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Difficulty Mode</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {['adaptive', 'easy', 'medium', 'hard'].map(d => (
-                      <button key={d} onClick={() => savePrefs({ ...prefs, difficulty: d })}
-                        className={`py-2 rounded-xl text-sm font-semibold capitalize transition border ${prefs.difficulty === d ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300'}`}>
-                        {d}
+                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Difficulty</label>
+                  {/* Three options, not four, because three is what the system
+                      has. This sets the starting value of the Easier/Auto/Harder
+                      control on the practice page, which is a *shift* applied on
+                      top of the difficulty the model picked from the student's
+                      own accuracy history. There is no "always medium" to offer:
+                      medium and adaptive would both mean no shift. */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {[[-1, 'Easier'], [0, 'Adaptive'], [1, 'Harder']].map(([v, label]) => (
+                      <button key={v} disabled={prefsBusy}
+                        onClick={() => savePrefs({ ...prefs, difficulty_bias: v })}
+                        className={`py-2 rounded-xl text-sm font-semibold transition border disabled:opacity-60 ${prefs.difficulty_bias === v ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300'}`}>
+                        {label}
                       </button>
                     ))}
                   </div>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Where each session starts. You can still change it while you practise — and
+                    if the sensors show you are struggling, questions get easier whatever this says.
+                  </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Session Duration</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {['15', '30', '45', '60'].map(d => (
-                      <button key={d} onClick={() => savePrefs({ ...prefs, duration: d })}
-                        className={`py-2 rounded-xl text-sm font-semibold transition border ${prefs.duration === d ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300'}`}>
+                    {[15, 30, 45, 60].map(d => (
+                      <button key={d} disabled={prefsBusy}
+                        onClick={() => savePrefs({ ...prefs, session_duration_minutes: d })}
+                        className={`py-2 rounded-xl text-sm font-semibold transition border disabled:opacity-60 ${prefs.session_duration_minutes === d ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300'}`}>
                         {d} min
                       </button>
                     ))}
                   </div>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    You are asked when you reach it, between questions. Nothing stops on its own.
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Notifications</p>
-                    <p className="text-xs text-gray-400">Daily reminders to practice</p>
+                    {/* Named for what it does. "Notifications — daily reminders
+                        to practice" described a system that does not exist: a
+                        reminder that reaches a closed browser needs a service
+                        worker, VAPID keys and a scheduled fan-out, and none of
+                        that is here. This is a banner on the dashboard, so it
+                        says so -- the same reason FacialRecognitionToggle was
+                        retired rather than given a disclaimer. */}
+                    <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Practice reminder</p>
+                    <p className="text-xs text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
                   </div>
-                  <Toggle value={prefs.notifications} onChange={v => savePrefs({ ...prefs, notifications: v })} />
+                  <Toggle value={prefs.practice_reminders}
+                          onChange={v => savePrefs({ ...prefs, practice_reminders: v })} />
                 </div>
               </div>
             )}

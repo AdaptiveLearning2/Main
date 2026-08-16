@@ -56,6 +56,23 @@ class InterpretedEegData(BaseModel):
     state: StateData
     bands: BandData | None = None
     ingestion: dict[str, Any] | None = None
+    # The headband's optical heart block, exactly as `CameraData` carries the
+    # camera's. Undeclared, this key was **silently dropped** by pydantic on the
+    # way out of `/api/v1/state` -- so under `INGEST_MODE=pull`, which is the
+    # default and reads precisely that endpoint, a headband on an optics preset
+    # could never record a heart rate. Everything upstream worked: the window
+    # was built, the anchor confirmed, the block held and stamped, and then the
+    # response model deleted it one layer before the poller saw it.
+    #
+    # Push was unaffected, because `push_client` posts `snapshot()` directly and
+    # never passes through this envelope -- so the two deployments silently
+    # disagreed about whether the headband has a heart channel at all, which is
+    # the one thing they are not allowed to differ on.
+    #
+    # Measured on hardware 2026-08-15 (MuseS-0FFC, PRESET_1035): 2697 optics
+    # packets at 64.3/s reached the adapter and `/api/v1/state` reported no
+    # `heart` key on 227 consecutive polls.
+    heart: dict[str, Any] | None = None
 
 
 class CameraData(BaseModel):

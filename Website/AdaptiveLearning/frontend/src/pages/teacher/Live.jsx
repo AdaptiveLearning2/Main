@@ -94,7 +94,6 @@ function StudentCard({ student, history }) {
         <Gauge label="Focus"      value={cog?.focus}      color="bg-indigo-500" />
         <Gauge label="Engagement" value={cog?.engagement} color="bg-emerald-500" />
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
-        <Gauge label="Attention"  value={face?.attention} color="bg-amber-500" />
       </div>
 
       {/* Absolute units, so it is stated rather than drawn on the 0..1
@@ -191,6 +190,16 @@ export default function Live() {
           // left that student's badge showing a live bpm with a permanently
           // empty trend line beneath it.
           if (!c && !h) return
+          // Copied, never mutated in place. This array is handed to the chart
+          // as a prop on line 269, and once it has been rendered something
+          // downstream makes it non-extensible -- so the next tick's `push`
+          // threw `Cannot add property 1, object is not extensible`, which the
+          // catch below turned into a banner across the whole page.
+          //
+          // It needed two ticks of data for one student to appear, so it stayed
+          // hidden until a session was actually streaming. Rebuilding rather
+          // than chasing who freezes it: a published array should not be edited
+          // afterwards regardless, and this removes the question.
           const arr = historyRef.current[r.user_id] || []
           // Null, not 0. A row can exist with null measurements when the
           // headband reported bad electrode contact -- the row is kept so the
@@ -198,7 +207,7 @@ export default function Live() {
           // Coercing that to 0 draws it as "totally unfocused, perfectly calm",
           // which is a fabricated reading presented as a real one. recharts
           // leaves a gap for null (connectNulls defaults to false).
-          arr.push({
+          const point = {
             focus:      c?.focus ?? null,
             engagement: c?.engagement ?? null,
             stress:     c?.stress ?? null,
@@ -207,9 +216,10 @@ export default function Live() {
             // recharts leaves a gap for null, and a 0 here would draw a
             // flatlined heart rate that never happened.
             bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
-          })
-          while (arr.length > 60) arr.shift()
-          historyRef.current[r.user_id] = arr
+          }
+          // `slice(-60)` rather than a shift loop, for the same reason: it
+          // returns a new array instead of editing the one already on screen.
+          historyRef.current[r.user_id] = [...arr, point].slice(-60)
         })
         setStudents(rows)
       } catch (e) {

@@ -84,6 +84,9 @@ public:
         case interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD:
             service_.update_optical_quality(packet);
             break;
+        case interaxon::bridge::MuseDataPacketType::BATTERY:
+            service_.update_battery(packet);
+            break;
         default:
             break;
         }
@@ -400,6 +403,11 @@ void MuseBridgeService::reset_device_fields_locked() {
     muse_model_.clear();
     requested_preset_.clear();
     optical_supported_ = false;
+    // Cleared with them, and for the same reason: a charge percentage left
+    // standing describes the headband that just went away. Worse than a stale
+    // preset, because it is the one number here a student is asked to act on --
+    // "82%" beside a Connect button for a headband nobody is wearing.
+    battery_percent_ = -1.0;
     latest_bands_ = BandPowers{};
     latest_contact_ = ContactQuality{};
     // Counters included. Carrying them across a reconnect would make "this
@@ -454,6 +462,11 @@ bool MuseBridgeService::connect_named(const std::string& name) {
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::PPG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD);
+    // Charge remaining. Registered on every preset because the packet is not a
+    // signal the preset carries -- it is device telemetry libMuse fires on its
+    // own schedule -- so it costs nothing on PRESET_21 and is the one reading a
+    // student can act on before a lesson rather than after it.
+    chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BATTERY);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -608,6 +621,18 @@ bool MuseBridgeService::optical_supported() const {
 #endif
 }
 
+double MuseBridgeService::battery_percent() const {
+#if defined(ENABLE_LIBMUSE)
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return battery_percent_;
+#else
+    // The synthetic build has no battery to report, and inventing one would put
+    // a number on a student's screen with nothing behind it -- the same reason
+    // EEG_SOURCE=sim emits no heart block.
+    return -1.0;
+#endif
+}
+
 BandPowers MuseBridgeService::band_powers() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -755,6 +780,7 @@ void MuseBridgeService::unregister_data_listeners(
         interaxon::bridge::MuseDataPacketType::PPG,
         interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD,
         interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD,
+        interaxon::bridge::MuseDataPacketType::BATTERY,
     };
     for (const auto type : kTypes) {
         muse->unregister_data_listener(data_listener_, type);
@@ -826,6 +852,25 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
             latest_optical_.optics_dropped += 1;
         }
     }
+}
+
+void MuseBridgeService::update_battery(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
+    // The named accessor rather than values()[0]. The optical path uses values()
+    // deliberately -- it needs the channel *count*, which is the thing nobody
+    // knows in advance -- but here the packet's three fields are a fixed mapping
+    // and reading them positionally would silently return millivolts if the SDK
+    // ever reordered the enum.
+    const double pct = packet->get_battery_value(
+        interaxon::bridge::Battery::CHARGE_PERCENTAGE_REMAINING);
+    // Range-checked before storing, because -1 is this field's "not reported"
+    // and a garbage reading landing on a negative number would be published as
+    // absence. Out of range is dropped rather than clamped: the previous good
+    // reading is a better answer than a fabricated 100.
+    if (!(pct >= 0.0 && pct <= 100.0)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    battery_percent_ = pct;
 }
 
 void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
@@ -967,6 +1012,12 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);
     if (state != interaxon::bridge::ConnectionState::CONNECTED) {
         firmware_version_.clear();
+        // Alongside firmware, not alongside the queues above. The queues are
+        // left across a blip because the samples in them are still good; a
+        // charge percentage is a claim about a link that is currently down.
+        // Costs a brief null on a transient reconnect, until the next BATTERY
+        // packet -- which is the honest answer for that interval.
+        battery_percent_ = -1.0;
     }
 }
 

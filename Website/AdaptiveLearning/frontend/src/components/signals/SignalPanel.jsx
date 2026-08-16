@@ -168,6 +168,34 @@ function faceReason(report, faceOn) {
   }
 }
 
+/** The same four states for the EEG channel.
+ *
+ * Missing until now, which is why the three cognitive tiles were the only ones
+ * still rendering `pct()`'s raw 'N/A'. A headband recording with poor electrode
+ * contact writes rows with the measurement columns nulled -- the honest thing,
+ * so the session's timeline survives -- and the snapshot then read the newest
+ * of those and printed "N/A" beside a weekly average of 64%. Two true numbers
+ * that look like a contradiction, and the tile that should have said
+ * "Calibrating" was the one saying nothing was there.
+ *
+ * `on: true` because the payload has no way to say otherwise: it carries
+ * `emotion_revoked_at` and `heart_revoked_at` and nothing for EEG, so there is
+ * no withdrawal date to render and borrowing the face one would report a
+ * withdrawal the student never made about a sensor they never touched. That
+ * leaves `offLabel` choosing between "Calibrating" (rows arrived, none usable)
+ * and "No sensor" (no rows at all), which is the distinction that was missing
+ * -- and `consentRetrieved === false` still wins over both. Add
+ * `eeg_revoked_at` to the payload before making this conditional.
+ */
+function eegReason(report) {
+  return {
+    on: true,
+    revokedAt: null,
+    consentRetrieved: report?.consent_retrieved,
+    samples: report?.sample_counts?.cognitive,
+  }
+}
+
 export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo' }) {
   const tones = {
     indigo: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
@@ -213,9 +241,17 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
         <Radio size={18} className="text-emerald-500" />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MiniMetric label="Focus" value={pct(cog.focus)} icon={Brain} tone="emerald" />
-        <MiniMetric label="Stress" value={pct(cog.stress)} icon={Zap} tone="rose" />
-        <MiniMetric label="Engagement" value={pct(cog.engagement)} icon={Activity} tone="indigo" />
+        {/* Through `valueOrReason`, like every other tile. These three were the
+            last holdouts still printing `pct()`'s raw 'N/A' -- so a headband
+            recording with poor electrode contact, which writes rows with the
+            measurement columns nulled, showed "N/A" here beside a weekly
+            average of 64% on the same screen. */}
+        <MiniMetric label="Focus" value={valueOrReason(pct(cog.focus), eegReason(report))}
+                    icon={Brain} tone="emerald" />
+        <MiniMetric label="Stress" value={valueOrReason(pct(cog.stress), eegReason(report))}
+                    icon={Zap} tone="rose" />
+        <MiniMetric label="Engagement" value={valueOrReason(pct(cog.engagement), eegReason(report))}
+                    icon={Activity} tone="indigo" />
         {/* Never "N/A" for a channel that was not recorded: that reports an
             absence in data nobody collected. `offLabel` picks between
             withdrawn, unavailable, calibrating and no-sensor. */}
@@ -373,16 +409,22 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                   review, and a parent reading both was shown one colour for two
                   things. The archived SVGs re-render the session charts, so
                   those are the reference and this is the side that moved. */}
-              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={false} name="Focus" />
-              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={false} name="Stress" />
+              {/* Dots, not `dot={false}`. This chart holds at most seven
+                  points, one per day, and a student who practised on a single
+                  day gives every series exactly one -- which draws no segment
+                  and, without a dot, renders as a completely empty chart. That
+                  is the normal case for a new student in their first week, so
+                  the graph was blank precisely when it was first looked at. */}
+              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
+              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
               {/* Omitted entirely with facial reporting off, rather than drawn
                   as an all-null series -- an empty legend entry reads as a
                   measurement that flatlined. */}
-              {faceOn && <Line yAxisId="pct" type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={false} name="Face Attention" />}
+              {faceOn && <Line yAxisId="pct" type="monotone" dataKey="attention" stroke="#0ea5e9" strokeWidth={2} dot={{ r: 3 }} name="Face Attention" />}
               {/* Same reasoning as the facial series: omitted rather than drawn
                   as an all-null line, because an empty legend entry reads as a
                   measurement that flatlined. */}
-              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={false} name="Heart Rate (bpm)" />}
+              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
             </LineChart>
           </ResponsiveContainer>
         )}

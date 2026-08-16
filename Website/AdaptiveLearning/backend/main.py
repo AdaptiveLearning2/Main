@@ -1043,8 +1043,25 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_by_day = _by_school_day(heart, "ts")
     sessions_by_day = _by_school_day(sessions, "started_at")
 
-    latest_cognitive = cog[0] if cog else None
-    latest_face = face[0] if face else None
+    # Newest row that actually produced a *measurement*, not newest row.
+    #
+    # The heart line below has always worked this way and said why; cognitive
+    # and face did not, and they are the two tables that deliberately keep rows
+    # with the measurement columns nulled -- a headband recording with poor
+    # electrode contact, a face window FER+ refused. Those rows exist so the
+    # session's timeline survives, which is right, but taking the newest one as
+    # "the latest reading" meant a panel labelled *Most recent readings* showed
+    # nothing while the weekly average beside it showed 64%: two true numbers
+    # that read as a contradiction, and the empty one describing the last few
+    # minutes of bad contact rather than the session.
+    #
+    # Falls back to the newest row when none carries a measurement, so a channel
+    # that recorded only unusable windows still reports `sample_counts > 0` and
+    # the tile says "Calibrating" rather than "No sensor".
+    latest_cognitive = next((r for r in cog if r.get("focus") is not None), None) \
+        or (cog[0] if cog else None)
+    latest_face = next((r for r in face if r.get("emotion") is not None), None) \
+        or (face[0] if face else None)
     # Newest *trusted* reading, matching every other heart figure in this
     # payload. An untrusted latest would be the one number here not subject to
     # the quality gate, and it is the one rendered largest.

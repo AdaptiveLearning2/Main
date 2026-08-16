@@ -165,26 +165,40 @@ export default function SessionReview() {
       }
     })
 
-  let hi = 0
-  for (const row of series) {
-    while (hi + 1 < heartByT.length && heartByT[hi + 1].t <= row.t) hi++
-    // The nearest heart reading is one of the two entries bracketing row.t in
-    // the sorted array: the last one at-or-before it (hi) and the first one
-    // after it (hi + 1). Checking only the floor missed a closer *later*
-    // reading whenever the heart channel sampled less often than the
-    // cognitive one -- the point of "nearest", not "most recent".
-    const floor = heartByT[hi]
-    const ceil  = heartByT[hi + 1]
-    const floorDist = floor ? Math.abs(floor.t - row.t) : Infinity
-    const ceilDist  = ceil  ? Math.abs(ceil.t - row.t)  : Infinity
-    const near = ceilDist < floorDist ? ceil : floor
-    // Only if it is actually near. Carrying a reading forward across a gap
-    // would draw a flat heart rate through a stretch where the sensor was off,
-    // which is the "cannot tell no-data from a value" failure on a chart.
-    if (near && Math.min(floorDist, ceilDist) <= 15_000) {
-      row.heart_rate_bpm = typeof near.h.heart_rate_bpm === 'number' ? near.h.heart_rate_bpm : null
-      row.rmssd_ms = typeof near.h.rmssd_ms === 'number' ? near.h.rmssd_ms : null
+  // Each heart reading lands on **one** row: the row nearest to it.
+  //
+  // This used to iterate the rows instead, giving every row its nearest reading
+  // within 15s. Cognitive arrives at 4Hz, so a single heart reading was copied
+  // onto up to 120 consecutive rows and drew as half a minute of dead-flat
+  // line -- exactly the "carrying a reading across a gap" artefact the window
+  // was added to prevent, produced by the window itself. A session with one
+  // accepted window (poor electrode contact, say) looked like a heart that did
+  // not vary rather than a heart measured once.
+  //
+  // One reading, one point. `dot` on the lines below is what makes a lone
+  // reading visible, since a single point with no neighbours draws no segment.
+  const rowIndexByT = series.map(r => r.t)
+  for (const { t, h } of heartByT) {
+    // Binary search for the insertion point, then compare the two neighbours --
+    // "nearest" in both directions, not the last one at-or-before.
+    let lo = 0, hiIdx = rowIndexByT.length
+    while (lo < hiIdx) {
+      const mid = (lo + hiIdx) >> 1
+      if (rowIndexByT[mid] < t) lo = mid + 1
+      else hiIdx = mid
     }
+    const before = lo > 0 ? lo - 1 : null
+    const after  = lo < series.length ? lo : null
+    const dBefore = before !== null ? Math.abs(series[before].t - t) : Infinity
+    const dAfter  = after  !== null ? Math.abs(series[after].t  - t) : Infinity
+    const pick = dAfter < dBefore ? after : before
+    // Still bounded. A reading with no row within 15s belongs to a stretch the
+    // cognitive channel was not recording, and pinning it to the nearest row
+    // minutes away would place a measurement at a time it was not taken.
+    if (pick === null || Math.min(dBefore, dAfter) > 15_000) continue
+    const row = series[pick]
+    row.heart_rate_bpm = typeof h.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null
+    row.rmssd_ms = typeof h.rmssd_ms === 'number' ? h.rmssd_ms : null
   }
 
   const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
@@ -403,13 +417,20 @@ export default function SessionReview() {
 
                 {/* Omitted rather than drawn as an all-null line: an empty
                     legend entry reads as a measurement that flatlined. */}
+                {/* `dot` on, unlike the cognitive lines above. Heart is a held
+                    25s window recomputed every 10s, so a session yields tens of
+                    readings where cognitive yields thousands -- and each one now
+                    occupies a single row. Without dots an isolated reading has
+                    no neighbour to draw a segment to and renders as nothing at
+                    all, which is how "measured once" would look identical to
+                    "never measured". */}
                 {hasHeart && (
                   <Line yAxisId="abs" type="monotone" dataKey="heart_rate_bpm" name="Heart rate (bpm)"
-                        stroke="#a855f7" dot={false} connectNulls isAnimationActive={false} />
+                        stroke="#a855f7" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
                 )}
                 {hasHeart && (
                   <Line yAxisId="abs" type="monotone" dataKey="rmssd_ms" name="RMSSD (ms)"
-                        stroke="#f59e0b" dot={false} connectNulls isAnimationActive={false} />
+                        stroke="#f59e0b" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
                 )}
 
                 {/* Sensor changed here. Distinct from the answer markers below

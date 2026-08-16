@@ -189,10 +189,36 @@ describe('LiveSignalSummary', () => {
 
   it('survives a report with no latest reading', () => {
     render(<LiveSignalSummary report={{}} />)
-    expect(metric('Focus').getByText('N/A')).toBeInTheDocument()
+    // Was 'N/A'. The cognitive tiles were the last three still printing
+    // `pct()`'s raw string; they go through `valueOrReason` now, so an absent
+    // channel says which kind of absence it is.
+    expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
     // Channel on (no flag says otherwise) and read, but nothing came back --
     // offLabel's no-sensor state, not a generic "no data".
     expect(metric('Facial Emotion').getByText('No sensor')).toBeInTheDocument()
+  })
+
+  it('says Calibrating, not No sensor, when rows arrived but none was usable', () => {
+    // The case that sent me here: a headband recording with poor electrode
+    // contact writes rows with the measurement columns nulled -- deliberately,
+    // so the session's timeline survives. The snapshot read the newest of those
+    // and printed "N/A" beside a weekly average of 64% on the same screen: two
+    // true numbers that read as a contradiction.
+    render(<LiveSignalSummary report={{
+      latest: { cognitive: { focus: null, stress: null, engagement: null } },
+      sample_counts: { cognitive: 155 },
+    }} />)
+    expect(metric('Focus').getByText('Calibrating')).toBeInTheDocument()
+    expect(metric('Stress').getByText('Calibrating')).toBeInTheDocument()
+    expect(metric('Engagement').getByText('Calibrating')).toBeInTheDocument()
+  })
+
+  it('does not claim a sensor state when the consent read failed', () => {
+    render(<LiveSignalSummary report={{
+      consent_retrieved: false,
+      sample_counts: { cognitive: 0 },
+    }} />)
+    expect(metric('Focus').getByText('Unavailable')).toBeInTheDocument()
   })
 })
 

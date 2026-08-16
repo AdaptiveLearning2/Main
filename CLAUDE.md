@@ -1262,6 +1262,39 @@ Access is a **relationship**, not a path segment or a role claim. Don't namespac
 under `/api/teacher/` when parents legitimately read it too, and don't gate on
 `user_metadata.role`.
 
+### Where a role gate must read it from, and why one column is not enough
+
+**`user_metadata.role` is attacker-controlled.** The client sets it at sign-up and can rewrite it
+whenever it likes with `supabase.auth.updateUser({data: {role: 'teacher'}})`, which talks to GoTrue
+and never passes through this backend. `create_class`, `my_classes` and `link_child` gated on it, so
+any student could self-elevate and create classes. They now call **`_role(uid)`**, which reads
+`profiles.role`; `test_no_endpoint_gates_on_user_metadata` greps the module so a fourth site cannot
+appear. It fails closed to `student`, since `_profile` degrades to a student-shaped dict on a failed
+read and a database blip must not be a way past a role check.
+
+**Switching to `profiles.role` is only half of it, and it is the half that looks like the whole
+fix.** `profiles` carries a `FOR ALL` own-row policy and `authenticated` holds UPDATE, so that
+column was equally client-writable — a student could PATCH their own row through PostgREST. RLS
+narrows *which rows*, never *which columns*, and a CHECK cannot express "not by you". Only the grant
+can, and grants are per-column for UPDATE and INSERT: `20260824010000` revokes both on `role` from
+`anon` and `authenticated`, leaving the rest of the row (display name, grade, the three preferences)
+writable as before. INSERT matters as much as UPDATE — with INSERT alone a student could delete
+their profile and re-insert it as a teacher.
+
+Self-service teacher sign-up is unaffected and still intentional: `handle_new_user` is
+`SECURITY DEFINER` owned by `postgres`, so it bypasses column grants and still writes the role the
+registration form chose. What changed is that the value cannot be edited afterwards by the account
+it describes.
+
+The frontend's `AuthContext.extractRole` still reads `user_metadata.role`, deliberately: it picks
+which dashboard to render, and someone who edits it sees a different nav and gets a 403 from every
+endpoint behind it. **That is a preference, not a permission** — it is commented as such, and
+nothing that matters may be gated on it. Same reasoning as `AdminGuard` being a UI convenience over
+a backend check.
+
+Tests: `backend/tests/test_role_gates.py`, which asserts both halves — that the code reads the right
+column, and that a migration takes the write away.
+
 Access-control tests live in `Website/AdaptiveLearning/backend/tests/test_access_control.py` and
 run in CI.
 

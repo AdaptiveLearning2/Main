@@ -83,6 +83,24 @@ def get_user(request: Request):
 def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
+def _role(uid: str) -> str:
+    """A caller's role, from `profiles` -- never from `user_metadata`.
+
+    `user_metadata.role` is set by the client at sign-up and can be rewritten
+    at any time with `supabase.auth.updateUser({data: {role: 'teacher'}})`,
+    which talks to GoTrue and never passes through this process. Three
+    endpoints used to gate on it, so a student could self-elevate and create
+    classes. `20260824010000` revokes UPDATE/INSERT on `profiles.role` from
+    `anon` and `authenticated`, which is what makes this column the answer
+    rather than a second copy of the same client-supplied claim.
+
+    Fails **closed**, to the least-privileged role: `_profile` already degrades
+    to a student-shaped dict on a failed read, and 'student' is the value that
+    grants nothing. A failed read must not be a way past a role check.
+    """
+    return (_profile(uid) or {}).get("role") or "student"
+
+
 def _profile(uid: str) -> dict:
     try:
         p = supabase.table("profiles").select("*").eq("id", uid).single().execute()
@@ -3091,7 +3109,7 @@ def leaderboard(request: Request, limit: int = 20):
 @app.post("/api/classes")
 def create_class(payload: CreateClassRequest, request: Request):
     user = get_user(request)
-    if user.get("user_metadata", {}).get("role") != "teacher":
+    if _role(user["id"]) != "teacher":
         raise HTTPException(403, "Only teachers can create classes")
     code = rand_code()
     for _ in range(5):
@@ -3143,7 +3161,7 @@ def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
 @app.get("/api/classes")
 def my_classes(request: Request):
     user = get_user(request)
-    role = user.get("user_metadata", {}).get("role", "student")
+    role = _role(user["id"])
     if role == "teacher":
         res = supabase.table("classes").select("*, class_memberships(count)").eq("teacher_id", user["id"]).execute()
     else:
@@ -4831,7 +4849,7 @@ def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 @app.post("/api/parent/link-child")
 def link_child(payload: LinkChildRequest, request: Request):
     user = get_user(request)
-    if user.get("user_metadata", {}).get("role") != "parent":
+    if _role(user["id"]) != "parent":
         raise HTTPException(403, "Only parents can link children")
     p = _profile(payload.child_id)
     if not p or p.get("role") != "student":

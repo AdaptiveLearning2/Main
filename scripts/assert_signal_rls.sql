@@ -995,5 +995,96 @@ BEGIN
     END IF;
 END $$;
 
+-- ── record_topic_attempt counts, and counts atomically ──────────────────────
+--
+-- The per-topic attribution moved out of `main.py` and into the database
+-- (20260825000000), because in Python it was four sequential round trips on the
+-- hottest path in the product and the last two of them were a read-modify-write
+-- with no lock: two answers landing together both read the same counts and the
+-- second write overwrote the first, losing attempts from the table the adaptive
+-- engine reads to choose what to serve next.
+--
+-- The backend suite can no longer check the arithmetic -- it drives `main.py`
+-- with a fake client, so what it can assert is that one call is made with the
+-- right three arguments. This is the half that checks the counting, and it is
+-- the only place the increment is exercised at all.
+
+DO $$
+DECLARE
+    usr   uuid;
+    topic integer;
+    q1    uuid := gen_random_uuid();
+    q2    uuid := gen_random_uuid();
+    got   text;
+    n     integer;
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+
+    INSERT INTO public.math_topics (topic_name)
+    VALUES ('assert-rls-topic')
+    RETURNING id INTO topic;
+
+    INSERT INTO public.questions (id, subject, question_text)
+    VALUES (q1, 'assert-rls-topic', 'two plus two'),
+           (q2, 'assert-rls-no-such-subject', 'unattributable');
+
+    -- First attempt creates the row, and answers with the topic *name* -- what
+    -- the answer endpoint hands back to the page so it can move one figure
+    -- rather than re-reading the whole table.
+    got := public.record_topic_attempt(usr, q1, true);
+    IF got IS DISTINCT FROM 'assert-rls-topic' THEN
+        RAISE EXCEPTION 'the topic was resolved as % rather than assert-rls-topic', got;
+    END IF;
+
+    -- Three more, so the increment is exercised against an existing row rather
+    -- than only against the INSERT branch.
+    PERFORM public.record_topic_attempt(usr, q1, false);
+    PERFORM public.record_topic_attempt(usr, q1, true);
+    PERFORM public.record_topic_attempt(usr, q1, false);
+
+    SELECT attempted_questions INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 4 THEN
+        RAISE EXCEPTION 'four attempts recorded % -- the increment reads a '
+                        'value the caller supplied rather than the stored one, '
+                        'which is the lost update this replaced', n;
+    END IF;
+
+    SELECT correct_questions INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 2 THEN
+        RAISE EXCEPTION 'two correct answers of four recorded %', n;
+    END IF;
+
+    -- One row, not one per attempt: the ON CONFLICT target has to match the
+    -- (user_id, topic_id) unique constraint or every attempt inserts.
+    SELECT count(*) INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 1 THEN
+        RAISE EXCEPTION '% rows for one student and one topic', n;
+    END IF;
+
+    -- A subject with no `math_topics` row records nothing and invents nothing.
+    -- Inventing a topic here would put a subject in the table that the question
+    -- generator cannot pick from.
+    got := public.record_topic_attempt(usr, q2, true);
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'an unattributable question resolved to topic %', got;
+    END IF;
+
+    -- Same for a question that does not exist at all.
+    got := public.record_topic_attempt(usr, gen_random_uuid(), true);
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'an unknown question resolved to topic %', got;
+    END IF;
+
+    PERFORM 1 FROM public.math_topics WHERE id = topic;   -- keep `topic` used
+
+    SELECT count(*) INTO n FROM public.user_math_performance WHERE user_id = usr;
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'an unattributable answer created % performance rows', n - 1;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

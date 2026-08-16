@@ -1133,6 +1133,126 @@ def test_the_opt_out_deliberately_does_not_reach_live_or_session_review():
         )
 
 
+# ── a session belongs to one student ─────────────────────────────────────
+#
+# `record_answer` and `end_session` write a student's academic history and never
+# checked whose session they were writing into, while the three `/api/signals/*`
+# endpoints beside them had called `_verify_session_owner` since they existed.
+# Any signed-in student could post answers into a session id they held -- moving
+# another child's counters, and crediting the questions to whoever the row said
+# when it closed -- or end a session someone else was still working in, stopping
+# their poller mid-lesson.
+
+class _OwnedSessionClient:
+    """One `sessions` row with a given owner. Records what was written."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.writes = []
+
+    def rpc(self, name, params):
+        client = self
+
+        class _R:
+            def execute(self):
+                client.writes.append(("rpc", name))
+                return type("R", (), {"data": None})()
+
+        return _R()
+
+    def table(self, name):
+        client, table = self, name
+
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a, **_k): return self
+            def is_(self, *_a, **_k): return self
+            def order(self, *_a, **_k): return self
+            def limit(self, *_a, **_k): return self
+            def single(self): return self
+
+            def insert(self, row):
+                client.writes.append((table, "insert", row))
+                return self
+
+            def update(self, row):
+                client.writes.append((table, "update", row))
+                return self
+
+            def execute(self):
+                if table == "sessions":
+                    return type("R", (), {"data": {
+                        "id": "session-1", "user_id": client.owner,
+                        "questions_answered": 2, "correct_answers": 1,
+                        "started_at": "2026-08-15T10:00:00Z", "ended_at": None}})()
+                return type("R", (), {"data": []})()
+
+        return _Q()
+
+
+@pytest.mark.parametrize("endpoint", ["answer", "end"])
+def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
+    client = _OwnedSessionClient("student-1")
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-2"})
+    stopped = []
+    monkeypatch.setattr(main.eeg_poller, "stop",
+                        lambda *a, **k: stopped.append(a) or {"running": False})
+
+    with pytest.raises(main.HTTPException) as exc:
+        if endpoint == "answer":
+            main.record_answer(
+                session_id="session-1",
+                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                                           correct=True),
+                request=None)
+        else:
+            main.end_session(session_id="session-1", request=None)
+
+    assert exc.value.status_code == 403
+    # Refused *before* anything was written. The insert used to run first and
+    # the session was read afterwards, so the forged answer row landed whatever
+    # a later check decided -- and `/end` stopped the poller before looking.
+    assert client.writes == [], f"the refusal came too late: {client.writes}"
+    assert stopped == [], "another student's poller was stopped before the check"
+
+
+@pytest.mark.parametrize("endpoint", ["answer", "end"])
+def test_the_owner_is_still_allowed(monkeypatch, endpoint):
+    """The mirror, so the check above cannot be satisfied by refusing everyone."""
+    client = _OwnedSessionClient("student-1")
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: {"running": False})
+    monkeypatch.setattr(main, "_close_session", lambda *_a: {"discarded": False})
+
+    if endpoint == "answer":
+        out = main.record_answer(
+            session_id="session-1",
+            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                                       correct=True),
+            request=None)
+        assert any(w[:2] == ("session_answers", "insert") for w in client.writes)
+    else:
+        out = main.end_session(session_id="session-1", request=None)
+    assert out["ok"] is True
+
+
+def test_the_two_academic_write_endpoints_check_ownership():
+    """Derived, so a fourth writer cannot be added without one.
+
+    The three `/api/signals/*` endpoints have always called the helper; these
+    two were written without it and nothing said so. Matching on the source is
+    what makes "the caller owns this session" a fact about the code rather than
+    a rule someone has to remember per endpoint.
+    """
+    for fn in (main.record_answer, main.end_session):
+        source = inspect.getsource(fn)
+        assert "_session_or_403(" in source or "_verify_session_owner(" in source, (
+            f"{fn.__name__} writes a student's academic history without "
+            "checking whose session it is")
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:
@@ -1159,6 +1279,9 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
 
         def select(self, *_a, **_k): return self
         def eq(self, *_a, **_k): return self
+        # The roster reads are batched now -- one `in_` for the whole class
+        # rather than an `eq` per student.
+        def in_(self, *_a, **_k): return self
         def is_(self, *_a, **_k): return self
         def order(self, *_a, **_k): return self
         def limit(self, *_a, **_k): return self
@@ -1179,7 +1302,10 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     tables = {
         "classes":            [{"teacher_id": "teacher-1"}],
         "class_memberships":  [{"student_id": "student-1"}],
-        "sessions":           [{"id": "session-1", "started_at": stale_ts}],
+        # `user_id` because the open-session read is now one query for the whole
+        # roster, grouped back per student -- a row without it belongs to nobody.
+        "sessions":           [{"id": "session-1", "user_id": "student-1",
+                                "started_at": stale_ts}],
         "cognitive_signals":  [{"ts": stale_ts, "focus": 0.5}],
         "face_signals":       [{"ts": stale_ts, "emotion": "neutral"}],
         "heart_signals":      [{"ts": stale_ts, "heart_rate_bpm": 72, "trusted": True}],

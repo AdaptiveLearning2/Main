@@ -200,16 +200,10 @@ def test_every_session_close_writes_a_rollup():
     what stops the indirection turning into a hole.
     """
     import inspect
-    closers = []
-    for name, obj in vars(main).items():
-        if not inspect.isfunction(obj) or obj.__module__ != "main":
-            continue
-        try:
-            source = inspect.getsource(obj)
-        except OSError:                      # pragma: no cover -- defensive
-            continue
-        if '"ended_at":' in source and name != "_close_session":
-            closers.append((name, source))
+
+    from conftest import close_sites
+
+    closers = close_sites()
 
     assert len(closers) >= 3, f"the search stopped finding closers: {closers}"
     for name, source in closers:

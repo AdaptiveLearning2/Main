@@ -372,8 +372,34 @@ if ($Camera) {
     # hand-edit: unset, `call()` omits the Authorization header entirely and
     # every sidecar request 401s -- while the sidecar looks perfectly healthy
     # from a terminal, because curl sends the token and the browser does not.
-    $apiToken = (Select-String -Path $eegEnv -Pattern '^API_TOKEN=(.*)$').Matches.Groups[1].Value
-    if ($apiToken) { Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken }
+    #
+    # Guarded on both halves, because a first-ever `-Camera` run on a fresh
+    # checkout has neither. `Set-EnvKey` above returns silently when the file is
+    # missing, so nothing before this line notices; `Select-String -Path` on a
+    # missing file is a *terminating* error under the $ErrorActionPreference at
+    # the top of this script, so the whole launcher aborted here -- before the
+    # sidecar, the backend or the frontend had been started -- over a token that
+    # is not required for any of them to come up. And with the file present but
+    # no `API_TOKEN=` line in it yet, `.Groups[1]` indexes into a null array,
+    # which is the same terminating error one step further along.
+    #
+    # `Select-Object -Last 1` for the same reason the EEG_DEVICES read below
+    # uses it: a duplicated key is what a dotenv reader takes the last of.
+    $apiToken = $null
+    if (Test-Path $eegEnv) {
+        $tokenLine = Select-String -Path $eegEnv -Pattern '^API_TOKEN=(.*)$' | Select-Object -Last 1
+        if ($tokenLine) { $apiToken = $tokenLine.Matches[0].Groups[1].Value }
+    }
+    if ($apiToken) {
+        Set-EnvKey $frontendEnv "VITE_EEG_LOCAL_TOKEN" $apiToken
+    } else {
+        # Said out loud rather than skipped quietly: without it the page sends
+        # no Authorization header and every sidecar call 401s, while the sidecar
+        # looks healthy from a terminal. The sidecar writes an API_TOKEN on its
+        # first start, so the next run of this script picks it up.
+        Write-Host "  No API_TOKEN in $eegEnv yet -- VITE_EEG_LOCAL_TOKEN not set." -ForegroundColor Yellow
+        Write-Host "  The browser will 401 against the sidecar. Re-run this script once it has started." -ForegroundColor Yellow
+    }
     Write-Host "  INGEST_MODE = push (the camera's only writer is the push endpoint)" -ForegroundColor Gray
 } else {
     Set-EnvKey $eegEnv "FACE_ENABLED" "false"

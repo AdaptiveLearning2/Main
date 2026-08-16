@@ -64,6 +64,13 @@ combination is a better place to say so than a sidecar that starts and then will
 `start.sh` is the mac equivalent and is kept at flag parity (`--gaze`, `--no-emotion`, the same two
 guards); per-machine setup lives in `DEVELOPER_SETUP_{MAC,WINDOWS}.md`.
 
+**Guard every read of a `.env` in `start.ps1` with `Test-Path`.** `Set-EnvKey` returns silently when
+the file is missing, so nothing before the read notices, and `Select-String -Path` on a missing file
+is a *terminating* error under this file's `$ErrorActionPreference` — a first-ever `-Camera` run on
+a fresh checkout aborted the whole launcher before anything had started. Guard the *match* too:
+`.Matches[0].Groups[1]` on a key that is not there indexes a null array, which fails the same way one
+step later. `start.sh` carries the same guard for parity.
+
 **Never redirect a native command's stderr in `start.ps1`.** PowerShell 5.1 wraps each stderr line
 from an exe in an ErrorRecord, and `$ErrorActionPreference = "Stop"` at the top of the file makes
 that *terminating* — so `python -c "import cv2" 2>$null` killed the script at the failing import,
@@ -1162,6 +1169,27 @@ one subject for work done in another, and `user_math_performance` is what the ad
 to choose what to serve next. It never raises: it runs after `session_answers` is written, and a
 topic lookup failing must not turn a recorded answer into "that answer could not be saved".
 
+**It is one statement in the database** (`record_topic_attempt`, `20260825000000`). It was four
+sequential round trips on the hottest path in the product, and the last two were a read-modify-write
+with no lock — two answers together both read the same counts and the second overwrote the first,
+losing attempts silently. `ON CONFLICT DO UPDATE` incrementing the *stored* value removes that
+rather than narrowing it. It returns the topic **name**, which `/answer` hands back to the page so
+one figure moves; nothing holds an id-to-name map, so returning the id would cost a second query.
+The arithmetic is asserted in `scripts/assert_signal_rls.sql` — the backend suite drives a fake
+client and can only check that one call is made with the right three arguments.
+
+**Its PGRST202 is the deploy-ordering trap in its worst form**: the helper swallows exceptions by
+design, so code deployed ahead of the migration stops attributing anything with no symptom but the
+numbers not moving. It logs that case by name and cites the migration.
+
+**A roster surface reads once for the roster, never once per student.** `_profiles_many`,
+`_topic_performance_many`, `_open_sessions_many` and `_stats_including_open_session_many` are the
+batch forms; `class_students`, `my_children` and `class_live` use them. The stats half was batched
+first and the profile lookup was left in the loop beside it, which is the shape to watch for. Two
+deliberate exceptions: `my_children` still reads the five most recent sessions **per child**,
+because "top N per group" has no PostgREST form and one `in_` query returns one busy child's five;
+and `leaderboard` is still N+1, noted here rather than fixed.
+
 **Topic accuracy is read from `user_math_performance`, not from the browser.** It was
 `localStorage.accuracyStats_<uid>` — the only panel in the app whose numbers were not the
 database's. It disagreed with the dashboard on the same screen, started from zero on a school
@@ -1188,6 +1216,13 @@ which let any teacher read any class:
 - `_verify_class_owner(class_id, user_id)` — only the owning teacher.
 - `_verify_can_view_student(viewer, student_id)` — the student themselves, a teacher of a class
   they are enrolled in, or a linked parent.
+- `_session_or_403(session_id, user_id, columns)` — a session is **one student's**, so this is
+  ownership and nothing weaker; no teacher or parent is admitted. It returns the row, which is the
+  point: `record_answer` and `end_session` need the session anyway, and paying for a second query
+  is why they were written with no check at all. `_verify_session_owner` is this with the row
+  thrown away. **Check before you write** — `record_answer` inserted the answer row *first* and
+  read the session afterwards, and `/end` stopped the poller before looking, so any student could
+  forge answers into another child's session or end one mid-lesson.
 
 Access is a **relationship**, not a path segment or a role claim. Don't namespace an endpoint
 under `/api/teacher/` when parents legitimately read it too, and don't gate on
@@ -1355,17 +1390,36 @@ History for ever; and the credit, the rollup and the archive each shipped at dif
 third close site to be missed".
 
 Order is load-bearing: **discard first**, because a rollup of nothing and an archive of four empty
-charts are work done for a session about to stop existing. Stopping the poller stays at the call
-sites — it takes different ids at each and must happen before the row is stamped.
+charts are work done for a session about to stop existing.
 
-`/end` **refuses a session that already has `ended_at`**. It credits the session's *cumulative*
-counts rather than a delta, so a session closed by the sweep or by a teacher opening Live and then
-finished normally was credited twice, inflating the accuracy a parent reads. Not an error to the
-caller: the student's page cannot know a teacher's view closed the session underneath it.
+**`_close_session` stamps `ended_at` itself, and the stamp is a claim.** It used to sit at each call
+site above the call, which left two things to get wrong per site and both were. `class_live` stamped
+and closed *before* stopping its poller, so a tick could insert a signal row after the discard check
+had looked. And no site made the stamp conditional, so two closes racing — a delayed `/end` against
+the sweep — both ran the whole sequence and both credited the session's *cumulative* counts, landing
+every answer twice in the lifetime totals. `/end`'s read of `ended_at` is not the guard; that read
+and the write are two statements. `_claim_session_close` is: `is_("ended_at","null")` matches at most
+one row. **An empty update result is ambiguous** — it is also what a client not asking PostgREST for
+the updated row returns — so it is confirmed by reading the row back, and only a *different*
+`ended_at` counts as a loss. Guessing "lost" would skip the credit, rollup and archive for every
+close.
 
-The exhaustiveness tests find closers by `'"ended_at":' in source` and assert each reaches the
-helper, with a second test pinning the helper's own contents — the indirection is only safe while
-both halves exist. They catch a step being **removed**, not neutered.
+Stopping the poller stays at the call sites — it takes different ids at each — and **before the
+call** is now the whole of the ordering rule, pinned by
+`test_every_close_site_stops_the_poller_first`.
+
+**The credit recounts from `session_answers`.** `questions_answered` is a denormalised cache written
+in a separate statement from the answer row, and `_discard_if_nothing_recorded` already distrusts it.
+The credit did not, so a session correctly *saved* from deletion by that re-check was then credited
+zero and the student's work never reached the lifetime totals — permanently, since no later close
+revisits a stamped session. `_answer_counts` only ever revises **upward**: rows fewer than the
+counter means a short read, and crediting less than a previous reading loses work.
+
+The exhaustiveness tests share one discovery helper, `tests/conftest.py:close_sites()` — a closer is
+a function that calls `_close_session(` **or** writes an `"ended_at":` of its own. Both halves
+matter: the first catches a site drifting away from the helper, the second catches a new site that
+hand-rolls a stamp and never reaches it. A second test pins the helper's own contents; the
+indirection is only safe while both halves exist. They catch a step being **removed**, not neutered.
 
 **`chart_paths` has four states and no column default.** A path, `null` for a channel that produced
 nothing, an absent key for a chart never attempted, and column-NULL for a session the archive never
@@ -1605,6 +1659,16 @@ three ways at once. Branching on the flag alone is the trap: it leaves `pct()`'s
 own `'N/A'` standing whenever a *consented* channel produced nothing usable,
 which is the exact string the rule exists to stop showing, surviving in the case
 least likely to be tested.
+
+**EEG carries `eeg_enabled` + `eeg_revoked_at`, not an `eeg_included`.** The name is the point: the
+summary RPCs have no `p_include_cognitive`, so that channel is *always* read, and withdrawal keeps
+what is already stored — a student who switched the headband off last week still has true averages
+from before then. Calling it `eeg_included` would claim a read was skipped that was not. Until it
+existed, `eegReason` hardcoded `on: true` and the three cognitive tiles were the only ones that
+could not say `Off since <date>`; a parent who switched the headband off read `No sensor`, which is
+what a fault looks like. Absent reads as **on** — defaulting to off would tell every reader of an
+older payload about a decision nobody made. The batch RPC cannot carry it, so `my_children` stamps
+it per child, like `emotion_revoked_at` beside it.
 
 A channel that is off keeps its tile. Dropping the row tells a parent who
 switched a sensor off nothing at all — the same failure wearing a different

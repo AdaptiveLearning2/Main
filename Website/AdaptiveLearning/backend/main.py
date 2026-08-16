@@ -83,6 +83,25 @@ def get_user(request: Request):
 def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
+def _placeholder_profile(uid: str) -> dict:
+    """What a caller gets when a profile cannot be read, or has no row.
+
+    The preference defaults are repeated from 20260822000000's column defaults
+    deliberately. This stands in for a *failed read*, and the caller cannot tell
+    it from a real profile -- so omitting them would hand the page `undefined`
+    for three controls and it would render them unset, which reads as "the
+    student turned this off" rather than "we could not find out". Same shape as
+    the reporting helpers, minus the flag: nothing downstream of a preference is
+    worth a 500, and the values below are what a new account gets anyway.
+
+    One copy, shared with `_profiles_many`. Written out twice, the batch version
+    would answer a different shape from the single one for the same student.
+    """
+    return {"id": uid, "display_name": "Student", "email": "", "role": "student",
+            "grade_level": None, "difficulty_bias": 0,
+            "session_duration_minutes": 15, "practice_reminders": True}
+
+
 def _profile(uid: str) -> dict:
     try:
         p = supabase.table("profiles").select("*").eq("id", uid).single().execute()
@@ -90,16 +109,33 @@ def _profile(uid: str) -> dict:
             return p.data
     except Exception:
         pass
-    # The preference defaults are repeated from 20260822000000's column defaults
-    # deliberately. This branch is a *failed read*, and the caller cannot tell it
-    # from a real profile -- so omitting them would hand the page `undefined` for
-    # three controls and it would render them unset, which reads as "the student
-    # turned this off" rather than "we could not find out". Same shape as the
-    # reporting helpers, minus the flag: nothing downstream of a preference is
-    # worth a 500, and the values below are what a new account gets anyway.
-    return {"id": uid, "display_name": "Student", "email": "", "role": "student",
-            "grade_level": None, "difficulty_bias": 0,
-            "session_duration_minutes": 15, "practice_reminders": True}
+    return _placeholder_profile(uid)
+
+
+def _profiles_many(uids) -> dict[str, dict]:
+    """`_profile` for a roster, in one query rather than one per student.
+
+    Every roster surface -- the class list, a parent's children, the live
+    monitor -- looked its students' profiles up inside a loop that was already
+    making several reads each. `_stats_including_open_session_many` fixed the
+    *stats* half of those same three loops and left the profile half doing a
+    round trip per student right beside it.
+
+    Same fallback as `_profile`, resolved per missing student rather than for
+    the batch: an absent row and a failed read both come back as the placeholder,
+    because the caller cannot tell those apart and a student rendered with no
+    name reads as bad data rather than as a read that did not land.
+    """
+    ids = [u for u in dict.fromkeys(uids) if u]
+    if not ids:
+        return {}
+    rows = []
+    try:
+        rows = supabase.table("profiles").select("*").in_("id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[profiles] could not batch-read {len(ids)} profiles: {e}")
+    found = {r["id"]: r for r in rows if r.get("id")}
+    return {uid: found.get(uid) or _placeholder_profile(uid) for uid in ids}
 
 
 # ─── biosignal reporting ─────────────────────────────────────────────────
@@ -546,8 +582,105 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
+def _claim_session_close(session_id: str, ended_at: str) -> bool:
+    """Stamp `ended_at` on a session that has none yet. True if this caller won.
+
+    Three sites close sessions and none of them held anything. `/end` read the
+    row, saw no `ended_at` and then wrote one, which is two statements: a
+    delayed `/end` arriving while the stale sweep or `class_live` was closing
+    the same session passed that check, and both closes ran. Both credited
+    `user_stats` with the session's **cumulative** counts, so every answer in it
+    landed twice in the lifetime totals -- inflating exactly the accuracy figure
+    a parent reads, with nothing raised anywhere.
+
+    The claim is the conditional update itself. `is_("ended_at", "null")`
+    matches at most one row and Postgres serialises the two writers, so exactly
+    one of them updates anything.
+
+    **An empty result is ambiguous, not a loss.** It is also what a client that
+    is not asking PostgREST for the updated row returns, so it is confirmed by
+    reading the row back; only a session that now carries a *different*
+    `ended_at` is somebody else's close. Guessing "lost" on the ambiguity would
+    silently skip the credit, the rollup and the archive for every close, which
+    is a far worse failure than the double-credit this prevents.
+
+    Never raises: it runs where a close does, and a session that cannot be
+    stamped must not take the caller down with it.
+    """
+    try:
+        claimed = supabase.table("sessions").update({"ended_at": ended_at}) \
+            .eq("id", session_id).is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:close] could not stamp {session_id}: {e}")
+        return False
+    if claimed:
+        return True
+    try:
+        row = supabase.table("sessions").select("ended_at") \
+            .eq("id", session_id).limit(1).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:close] could not confirm the close of {session_id}: {e}")
+        return False
+    if not row:
+        # Deleted underneath us -- by the discard on a competing close, or from
+        # the dashboard. There is nothing left to credit or summarise.
+        return False
+    stored = row[0].get("ended_at")
+    # `None` means the row is still open, so the update reported nothing because
+    # it was not asked to report anything rather than because it matched
+    # nothing. Equal means this caller's own stamp landed.
+    return stored is None or stored == ended_at
+
+
+# Above this many rows a close credits the stored counter instead of recounting.
+# A capped recount is certainly short; the cache is only possibly low.
+_ANSWER_RECOUNT_CAP = 2000
+
+
+def _answer_counts(session_id: str, session: dict) -> tuple[int, int]:
+    """What a closing session actually answered -- the rows, not just the counter.
+
+    `sessions.questions_answered` is a denormalised cache. `record_answer`
+    inserts the answer row and bumps the counter in two separate statements with
+    no transaction around them, so the counter can sit below the truth --
+    `_discard_if_nothing_recorded` already says so, and re-checks
+    `session_answers` before deleting a session that looks empty.
+
+    The **credit** was left trusting the same field the discard check distrusts.
+    So a session correctly saved from deletion by that re-check was then
+    credited a falsy count, `_credit_session_to_user_stats` returned early on
+    it, and the student's work survived in `session_answers` while never
+    reaching the lifetime totals a parent reads. Permanently: no later close
+    revisits a session that is already stamped, and nothing logged it.
+
+    One query per close -- not per answer -- which is the price the discard
+    check was already paying to distrust the same field.
+
+    Falls back to the stored counter on a failed read, on a session bigger than
+    the cap, and whenever the rows come back *fewer* than the counter: crediting
+    less than a previous reading of this session is the direction that loses a
+    student's work.
+    """
+    stored_q = session.get("questions_answered") or 0
+    stored_c = session.get("correct_answers") or 0
+    try:
+        rows = supabase.table("session_answers").select("correct") \
+            .eq("session_id", session_id).limit(_ANSWER_RECOUNT_CAP).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[session:close] could not recount answers for {session_id}: {e}")
+        return stored_q, stored_c
+    if len(rows) >= _ANSWER_RECOUNT_CAP:
+        print(f"[session:close] {session_id} has at least {_ANSWER_RECOUNT_CAP} "
+              f"answers; crediting the stored counter rather than a capped recount")
+        return stored_q, stored_c
+    counted_q = len(rows)
+    if counted_q < stored_q:
+        return stored_q, stored_c
+    return counted_q, sum(1 for r in rows if r.get("correct"))
+
+
 def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
-    """Everything a session close does after `ended_at` is stamped.
+    """Everything a session close does, including stamping `ended_at`.
 
     Three endpoints close sessions -- `/end`, the stale sweep in
     `start_session`, and `class_live` -- and the sequence was hand-copied into
@@ -566,12 +699,27 @@ def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
     because a rollup of nothing and an archive of four empty charts are work
     done for a session that is about to stop existing.
 
+    **The stamp is the first step, and it is the claim.** It used to sit at each
+    call site, above the call, which left two things to get wrong per site and
+    both were: `class_live` stamped and closed *before* stopping the poller, so
+    a tick could still insert a signal row after the discard check had looked;
+    and nothing anywhere made the stamp conditional, so two closes racing each
+    other both ran the whole sequence. Owning it here makes "did I win" a
+    question with one answer.
+
     Stopping the poller stays at the call sites -- it takes a different pair of
-    ids at each, and it has to happen before the row is stamped.
+    ids at each -- and it has to happen **before this call**, which is now the
+    whole of the ordering rule. `test_every_close_site_stops_the_poller_first`
+    pins it.
     """
     sid = session["id"]
-    total_q = session.get("questions_answered") or 0
-    correct = session.get("correct_answers") or 0
+    if not _claim_session_close(sid, ended_at):
+        # Somebody else stamped it first, or the row is gone. Everything below
+        # is theirs to do, and doing it twice is what counted a session's
+        # answers twice in the lifetime totals.
+        return {"discarded": False, "already_closed": True}
+
+    total_q, correct = _answer_counts(sid, session)
 
     if _discard_if_nothing_recorded(sid, total_q):
         return {"discarded": True}
@@ -723,6 +871,20 @@ class ReportChannels(NamedTuple):
     # that does not care is not forced to thread them through.
     heart_revoked_at: str | None = None
     emotion_revoked_at: str | None = None
+    # EEG is **not** a read filter, unlike the two above, and that is why it is
+    # named for consent rather than for inclusion. There is no
+    # `p_include_cognitive` on the summary RPCs -- the cognitive channel is
+    # always read -- and withdrawal deliberately keeps what was already
+    # recorded, so a student who switched the headband off last week still has
+    # true averages from before then.
+    #
+    # It rides here so a tile can say "Off since 3 August" instead of "No
+    # sensor". Without it the three cognitive tiles were the only ones on the
+    # panel that could not tell a withdrawn channel from a sensor that never
+    # recorded, and `SignalPanel.eegReason` said so in its own comment while
+    # hardcoding `on: true`.
+    eeg: bool = True
+    eeg_revoked_at: str | None = None
 
 
 def _reportable_channels(student_id: str, want_emotion: bool = True,
@@ -777,11 +939,18 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
             stamps,
             key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
             default=None)
+    eeg = bool(consent.get("eeg_enabled"))
     return ReportChannels(heart=want_heart and heart,
                           emotion=want_emotion and emotion,
                           consent_retrieved=bool(consent.get("retrieved")),
                           heart_revoked_at=heart_revoked,
-                          emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"))
+                          emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"),
+                          # No `want_eeg`: the cognitive channel is read either
+                          # way, so this reports consent rather than narrowing
+                          # anything. Null while it is on, so no surface can put
+                          # a revocation date beside live data.
+                          eeg=eeg,
+                          eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"))
 
 
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
@@ -812,7 +981,9 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     include_emotion: bool = True,
                     consent_retrieved: bool = True,
                     emotion_revoked_at: str | None = None,
-                    heart_revoked_at: str | None = None) -> dict:
+                    heart_revoked_at: str | None = None,
+                    eeg_enabled: bool = True,
+                    eeg_revoked_at: str | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
     The full report pulls thousands of raw signal rows to compute a handful of
@@ -848,7 +1019,9 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
     summary = _shape_summary(row, include_heart, include_emotion, retrieved,
                              consent_retrieved,
                              emotion_revoked_at=emotion_revoked_at,
-                             heart_revoked_at=heart_revoked_at)
+                             heart_revoked_at=heart_revoked_at,
+                             eeg_enabled=eeg_enabled,
+                             eeg_revoked_at=eeg_revoked_at)
     # Set here rather than in _shape_summary, which is shared with the batch
     # RPC: putting it there would add an always-null dominant_emotion to every
     # child on the parent dashboard, reporting "no emotion recorded" for a
@@ -870,13 +1043,21 @@ _EMPTY_SUMMARY = {"consent_retrieved": True,
                   # every one of them -- silently reporting a channel as
                   # excluded. It now means the emotion channel specifically.
                   "face_included": True, "emotion_included": True,
-                  "heart_included": True, "retrieved": True}
+                  "heart_included": True, "retrieved": True,
+                  # True, because absent means a payload from before this field
+                  # existed and the alternative -- defaulting to off -- would
+                  # tell every reader of an older payload that the headband had
+                  # been switched off, which is a claim about a decision nobody
+                  # made. Same reasoning as `face_included`'s fallback.
+                  "eeg_enabled": True, "eeg_revoked_at": None}
 
 
 def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True,
                    retrieved: bool = True, consent_retrieved: bool = True,
                    emotion_revoked_at: str | None = None,
-                   heart_revoked_at: str | None = None) -> dict:
+                   heart_revoked_at: str | None = None,
+                   eeg_enabled: bool = True,
+                   eeg_revoked_at: str | None = None) -> dict:
     """The summary payload.
 
     `retrieved` is the third thing a caller has to be able to tell apart, after
@@ -895,7 +1076,8 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                 "emotion_included": include_emotion, "heart_included": include_heart,
                 "retrieved": retrieved, "consent_retrieved": consent_retrieved,
                 "emotion_revoked_at": emotion_revoked_at,
-                "heart_revoked_at": heart_revoked_at}
+                "heart_revoked_at": heart_revoked_at,
+                "eeg_enabled": eeg_enabled, "eeg_revoked_at": eeg_revoked_at}
     return {
         "focus": row.get("focus"),
         "stress": row.get("stress"),
@@ -939,6 +1121,14 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         # rendering a revocation date next to live data.
         "emotion_revoked_at": emotion_revoked_at,
         "heart_revoked_at": heart_revoked_at,
+        # Consent, **not** an inclusion flag, and named so. The cognitive
+        # channel has no `p_include_*` parameter and is always read, and a
+        # withdrawal keeps what was already recorded -- so a student who
+        # switched the headband off last week has true averages here and a tile
+        # that should say "Off since <date>" rather than "No sensor". Calling
+        # this `eeg_included` would claim a read was skipped that was not.
+        "eeg_enabled": eeg_enabled,
+        "eeg_revoked_at": eeg_revoked_at,
     }
 
 
@@ -1772,9 +1962,6 @@ def start_session(payload: StartSessionRequest, request: Request):
         # way is exactly the "gave up mid-pairing" case that leaves one.
         eeg_poller.stop(s["id"], user["id"])
         stale_ended = _utc_now().isoformat()
-        supabase.table("sessions").update(
-            {"ended_at": stale_ended}
-        ).eq("id", s["id"]).execute()
         # Closed by timeout rather than by /end, and it still needs its rollup,
         # its lifetime credit and its archive. This is the only close many
         # sessions ever get -- it is the path a student who shuts the tab always
@@ -1808,6 +1995,16 @@ def start_session(payload: StartSessionRequest, request: Request):
 @app.post("/api/sessions/{session_id}/answer")
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
+    # Ownership first, and before the write. This endpoint checked nothing: it
+    # inserted the answer row, *then* read the session, and never compared the
+    # owner at all -- so any signed-in student could post answers into any
+    # session id they held, moving another child's counters and, when that
+    # session closed, crediting the questions to whoever the row said. The three
+    # `/api/signals/*` endpoints have called this helper since they existed; the
+    # two that write academic history did not.
+    #
+    # One query, not two: this is the same read the counter bump below needs.
+    cur = _session_or_403(session_id, user["id"], "*")
     supabase.table("session_answers").insert({
         "session_id":     session_id,
         "user_id":        user["id"],
@@ -1816,19 +2013,20 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "correct":        payload.correct,
         "answered_at":    datetime.utcnow().isoformat(),
     }).execute()
-    sess = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    cur = sess.data
     supabase.table("sessions").update({
         "questions_answered": (cur.get("questions_answered") or 0) + 1,
         "correct_answers":    (cur.get("correct_answers") or 0) + (1 if payload.correct else 0),
     }).eq("id", session_id).execute()
-    _record_topic_attempt(user["id"], payload.question_id, payload.correct)
-    return {"ok": True}
+    # The topic the answer was attributed to, handed straight back. The page
+    # keys its Topic Accuracy panel by name, and without this it re-read the
+    # student's whole performance table after every single answer -- an extra
+    # round trip in the app's hottest loop, to learn something this request had
+    # just decided. `None` means nothing was attributed, which is not an error.
+    topic = _record_topic_attempt(user["id"], payload.question_id, payload.correct)
+    return {"ok": True, "topic": topic}
 
 
-def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> None:
+def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str | None:
     """Add one attempt to the student's per-topic record.
 
     The topic is looked up from the **question row**, never taken from the
@@ -1840,47 +2038,70 @@ def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> None
     Never raises. It runs after the answer is safely recorded, and a student's
     answer must not be lost because a topic lookup failed -- the row in
     `session_answers` is the record that matters and it is already written.
+
+    **One statement, in the database** (`record_topic_attempt`, 20260825000000).
+    This used to be four sequential round trips on the hottest path in the
+    product -- question, topic, existing row, upsert -- and the last two were a
+    read-modify-write with nothing holding a lock between them, so two answers
+    landing together both read the same counts and the second write overwrote
+    the first. Attempts disappeared from the table the adaptive engine reads to
+    choose what to serve next, silently. `ON CONFLICT DO UPDATE` incrementing
+    the stored value is what removes that rather than narrowing it.
+
+    Moving the join into SQL does not move the trust boundary: the topic still
+    comes off the question row, never from the caller.
+
+    Returns the topic **name** it attributed the answer to, or `None` -- for an
+    unknown question, a subject with no `math_topics` row, or any failure. The
+    caller hands it to the page so a single figure can move; without it the page
+    re-read the student's whole performance table after every answer, having
+    just told the backend exactly what changed.
     """
     try:
-        q = supabase.table("questions").select("subject").eq("id", question_id) \
-            .limit(1).execute().data or []
-        if not q or not q[0].get("subject"):
-            return
-        topic = supabase.table("math_topics").select("id") \
-            .eq("topic_name", q[0]["subject"]).limit(1).execute().data or []
-        if not topic:
-            # A question whose subject is not in `math_topics`. Nothing to
-            # attribute it to, and inventing a topic row here would put a
-            # subject in the table the generator cannot pick from.
-            return
-        topic_id = topic[0]["id"]
-        existing = supabase.table("user_math_performance") \
-            .select("correct_questions, attempted_questions") \
-            .eq("user_id", user_id).eq("topic_id", topic_id).limit(1).execute().data or []
-        prior = existing[0] if existing else {}
-        supabase.table("user_math_performance").upsert({
-            "user_id":             user_id,
-            "topic_id":            topic_id,
-            "attempted_questions": (prior.get("attempted_questions") or 0) + 1,
-            "correct_questions":   (prior.get("correct_questions") or 0) + (1 if correct else 0),
-        }, on_conflict="user_id,topic_id").execute()
+        res = supabase.rpc("record_topic_attempt", {
+            "p_user_id":     user_id,
+            "p_question_id": question_id,
+            "p_correct":     bool(correct),
+        }).execute()
+        # A scalar-returning function comes back as the bare value. `or None`
+        # would be wrong on an empty-string topic name; there is no such topic,
+        # but the three-state habit is cheaper than the exception to it.
+        topic = getattr(res, "data", None)
+        return topic if isinstance(topic, str) else None
     except Exception as e:                                     # noqa: BLE001
-        print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
+        # PGRST202 here means the migration has not been applied yet, and that
+        # deserves its own sentence: every other failure on this path is a
+        # transient one that the next answer retries, while this one is every
+        # answer from now until someone applies it -- and the visible symptom
+        # is identical, which is per-topic attribution simply stopping.
+        if "PGRST202" in str(e):
+            print(f"[answer] record_topic_attempt is missing from the database -- "
+                  f"apply 20260825000000; no topic attribution until then: {e}")
+        else:
+            print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
+        return None
 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
     user = get_user(request)
+    # Before the poller stop, not after it. This endpoint verified nothing, so
+    # a student who knew another student's session id could end it -- stopping
+    # their poller mid-lesson and closing a session they were still working in.
+    # Stopping the poller is itself a write on somebody's session, so the check
+    # has to come first; the close still sees a stopped poller, which is the
+    # ordering `_close_session` requires.
+    data = _session_or_403(session_id, user["id"], "*")
     # Also releases user["id"]'s pre-claim reservation (#34), if any.
     eeg_poller.stop(session_id, user["id"])  # auto-stop EEG poller
-    sess = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    data = sess.data
     # Already closed, by the stale sweep or by a teacher opening the Live view.
     # Both of those credit the lifetime totals, and this endpoint credits the
     # session's *cumulative* counts rather than a delta -- so closing twice
-    # counted every answer twice, inflating the accuracy a parent reads. The
-    # close is idempotent now because it happens once.
+    # counted every answer twice, inflating the accuracy a parent reads.
+    #
+    # A cheap early out, **not the guard**: this read and the stamp below are
+    # two statements, so a close arriving between them passes it. The guard is
+    # the conditional stamp inside `_close_session`, which is why the same
+    # answer is returned from both places.
     #
     # Not an error: the student did nothing wrong, and their page has no way to
     # know a teacher's view closed the session out from under it.
@@ -1889,13 +2110,14 @@ def end_session(session_id: str = Path(...), request: Request = None):
     # Named, and `_utc_now` rather than the naive deprecated `datetime.utcnow`:
     # this value is now read back by the rollup, which converts it to a school
     # day, and a naive stamp has no zone to convert from.
+    #
+    # `ended`, not a fresh reading at each step: they differ only across local
+    # midnight, where a fresh one rolls up a day the stored session does not
+    # claim and skips the day it is actually recorded on.
     ended = _utc_now().isoformat()
-    supabase.table("sessions").update({"ended_at": ended}).eq("id", session_id).execute()
-
-    # `ended`, not a fresh reading: they differ only across local midnight,
-    # where a fresh one rolls up a day the stored session does not claim and
-    # skips the day it is actually recorded on.
     result = _close_session(user["id"], data, ended)
+    if result.get("already_closed"):
+        return {"ok": True, "already_closed": True}
     return {"ok": True, **({"discarded": True} if result["discarded"] else {})}
 
 @app.get("/api/sessions")
@@ -1906,6 +2128,55 @@ def list_sessions(request: Request):
 
 
 # ─── stats ───────────────────────────────────────────────────────────────
+
+def _topic_performance_many(student_ids) -> dict[str, list]:
+    """Per-topic performance for several students, in one query rather than N.
+
+    Bounded by topics x students, so unlike "the five most recent sessions per
+    child" this one batches soundly: there is no per-student limit to preserve.
+
+    Fails to an empty map. The caller renders a Topic Accuracy panel from it,
+    and an empty panel is what a student with no attempts already shows.
+    """
+    ids = [s for s in dict.fromkeys(student_ids) if s]
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("user_math_performance") \
+            .select("*, math_topics(topic_name)").in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[perf] could not batch-read topic performance for {len(ids)}: {e}")
+        return {}
+    grouped: dict[str, list] = {}
+    for r in rows:
+        grouped.setdefault(r.get("user_id"), []).append(r)
+    return grouped
+
+
+def _open_sessions_many(student_ids) -> dict[str, list]:
+    """Every open session per student, newest first, in one query rather than N.
+
+    Bounded by the roster: a student has one open session in normal operation,
+    and `start_session` sweeps any others the moment they come back. Newest
+    first per student, so a caller taking `[0]` gets what the per-student
+    `.order(...).limit(1)` gave it.
+
+    Deliberately not caught. The live monitor is the caller, and a failed read
+    turned into an empty map would draw every student on the roster as not
+    working -- an absence asserted from data that never loaded, on the surface a
+    teacher uses to decide who needs help.
+    """
+    ids = [s for s in dict.fromkeys(student_ids) if s]
+    if not ids:
+        return {}
+    rows = supabase.table("sessions").select("*") \
+        .in_("user_id", ids).is_("ended_at", "null") \
+        .order("started_at", desc=True).execute().data or []
+    grouped: dict[str, list] = {}
+    for r in rows:
+        grouped.setdefault(r.get("user_id"), []).append(r)
+    return grouped
+
 
 def _stats_including_open_session(student_id: str) -> dict:
     """Lifetime totals, plus whatever the student has answered *so far today*.
@@ -1930,41 +2201,23 @@ def _stats_including_open_session(student_id: str) -> dict:
     False only when the lifetime read itself failed. A failed *open-session*
     read leaves the stored totals true as far as they go -- this call only ever
     adds to them -- so that stays `True` and simply omits the live delta.
+
+    **One student is a roster of one.** The arithmetic, the three-state rule and
+    the `retrieved` resolution live in the batch version below and are not
+    repeated here: they were written out twice, identically, which is the shape
+    that lets two copies drift while both look maintained.
     """
-    base = {"total_questions": 0, "total_correct": 0, "current_streak": 0,
-            "best_streak": 0, "retrieved": True}
-    try:
-        res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
-        if res.data:
-            base = {**res.data[0], "retrieved": True}
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[stats] could not read user_stats for {student_id[:8]}: {e}")
-        return {**base, "retrieved": False}
-    try:
-        open_rows = supabase.table("sessions") \
-            .select("questions_answered, correct_answers") \
-            .eq("user_id", student_id).is_("ended_at", "null").execute().data or []
-    except Exception as e:                                     # noqa: BLE001
-        # The stored totals are still true as far as they go, so they are
-        # returned rather than refused -- this only ever *adds* to them.
-        print(f"[stats] could not read the open session for {student_id[:8]}: {e}")
-        return base
-    live_q = sum(r.get("questions_answered") or 0 for r in open_rows)
-    live_c = sum(r.get("correct_answers") or 0 for r in open_rows)
-    if not live_q:
-        return base
-    return {**base,
-            "total_questions": (base.get("total_questions") or 0) + live_q,
-            "total_correct":   (base.get("total_correct") or 0) + live_c}
+    return _stats_including_open_session_many([student_id])[student_id]
 
 
 def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict]:
-    """The same figures as above, for a roster, in two queries rather than 2N.
+    """The figures described above, for a roster, in two queries rather than 2N.
 
-    `class_students` and `my_children` both call this per student inside a loop
-    that already makes several reads each, so the single-student version turned
-    a class of thirty into sixty extra round trips on a page a teacher opens
-    constantly.
+    `class_students` and `my_children` both used to ask per student inside a
+    loop that already makes several reads each, which turned a class of thirty
+    into sixty extra round trips on a page a teacher opens constantly. This is
+    now the only implementation -- the single-student helper above calls it with
+    a list of one.
 
     Same three-state rule and the same `retrieved` flag, resolved per student.
     A failed lifetime read marks *every* student unretrieved rather than
@@ -2100,7 +2353,9 @@ def student_signal_summary(student_id: str, request: Request, days: int = 7, inc
                            include_emotion=channels.emotion,
                            consent_retrieved=channels.consent_retrieved,
                            emotion_revoked_at=channels.emotion_revoked_at,
-                           heart_revoked_at=channels.heart_revoked_at)
+                           heart_revoked_at=channels.heart_revoked_at,
+                           eeg_enabled=channels.eeg,
+                           eeg_revoked_at=channels.eeg_revoked_at)
 
 
 @app.get("/api/students/{student_id}/topic-breakdown")
@@ -2536,7 +2791,9 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     channels = _reportable_channels(student_id, include_face)
     summary = _signal_summary(student_id, days, include_heart=channels.heart,
                               include_emotion=channels.emotion,
-                              consent_retrieved=channels.consent_retrieved)
+                              consent_retrieved=channels.consent_retrieved,
+                              eeg_enabled=channels.eeg,
+                              eeg_revoked_at=channels.eeg_revoked_at)
     return {
         "days": days,
         "face_included": summary["face_included"],
@@ -3102,13 +3359,16 @@ def class_students(class_id: str, request: Request):
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
-    # One read for the whole roster, not two per student.
-    all_stats = _stats_including_open_session_many(
-        [m["student_id"] for m in (memberships.data or [])])
+    roster = [m["student_id"] for m in (memberships.data or [])]
+    # Three reads for the whole roster, not three per student. The stats half
+    # was batched first and the profile lookup was left in the loop beside it,
+    # so a class of thirty still cost thirty round trips on this page.
+    all_stats = _stats_including_open_session_many(roster)
+    profiles = _profiles_many(roster)
     for m in (memberships.data or []):
         sid = m["student_id"]
         stats = all_stats.get(sid) or {}
-        p = _profile(sid)
+        p = profiles.get(sid) or {}
         students.append({
             "user_id":   sid,
             "name":      p.get("display_name") or "Student",
@@ -3796,12 +4056,32 @@ def _heart_consent_for_poller(student_id: str, source: str) -> bool:
 eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
 
 
-def _verify_session_owner(session_id: str, user_id: str):
-    sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
+def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> dict:
+    """Fetch a session, refusing it unless the caller owns it. Returns the row.
+
+    Returning the row is what lets a caller that needs the session anyway --
+    `record_answer`, `end_session` -- check ownership without paying for a
+    second query, which is why they were written without a check at all.
+
+    Access here is ownership and nothing weaker: a session is one student's, so
+    unlike `_verify_can_view_student` there is no teacher or parent to admit.
+
+    `columns` must include `user_id`. It fails the safe way if it does not --
+    the comparison is against `.get("user_id")`, so an absent column is `None`,
+    which matches no caller and refuses everyone rather than admitting them.
+    """
+    sess = supabase.table("sessions").select(columns) \
+        .eq("id", session_id).single().execute()
     if not sess.data:
         raise HTTPException(404, "Session not found")
-    if sess.data["user_id"] != user_id:
+    if sess.data.get("user_id") != user_id:
         raise HTTPException(403, "Not your session")
+    return sess.data
+
+
+def _verify_session_owner(session_id: str, user_id: str):
+    """`_session_or_403` for the callers that want only the refusal."""
+    _session_or_403(session_id, user_id)
 
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
@@ -4197,14 +4477,17 @@ def class_live(class_id: str, request: Request):
     stale_cutoff = (now - timedelta(seconds=STALE_AFTER_SEC)).isoformat()
 
     members = supabase.table("class_memberships").select("student_id").eq("class_id", class_id).execute().data or []
+    roster = [m["student_id"] for m in members]
+    # Two reads for the roster, not two per student. This endpoint is polled
+    # while a class is working, so a class of thirty was sixty round trips
+    # every few seconds before the per-session signal reads even started.
+    profiles = _profiles_many(roster)
+    open_by_student = _open_sessions_many(roster)
     out = []
     for m in members:
         sid = m["student_id"]
-        p = _profile(sid)
-
-        open_sessions = supabase.table("sessions").select("*") \
-            .eq("user_id", sid).is_("ended_at", "null") \
-            .order("started_at", desc=True).limit(1).execute().data or []
+        p = profiles.get(sid) or {}
+        open_sessions = open_by_student.get(sid) or []
 
         active = None
         latest_cog = latest_face = latest_heart = None
@@ -4232,9 +4515,18 @@ def class_live(class_id: str, request: Request):
             last_activity = max(candidates) if candidates else sess.get("started_at")
 
             if last_activity and last_activity < stale_cutoff:
-                supabase.table("sessions").update({
-                    "ended_at": now.isoformat()
-                }).eq("id", sid2).execute()
+                # First, and this site had it last. `sid`, not the teacher
+                # reading this view -- the reservation (#34), like the poller,
+                # belongs to the student whose stale session this is.
+                #
+                # Before the close, not after it: a poller left running past the
+                # stamp can insert a `cognitive_signals` row for this session
+                # *after* `_discard_if_nothing_recorded` has looked, so an empty
+                # pairing is deleted with a row pointing at it -- and the rollup
+                # is computed from a day that gains a sample a tick later. The
+                # other two close sites always stopped it first; this one was
+                # the copy that inverted the order.
+                eeg_poller.stop(sid2, sid)
                 # `sid` is the student, not the teacher whose request this is:
                 # everything the close writes belongs to whoever the data is
                 # about.
@@ -4246,10 +4538,6 @@ def class_live(class_id: str, request: Request):
                 # stayed in the student's History for ever. Going through the
                 # shared helper is what stops it drifting a fourth time.
                 _close_session(sid, sess, now.isoformat())
-                # sid, not the teacher reading this view -- the reservation
-                # (#34), like the poller, belongs to the student whose stale
-                # session this is.
-                eeg_poller.stop(sid2, sid)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess
@@ -4750,15 +5038,21 @@ def my_children(request: Request, include_face: bool = True):
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
     children = []
-    # One read for all the children, not two per child.
-    all_stats = _stats_including_open_session_many(
-        [lnk["child_id"] for lnk in (links.data or [])])
+    kids = [lnk["child_id"] for lnk in (links.data or [])]
+    # One read each for all the children, not one each per child.
+    all_stats = _stats_including_open_session_many(kids)
+    profiles = _profiles_many(kids)
+    all_perf = _topic_performance_many(kids)
     for lnk in (links.data or []):
         cid = lnk["child_id"]
         stats = all_stats.get(cid) or {}
+        # Still per child, and deliberately: "the five most recent per child"
+        # has no batch form in PostgREST -- one `in_` query returns the newest
+        # five *overall*, which is one child's five when they have been the busy
+        # one. A parent has a handful of children, so this is a handful of reads;
+        # the same shape on a class roster would not be acceptable.
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
-        perf_res = supabase.table("user_math_performance").select("*, math_topics(topic_name)").eq("user_id", cid).execute()
-        p = _profile(cid)
+        p = profiles.get(cid) or {}
         children.append({
             "user_id":     cid,
             "name":        p.get("display_name") or "Student",
@@ -4766,7 +5060,7 @@ def my_children(request: Request, include_face: bool = True):
             "linked_at":   lnk["created_at"],
             "stats":       stats,
             "sessions":    sess_res.data or [],
-            "performance": perf_res.data or [],
+            "performance": all_perf.get(cid) or [],
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
@@ -4780,10 +5074,18 @@ def my_children(request: Request, include_face: bool = True):
             # per-child timestamp. Without this a revoked channel came back with
             # "emotion_revoked_at": null from this endpoint, degrading a surface
             # that wants "Off since <date>" to the generic "Not recorded".
+            # eeg_enabled / eeg_revoked_at are stamped here for the same reason
+            # as the two above: the batch RPC groups children by flag pair and
+            # has no per-child consent state to carry. Without them the three
+            # cognitive tiles fall back to "on", so a parent who switched the
+            # headband off reads "No sensor" -- a fault -- rather than
+            # "Off since <date>", the thing they did.
             "signal_summary": {**summaries[str(cid)],
                                "consent_retrieved": channels_by_child[cid].consent_retrieved,
                                "emotion_revoked_at": channels_by_child[cid].emotion_revoked_at,
-                               "heart_revoked_at": channels_by_child[cid].heart_revoked_at}
+                               "heart_revoked_at": channels_by_child[cid].heart_revoked_at,
+                               "eeg_enabled": channels_by_child[cid].eeg,
+                               "eeg_revoked_at": channels_by_child[cid].eeg_revoked_at}
                               if str(cid) in summaries
                               else _shape_summary(None,
                                                 channels_by_child[cid].heart,
@@ -4791,7 +5093,9 @@ def my_children(request: Request, include_face: bool = True):
                                                 summaries_retrieved,
                                                 channels_by_child[cid].consent_retrieved,
                                                 emotion_revoked_at=channels_by_child[cid].emotion_revoked_at,
-                                                heart_revoked_at=channels_by_child[cid].heart_revoked_at),
+                                                heart_revoked_at=channels_by_child[cid].heart_revoked_at,
+                                                eeg_enabled=channels_by_child[cid].eeg,
+                                                eeg_revoked_at=channels_by_child[cid].eeg_revoked_at),
         })
     return children
 

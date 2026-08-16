@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
+import { endSession } from '../../lib/session'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, museRefresh, museConnect,
@@ -80,15 +81,17 @@ export default function Adaptive() {
 
   const loadAccuracy = useCallback(async () => {
     if (!user?.id) return
-    // Read directly, the same way this page already reads `math_topics`:
-    // `user_math_performance` carries a FOR ALL own-row policy, so RLS scopes
-    // this to the student whatever the query says.
-    const { data: rows, error } = await supabase
-      .from('user_math_performance')
-      .select('correct_questions, attempted_questions, math_topics(topic_name)')
-      .eq('user_id', user.id)
-    if (error) {
-      console.error('[accuracy] could not load topic performance', error)
+    // `GET /api/performance/student/{id}` -- the endpoint StudentProgressReport
+    // already uses, rather than a second raw PostgREST query of the same table
+    // written out here. Two readers of one table meant two places to change
+    // when its shape moves, and the backend's access rule (`_verify_can_view_student`,
+    // which admits the student themselves) stops being the only description of
+    // who may read this the moment a page goes around it.
+    let rows
+    try {
+      rows = await apiFetch(`/api/performance/student/${user.id}`)
+    } catch (e) {
+      console.error('[accuracy] could not load topic performance', e)
       setAccuracyState('failed')
       return
     }
@@ -105,6 +108,36 @@ export default function Adaptive() {
     setAccuracyStats({ total: { correct, attempts }, subjects })
     setAccuracyState('ready')
   }, [user])
+
+  // One answer moves one topic by one. The backend names the topic it actually
+  // attributed the answer to -- derived from the question row, not from
+  // anything this page decided -- so applying it here is not a local guess
+  // about *what* changed, only about a +1 the database has already made
+  // atomically.
+  //
+  // It replaces a full re-read of the student's performance table after every
+  // single answer, in the app's hottest loop, immediately after the request
+  // that had just told the backend what changed.
+  const applyAttempt = useCallback((topic, wasCorrect) => {
+    if (!topic) return                 // nothing was attributed; nothing moved
+    setAccuracyStats(prev => {
+      const prior = prev.subjects[topic]
+      if (!prior) return prev          // a topic this page does not render
+      return {
+        total: {
+          correct:  prev.total.correct  + (wasCorrect ? 1 : 0),
+          attempts: prev.total.attempts + 1,
+        },
+        subjects: {
+          ...prev.subjects,
+          [topic]: {
+            correct:  prior.correct  + (wasCorrect ? 1 : 0),
+            attempts: prior.attempts + 1,
+          },
+        },
+      }
+    })
+  }, [])
 
   useEffect(() => { loadAccuracy() }, [loadAccuracy])
 
@@ -379,17 +412,12 @@ export default function Adaptive() {
   // is keyed on it and takes the student's token back off the sidecar. The
   // hardware stays paired, because finishing a sitting is not unplugging.
   const finishSession = async () => {
-    const id = sessionIdRef.current
     setFinishing(true)
     try {
-      if (id) await apiFetch(`/api/sessions/${id}/end`, { method: 'POST' })
-    } catch (e) {
-      // Reported, not swallowed. The rollup and the chart archive both run off
-      // this call, so a failure here is a session whose summary never gets
-      // written -- and the student would otherwise see the page reset and
-      // assume it landed.
-      console.error('[session] could not end', e)
-      toast.error('Could not close the session cleanly — it will be tidied up next time you practise.')
+      // The call and how a failure is reported live in lib/session.js, because
+      // Practice.jsx makes the same one and its copy had already drifted into
+      // swallowing the error. Resetting the page is this page's own business.
+      await endSession(sessionIdRef.current)
     } finally {
       setSessionId(null)
       setSessionCount(0)
@@ -924,14 +952,16 @@ export default function Adaptive() {
       return
     }
     try {
-      await apiFetch(`/api/sessions/${sid}/answer`, {
+      const res = await apiFetch(`/api/sessions/${sid}/answer`, {
         method: 'POST',
         body: { question_id: data.id, selected_index: selectedAnswer, correct: isCorrect },
       })
-      // Re-read rather than incrementing locally. The backend derives the topic
-      // from the question row, so a local guess could disagree with it -- and
-      // disagreeing copies of this number is the whole bug being removed.
-      await loadAccuracy()
+      // The response names the topic the backend attributed this to, so there
+      // is nothing left to go and ask. A local *guess* at the topic is what had
+      // to be avoided -- disagreeing copies of this number is the whole bug
+      // that moved these figures out of localStorage -- and this is not one:
+      // the name comes from the question row, the same place the write did.
+      applyAttempt(res?.topic, isCorrect)
     } catch (e) {
       console.error('[answer] not recorded', e)
       toast.error('That answer could not be saved.')

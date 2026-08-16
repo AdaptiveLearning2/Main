@@ -503,17 +503,9 @@ def test_every_session_close_schedules_an_archive():
     import inspect
 
     import main
+    from conftest import close_sites
 
-    closers = []
-    for name, obj in vars(main).items():
-        if not inspect.isfunction(obj) or obj.__module__ != "main":
-            continue
-        try:
-            source = inspect.getsource(obj)
-        except OSError:                      # pragma: no cover -- defensive
-            continue
-        if '"ended_at":' in source and name != "_close_session":
-            closers.append((name, source))
+    closers = close_sites()
 
     assert len(closers) >= 3, "close sites vanished; this test is now vacuous"
     for name, source in closers:

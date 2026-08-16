@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabase'
-import { Users, Search, ChevronDown, Eye, Flame, Brain, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
+import { Users, Search, ChevronDown, Flame, Brain, Smile, Target, TrendingUp, Zap, Heart, Activity } from 'lucide-react'
 import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 import { apiFetch } from '../../lib/api'
@@ -85,7 +85,19 @@ async function getStudentStats(studentId)
     // same moment. `/api/stats/student` adds any open session's counts and
     // applies `_verify_can_view_student`, which the direct read leaned on RLS
     // for.
-    apiFetch(`/api/stats/student/${studentId}`),
+    // Caught, but *not* to null. An uncaught rejection here took the whole
+    // Promise.all down and blanked the four signal tiles beside it, which had
+    // loaded fine -- the exact failure the comment below describes, running the
+    // other way. Catching it to null instead would put the row back in the
+    // state a previous fix removed: zeros that look measured, on a row that
+    // reports itself as loaded and never refetches.
+    //
+    // So it resolves to a marked failure. `retrieved: false` is what the
+    // backend now sends when the lifetime read itself fails, and this reuses
+    // that shape so a failed request and a failed query render identically --
+    // there is nothing useful in telling a teacher which layer broke.
+    apiFetch(`/api/stats/student/${studentId}`)
+      .catch(err => { console.error('Failed to load student stats:', err); return { retrieved: false } }),
     // Caught here rather than left to reject the Promise.all: a signal-summary
     // outage should cost the four signal tiles, not the academic ones sitting
     // beside them that loaded fine.
@@ -100,16 +112,22 @@ async function getStudentStats(studentId)
 
   const userStats = statsRes
   const signals = summary || {}
+  // Three states, not two: read and empty, read and populated, or not read at
+  // all. Only the last may not be rendered as a number -- "0 questions, 0%"
+  // for a child whose record simply failed to load is the academic version of
+  // reporting a quiet week that never happened.
+  const statsRetrieved = userStats?.retrieved !== false
 
-  const totalAccuracy = userStats && userStats.total_questions > 0
+  const totalAccuracy = statsRetrieved && userStats && userStats.total_questions > 0
     ? Math.round((userStats.total_correct / userStats.total_questions) * 100)
     : null
 
   return {
+    statsRetrieved,
     totalAccuracy,
-    totalQuestions: userStats?.total_questions ?? 0,
-    currentStreak: userStats?.current_streak ?? 0,
-    bestStreak: userStats?.best_streak ?? 0,
+    totalQuestions: statsRetrieved ? (userStats?.total_questions ?? 0) : null,
+    currentStreak: statsRetrieved ? (userStats?.current_streak ?? 0) : null,
+    bestStreak: statsRetrieved ? (userStats?.best_streak ?? 0) : null,
     focusScore: asPct(signals.focus),
     stressLevel: asPct(signals.stress),
     engagement: asPct(signals.engagement),
@@ -247,7 +265,15 @@ export default function Students() {
       return
     }
     setExpandedId(studentId)
-    if (statsCache[studentId] || statsLoading[studentId]) return
+    // A cached row whose academic read failed is not a loaded row -- it is a
+    // row holding signal tiles and a "couldn't be loaded" where the questions
+    // go. Treating it as done is what made the earlier version of this stick:
+    // the failure was cached, and collapsing and re-expanding never retried.
+    //
+    // So the entry is still cached (the signal tiles beside it loaded fine and
+    // must survive), and re-expanding refetches it.
+    const cached = statsCache[studentId]
+    if ((cached && cached.statsRetrieved !== false) || statsLoading[studentId]) return
     await refreshStats(studentId)
   }
 
@@ -391,7 +417,9 @@ export default function Students() {
                                 icon={<TrendingUp size={16} />}
                                 label="Total Accuracy"
                                 value={stats.totalAccuracy !== null ? `${stats.totalAccuracy}%` : '—'}
-                                sub={`${stats.totalQuestions} questions`}
+                                sub={stats.statsRetrieved
+                                  ? `${stats.totalQuestions} questions`
+                                  : "couldn't be loaded"}
                                 color="indigo"
                               />
                               {!hideSensors && (
@@ -415,8 +443,10 @@ export default function Students() {
                               <StatCard
                                 icon={<Zap size={16} />}
                                 label="Current Streak"
-                                value={stats.currentStreak}
-                                sub={`best: ${stats.bestStreak}`}
+                                value={stats.statsRetrieved ? stats.currentStreak : '—'}
+                                sub={stats.statsRetrieved
+                                  ? `best: ${stats.bestStreak}`
+                                  : "couldn't be loaded"}
                                 color="amber"
                               />
                             </div>

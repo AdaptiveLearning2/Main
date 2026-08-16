@@ -227,6 +227,45 @@ describe('a failed read', () => {
     await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
     expect(statsCalls().length).toBeGreaterThan(1)
   })
+
+  it('costs the academic tiles only, not the signal ones beside them', async () => {
+    // The mirror of the first test in this block, and the direction that was
+    // wrong: the stats read had no catch, so its failure rejected the whole
+    // Promise.all and blanked four signal tiles that had loaded fine.
+    setData({ userStats: new Error('stats down') })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Focus Score').getByText('70%')).toBeInTheDocument())
+    expect(tile('Total Accuracy').getByText('—')).toBeInTheDocument()
+  })
+
+  it('says the academic figures could not be loaded rather than showing zero', async () => {
+    // The three-state rule, on the numbers a parent judges a week of their
+    // child's work by. Catching the failure to a zeroed object would report a
+    // child who answered nothing -- an absence asserted from data that never
+    // loaded, and indistinguishable from a genuinely quiet week.
+    setData({ userStats: new Error('stats down') })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Total Accuracy').getByText(/couldn't be loaded/i)).toBeInTheDocument())
+    expect(tile('Total Accuracy').queryByText('0 questions')).not.toBeInTheDocument()
+    // And the streak, which has no natural "—" of its own.
+    expect(tile('Current Streak').getByText('—')).toBeInTheDocument()
+  })
+
+  it('still reports a genuinely empty record as zero', async () => {
+    // So the flag above cannot be satisfied by treating every empty record as
+    // a failure -- a student who has answered nothing must still read as zero.
+    setData({ userStats: { total_questions: 0, total_correct: 0, current_streak: 0,
+                           best_streak: 0, retrieved: true } })
+    render(<Students />)
+    await expandAda()
+
+    await waitFor(() => expect(tile('Total Accuracy').getByText('0 questions')).toBeInTheDocument())
+    expect(tile('Total Accuracy').queryByText(/couldn't be loaded/i)).not.toBeInTheDocument()
+  })
 })
 
 describe('facial recognition switch', () => {

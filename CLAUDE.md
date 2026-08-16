@@ -876,6 +876,42 @@ The headband is the primary heart source (the camera is emotion-only), and it re
 - **`EEG_SOURCE=sim` produces no heart block at all** — the simulator does not model an optical
   channel, and a simulated pulse would be a number on a parent's chart with nothing behind it.
 
+**A payload key needs a field on `InterpretedEegData` or `/api/v1/state` deletes it.** `Envelope.data`
+is typed `InterpretedEegData | CameraData | None`, so the sidecar's snapshot is serialised through a
+declared model and **pydantic drops undeclared keys silently** — the same trap as `main.FaceSample`
+on the website side, one layer further out. `heart` was undeclared, so under `INGEST_MODE=pull` (the
+default, and `eeg_client.get_state` reads precisely that endpoint) a headband on an optics preset
+could never record a heart rate. Every stage upstream worked: window built, anchor confirmed, block
+held and stamped, then deleted at the boundary with nothing raised. Measured on hardware 2026-08-15
+— 2697 optics packets at 64.3/s, and no `heart` key on 227 consecutive polls.
+
+It hid because **push bypasses the envelope** (`push_client` posts `snapshot()` directly) and every
+heart test asserts on `session.latest_payload`, the dict *before* the model — so the channel was well
+covered on both sides of the one layer eating it. `tests/test_state_envelope.py` derives the check
+from `stream_manager`'s source so the next key cannot go the same way.
+
+### Optics measured against EEG: the two coexist at the 4 CH rung
+
+Run 2026-08-15 on a MuseS-0FFC (model `MS-03`), `./start.ps1 -Muse -Optics`, default `PRESET_1035`:
+
+| | `PRESET_21` (no optics) | `PRESET_1035` (4 CH optics) |
+| --- | --- | --- |
+| good EEG channels | 63.8% | 60.7% |
+| link drops in 3 min | — | 0 |
+| optics rate | n/a | 64.3 packets/s |
+
+So **optics is not what degrades EEG contact** — the earlier working hypothesis, formed across
+several failed attempts, was wrong. The 16 CH cliff documented above is real and separate; the
+bottom rung holds. Residual `is_good` failures with `hsi [1,1,1,1]` are dry electrodes, not
+bandwidth.
+
+**Verify the flag reached the bridge by reading the process, not the launcher.** Every earlier
+"phase B" measured a bridge that never had the variable — the flag was set in a string the outer
+shell expanded first, and the run looked exactly like optics being harmless. The bridge is a C++
+process reading `getenv`, so the check is its own environment block (`NtQueryInformationProcess` →
+PEB → `ProcessParameters`), or `requested_preset`/`active_preset` on `/api/v1/muse/status`, which
+must both read `PRESET_1035`. `active_preset: ""` means the device never applied one.
+
 **`rmssd_ms` is an enrichment, and a null one is the normal case.** `build_heart_record` derives it
 through `hrv_processing.estimate_hrv` over the same 25s window and the same rate — sharing them is
 required, not incidental, so the two cannot disagree about whether a window is usable. Roughly one
@@ -1309,10 +1345,27 @@ goes to a two-worker pool and `schedule()` swallows even a submit failure. That 
 only place a failure can surface, and it *has* to surface: the window in which an archive can still
 be rebuilt closes on `ends_on`.
 
-**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live`. Each
-one also writes the rollup, and `test_every_session_close_schedules_an_archive` derives the list
-from that rather than keeping its own: a fourth site added later would otherwise leave sessions
-whose raw rows expire with no picture behind them, and nothing would say so.
+**Three close sites** — `/end`, the stale-session sweep in `start_session`, and `class_live` — and
+they all go through **`_close_session()`**. Don't hand-write a fourth: the sequence was copied into
+each site and every copy drifted separately, none of them raising anything. The sweep credited a
+`correct_answers` it had never selected (absent column → `None` → `or 0` → an honest-looking zero),
+so every session of a student who shut the tab added its questions and *no* correct answers to their
+record; `class_live` never ran the empty-session discard, so a failed pairing it closed stayed in
+History for ever; and the credit, the rollup and the archive each shipped at different times as "the
+third close site to be missed".
+
+Order is load-bearing: **discard first**, because a rollup of nothing and an archive of four empty
+charts are work done for a session about to stop existing. Stopping the poller stays at the call
+sites — it takes different ids at each and must happen before the row is stamped.
+
+`/end` **refuses a session that already has `ended_at`**. It credits the session's *cumulative*
+counts rather than a delta, so a session closed by the sweep or by a teacher opening Live and then
+finished normally was credited twice, inflating the accuracy a parent reads. Not an error to the
+caller: the student's page cannot know a teacher's view closed the session underneath it.
+
+The exhaustiveness tests find closers by `'"ended_at":' in source` and assert each reaches the
+helper, with a second test pinning the helper's own contents — the indirection is only safe while
+both halves exist. They catch a step being **removed**, not neutered.
 
 **`chart_paths` has four states and no column default.** A path, `null` for a channel that produced
 nothing, an absent key for a chart never attempted, and column-NULL for a session the archive never

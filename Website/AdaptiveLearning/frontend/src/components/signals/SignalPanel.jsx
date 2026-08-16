@@ -1,4 +1,4 @@
-import { Activity, Brain, Eye, Heart, Radio, Sparkles, Zap } from 'lucide-react'
+import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,

@@ -494,22 +494,36 @@ def test_every_session_close_schedules_an_archive():
     behind them -- and `chart_paths` would be NULL, which reads as "closed
     before this shipped" rather than as a bug.
 
-    The rollup is the marker: it already runs at every close, for exactly the
-    same reason, and the two have been added and forgotten in the same places.
+    The close sequence now lives in `_close_session`, so the check is that
+    every site reaches it and that it still archives. Before that consolidation
+    the three sites each carried their own copy and each dropped a different
+    step; the archive was the step `class_live` and the stale sweep were both
+    missing at different times.
     """
     import inspect
 
     import main
 
-    lines = inspect.getsource(main).splitlines()
-    rollups = [i for i, ln in enumerate(lines) if "_rollup_session_days(" in ln
-               and "def " not in ln]
-    assert len(rollups) >= 3, "close sites vanished; this test is now vacuous"
+    closers = []
+    for name, obj in vars(main).items():
+        if not inspect.isfunction(obj) or obj.__module__ != "main":
+            continue
+        try:
+            source = inspect.getsource(obj)
+        except OSError:                      # pragma: no cover -- defensive
+            continue
+        if '"ended_at":' in source and name != "_close_session":
+            closers.append((name, source))
 
-    for i in rollups:
-        window = "\n".join(lines[i:i + 12])
-        assert "chart_archive.schedule(" in window, (
-            f"close site at line {i + 1} rolls up but does not archive")
+    assert len(closers) >= 3, "close sites vanished; this test is now vacuous"
+    for name, source in closers:
+        assert "_close_session(" in source or "chart_archive.schedule(" in source, (
+            f"{name} ends a session without archiving its charts -- its raw rows "
+            "expire on `ends_on` with nothing left behind, and `chart_paths` "
+            'would read as "closed before this shipped" rather than as a bug')
+
+    assert "chart_archive.schedule(" in inspect.getsource(main._close_session), (
+        "the shared close no longer archives, so no close site does")
 
 
 # ── the orphan sweep (#107) ─────────────────────────────────────────────────

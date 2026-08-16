@@ -537,6 +537,44 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
+def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
+    """Everything a session close does after `ended_at` is stamped.
+
+    Three endpoints close sessions -- `/end`, the stale sweep in
+    `start_session`, and `class_live` -- and the sequence was hand-copied into
+    each of them. Every copy drifted, in a different direction, and none of the
+    drifts raised anything:
+
+    - the stale sweep credited `correct_answers` it had never selected, so
+      every session it closed added its questions to the lifetime total and
+      **zero** correct answers, quietly deflating the student's accuracy;
+    - `class_live` never ran the empty-session discard, so a failed pairing
+      closed by a teacher opening the Live view survived in History for ever;
+    - and the archive, then the rollup, then the credit each shipped as
+      "the third close site to be missed".
+
+    One copy, one order. The order is load-bearing: the discard runs first
+    because a rollup of nothing and an archive of four empty charts are work
+    done for a session that is about to stop existing.
+
+    Stopping the poller stays at the call sites -- it takes a different pair of
+    ids at each, and it has to happen before the row is stamped.
+    """
+    sid = session["id"]
+    total_q = session.get("questions_answered") or 0
+    correct = session.get("correct_answers") or 0
+
+    if _discard_if_nothing_recorded(sid, total_q):
+        return {"discarded": True}
+
+    _credit_session_to_user_stats(user_id, total_q, correct)
+    _rollup_session_days(user_id, session.get("started_at"), ended_at)
+    # Off the request path and last: it reads three tables and makes four calls
+    # to object storage, which is not work to hold a request open for.
+    chart_archive.schedule(supabase, sid, user_id)
+    return {"discarded": False}
+
+
 def _may_record(student_id: str) -> dict:
     """Consent **and** the retention window, which are different questions.
 
@@ -1709,7 +1747,15 @@ def start_session(payload: StartSessionRequest, request: Request):
     # below treats a falsy count as "answered nothing", so a column left out of
     # this select arrives as None and a stale session full of answers would be
     # deleted for having no signal rows beside it.
-    stale_open = supabase.table("sessions").select("id, started_at, questions_answered") \
+    #
+    # `correct_answers` for the same class of reason, and it was missing: the
+    # close credits it to the lifetime totals, an unselected column arrives as
+    # None, and `or 0` turned that into an honest-looking zero. Every session
+    # this sweep closed -- which is every session of a student who shuts the tab
+    # -- added its questions to `total_questions` and nothing to `total_correct`,
+    # so a student's accuracy fell by exactly the work they did away from /end.
+    stale_open = supabase.table("sessions") \
+        .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
         # Also releases any pre-claim reservation (#34) left behind by a
@@ -1720,23 +1766,11 @@ def start_session(payload: StartSessionRequest, request: Request):
         supabase.table("sessions").update(
             {"ended_at": stale_ended}
         ).eq("id", s["id"]).execute()
-        # Closed by timeout rather than by /end, and it still needs its rollup.
-        # Only the /end endpoint called this, so a student who closed the tab --
-        # the case this sweep exists for -- left a day with raw rows and no
-        # summary, and once the delete job runs that day is simply gone.
-        if _discard_if_nothing_recorded(s["id"], s.get("questions_answered")):
-            continue
-        # The other close path, and the one a student who shuts the tab always
-        # takes. Without this their answers reached `session_answers` and
-        # `user_math_performance` and never reached their lifetime totals.
-        _credit_session_to_user_stats(user["id"], s.get("questions_answered") or 0,
-                                      s.get("correct_answers") or 0)
-        _rollup_session_days(user["id"], s.get("started_at"), stale_ended)
-        # And archived, for the same reason the rollup is: this is the sweep
-        # that closes the session of a student who shut the tab, so it is the
-        # only close many sessions ever get. Off the request path -- a storage
-        # failure here would otherwise stop a student *starting* a new session.
-        chart_archive.schedule(supabase, s["id"], user["id"])
+        # Closed by timeout rather than by /end, and it still needs its rollup,
+        # its lifetime credit and its archive. This is the only close many
+        # sessions ever get -- it is the path a student who shuts the tab always
+        # takes -- so a step missing here is a step that never runs at all.
+        _close_session(user["id"], s, stale_ended)
 
 
     obj  = {
@@ -1833,36 +1867,27 @@ def end_session(session_id: str = Path(...), request: Request = None):
     if not sess.data:
         raise HTTPException(404, "Session not found")
     data = sess.data
+    # Already closed, by the stale sweep or by a teacher opening the Live view.
+    # Both of those credit the lifetime totals, and this endpoint credits the
+    # session's *cumulative* counts rather than a delta -- so closing twice
+    # counted every answer twice, inflating the accuracy a parent reads. The
+    # close is idempotent now because it happens once.
+    #
+    # Not an error: the student did nothing wrong, and their page has no way to
+    # know a teacher's view closed the session out from under it.
+    if data.get("ended_at"):
+        return {"ok": True, "already_closed": True}
     # Named, and `_utc_now` rather than the naive deprecated `datetime.utcnow`:
     # this value is now read back by the rollup, which converts it to a school
     # day, and a naive stamp has no zone to convert from.
     ended = _utc_now().isoformat()
     supabase.table("sessions").update({"ended_at": ended}).eq("id", session_id).execute()
 
-    total_q = data.get("questions_answered") or 0
-    correct = data.get("correct_answers")    or 0
-
-    _credit_session_to_user_stats(user["id"], total_q, correct)
-
-    # Last, and after the writes that matter. The rollup is derived data and
-    # `_rollup_session_days` swallows its own failures, so it cannot cost the
-    # session record or the stats update -- but ordering it here means it also
-    # sees the `ended_at` this endpoint just wrote.
     # `ended`, not a fresh reading: they differ only across local midnight,
     # where a fresh one rolls up a day the stored session does not claim and
     # skips the day it is actually recorded on.
-    # Before the rollup and the archive, because both are derived from rows
-    # this may be about to delete -- a rollup of nothing, and an archive of four
-    # empty charts, are work done for a session that is not going to exist.
-    if _discard_if_nothing_recorded(session_id, total_q):
-        return {"ok": True, "discarded": True}
-    _rollup_session_days(user["id"], data.get("started_at"), ended)
-    # After the rollup, and off the request path entirely. Both are derived, but
-    # they fail differently: the rollup is a synchronous RPC that swallows its
-    # own errors, while this one reads three tables and makes four network calls
-    # to object storage, which is not work to hold a request open for.
-    chart_archive.schedule(supabase, session_id, user["id"])
-    return {"ok": True}
+    result = _close_session(user["id"], data, ended)
+    return {"ok": True, **({"discarded": True} if result["discarded"] else {})}
 
 @app.get("/api/sessions")
 def list_sessions(request: Request):
@@ -1884,15 +1909,28 @@ def _stats_including_open_session(student_id: str) -> dict:
 
     Open sessions only (`ended_at is null`), so this can never double-count one
     the close path has already credited.
+
+    **`retrieved` separates "answered nothing" from "could not find out."** A
+    student with no `user_stats` row and a student whose read failed both left
+    here as four zeros, so a broken query reached a parent as "0 questions, 0%
+    accuracy" -- an absence asserted from data that never loaded, which is the
+    same failure the reporting helpers carry `retrieved` to avoid. The stored
+    totals are the *academic* record, so this matters more here than on a signal
+    tile: it is the number a parent judges a week of their child's work by.
+
+    False only when the lifetime read itself failed. A failed *open-session*
+    read leaves the stored totals true as far as they go -- this call only ever
+    adds to them -- so that stays `True` and simply omits the live delta.
     """
-    base = {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
+    base = {"total_questions": 0, "total_correct": 0, "current_streak": 0,
+            "best_streak": 0, "retrieved": True}
     try:
         res = supabase.table("user_stats").select("*").eq("user_id", student_id).execute()
         if res.data:
-            base = res.data[0]
+            base = {**res.data[0], "retrieved": True}
     except Exception as e:                                     # noqa: BLE001
         print(f"[stats] could not read user_stats for {student_id[:8]}: {e}")
-        return base
+        return {**base, "retrieved": False}
     try:
         open_rows = supabase.table("sessions") \
             .select("questions_answered, correct_answers") \
@@ -2516,12 +2554,11 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
             "routine is holding up."
         )
 
-    attention = averages.get("face_attention")
-    if report.get("face_included") and attention is not None and float(attention) < 0.5:
-        strategies.append(
-            "Try working problems on paper together or tying them to a real "
-            "situation when attention drifts."
-        )
+    # The attention rule that sat here is gone with the prompt line above.
+    # `face_attention` has no producer, so `attention is not None` was never
+    # true and the strategy could never be emitted -- dead code that read as a
+    # live feature, over a measurement this product has decided not to claim
+    # until there is a labelled reference for it.
 
     strategies.append(
         "Close each session by asking which problem felt hardest and what helped "
@@ -2547,10 +2584,15 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"{str(weakest.get('topic_name')).replace('_', ' ')} at {weakest.get('accuracy')}%"
         if weakest else "no attempted topics yet"
     )
-    face_line = (
-        f"average facial attention {_pct(averages.get('face_attention'))}"
-        if report.get("face_included") else "facial reporting is switched off"
-    )
+    # No attention line. `face_attention` has never had a producer, so this read
+    # `- average facial attention unavailable` on every prompt ever sent -- an
+    # unmeasured metric named to a model whose output a parent reads as advice
+    # about their child. The rest of the surfaces that rendered it were removed
+    # for the same reason; this one was missed because it is a string rather
+    # than a component.
+    #
+    # Put it back when there is a labelled reference behind the column, in the
+    # same change that restores the tiles.
     return (
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
@@ -2562,7 +2604,6 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"- average focus {_pct(averages.get('focus'))}\n"
         f"- average stress {_pct(averages.get('stress'))}\n"
         f"- average engagement {_pct(averages.get('engagement'))}\n"
-        f"- {face_line}\n"
         f"- weakest attempted topic: {topic_line}\n"
         f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
         "For reference, here is a safe baseline answer:\n"
@@ -4130,23 +4171,17 @@ def class_live(class_id: str, request: Request):
                 supabase.table("sessions").update({
                     "ended_at": now.isoformat()
                 }).eq("id", sid2).execute()
-                # Same reason as the sweep in start_session. `sid` is the
-                # student: this runs on a teacher's request, and the rollup
-                # belongs to whoever the data is about.
+                # `sid` is the student, not the teacher whose request this is:
+                # everything the close writes belongs to whoever the data is
+                # about.
                 #
-                # The lifetime totals go with it, and this was the third close
-                # site to be missed: a teacher opening the Live view is what
-                # actually closed the session whose six answers never reached
-                # `user_stats`, so the class average read "—" for a class whose
-                # only student was sitting at 67% two clicks away.
-                _credit_session_to_user_stats(sid, sess.get("questions_answered") or 0,
-                                              sess.get("correct_answers") or 0)
-                _rollup_session_days(sid, sess.get("started_at"), now.isoformat())
-                # Third and last close site. Missing one leaves sessions whose
-                # raw rows expire on `ends_on` with no picture behind them, and
-                # nothing would say so -- `chart_paths` would simply be NULL,
-                # which reads as "closed before this shipped".
-                chart_archive.schedule(supabase, sid2, sid)
+                # This is the site that has been missed most often -- the
+                # lifetime credit, the rollup and the archive each shipped
+                # without it, and it never ran the empty-session discard at
+                # all, so a failed pairing closed by a teacher opening this view
+                # stayed in the student's History for ever. Going through the
+                # shared helper is what stops it drifting a fourth time.
+                _close_session(sid, sess, now.isoformat())
                 # sid, not the teacher reading this view -- the reservation
                 # (#34), like the poller, belongs to the student whose stale
                 # session this is.

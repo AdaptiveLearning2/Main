@@ -176,6 +176,104 @@ def test_the_answer_endpoint_updates_the_topic_record(monkeypatch):
     assert seen == [(USER, QUESTION, True)]
 
 
+class _SessionClient:
+    """A `sessions` row with whatever state the test needs, and a credit counter."""
+
+    def __init__(self, row):
+        self.row = row
+        self.credited = []
+        self.updates = []
+
+    def table(self, name):
+        client, table = self, name
+
+        class _Q:
+            def select(self, *_a):
+                return self
+
+            def eq(self, *_a):
+                return self
+
+            def is_(self, *_a):
+                return self
+
+            def order(self, *_a, **_k):
+                return self
+
+            def limit(self, *_a):
+                return self
+
+            def single(self):
+                return self
+
+            def update(self, row):
+                if table == "sessions":
+                    client.updates.append(row)
+                return self
+
+            def insert(self, _row):
+                return self
+
+            def upsert(self, _row, **_k):
+                return self
+
+            def execute(self):
+                if table == "sessions":
+                    return type("R", (), {"data": client.row})()
+                return type("R", (), {"data": []})()
+
+        return _Q()
+
+
+def test_closing_a_session_twice_credits_it_once(monkeypatch):
+    """`/end` credits the session's *cumulative* counts, not a delta.
+
+    So a session already closed by the stale sweep or by a teacher opening the
+    Live view -- both of which credit -- was credited a second time in full when
+    the student's page finally called `/end`, doubling every answer in the
+    lifetime totals and inflating the accuracy a parent reads. The student's
+    page has no way to know a teacher's view closed the session underneath it,
+    so this is an ordinary race, not a misuse.
+    """
+    closed = {"id": "s-1", "user_id": USER, "questions_answered": 6,
+              "correct_answers": 4, "started_at": "2026-08-15T10:00:00Z",
+              "ended_at": "2026-08-15T11:00:00Z"}
+    client = _SessionClient(closed)
+    credited = []
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: None)
+    monkeypatch.setattr(main, "_credit_session_to_user_stats",
+                        lambda uid, q, c: credited.append((uid, q, c)))
+
+    out = main.end_session(session_id="s-1", request=None)
+
+    assert out.get("already_closed") is True
+    assert credited == [], "an already-closed session was credited a second time"
+    assert client.updates == [], "an already-closed session had its ended_at rewritten"
+
+
+def test_closing_an_open_session_still_credits_it(monkeypatch):
+    """The mirror, so the guard above cannot be satisfied by never crediting."""
+    open_row = {"id": "s-1", "user_id": USER, "questions_answered": 6,
+                "correct_answers": 4, "started_at": "2026-08-15T10:00:00Z",
+                "ended_at": None}
+    client = _SessionClient(open_row)
+    credited = []
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: None)
+    monkeypatch.setattr(main, "_credit_session_to_user_stats",
+                        lambda uid, q, c: credited.append((uid, q, c)))
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a: False)
+    monkeypatch.setattr(main, "_rollup_session_days", lambda *_a: None)
+    monkeypatch.setattr(main.chart_archive, "schedule", lambda *_a, **_k: None)
+
+    main.end_session(session_id="s-1", request=None)
+
+    assert credited == [(USER, 6, 4)]
+
+
 def test_only_one_place_reads_user_stats():
     """`user_stats` gains a row when a session *closes*, so reading it directly
     reports a student mid-lesson as having answered nothing.
@@ -195,17 +293,36 @@ def test_only_one_place_reads_user_stats():
     import re
 
     source = inspect.getsource(main)
-    readers = [m.start() for m in re.finditer(r'table\("user_stats"\)\s*\.?\s*select', source)]
-    assert readers, "the call shape changed; this test is no longer looking at anything"
+    # `[\s\\]*`, not `\s*`. A backslash line continuation is not whitespace, so
+    # the original pattern silently skipped `leaderboard`, which splits the call
+    # across two lines exactly that way -- the one reader this test existed to
+    # catch was the one it could not see, and it passed while being blind.
+    readers = [m.start() for m in
+               re.finditer(r'table\("user_stats"\)[\s\\]*\.?[\s\\]*select', source)]
+    assert len(readers) >= 3, (
+        "the call shape changed, or the line-continuation blind spot is back; "
+        f"found {len(readers)} readers and there are at least three"
+    )
+
+    # Two writers/readers own this table, plus one deliberate exception.
+    #
+    # `leaderboard` reads every user's row in one query to rank them. Routing it
+    # through `_stats_including_open_session` would mean a second query per user
+    # on a board that already has an N+1 problem, to add an in-flight session to
+    # a *ranking* -- where being one session stale is both harmless and uniform
+    # across everyone on the board. Listed with its reason rather than left to
+    # slip through a regex, so the next reader still has to justify itself.
+    ALLOWED = {"_stats_including_open_session", "_credit_session_to_user_stats"}
+    ALLOWLIST = {"leaderboard": "ranks all users; one query, staleness is uniform"}
 
     for pos in readers:
         # Which function the read sits in, by walking back to the nearest def.
         head = source[:pos]
         enclosing = re.findall(r"^def (\w+)", head, re.MULTILINE)[-1]
-        assert enclosing in {"_stats_including_open_session", "_credit_session_to_user_stats"}, (
+        assert enclosing in ALLOWED or enclosing in ALLOWLIST, (
             f"{enclosing} reads user_stats directly -- it will report a student "
             "who is mid-session as having answered nothing. Use "
-            "_stats_including_open_session()."
+            "_stats_including_open_session(), or add it to ALLOWLIST with a reason."
         )
 
 
@@ -220,26 +337,68 @@ def test_every_session_close_credits_the_lifetime_totals():
     class whose only student was at 67%, because the third was the one that had
     actually closed the session.
 
-    `_rollup_session_days` is the marker, exactly as in
-    `test_every_session_close_schedules_an_archive`: it already runs at every
-    close for the same reason, and these two keep being added and forgotten in
-    the same places.
+    The three copies have since been folded into `_close_session`, because each
+    one drifted separately: the sweep credited a `correct_answers` it had never
+    selected, so every tab-close added questions and zero correct answers to a
+    student's record. So the check is now that every closer reaches the helper,
+    and that the helper still credits.
+    """
+    import inspect
+
+    closers = []
+    for name, obj in vars(main).items():
+        if not inspect.isfunction(obj) or obj.__module__ != "main":
+            continue
+        try:
+            src = inspect.getsource(obj)
+        except OSError:                      # pragma: no cover -- defensive
+            continue
+        if '"ended_at":' in src and name != "_close_session":
+            closers.append((name, src))
+
+    assert len(closers) >= 3, f"expected at least three close sites, found {closers}"
+    for name, src in closers:
+        assert "_close_session(" in src or "_credit_session_to_user_stats(" in src, (
+            f"{name} closes a session without crediting the lifetime totals -- "
+            "its answers vanish from Questions/Correct/Accuracy while "
+            "session_answers keeps them"
+        )
+
+    assert "_credit_session_to_user_stats(" in inspect.getsource(main._close_session), (
+        "the shared close no longer credits, so no close site does")
+
+
+def test_the_close_reads_every_column_it_credits():
+    """The stale sweep credited a column it had not selected.
+
+    `select("id, started_at, questions_answered")` with no `correct_answers`
+    means the key is simply absent, `or 0` reads that as an honest zero, and
+    every session closed by the sweep -- which is every session of a student who
+    shuts the tab -- credited its questions and none of its correct answers.
+    Nothing raises; a student's accuracy just falls.
+
+    Derived from what `_close_session` reads off the row, so a column added to
+    the close has to be added to the selects too.
     """
     import inspect
     import re
 
-    source = inspect.getsource(main)
-    rollups = [m.start() for m in re.finditer(r"_rollup_session_days\(", source)]
-    # The definition itself, plus one call per close site.
-    calls = [p for p in rollups if not source[:p].rstrip().endswith("def")]
-    assert len(calls) >= 3, f"expected at least three close sites, found {len(calls)}"
+    close_src = inspect.getsource(main._close_session)
+    needed = set(re.findall(r'session\.get\("(\w+)"\)', close_src))
+    needed.discard("id")
+    assert "correct_answers" in needed and "questions_answered" in needed, (
+        "the close stopped reading the counts; this test is looking at nothing")
 
-    for pos in calls:
-        # The close site is a window around the rollup call; the credit sits
-        # beside it in every one of them.
-        window = source[max(0, pos - 1200):pos + 400]
-        assert "_credit_session_to_user_stats(" in window, (
-            "a session close runs the rollup without crediting the lifetime "
-            "totals -- its answers will vanish from Questions/Correct/Accuracy "
-            f"while session_answers keeps them:\n...{source[pos-200:pos+120]}..."
+    source = inspect.getsource(main)
+    # Every explicit column list selected from `sessions`. `select("*")` is fine
+    # by construction and is skipped.
+    for cols in re.findall(r'table\("sessions"\)\s*\\?\s*\.select\("([^"*]+)"\)', source):
+        listed = {c.strip() for c in cols.split(",")}
+        if "id" not in listed or "started_at" not in listed:
+            continue        # not a close-site select
+        missing = needed - listed
+        assert not missing, (
+            f"a session close selects {sorted(listed)} but the close reads "
+            f"{sorted(missing)} -- absent columns arrive as None and `or 0` "
+            "turns that into a zero that looks measured"
         )

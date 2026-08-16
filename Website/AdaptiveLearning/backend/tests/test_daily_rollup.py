@@ -169,8 +169,10 @@ def test_the_rollup_runs_after_the_writes_that_matter():
     row without its `ended_at`.
     """
     import inspect
-    source = inspect.getsource(main.end_session)
-    assert source.index("_rollup_session_days") > source.index("user_stats"), (
+    # Both now live in `_close_session`, which is where the ordering is decided
+    # for all three close sites at once.
+    source = inspect.getsource(main._close_session)
+    assert source.index("_rollup_session_days") > source.index("_credit_session_to_user_stats"), (
         "the rollup runs before the stats write it must not be able to affect"
     )
 
@@ -189,6 +191,13 @@ def test_every_session_close_writes_a_rollup():
     Matched on the write rather than on a hand-kept list of functions, for the
     same reason as the recording-site check: "sets ended_at" is a fact about the
     code, not a judgement someone has to remember to record here.
+
+    Now asserted through `_close_session`. Each site used to carry its own copy
+    of the close sequence and each copy drifted separately -- the sweep credited
+    correct answers it had never selected, `class_live` skipped the empty-session
+    discard -- so the sequence lives in one helper and this checks that every
+    closer reaches it. The helper's own contents are pinned just below, which is
+    what stops the indirection turning into a hole.
     """
     import inspect
     closers = []
@@ -199,13 +208,42 @@ def test_every_session_close_writes_a_rollup():
             source = inspect.getsource(obj)
         except OSError:                      # pragma: no cover -- defensive
             continue
-        if '"ended_at":' in source:
+        if '"ended_at":' in source and name != "_close_session":
             closers.append((name, source))
 
     assert len(closers) >= 3, f"the search stopped finding closers: {closers}"
     for name, source in closers:
-        assert "_rollup_session_days" in source, (
+        assert "_close_session(" in source or "_rollup_session_days" in source, (
             f"{name} ends a session without rolling up its day. The rollup is "
             "what survives the end-of-year delete, so a day closed this way is "
             "lost rather than summarised."
         )
+
+
+def test_the_shared_close_does_every_step_a_close_owes():
+    """The other half of the check above.
+
+    Routing three sites through one helper only helps if the helper is complete;
+    a step dropped here now goes missing from all three at once, which is the
+    risk the consolidation trades for. Each of these shipped as "the close site
+    that was missed" at least once.
+    """
+    import inspect
+    source = inspect.getsource(main._close_session)
+
+    for call, why in [
+        ("_discard_if_nothing_recorded",
+         "an abandoned pairing stays in the student's History for ever"),
+        ("_credit_session_to_user_stats",
+         "the session's answers never reach the lifetime totals"),
+        ("_rollup_session_days",
+         "the day has raw rows and no summary, and the delete job takes it"),
+        ("chart_archive.schedule",
+         "the raw rows expire with no picture left behind them"),
+    ]:
+        assert call in source, f"the shared close no longer calls {call}: {why}"
+
+    # Discard first: a rollup of nothing and an archive of four empty charts are
+    # work done for a session that is about to stop existing.
+    assert source.index("_discard_if_nothing_recorded") < source.index("_rollup_session_days")
+    assert source.index("_discard_if_nothing_recorded") < source.index("chart_archive.schedule")

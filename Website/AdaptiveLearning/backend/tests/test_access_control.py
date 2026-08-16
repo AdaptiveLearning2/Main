@@ -1449,12 +1449,45 @@ def test_rule_based_strategies_react_to_elevated_stress():
     assert not any("shorter blocks" in s for s in calm)
 
 
-def test_rule_based_strategies_ignore_face_attention_when_reporting_is_off():
+def test_no_strategy_is_derived_from_face_attention():
+    """`attention` has no producer and this product does not claim it.
+
+    The rule this replaces fired on `face_attention < 0.5` and could never fire,
+    because the column is always NULL -- dead code that read as a live feature.
+    It is now absent, along with the prompt line below, which is the same
+    removal the tiles and chart series got: a metric nothing measures must not
+    reach a parent as advice about their child.
+
+    Asserted for a *populated* attention value, so restoring the rule fails this
+    rather than passing on the null the column actually holds.
+    """
     averages = {"face_attention": 0.2, "focus": 0.7, "stress": 0.3}
-    off = main._rule_based_strategies({"averages": averages, "face_included": False}, [])
-    on = main._rule_based_strategies({"averages": averages, "face_included": True}, [])
-    assert any("attention drifts" in s for s in on)
-    assert not any("attention drifts" in s for s in off)
+    for included in (True, False):
+        out = main._rule_based_strategies(
+            {"averages": averages, "face_included": included}, [])
+        assert not any("attention" in s.lower() for s in out)
+
+
+def test_the_model_is_never_told_about_attention():
+    """The prompt half of the same rule.
+
+    `_strategy_prompt` interpolated `average facial attention {…}`, which read
+    "unavailable" on every prompt ever sent -- an unmeasured metric named to a
+    model whose output a parent reads as advice. It was missed when the tiles
+    were removed because it is a string rather than a component.
+    """
+    report = {
+        "days": 7, "face_included": True,
+        "averages": {"focus": 0.7, "stress": 0.3, "engagement": 0.5,
+                     "face_attention": 0.83},
+        "sample_counts": {"sessions": 3},
+    }
+    prompt = main._strategy_prompt(report, [], ["baseline"])
+
+    assert "attention" not in prompt.lower()
+    assert "83%" not in prompt, "the attention average reached the model"
+    # The measurements that do have producers are still there.
+    assert "70%" in prompt and "30%" in prompt
 
 
 def test_strategy_prompt_carries_no_identifying_data():

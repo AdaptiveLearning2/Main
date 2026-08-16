@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Eye, Activity, Sparkles, ShieldCheck } from 'lucide-react'
+import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 // pct, emotionOn are shared rather than redefined here: this page had verbatim

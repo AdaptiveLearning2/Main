@@ -463,6 +463,15 @@ def test_every_session_close_credits_the_lifetime_totals():
         "the shared close no longer credits, so no close site does")
 
 
+def _safe_source(fn):
+    """A function's source, or "" if it has none (C-level, or defined in exec)."""
+    import inspect
+    try:
+        return inspect.getsource(fn)
+    except (OSError, TypeError):
+        return ""
+
+
 def test_the_close_reads_every_column_it_credits():
     """The stale sweep credited a column it had not selected.
 
@@ -484,16 +493,37 @@ def test_the_close_reads_every_column_it_credits():
     assert "correct_answers" in needed and "questions_answered" in needed, (
         "the close stopped reading the counts; this test is looking at nothing")
 
-    source = inspect.getsource(main)
-    # Every explicit column list selected from `sessions`. `select("*")` is fine
-    # by construction and is skipped.
-    for cols in re.findall(r'table\("sessions"\)\s*\\?\s*\.select\("([^"*]+)"\)', source):
-        listed = {c.strip() for c in cols.split(",")}
-        if "id" not in listed or "started_at" not in listed:
-            continue        # not a close-site select
-        missing = needed - listed
-        assert not missing, (
-            f"a session close selects {sorted(listed)} but the close reads "
-            f"{sorted(missing)} -- absent columns arrive as None and `or 0` "
-            "turns that into a zero that looks measured"
-        )
+    # Scanned per function that actually closes a session, rather than over the
+    # whole module. The rule is about rows that reach `_close_session`, and
+    # `id` + `started_at` is only a proxy for that -- a read-only query wanting
+    # a session's start time matches the proxy while being unable to credit
+    # anything (`/api/admin/live-signals` is one). Narrowing to the callers
+    # keeps the guard pointed at the bug and stops it firing on reads.
+    closers = [fn for fn in vars(main).values()
+               if inspect.isfunction(fn)
+               and getattr(fn, "__module__", None) == "main"
+               and "_close_session(" in _safe_source(fn)]
+    assert closers, "no function calls _close_session; this test is looking at nothing"
+
+    scanned = 0
+    for fn in closers:
+        for cols in re.findall(r'table\("sessions"\)\s*\\?\s*\.select\("([^"*]+)"\)',
+                               _safe_source(fn)):
+            listed = {c.strip() for c in cols.split(",")}
+            if "id" not in listed:
+                continue        # not the row that gets closed
+            scanned += 1
+            missing = needed - listed
+            assert not missing, (
+                f"{fn.__name__} selects {sorted(listed)} but the close reads "
+                f"{sorted(missing)} -- absent columns arrive as None and `or 0` "
+                "turns that into a zero that looks measured"
+            )
+
+    # The regex has to keep matching how the selects are actually written -- the
+    # stale sweep's is split across a line continuation, and a pattern that
+    # stopped handling that would leave this test green while checking nothing.
+    assert scanned, (
+        "no explicit `sessions` select was scanned inside a function that closes "
+        "a session -- either the selects moved, or the pattern above stopped "
+        "matching how they are written")

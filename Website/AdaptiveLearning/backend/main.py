@@ -329,6 +329,118 @@ def _resolve_window(row: dict) -> dict:
     return {"state": state, "starts_on": starts, "ends_on": ends, "timezone": name}
 
 
+# ─── feature flags ───────────────────────────────────────────────────────
+#
+# Global runtime switches, edited from the admin dashboard rather than from a
+# `.env` and a redeploy. The defaults below are the contract: a key absent from
+# the table still has a value, and it is the value the system had before this
+# table existed. That is what lets the flags be introduced without changing any
+# behaviour, and what keeps a failed read from being a change of behaviour
+# either.
+#
+# The map is also the *whitelist*. A row whose key is not here is ignored, so a
+# typo'd INSERT is inert rather than a silently dead switch, and a write to an
+# unknown key is refused by the endpoint instead of creating one.
+_FEATURE_FLAG_DEFAULTS = {
+    "strategy_llm_enabled": False,
+    "recording_eeg_enabled": True,
+    "recording_heart_enabled": True,
+    "recording_camera_enabled": True,
+    "consent_enforcement_enabled": True,
+}
+
+# The one flag with an expiry, named rather than spelled out at its three call
+# sites: the whole safety property is that this specific switch cannot be left
+# off, and a literal repeated three times is a literal that gets changed twice.
+CONSENT_ENFORCEMENT_FLAG = "consent_enforcement_enabled"
+
+# Same TTL and the same reasoning as `_RETENTION_TTL_SECONDS`: this is global
+# configuration, not a per-student decision, so a bounded staleness costs
+# nothing that anyone can perceive. It is deliberately *not* the consent cache
+# that `_consent` refuses to have -- a withdrawal has to land mid-lesson, and
+# nothing here is a withdrawal. The one flag whose staleness matters is the
+# consent bypass, and it fails in the safe direction: turning enforcement back
+# **on** takes effect within the TTL, and its expiry is evaluated against the
+# clock on every read rather than being cached as a verdict.
+_FEATURE_FLAGS_TTL_SECONDS = 30.0
+_feature_flags_cached: tuple[float, dict] | None = None
+_feature_flags_lock = threading.Lock()
+
+
+def _feature_flags_cache_clear() -> None:
+    """Drop the cached flags. For tests, and for anything that writes a flag."""
+    global _feature_flags_cached
+    with _feature_flags_lock:
+        _feature_flags_cached = None
+
+
+def _feature_flags() -> dict:
+    """Every known flag, as `{key: {"enabled": bool, "bypass_until": str|None}}`.
+
+    **Fails to the declared defaults, not to off and not to on.** A flag is a
+    statement about how this deployment is configured, and an unreadable table
+    is not a reconfiguration -- so a failed read reproduces the behaviour the
+    system had before the table existed, which is also what an empty table
+    gives. The direction that matters is `consent_enforcement_enabled`, whose
+    default is True: a database that cannot be read must never be the reason
+    consent stops being enforced.
+
+    Unknown keys in the table are dropped rather than surfaced, so the returned
+    dict has exactly the keys of `_FEATURE_FLAG_DEFAULTS` whatever the table
+    holds.
+    """
+    global _feature_flags_cached
+    now = time.monotonic()
+    with _feature_flags_lock:
+        cached = _feature_flags_cached
+    if cached and now < cached[0]:
+        return cached[1]
+
+    flags = {k: {"enabled": v, "bypass_until": None}
+             for k, v in _FEATURE_FLAG_DEFAULTS.items()}
+    try:
+        rows = supabase.table("feature_flags").select("*").execute().data or []
+    except Exception as e:
+        print(f"[flags:read] {e}")
+        # Not cached, for the same reason `_retention_window` does not cache a
+        # failure: holding one would keep answering from defaults for the TTL
+        # after the database came back, and a transient blip should not outlive
+        # itself.
+        return flags
+
+    for row in rows:
+        key = row.get("key")
+        if key in flags:
+            flags[key] = {"enabled": bool(row.get("enabled")),
+                          "bypass_until": row.get("bypass_until")}
+
+    with _feature_flags_lock:
+        _feature_flags_cached = (now + _FEATURE_FLAGS_TTL_SECONDS, flags)
+    return flags
+
+
+def _consent_enforcement_active(flags: dict | None = None) -> bool:
+    """Whether per-student consent gates recording right now.
+
+    True in every case except a live, unexpired bypass. The expiry is checked
+    against the clock **here**, on the read, rather than by a job that flips the
+    row back: a scheduled job that fails to run leaves consent enforcement off
+    indefinitely, and the single guarantee this mechanism has to make is that it
+    cannot. A bypass with no `bypass_until` at all has already expired by this
+    rule -- an unbounded bypass is exactly the state the column exists to
+    prevent, so an unparseable or absent value resumes enforcement rather than
+    extending it.
+    """
+    flags = flags if flags is not None else _feature_flags()
+    flag = flags.get(CONSENT_ENFORCEMENT_FLAG) or {}
+    if flag.get("enabled", True):
+        return True
+    until = _parse_ts(flag.get("bypass_until"))
+    if until is None:
+        return True
+    return _utc_now() >= until
+
+
 def _school_timezone() -> tzinfo:
     """The school's zone, for bucketing report days. Defaults to UTC.
 
@@ -600,20 +712,36 @@ def _may_record(student_id: str) -> dict:
     fail closed and the reasons stay separate: `window_state` says why nothing
     is being recorded when every flag is true.
     """
-    consent = _consent(student_id)
+    flags = _feature_flags()
+    # A live bypass substitutes a fully-consenting answer rather than skipping
+    # the checks below, so every other gate -- the window, the per-channel kill
+    # switches -- still applies. `consent_bypassed` rides along because a caller
+    # that reports *why* something is being recorded would otherwise say the
+    # student agreed, which is the one thing that is not true here.
+    enforced = _consent_enforcement_active(flags)
+    consent = _consent(student_id) if enforced else {
+        **_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
     window = _retention_window()
     recording = window["state"] not in _WINDOW_DENIED
     return {**consent,
             "window_state": window["state"],
             "window_starts_on": window["starts_on"],
             "window_ends_on": window["ends_on"],
+            "consent_bypassed": not enforced,
             # The per-channel flags a recording caller should read. Consent is
             # left untouched above so a caller that needs the raw answer still
             # has it -- these are the conjunction.
-            "record_eeg": recording and bool(consent.get("eeg_enabled")),
-            "record_headband_optical": recording and bool(
-                consent.get("headband_optical_enabled")),
-            "record_camera": recording and bool(consent.get("camera_enabled"))}
+            #
+            # The kill switches are ANDed, never ORed: a flag here can withhold
+            # recording and can never grant it, so turning one on cannot record
+            # anything a student declined.
+            "record_eeg": (recording and flags["recording_eeg_enabled"]["enabled"]
+                           and bool(consent.get("eeg_enabled"))),
+            "record_headband_optical": (
+                recording and flags["recording_heart_enabled"]["enabled"]
+                and bool(consent.get("headband_optical_enabled"))),
+            "record_camera": (recording and flags["recording_camera_enabled"]["enabled"]
+                              and bool(consent.get("camera_enabled")))}
 
 
 def _as_sentence(text: str) -> str:
@@ -2161,7 +2289,14 @@ def _env_number(name: str, default, cast, minimum=None):
 # rules below and never opens a socket -- which is what CI, and any deployment
 # without a local Ollama, should do. Enabling it changes only whether the
 # rule-based answer gets a chance to be replaced.
-STRATEGY_LLM_ENABLED = os.getenv("STRATEGY_LLM_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+#
+# **This is the `feature_flags` row `strategy_llm_enabled`, not an env var.**
+# It moved so an admin can turn the model pass off without a redeploy -- which
+# is the point of the flag: the reason to reach for this switch is a model
+# behaving badly in front of students, and that is not a moment to be waiting on
+# a deploy. Read per request rather than at import for the same reason. The
+# default is False in `_FEATURE_FLAG_DEFAULTS`, matching what the env var
+# defaulted to, so nothing changed when it moved.
 STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
 # Wall-clock budget for the whole model call. A hung Ollama server is not an
 # exception, so without an explicit timeout the endpoint would block one of a
@@ -2881,7 +3016,7 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
     strategies = _rule_based_strategies(report, topics)
     source = "rule-based"
 
-    if STRATEGY_LLM_ENABLED:
+    if _feature_flags()["strategy_llm_enabled"]["enabled"]:
         refined = _llm_strategies_bounded(_strategy_prompt(report, topics, strategies))
         if refined:
             strategies, source = refined, "model-refined"
@@ -3058,12 +3193,22 @@ def _verify_class_owner(class_id: str, user_id: str):
 def _can_view_student(viewer: dict, student_id: str) -> bool:
     """Whether `viewer` is allowed to see this student's data.
 
-    Three legitimate relationships: the student themselves, a teacher of a class
-    the student is enrolled in, or a linked parent. Everything reachable through
-    this check is queried with the service-role client, so RLS is not a backstop.
+    Four legitimate relationships: the student themselves, a teacher of a class
+    the student is enrolled in, a linked parent, or a platform administrator.
+    Everything reachable through this check is queried with the service-role
+    client, so RLS is not a backstop.
+
+    Admin is checked here rather than by giving the admin endpoints their own
+    copy of each report query. Adding it to the shared helper is what makes
+    "an admin can open a student's report" one decision in one place, instead
+    of a parallel admin path per endpoint that drifts from this one -- the same
+    failure the `class_live` guard already demonstrated.
     """
     uid = viewer["id"]
     if uid == student_id:
+        return True
+
+    if _is_admin(uid):
         return True
 
     # Teacher of any class this student belongs to.
@@ -3132,6 +3277,23 @@ def class_students(class_id: str, request: Request):
 # rules below are therefore the enforcement, not a convenience layer over it.
 
 CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
+
+# What `_may_record` substitutes for a real consent read while the admin
+# consent bypass is live. Deliberately the same shape as `_CONSENT_DENIED` and
+# deliberately never returned by `_consent` itself: the bypass is a decision
+# about whether to *ask*, not a claim that anyone agreed, so it must not reach
+# the consent screen, the reporting surfaces or the poller status -- all of
+# which read `_consent` directly and should keep showing what the family
+# actually decided.
+_CONSENT_ENABLED_ALL = {
+    **{f"{c}_enabled": True for c in CONSENT_CHANNELS},
+    **{f"{c}_revoked_at": None for c in CONSENT_CHANNELS},
+    **{f"{c}_revoked_by": None for c in CONSENT_CHANNELS},
+    "updated_by": None,
+    "updated_at": None,
+    "parent_enabled_at": None,
+    "student_ack_at": None,
+}
 
 _CONSENT_DENIED = {
     **{f"{c}_enabled": False for c in CONSENT_CHANNELS},
@@ -4190,8 +4352,8 @@ def class_live(class_id: str, request: Request):
     # who were neither, so ANY teacher could read ANY class's live signals.
     _verify_class_owner(class_id, user["id"])
 
-    LIVE_WINDOW_SEC = 90
-    STALE_AFTER_SEC = 600
+    LIVE_WINDOW_SEC = _LIVE_WINDOW_SEC
+    STALE_AFTER_SEC = _STALE_AFTER_SEC
     now = datetime.utcnow()
     live_cutoff  = (now - timedelta(seconds=LIVE_WINDOW_SEC)).isoformat()
     stale_cutoff = (now - timedelta(seconds=STALE_AFTER_SEC)).isoformat()
@@ -4794,6 +4956,529 @@ def my_children(request: Request, include_face: bool = True):
                                                 heart_revoked_at=channels_by_child[cid].heart_revoked_at),
         })
     return children
+
+
+# ─── admin ───────────────────────────────────────────────────────────────
+#
+# Everything below is gated on `_require_admin`. Membership is a row in
+# `admin_users`, which only the service-role client can read or write -- not a
+# `profiles.role` value and emphatically not `user_metadata.role`, which the
+# client sets at sign-up and can rewrite through `supabase.auth.updateUser`
+# without this backend ever seeing it.
+
+
+def _is_admin(user_id: str) -> bool:
+    """Whether this user is a platform administrator.
+
+    Fails **closed** on a read error, like `_consent` and unlike the reporting
+    helpers: this is the only thing standing in front of the switches that
+    decide whether consent is enforced, so an unreadable table must not admit
+    anyone. Uncached, deliberately -- admin traffic is three people, and a TTL
+    here would keep a removed admin admitted for the length of it.
+    """
+    try:
+        rows = supabase.table("admin_users").select("user_id") \
+            .eq("user_id", user_id).limit(1).execute().data or []
+        return bool(rows)
+    except Exception as e:
+        print(f"[admin:is_admin] {e}")
+        return False
+
+
+def _require_admin(request: Request) -> dict:
+    """The caller, if they are an admin. 401 without a token, 403 without a row.
+
+    Returns the user so callers do not resolve it twice -- the id is needed for
+    `updated_by`/`changed_by` on every write below.
+    """
+    user = get_user(request)
+    if not _is_admin(user["id"]):
+        raise HTTPException(403, "Admin access required")
+    return user
+
+
+class FeatureFlagUpdate(BaseModel):
+    enabled: bool
+    # Only read when disabling `consent_enforcement_enabled`. Bounded rather
+    # than free: the point of the bypass is that it cannot be left on, and a
+    # window measured in days is indistinguishable from leaving it on.
+    bypass_minutes: int | None = None
+
+
+# The bypass may be set for at most this long in one go. Re-arming is a
+# deliberate act that lands in the audit log, which is the property worth
+# keeping -- a long window produces one log line and a week of unenforced
+# consent, a short one produces a line every time someone chooses to continue.
+_MAX_BYPASS_MINUTES = 240
+
+
+@app.get("/api/admin/me")
+def admin_me(request: Request):
+    """200 for an admin, 403 for anyone else. What the frontend guard calls."""
+    user = _require_admin(request)
+    return {"user_id": user["id"], "is_admin": True}
+
+
+def _flag_rows() -> list:
+    """Every known flag as a response row, in the declared order.
+
+    Ordered from `_FEATURE_FLAG_DEFAULTS` rather than from the table so the
+    dashboard's rows do not reorder themselves when a flag is written, and so a
+    key the table is missing still appears -- with its default, which is the
+    value the backend is actually using for it.
+    """
+    flags = _feature_flags()
+    try:
+        rows = {r["key"]: r for r in
+                (supabase.table("feature_flags").select("*").execute().data or [])
+                if r.get("key")}
+    except Exception as e:
+        print(f"[admin:flags] {e}")
+        rows = {}
+
+    out = []
+    for key in _FEATURE_FLAG_DEFAULTS:
+        row = rows.get(key, {})
+        out.append({
+            "key": key,
+            "enabled": flags[key]["enabled"],
+            "bypass_until": flags[key]["bypass_until"],
+            "description": row.get("description"),
+            "updated_at": row.get("updated_at"),
+            # True when the row is missing and the default is answering. A
+            # dashboard that cannot tell those apart would show a flag as set
+            # by someone when nobody has ever set it.
+            "is_default": key not in rows,
+        })
+    return out
+
+
+@app.get("/api/admin/flags")
+def admin_flags(request: Request):
+    _require_admin(request)
+    return {"flags": _flag_rows(),
+            "consent_enforcement_active": _consent_enforcement_active()}
+
+
+@app.put("/api/admin/flags/{key}")
+def admin_set_flag(key: str, request: Request, payload: FeatureFlagUpdate):
+    """Set one flag, audit the change, and drop the cache.
+
+    Refuses a key that is not declared: `_feature_flags` ignores unknown rows,
+    so writing one would create a switch that reads back as set and controls
+    nothing.
+    """
+    user = _require_admin(request)
+    if key not in _FEATURE_FLAG_DEFAULTS:
+        raise HTTPException(404, f"Unknown flag {key!r}")
+
+    bypass_until = None
+    if key == CONSENT_ENFORCEMENT_FLAG and not payload.enabled:
+        minutes = payload.bypass_minutes
+        # Required rather than defaulted. A default here would be this file
+        # choosing how long consent goes unenforced, which is exactly the
+        # decision that should have to be made out loud, every time.
+        if minutes is None:
+            raise HTTPException(
+                422, "bypass_minutes is required when disabling consent enforcement")
+        if minutes < 1 or minutes > _MAX_BYPASS_MINUTES:
+            raise HTTPException(
+                422, f"bypass_minutes must be between 1 and {_MAX_BYPASS_MINUTES}")
+        bypass_until = (_utc_now() + timedelta(minutes=minutes)).isoformat()
+
+    before = _feature_flags().get(key, {})
+    row = {"key": key, "enabled": payload.enabled, "bypass_until": bypass_until,
+           "updated_by": user["id"], "updated_at": _utc_now().isoformat()}
+    try:
+        supabase.table("feature_flags").upsert(row, on_conflict="key").execute()
+    except Exception as e:
+        print(f"[admin:set_flag] {e}")
+        raise HTTPException(500, "Could not update the flag")
+
+    # After the write, so the next read cannot be served the old value, and
+    # before the audit insert, so a failing audit does not leave the cache
+    # holding a value the table no longer has.
+    _feature_flags_cache_clear()
+
+    try:
+        supabase.table("feature_flag_changes").insert({
+            "key": key,
+            "old_enabled": before.get("enabled"),
+            "new_enabled": payload.enabled,
+            "bypass_until": bypass_until,
+            "changed_by": user["id"],
+        }).execute()
+    except Exception as e:
+        # Never raises. The flag is already set; turning a successful change
+        # into a 500 would invite a retry that changes nothing and audits
+        # nothing. The gap is visible in the history instead of hidden by a
+        # rollback that did not happen.
+        print(f"[admin:audit] {key} change not recorded: {e}")
+
+    return {"flags": _flag_rows(),
+            "consent_enforcement_active": _consent_enforcement_active()}
+
+
+@app.get("/api/admin/flags/{key}/history")
+def admin_flag_history(key: str, request: Request, limit: int = 20):
+    _require_admin(request)
+    if key not in _FEATURE_FLAG_DEFAULTS:
+        raise HTTPException(404, f"Unknown flag {key!r}")
+    limit = max(1, min(limit, 100))
+    try:
+        rows = supabase.table("feature_flag_changes").select("*") \
+            .eq("key", key).order("changed_at", desc=True) \
+            .limit(limit).execute().data or []
+    except Exception as e:
+        print(f"[admin:history] {e}")
+        # Degrades rather than raising, like the reporting helpers -- and says
+        # so, because an empty history and an unreadable one are different
+        # claims about whether anyone has touched this flag.
+        return {"key": key, "changes": [], "retrieved": False}
+
+    names = _display_names({r.get("changed_by") for r in rows if r.get("changed_by")})
+    return {"key": key, "retrieved": True, "changes": [{
+        "changed_at": r.get("changed_at"),
+        "old_enabled": r.get("old_enabled"),
+        "new_enabled": r.get("new_enabled"),
+        "bypass_until": r.get("bypass_until"),
+        "changed_by": names.get(r.get("changed_by"), "Unknown"),
+    } for r in rows]}
+
+
+def _display_names(user_ids) -> dict:
+    """Names for a set of ids, for the audit view. Never raises."""
+    ids = [u for u in user_ids if u]
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("profiles").select("id, display_name") \
+            .in_("id", ids).execute().data or []
+        return {r["id"]: r.get("display_name") or "Unknown" for r in rows}
+    except Exception as e:
+        print(f"[admin:names] {e}")
+        return {}
+
+
+# The env-var flags this dashboard can show but not change. Named here rather
+# than discovered, because `os.environ` also holds the service-role key: a
+# dashboard that enumerated the environment would eventually render a secret.
+_DEPLOYMENT_FLAGS = (
+    ("INGEST_MODE", "pull", "Whether the backend polls the sidecar, or the sidecar posts here."),
+    ("EEG_API_URL", None, "Where the EEG sidecar is expected, under pull ingestion."),
+    ("FACE_ENABLED", None, "Camera capture, in the sidecar's own environment."),
+    ("FACE_EMOTION_ENABLED", None, "FER+ emotion classification, in the sidecar."),
+    ("FACE_GAZE_ENABLED", None, "Gaze and head pose, in the sidecar."),
+    ("FACE_HEART_ENABLED", None, "Camera rPPG. Validated and rejected -- expected off."),
+    ("MUSE_ENABLE_OPTICS", None, "The headband's optical channels, read by the native bridge."),
+    ("MUSE_OPTICS_PRESET", None, "Which optics rung the bridge asks for."),
+)
+
+
+@app.get("/api/admin/env-flags")
+def admin_env_flags(request: Request):
+    """The process's env-var switches, read-only.
+
+    Here so one screen answers "how is this deployment configured" rather than
+    half of it living in a `.env` nobody can see from the browser. Every entry
+    is marked `editable: false` in the payload rather than left for the UI to
+    remember -- a switch that looks like the others and silently does nothing is
+    worse than one that is absent.
+
+    Several of these belong to the *sidecar's* environment, not this process, so
+    a null here means "not set for the backend", which is the normal state. It
+    is a hint about the deployment, not an authority on what the sidecar is
+    doing.
+    """
+    _require_admin(request)
+    return {"flags": [{
+        "key": key,
+        "value": os.getenv(key, default),
+        "description": description,
+        "editable": False,
+    } for key, default, description in _DEPLOYMENT_FLAGS]}
+
+
+class RetentionWindowUpdate(BaseModel):
+    enforced: bool
+    starts_on: str | None = None
+    ends_on: str | None = None
+    timezone: str = "UTC"
+
+
+@app.get("/api/admin/retention-window")
+def admin_get_retention_window(request: Request):
+    """The school year as configured, plus where today sits in it."""
+    _require_admin(request)
+    window = _retention_window()
+    try:
+        rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
+    except Exception as e:
+        print(f"[admin:window] {e}")
+        rows = []
+    row = rows[0] if rows else {}
+    return {"state": window["state"],
+            "configured": bool(rows),
+            "enforced": row.get("enforced"),
+            "starts_on": row.get("starts_on"),
+            "ends_on": row.get("ends_on"),
+            "timezone": row.get("timezone") or "UTC"}
+
+
+@app.put("/api/admin/retention-window")
+def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate):
+    """Replace the school-year row. The SQL editor's job, with a form on it.
+
+    Validates here rather than relying on the table's CHECKs, so a bad edit is a
+    422 naming the field instead of a 500 out of the client library. The CHECKs
+    stay as the second line -- this endpoint is not the only thing that can
+    write that row.
+    """
+    user = _require_admin(request)
+
+    try:
+        ZoneInfo(payload.timezone)
+    except Exception:
+        # The one field whose typo is invisible: an unknown zone makes
+        # `_retention_window` deny all recording, and it is edited twice a year.
+        raise HTTPException(422, f"Unknown timezone {payload.timezone!r}")
+
+    starts, ends = payload.starts_on, payload.ends_on
+    if payload.enforced:
+        if not starts or not ends:
+            raise HTTPException(
+                422, "starts_on and ends_on are required when the year is enforced")
+        try:
+            starts_d, ends_d = date.fromisoformat(starts), date.fromisoformat(ends)
+        except ValueError:
+            raise HTTPException(422, "starts_on and ends_on must be YYYY-MM-DD")
+        if ends_d <= starts_d:
+            raise HTTPException(422, "ends_on must be after starts_on")
+
+    row = {"id": True, "enforced": payload.enforced,
+           "starts_on": starts or None, "ends_on": ends or None,
+           "timezone": payload.timezone,
+           "updated_by": user["id"],
+           "updated_at": _utc_now().isoformat()}
+    try:
+        supabase.table("retention_window").upsert(row, on_conflict="id").execute()
+    except Exception as e:
+        print(f"[admin:set_window] {e}")
+        raise HTTPException(500, "Could not update the school year")
+
+    _retention_cache_clear()
+    return admin_get_retention_window(request)
+
+
+# How recently a channel must have written to count as flowing, and how long
+# before it counts as stale. Shared with `class_live`, which is the other page
+# answering this question about the same sessions -- two sets of numbers would
+# let one page call a session live while the other called it stale.
+_LIVE_WINDOW_SEC = 90
+_STALE_AFTER_SEC = 600
+
+# The dashboard polls this and each session costs four reads. A school does not
+# have 200 simultaneous sessions, so reaching this cap means something is wrong
+# -- which is why the payload says it was reached rather than quietly truncating.
+_ADMIN_LIVE_SESSION_CAP = 200
+
+
+@app.get("/api/admin/live-signals")
+def admin_live_signals(request: Request):
+    """Whether signals are *arriving* for each open session. Not what they say.
+
+    The content is dropped here, in the endpoint, rather than left for the
+    frontend not to render: this exists to answer "is the data flowing", and an
+    admin has no relationship to these students that would entitle them to the
+    readings. Only the newest timestamp per channel survives the row-to-dict
+    step -- no band powers, no emotion label, no bpm.
+
+    Same thresholds and the same per-session helper as `class_live`, which is
+    the other page that answers this question. A second set of numbers would
+    make one of the two pages wrong about the same session.
+    """
+    _require_admin(request)
+
+    now = _utc_now()
+    live_cutoff = now - timedelta(seconds=_LIVE_WINDOW_SEC)
+    stale_cutoff = now - timedelta(seconds=_STALE_AFTER_SEC)
+
+    try:
+        sessions = supabase.table("sessions").select("id, user_id, started_at") \
+            .is_("ended_at", "null").order("started_at", desc=True) \
+            .limit(_ADMIN_LIVE_SESSION_CAP).execute().data or []
+    except Exception as e:
+        print(f"[admin:live] {e}")
+        return {"sessions": [], "retrieved": False}
+
+    names = _display_names({s.get("user_id") for s in sessions})
+
+    def _channel(row):
+        """A channel's liveness, from its newest row's ts alone."""
+        ts = _parse_ts((row or {}).get("ts"))
+        if ts is None:
+            # Never reported. Distinct from stale: one is a sensor that stopped,
+            # the other is a session that never had one.
+            return {"flowing": False, "stale": False, "seen": False}
+        return {"flowing": ts >= live_cutoff,
+                "stale": ts < stale_cutoff,
+                "seen": True,
+                # The one timestamp that leaves this endpoint. It is what lets
+                # the dashboard pulse on a *new* sample rather than re-pulsing
+                # on every poll, and it says nothing about the reading.
+                "last_ts": (row or {}).get("ts")}
+
+    out = []
+    for s in sessions:
+        cog, face, _heart, _answers = _latest_session_signals(s["id"])
+        out.append({
+            "session_id": s["id"],
+            "student_id": s.get("user_id"),
+            "student_name": names.get(s.get("user_id"), "Student"),
+            "started_at": s.get("started_at"),
+            "eeg": _channel(cog[0] if cog else None),
+            "camera": _channel(face[0] if face else None),
+        })
+    return {"sessions": out, "retrieved": True,
+            "capped": len(sessions) >= _ADMIN_LIVE_SESSION_CAP}
+
+
+@app.get("/api/admin/health")
+def admin_health(request: Request):
+    """One place to see whether the moving parts are moving.
+
+    Three states per check -- `ok`, `degraded`, `unknown` -- and a failed read
+    is `unknown`, never `ok`. Same rule as the reporting helpers: a check that
+    could not run has not earned the right to say everything is fine.
+    """
+    _require_admin(request)
+
+    checks = []
+
+    mode = eeg_poller.INGEST_MODE
+    if mode == "push":
+        # Not a fault. Under push the sidecar is on a student's laptop and this
+        # process has no route to it, so "unreachable" would be true and
+        # misleading -- the same reason the /api/eeg/* endpoints answer None.
+        checks.append({"key": "eeg_sidecar", "status": "unknown",
+                       "detail": "Not probed: this deployment uses push ingestion."})
+    else:
+        try:
+            alive = eeg_client.is_alive()
+            checks.append({"key": "eeg_sidecar",
+                           "status": "ok" if alive else "degraded",
+                           "detail": eeg_client.EEG_API_URL if alive
+                                     else f"Not answering on {eeg_client.EEG_API_URL}"})
+        except Exception as e:
+            checks.append({"key": "eeg_sidecar", "status": "unknown",
+                           "detail": f"Could not probe: {e}"})
+
+    checks.append({"key": "ingest_mode", "status": "ok", "detail": mode})
+
+    window = _retention_window()
+    meaning = _WINDOW_STATES.get(window["state"])
+    checks.append({
+        "key": "school_year",
+        "status": "ok" if meaning and meaning.records else "degraded",
+        "detail": window["state"],
+    })
+
+    # Newest rollup row, as a proxy for "the summary writer is running". Not a
+    # scheduler status -- there is no such table -- so an old one means nobody
+    # closed a session recently, which on a quiet day is not a fault. Reported
+    # as a date for a person to judge, not as a verdict.
+    try:
+        rows = supabase.table("signal_daily_rollup").select("day") \
+            .order("day", desc=True).limit(1).execute().data or []
+        checks.append({"key": "last_rollup", "status": "ok" if rows else "degraded",
+                       "detail": rows[0]["day"] if rows else "No rollup rows yet"})
+    except Exception as e:
+        print(f"[admin:health:rollup] {e}")
+        checks.append({"key": "last_rollup", "status": "unknown",
+                       "detail": "Could not read the rollup table"})
+
+    checks.append({
+        "key": "consent_enforcement",
+        "status": "ok" if _consent_enforcement_active() else "degraded",
+        "detail": "Enforced" if _consent_enforcement_active()
+                  else "BYPASSED -- recording without consent",
+    })
+
+    return {"checks": checks}
+
+
+@app.get("/api/admin/consent-summary")
+def admin_consent_summary(request: Request):
+    """Counts only. How many students, how many have said yes to each channel.
+
+    Deliberately aggregate: an admin needs to know whether the consent flow is
+    working, which is a number, not a list of children and what they agreed to.
+    """
+    _require_admin(request)
+    try:
+        students = supabase.table("profiles").select("id") \
+            .eq("role", "student").execute().data or []
+        consents = supabase.table("signal_consent").select("*").execute().data or []
+    except Exception as e:
+        print(f"[admin:consent_summary] {e}")
+        return {"retrieved": False}
+
+    def _n(channel):
+        return sum(1 for c in consents if c.get(f"{channel}_enabled"))
+
+    return {
+        "retrieved": True,
+        "students": len(students),
+        "with_any_consent_row": len(consents),
+        "eeg": _n("eeg"),
+        "headband_optical": _n("headband_optical"),
+        "camera": _n("camera"),
+        # A parent re-enabled a channel and the student has not acknowledged it
+        # yet. Worth surfacing because it is the one consent state that needs
+        # someone to do something.
+        "awaiting_student_ack": sum(
+            1 for c in consents
+            if c.get("parent_enabled_at") and not c.get("student_ack_at")),
+    }
+
+
+@app.get("/api/admin/students/search")
+def admin_student_search(request: Request, q: str = "", limit: int = 10):
+    """Find a student by name or email, to jump to their existing report.
+
+    Returns identifiers and nothing else -- the report itself is served by the
+    endpoints that already exist, behind the relationship check that now admits
+    admins.
+    """
+    _require_admin(request)
+    term = (q or "").strip()
+    if len(term) < 2:
+        # Not an error: an empty box is the normal state of a search field. A
+        # one-character term would return most of the school, which is not a
+        # search result.
+        return {"students": [], "query": term}
+    limit = max(1, min(limit, 25))
+
+    # PostgREST `or` with `ilike`. The term is escaped for the filter's own
+    # syntax -- a comma or parenthesis would otherwise be read as structure
+    # rather than as text, which is this filter language's injection shape.
+    safe = term.replace("\\", "\\\\").replace("%", "\\%").replace(",", "").replace("(", "").replace(")", "")
+    try:
+        rows = supabase.table("profiles") \
+            .select("id, display_name, email, grade_level") \
+            .eq("role", "student") \
+            .or_(f"display_name.ilike.%{safe}%,email.ilike.%{safe}%") \
+            .limit(limit).execute().data or []
+    except Exception as e:
+        print(f"[admin:search] {e}")
+        return {"students": [], "query": term, "retrieved": False}
+
+    return {"query": term, "retrieved": True, "students": [{
+        "id": r["id"],
+        "display_name": r.get("display_name") or "Student",
+        "email": r.get("email") or "",
+        "grade_level": r.get("grade_level"),
+    } for r in rows]}
 
 
 if __name__ == "__main__":

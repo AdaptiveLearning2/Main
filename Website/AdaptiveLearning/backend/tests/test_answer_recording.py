@@ -274,6 +274,100 @@ def test_closing_an_open_session_still_credits_it(monkeypatch):
     assert credited == [(USER, 6, 4)]
 
 
+class _RosterClient:
+    """`user_stats` and open `sessions` for many students, counting queries."""
+
+    def __init__(self, stats_rows=(), open_rows=(), raises=()):
+        self.stats_rows = list(stats_rows)
+        self.open_rows = list(open_rows)
+        self.raises = set(raises)
+        self.queries = []
+
+    def table(self, name):
+        client, table = self, name
+
+        class _Q:
+            def select(self, *_a):
+                return self
+
+            def in_(self, *_a):
+                return self
+
+            def eq(self, *_a):
+                return self
+
+            def is_(self, *_a):
+                return self
+
+            def execute(self):
+                client.queries.append(table)
+                if table in client.raises:
+                    raise RuntimeError(f"{table} unavailable")
+                rows = client.stats_rows if table == "user_stats" else client.open_rows
+                return type("R", (), {"data": rows})()
+
+        return _Q()
+
+
+def test_a_roster_costs_two_queries_not_two_per_student(monkeypatch):
+    """`class_students` and `my_children` call this inside a loop that already
+    makes several reads per student, so the per-student version turned a class
+    of thirty into sixty extra round trips on a page a teacher lives in."""
+    ids = [f"s-{i}" for i in range(30)]
+    c = _RosterClient(stats_rows=[{"user_id": "s-0", "total_questions": 4,
+                                   "total_correct": 3}])
+    monkeypatch.setattr(main, "supabase", c)
+
+    out = main._stats_including_open_session_many(ids)
+
+    assert len(c.queries) == 2, f"one read per table, got {c.queries}"
+    assert len(out) == 30
+    assert out["s-0"]["total_questions"] == 4
+    # A student with no row is zero, not missing -- they have answered nothing.
+    assert out["s-7"]["total_questions"] == 0 and out["s-7"]["retrieved"] is True
+
+
+def test_the_roster_adds_each_students_own_open_session(monkeypatch):
+    """The whole point of the helper: `user_stats` is a session behind, and the
+    live delta must land on the student it belongs to rather than the roster."""
+    c = _RosterClient(
+        stats_rows=[{"user_id": "a", "total_questions": 10, "total_correct": 6}],
+        open_rows=[{"user_id": "a", "questions_answered": 3, "correct_answers": 2},
+                   {"user_id": "b", "questions_answered": 5, "correct_answers": 5}])
+    monkeypatch.setattr(main, "supabase", c)
+
+    out = main._stats_including_open_session_many(["a", "b"])
+
+    assert out["a"]["total_questions"] == 13 and out["a"]["total_correct"] == 8
+    assert out["b"]["total_questions"] == 5 and out["b"]["total_correct"] == 5
+
+
+def test_a_failed_roster_read_marks_every_student_unretrieved(monkeypatch):
+    """Same three-state rule as the single-student version. The batch cannot
+    know which rows it would have got, so reporting a roster of zeros would be
+    an absence asserted from data that never loaded -- for a whole class."""
+    c = _RosterClient(raises=["user_stats"])
+    monkeypatch.setattr(main, "supabase", c)
+
+    out = main._stats_including_open_session_many(["a", "b"])
+
+    assert all(v["retrieved"] is False for v in out.values())
+
+
+def test_a_failed_open_session_read_still_reports_the_stored_totals(monkeypatch):
+    """This call only ever *adds* to the stored totals, so losing the delta
+    leaves them true as far as they go -- unlike losing the totals themselves."""
+    c = _RosterClient(stats_rows=[{"user_id": "a", "total_questions": 10,
+                                   "total_correct": 6}],
+                      raises=["sessions"])
+    monkeypatch.setattr(main, "supabase", c)
+
+    out = main._stats_including_open_session_many(["a"])
+
+    assert out["a"]["retrieved"] is True
+    assert out["a"]["total_questions"] == 10
+
+
 def test_only_one_place_reads_user_stats():
     """`user_stats` gains a row when a session *closes*, so reading it directly
     reports a student mid-lesson as having answered nothing.
@@ -312,7 +406,8 @@ def test_only_one_place_reads_user_stats():
     # a *ranking* -- where being one session stale is both harmless and uniform
     # across everyone on the board. Listed with its reason rather than left to
     # slip through a regex, so the next reader still has to justify itself.
-    ALLOWED = {"_stats_including_open_session", "_credit_session_to_user_stats"}
+    ALLOWED = {"_stats_including_open_session", "_stats_including_open_session_many",
+               "_credit_session_to_user_stats"}
     ALLOWLIST = {"leaderboard": "ranks all users; one query, staleness is uniform"}
 
     for pos in readers:

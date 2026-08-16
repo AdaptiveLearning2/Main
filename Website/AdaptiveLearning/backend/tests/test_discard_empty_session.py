@@ -78,6 +78,25 @@ def test_a_session_with_nothing_at_all_is_discarded(_client):
     assert c.deleted == [SESSION]
 
 
+def test_an_answered_session_survives_a_counter_that_says_zero(_client):
+    """The counter and the answer rows are written by two separate statements.
+
+    `record_answer` inserts into `session_answers` and then bumps
+    `sessions.questions_answered`, with no transaction around the pair. The
+    update failing -- or the read it is computed from failing -- leaves real
+    answers behind a counter reading 0, and this job deletes on absence. Before
+    `session_answers` was consulted, a database hiccup mid-lesson could end with
+    a student's answered session deleted for looking empty, taking the answers
+    with it.
+
+    The counter is a denormalised cache. The rows are the record.
+    """
+    c = _client(populated=["session_answers"])
+
+    assert main._discard_if_nothing_recorded(SESSION, 0) is False
+    assert c.deleted == []
+
+
 def test_answering_questions_keeps_it_even_with_no_signals(_client):
     """The student practised. That is the session, headband or not -- and this
     is the case a careless implementation deletes, because it looks empty from
@@ -88,7 +107,8 @@ def test_answering_questions_keeps_it_even_with_no_signals(_client):
     assert c.deleted == []
 
 
-@pytest.mark.parametrize("table", ["cognitive_signals", "face_signals", "heart_signals"])
+@pytest.mark.parametrize("table", ["session_answers", "cognitive_signals",
+                                   "face_signals", "heart_signals"])
 def test_any_one_signal_table_with_a_row_keeps_it(_client, table):
     """A student who wore a headband and answered nothing recorded something
     real. Parametrised over all three because 'the loop body is the same' is an
@@ -99,7 +119,8 @@ def test_any_one_signal_table_with_a_row_keeps_it(_client, table):
     assert c.deleted == []
 
 
-@pytest.mark.parametrize("table", ["cognitive_signals", "face_signals", "heart_signals"])
+@pytest.mark.parametrize("table", ["session_answers", "cognitive_signals",
+                                   "face_signals", "heart_signals"])
 def test_a_failed_read_keeps_the_session(_client, table):
     """The whole reason deleting on absence is dangerous. A table that cannot be
     read is not a table with no rows in it, and treating the two the same is how

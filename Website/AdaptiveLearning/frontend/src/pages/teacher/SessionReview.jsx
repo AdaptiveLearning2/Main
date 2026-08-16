@@ -178,6 +178,7 @@ export default function SessionReview() {
   // One reading, one point. `dot` on the lines below is what makes a lone
   // reading visible, since a single point with no neighbours draws no segment.
   const rowIndexByT = series.map(r => r.t)
+  let heartCollisions = 0
   for (const { t, h } of heartByT) {
     // Binary search for the insertion point, then compare the two neighbours --
     // "nearest" in both directions, not the last one at-or-before.
@@ -197,8 +198,31 @@ export default function SessionReview() {
     // minutes away would place a measurement at a time it was not taken.
     if (pick === null || Math.min(dBefore, dAfter) > 15_000) continue
     const row = series[pick]
+    const d = Math.min(dBefore, dAfter)
+    // Two readings can choose the same row -- `heart_signals` is unique per
+    // (session, source, ts), so a headband and a camera reading the same
+    // instant are two rows with one timestamp, and the union above collapses
+    // them to one point. The write used to be unconditional, so the second
+    // silently replaced the first and the chart showed one of the two sensors
+    // with nothing saying a reading had been dropped.
+    //
+    // Closest wins, first wins a tie, and the loser is counted rather than
+    // vanishing. Not merged or averaged: two sensors' calibrations combined
+    // into one number is the same mistake the failover markers below exist to
+    // avoid, one layer down.
+    if (row.heart_rate_bpm !== undefined && row._heartDist <= d) {
+      heartCollisions++
+      continue
+    }
+    if (row.heart_rate_bpm !== undefined) heartCollisions++
+    row._heartDist = d
     row.heart_rate_bpm = typeof h.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null
     row.rmssd_ms = typeof h.rmssd_ms === 'number' ? h.rmssd_ms : null
+  }
+  if (heartCollisions) {
+    console.warn(
+      `[session-review] ${heartCollisions} heart reading(s) shared a plotted ` +
+      'timestamp with another and are not drawn; the nearest one is shown.')
   }
 
   const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)

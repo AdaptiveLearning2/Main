@@ -449,14 +449,23 @@ def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
 
     **Deletes on absence, so it is guarded like `sweep_orphan_charts`.** A read
     that fails keeps the session: never delete because you could not confirm
-    there was nothing there. Any one of the three tables reporting a row is
+    there was nothing there. Any one of the four tables reporting a row is
     enough to keep it, so a signals-only session -- a student who wore the
     headband and answered nothing -- survives, which is the case this must not
     get wrong.
+
+    **`session_answers` is checked, not just the counter.** `record_answer`
+    inserts the answer row and bumps `sessions.questions_answered` in two
+    separate statements with no transaction around them, so the counter can sit
+    at 0 while real answers exist -- the update failing, or the read it is
+    computed from failing, is enough. The counter is a denormalised cache; the
+    rows are the record. Trusting the cache meant a hiccup mid-lesson could end
+    with a student's answered session deleted for looking empty, which is the
+    one outcome a delete-on-absence job may not have.
     """
     if questions:
         return False
-    for table in ("cognitive_signals", "face_signals", "heart_signals"):
+    for table in ("session_answers", "cognitive_signals", "face_signals", "heart_signals"):
         try:
             rows = supabase.table(table).select("session_id") \
                 .eq("session_id", session_id).limit(1).execute().data or []
@@ -1949,6 +1958,58 @@ def _stats_including_open_session(student_id: str) -> dict:
             "total_correct":   (base.get("total_correct") or 0) + live_c}
 
 
+def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict]:
+    """The same figures as above, for a roster, in two queries rather than 2N.
+
+    `class_students` and `my_children` both call this per student inside a loop
+    that already makes several reads each, so the single-student version turned
+    a class of thirty into sixty extra round trips on a page a teacher opens
+    constantly.
+
+    Same three-state rule and the same `retrieved` flag, resolved per student.
+    A failed lifetime read marks *every* student unretrieved rather than
+    reporting a roster of zeros -- the batch cannot tell which rows it would
+    have got, and guessing in the optimistic direction is what the flag exists
+    to prevent.
+    """
+    if not student_ids:
+        return {}
+    base: dict[str, dict] = {
+        sid: {"total_questions": 0, "total_correct": 0, "current_streak": 0,
+              "best_streak": 0, "retrieved": True}
+        for sid in student_ids
+    }
+    try:
+        rows = supabase.table("user_stats").select("*") \
+            .in_("user_id", student_ids).execute().data or []
+        for r in rows:
+            if r.get("user_id") in base:
+                base[r["user_id"]] = {**r, "retrieved": True}
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stats] could not batch-read user_stats for {len(student_ids)}: {e}")
+        return {sid: {**v, "retrieved": False} for sid, v in base.items()}
+    try:
+        open_rows = supabase.table("sessions") \
+            .select("user_id, questions_answered, correct_answers") \
+            .in_("user_id", student_ids).is_("ended_at", "null").execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # The stored totals stand on their own; this only ever adds to them.
+        print(f"[stats] could not batch-read open sessions: {e}")
+        return base
+    for r in open_rows:
+        sid = r.get("user_id")
+        if sid not in base:
+            continue
+        live_q = r.get("questions_answered") or 0
+        if not live_q:
+            continue
+        base[sid] = {**base[sid],
+                     "total_questions": (base[sid].get("total_questions") or 0) + live_q,
+                     "total_correct": (base[sid].get("total_correct") or 0)
+                     + (r.get("correct_answers") or 0)}
+    return base
+
+
 @app.get("/api/stats/me")
 def my_stats(request: Request):
     user = get_user(request)
@@ -3041,9 +3102,12 @@ def class_students(class_id: str, request: Request):
     memberships = supabase.table("class_memberships").select("student_id, joined_at") \
         .eq("class_id", class_id).execute()
     students = []
+    # One read for the whole roster, not two per student.
+    all_stats = _stats_including_open_session_many(
+        [m["student_id"] for m in (memberships.data or [])])
     for m in (memberships.data or []):
         sid = m["student_id"]
-        stats = _stats_including_open_session(sid)
+        stats = all_stats.get(sid) or {}
         p = _profile(sid)
         students.append({
             "user_id":   sid,
@@ -4686,9 +4750,12 @@ def my_children(request: Request, include_face: bool = True):
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
     children = []
+    # One read for all the children, not two per child.
+    all_stats = _stats_including_open_session_many(
+        [lnk["child_id"] for lnk in (links.data or [])])
     for lnk in (links.data or []):
         cid = lnk["child_id"]
-        stats = _stats_including_open_session(cid)
+        stats = all_stats.get(cid) or {}
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         perf_res = supabase.table("user_math_performance").select("*, math_topics(topic_name)").eq("user_id", cid).execute()
         p = _profile(cid)

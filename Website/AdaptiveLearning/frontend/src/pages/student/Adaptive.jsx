@@ -323,6 +323,14 @@ export default function Adaptive() {
   // than the pull path's equivalent. The read is a cached field on loopback.
   useEffect(() => {
     if (!headband.connected || !stationId) return
+    // Under pull with a session running, the 3s status poll below reads the
+    // same `eegStatus` response and now takes the charge off it -- so this
+    // would be a second call to one backend endpoint for a field already in
+    // hand. It still runs under pull *before* a session exists, which is when
+    // a student pairs a headband and the status poll has returned early, and
+    // always under push, where it reads the sidecar directly and is the only
+    // thing watching the link.
+    if (!headband.pushMode && sessionId) return
     let killed = false
     const read = async () => {
       try {
@@ -356,7 +364,7 @@ export default function Adaptive() {
     read()
     const id = setInterval(read, 5000)
     return () => { killed = true; clearInterval(id) }
-  }, [headband.connected, headband.pushMode, stationId])
+  }, [headband.connected, headband.pushMode, stationId, sessionId])
 
   // Close the session the student is in.
   //
@@ -429,6 +437,16 @@ export default function Adaptive() {
         ...(s.ingest_mode === 'push' ? {} : { connected: !!s.poller?.running }),
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
+        // Taken from the response already in hand. Under pull the telemetry
+        // effect above reads `eegStatus` too, so with a session running the two
+        // polled the same backend endpoint 3s and 5s apart for overlapping
+        // fields; that effect now stands down under pull once a session exists.
+        // Same `typeof` check and the same reason: 0% is a real charge, and
+        // `pct || null` would erase exactly the reading the badge is for.
+        ...(s.ingest_mode === 'push' ? {} : {
+          battery: typeof s.muse?.ingestion?.battery_percent === 'number'
+            ? s.muse.ingestion.battery_percent : null,
+        }),
       }))
     }
     tick()
@@ -1093,20 +1111,38 @@ export default function Adaptive() {
           className="mb-6 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4 flex items-center gap-4 shadow-sm">
           <div className="w-11 h-11 rounded-xl bg-fuchsia-600 grid place-items-center text-white text-lg">📷</div>
           <div className="flex-1 min-w-0">
+            {/* Three states, not two. The camera is deliberately not tied to
+                the session -- it comes on when the student says so, and whether
+                anything is *stored* depends on a lesson running -- so "the
+                camera is on" and "you are being recorded" are different claims
+                and only the second earns the red dot.
+
+                Driven off `camera.running` alone, this said RECORDING after
+                `finishSession` had cleared the session, while the sidecar was
+                capturing frames and dropping them. Clearing `camera.running`
+                there instead would have been the opposite lie: the camera
+                really is still on, and a student looking at the lens deserves
+                to be told so. Same rule as RecordingIndicator -- a chip
+                claiming a recording that is not happening is worse than no
+                chip -- applied to the surface that outlives the session. */}
             <p className="font-bold text-sm flex items-center gap-2">
               Camera
-              {camera.running
+              {camera.running && sessionId
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
-                : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">off</span>}
+                : camera.running
+                  ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
+                  : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">off</span>}
             </p>
             <p className="text-[11px] text-gray-400 mt-0.5">
               {!headband.pushMode
                 ? 'The camera records through the app on this computer, which this deployment is not set up for. Nothing would be saved.'
                 : camera.busy
                   ? 'Starting the camera...'
-                  : camera.running
+                  : camera.running && sessionId
                     ? 'Reading how you are finding the questions. No video is saved.'
-                    : 'Turn on to read how you are finding the questions. No video is saved.'}
+                    : camera.running
+                      ? 'The camera is on, but nothing is being recorded until you start a lesson. No video is saved.'
+                      : 'Turn on to read how you are finding the questions. No video is saved.'}
             </p>
           </div>
           <button onClick={toggleCamera}

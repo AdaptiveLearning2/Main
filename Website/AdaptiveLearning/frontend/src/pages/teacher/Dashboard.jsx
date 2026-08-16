@@ -5,6 +5,7 @@ import { Users, HelpCircle, BarChart3, ArrowUpRight, Brain, Zap, Copy, Check } f
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { toast } from 'sonner'
+import SkeletonList, { Skeleton } from '../../components/ui/Skeleton'
 
 function StatCard({ icon: Icon, title, value, sub, color, delay }) {
   return (
@@ -31,59 +32,119 @@ function StatCard({ icon: Icon, title, value, sub, color, delay }) {
 
 
 
+// How often the dashboard refreshes itself. A teacher leaves this open on a
+// second screen during a lesson, so figures that never move are figures they
+// are reading wrong -- but nothing here is live enough to want a fast poll.
+const REFRESH_MS = 60_000
+
 export default function TeacherDashboard() {
   const { user } = useAuth()
   const [questions, setQuestions] = useState([])
+  // Three states, not two. `null` is "not read", which must not render as an
+  // empty question bank -- the failure this page had was reporting 0 questions
+  // and no classes for a backend that was simply down.
+  const [questionCount, setQuestionCount] = useState(null)
   const [loading, setLoading]     = useState(true)
+  const [questionsFailed, setQuestionsFailed] = useState(false)
   const name = user?.email?.split('@')[0] || 'there'
-
-  useEffect(() => {
-    apiFetch('/api/questions?limit=1000')
-      .then(q => { setQuestions(q || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
-
-  
-
 
   const [classes, setClasses] = useState([])
   const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak }
   const [classesLoading, setClassesLoading] = useState(true)
+  const [classesFailed, setClassesFailed] = useState(false)
+  // When the figures on screen were last actually confirmed. Null until the
+  // first success, so a page that has never loaded cannot claim a time.
+  const [lastUpdated, setLastUpdated] = useState(null)
   const headcount = (c) => c.class_memberships?.[0]?.count ?? 0
   const totalStudents = classes.reduce((sum, c) => sum + headcount(c), 0)
 
   useEffect(() => {
-    apiFetch('/api/classes').then(async (rows) => {
-      setClasses(rows || [])
-      const averages = {}
-      await Promise.all((rows || []).map(async (c) => {
-        try {
-          const students = await apiFetch(`/api/classes/${c.id}/students`)
-          const withAttempts = (students || []).filter(s => (s.total_questions || 0) > 0)
-          const avgAccuracy = withAttempts.length
-            ? Math.round(
-                withAttempts.reduce((sum, s) => sum + (s.total_correct / s.total_questions) * 100, 0)
-                / withAttempts.length
-              )
-            : null
-          const avgStreak = (students || []).length
-            ? Math.round((students || []).reduce((sum, s) => sum + (s.current_streak || 0), 0) / students.length)
-            : 0
-          averages[c.id] = { avgAccuracy, avgStreak }
-        } catch {
-          averages[c.id] = { avgAccuracy: null, avgStreak: 0 }
-        }
-      }))
-      setClassAverages(averages)
-      setClassesLoading(false)
-    }).catch(() => setClassesLoading(false))
+    let killed = false
+
+    // Five rows and a count, not a thousand rows. The list is ordered by the
+    // endpoint now, so these really are the five most recent.
+    const loadQuestions = async () => {
+      try {
+        const [recent, count] = await Promise.all([
+          apiFetch('/api/questions?limit=5'),
+          apiFetch('/api/questions/count'),
+        ])
+        if (killed) return
+        setQuestions(recent || [])
+        setQuestionCount(count?.retrieved === false ? null : (count?.total ?? null))
+        setQuestionsFailed(false)
+        return true
+      } catch (e) {
+        if (killed) return
+        console.error('Failed to load questions:', e)
+        // Kept on screen if we had them: a failed *refresh* should not blank a
+        // dashboard that was correct a minute ago. Only the banner changes.
+        setQuestionsFailed(true)
+        return false
+      } finally {
+        if (!killed) setLoading(false)
+      }
+    }
+
+    const loadClasses = async () => {
+      try {
+        const rows = await apiFetch('/api/classes')
+        if (killed) return
+        setClasses(rows || [])
+        const averages = {}
+        await Promise.all((rows || []).map(async (c) => {
+          try {
+            const students = await apiFetch(`/api/classes/${c.id}/students`)
+            const withAttempts = (students || []).filter(s => (s.total_questions || 0) > 0)
+            const avgAccuracy = withAttempts.length
+              ? Math.round(
+                  withAttempts.reduce((sum, s) => sum + (s.total_correct / s.total_questions) * 100, 0)
+                  / withAttempts.length
+                )
+              : null
+            const avgStreak = (students || []).length
+              ? Math.round((students || []).reduce((sum, s) => sum + (s.current_streak || 0), 0) / students.length)
+              : 0
+            // `null` accuracy here means "nobody has attempted anything",
+            // which the card already renders as an em dash. A class whose
+            // roster failed to load is marked separately below.
+            averages[c.id] = { avgAccuracy, avgStreak, retrieved: true }
+          } catch {
+            averages[c.id] = { avgAccuracy: null, avgStreak: 0, retrieved: false }
+          }
+        }))
+        if (killed) return
+        setClassAverages(averages)
+        setClassesFailed(false)
+        return true
+      } catch (e) {
+        if (killed) return
+        console.error('Failed to load classes:', e)
+        setClassesFailed(true)
+        return false
+      } finally {
+        if (!killed) setClassesLoading(false)
+      }
+    }
+
+    const refresh = async () => {
+      const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
+      // Stamped only when both halves succeeded, or the time would vouch for
+      // figures that are partly stale -- which is worse than no time at all.
+      if (!killed && q && c) setLastUpdated(new Date())
+    }
+
+    refresh()
+    const id = setInterval(refresh, REFRESH_MS)
+    return () => { killed = true; clearInterval(id) }
   }, [])
   const recentQuestions = questions.slice(0, 5)
 
+  const failed = questionsFailed || classesFailed
   const CARDS = [
-    { icon: HelpCircle, title: 'Total Questions', value: loading ? '...' : questions.length, sub: 'in question bank', color: 'bg-gradient-to-br from-violet-500 to-purple-600', delay: 0.1 },
-    { icon: Users,       title: 'Classes',         value: classesLoading ? '...' : classes.length, sub: 'you teach',   color: 'bg-gradient-to-br from-indigo-500 to-blue-600',   delay: 0.2 },
-    { icon: Users,       title: 'Total Students',  value: classesLoading ? '...' : totalStudents,   sub: 'enrolled',    color: 'bg-gradient-to-br from-emerald-500 to-green-600', delay: 0.3 },
+    { icon: HelpCircle, title: 'Total Questions', value: loading ? '...' : (questionCount ?? '—'), sub: questionsFailed ? "couldn't be loaded" : 'in question bank', color: 'bg-gradient-to-br from-violet-500 to-purple-600', delay: 0.1 },
+    { icon: Users,       title: 'Classes',         value: classesLoading ? '...' : (classesFailed && !classes.length ? '—' : classes.length), sub: classesFailed && !classes.length ? "couldn't be loaded" : 'you teach',   color: 'bg-gradient-to-br from-indigo-500 to-blue-600',   delay: 0.2 },
+    { icon: Users,       title: 'Total Students',  value: classesLoading ? '...' : (classesFailed && !classes.length ? '—' : totalStudents),   sub: classesFailed && !classes.length ? "couldn't be loaded" : 'enrolled',    color: 'bg-gradient-to-br from-emerald-500 to-green-600', delay: 0.3 },
   ]
 
   const [copiedId, setCopiedId] = useState(null)
@@ -113,6 +174,15 @@ export default function TeacherDashboard() {
             Hey, <span className="text-violet-600">{name}</span> 👋
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Here's what's going on with your class.</p>
+          {/* When the numbers were last confirmed. A dashboard left open on a
+              second screen otherwise gives no way to tell figures that are
+              current from figures that stopped updating an hour ago. */}
+          {lastUpdated && (
+            <p className="text-[11px] text-gray-400 mt-1">
+              Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+              {' · refreshes every minute'}
+            </p>
+          )}
         </div>
         <Link to="/teacher/questions">
           <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
@@ -121,6 +191,20 @@ export default function TeacherDashboard() {
           </motion.div>
         </Link>
       </motion.div>
+
+      {/* A failed read is not a quiet week. Whatever loaded stays on screen --
+          blanking a correct dashboard because a refresh failed is the louder
+          mistake -- and this says which half is stale. */}
+      {failed && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
+          <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
+            {lastUpdated
+              ? "Couldn't refresh just now — showing the last figures that loaded."
+              : "Some of this dashboard couldn't be loaded. Check the backend is running."}
+          </p>
+        </div>
+      )}
+
       {/* stat cards */}
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
         {CARDS.map(c => <StatCard key={c.title} {...c} />)}
@@ -136,7 +220,7 @@ export default function TeacherDashboard() {
 
         {classesLoading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {[1,2,3].map(i => <div key={i} className="h-28 bg-gray-100 dark:bg-gray-800 rounded-2xl animate-pulse" />)}
+            {[1,2,3].map(i => <Skeleton key={i} height="h-28" />)}
           </div>
         ) : classes.length === 0 ? (
           <div className="text-center py-10 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
@@ -183,7 +267,7 @@ export default function TeacherDashboard() {
                   <div key={c.id} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
                     <p className="font-black text-gray-900 dark:text-white mb-3">{c.name}</p>
                     {classesLoading || !avg ? (
-                      <div className="h-10 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />
+                      <Skeleton height="h-10" />
                     ) : (
                       <div className="grid grid-cols-2 gap-2 text-center">
                         <div>
@@ -269,7 +353,7 @@ export default function TeacherDashboard() {
           </div>
         
           {loading ? (
-            <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />)}</div>
+            <SkeletonList count={3} height="h-12" gap="space-y-2" />
           ) : recentQuestions.length === 0 ? (
             <div className="text-center py-6">
               <p className="text-4xl mb-2">📭</p>

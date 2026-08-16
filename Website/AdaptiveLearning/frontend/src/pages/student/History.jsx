@@ -1,17 +1,33 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
+import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 
 export default function History() {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading]   = useState(true)
+  const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
 
-  useEffect(() => {
+  // Named so the retry button can call it again. A student whose history
+  // failed to load once should not have to know that reloading the page is
+  // the fix.
+  // No `setLoading(true)` here: it is already true on mount, and setting state
+  // synchronously inside an effect is a cascading render. The retry path below
+  // sets it, because by then it is false.
+  const load = () => {
     apiFetch('/api/sessions')
-      .then(s => { setSessions(s || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
+      .then(s => { setSessions(s || []); setFailed(false); setLoading(false) })
+      // Not `setLoading(false)` alone. That left `sessions` empty and drew
+      // "No sessions here" -- telling a student who had practised all term
+      // that they had never practised, because one request failed.
+      .catch(e => { console.error('Failed to load sessions:', e); setFailed(true); setLoading(false) })
+  }
+
+  const retry = () => { setLoading(true); load() }
+
+  useEffect(load, [])
 
   const filtered = sessions.filter(s => {
     if (filter === 'complete')   return !!s.ended_at
@@ -59,7 +75,9 @@ export default function History() {
       </div>
 
       {loading ? (
-        <div className="space-y-3">{[1,2,3,4].map(i => <div key={i} className="h-20 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+        <SkeletonList count={4} height="h-20" />
+      ) : failed ? (
+        <LoadError what="your session history" onRetry={retry} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">📭</div>

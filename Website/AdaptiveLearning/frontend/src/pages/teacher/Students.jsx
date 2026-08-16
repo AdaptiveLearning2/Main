@@ -78,7 +78,14 @@ const asPct = (value) => {
 async function getStudentStats(studentId)
 {
    const [statsRes, summary, topicRes] = await Promise.all([
-    supabase.from('user_stats').select('*').eq('user_id', studentId).maybeSingle(),
+    // The endpoint, not `user_stats` directly. That table only gains a row when
+    // a session *closes*, so reading it here showed "0 questions" for a student
+    // who was answering right now -- while the parent's report, which goes
+    // through this endpoint, showed the real figure for the same child at the
+    // same moment. `/api/stats/student` adds any open session's counts and
+    // applies `_verify_can_view_student`, which the direct read leaned on RLS
+    // for.
+    apiFetch(`/api/stats/student/${studentId}`),
     // Caught here rather than left to reject the Promise.all: a signal-summary
     // outage should cost the four signal tiles, not the academic ones sitting
     // beside them that loaded fine.
@@ -89,10 +96,9 @@ async function getStudentStats(studentId)
       .eq('user_id', studentId)
   ])
 
-  if (statsRes.error) console.error('Failed to load user_stats:', statsRes.error)
   if (topicRes.error) console.error('Failed to load topic performance:', topicRes.error)
 
-  const userStats = statsRes.data
+  const userStats = statsRes
   const signals = summary || {}
 
   const totalAccuracy = userStats && userStats.total_questions > 0

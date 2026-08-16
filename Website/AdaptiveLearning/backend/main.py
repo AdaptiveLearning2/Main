@@ -3002,8 +3002,7 @@ def class_students(class_id: str, request: Request):
     students = []
     for m in (memberships.data or []):
         sid = m["student_id"]
-        stats_res = supabase.table("user_stats").select("*").eq("user_id", sid).execute()
-        stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0}
+        stats = _stats_including_open_session(sid)
         p = _profile(sid)
         students.append({
             "user_id":   sid,
@@ -4134,6 +4133,14 @@ def class_live(class_id: str, request: Request):
                 # Same reason as the sweep in start_session. `sid` is the
                 # student: this runs on a teacher's request, and the rollup
                 # belongs to whoever the data is about.
+                #
+                # The lifetime totals go with it, and this was the third close
+                # site to be missed: a teacher opening the Live view is what
+                # actually closed the session whose six answers never reached
+                # `user_stats`, so the class average read "—" for a class whose
+                # only student was sitting at 67% two clicks away.
+                _credit_session_to_user_stats(sid, sess.get("questions_answered") or 0,
+                                              sess.get("correct_answers") or 0)
                 _rollup_session_days(sid, sess.get("started_at"), now.isoformat())
                 # Third and last close site. Missing one leaves sessions whose
                 # raw rows expire on `ends_on` with no picture behind them, and
@@ -4646,8 +4653,7 @@ def my_children(request: Request, include_face: bool = True):
     children = []
     for lnk in (links.data or []):
         cid = lnk["child_id"]
-        stats_res = supabase.table("user_stats").select("*").eq("user_id", cid).execute()
-        stats = stats_res.data[0] if stats_res.data else {"total_questions": 0, "total_correct": 0, "current_streak": 0, "best_streak": 0}
+        stats = _stats_including_open_session(cid)
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         perf_res = supabase.table("user_math_performance").select("*, math_topics(topic_name)").eq("user_id", cid).execute()
         p = _profile(cid)

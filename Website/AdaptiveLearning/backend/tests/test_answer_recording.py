@@ -174,3 +174,72 @@ def test_the_answer_endpoint_updates_the_topic_record(monkeypatch):
     )
 
     assert seen == [(USER, QUESTION, True)]
+
+
+def test_only_one_place_reads_user_stats():
+    """`user_stats` gains a row when a session *closes*, so reading it directly
+    reports a student mid-lesson as having answered nothing.
+
+    Four surfaces did: `/api/stats/me`, `/api/stats/student`, the class roster
+    and the parent's children list. The teacher's dashboard showed a class
+    average of "—" for a class whose only student was sitting at 67% on the
+    Students page two clicks away, because the average came from one of the
+    readers and the tile from another.
+
+    Derived from the source rather than listed, so a fifth reader cannot be
+    added quietly -- the same exhaustiveness pattern as `_MODE_AWARE` and
+    `test_every_recording_site_gates_on_the_window`. `_credit_session_to_user_stats`
+    is the writer and is allowed; `_stats_including_open_session` is the reader.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(main)
+    readers = [m.start() for m in re.finditer(r'table\("user_stats"\)\s*\.?\s*select', source)]
+    assert readers, "the call shape changed; this test is no longer looking at anything"
+
+    for pos in readers:
+        # Which function the read sits in, by walking back to the nearest def.
+        head = source[:pos]
+        enclosing = re.findall(r"^def (\w+)", head, re.MULTILINE)[-1]
+        assert enclosing in {"_stats_including_open_session", "_credit_session_to_user_stats"}, (
+            f"{enclosing} reads user_stats directly -- it will report a student "
+            "who is mid-session as having answered nothing. Use "
+            "_stats_including_open_session()."
+        )
+
+
+def test_every_session_close_credits_the_lifetime_totals():
+    """Derived from the closes themselves, not a hand-kept list.
+
+    There are three: `/end`, the stale sweep in `start_session`, and the one in
+    `class_live`. The stats update lived only in `/end`, so a student who shut
+    the tab -- or whose teacher opened the Live view -- had every answer in that
+    session dropped from Questions/Correct/Accuracy while `session_answers` kept
+    it. Fixing two of the three still left the class average reading "—" for a
+    class whose only student was at 67%, because the third was the one that had
+    actually closed the session.
+
+    `_rollup_session_days` is the marker, exactly as in
+    `test_every_session_close_schedules_an_archive`: it already runs at every
+    close for the same reason, and these two keep being added and forgotten in
+    the same places.
+    """
+    import inspect
+    import re
+
+    source = inspect.getsource(main)
+    rollups = [m.start() for m in re.finditer(r"_rollup_session_days\(", source)]
+    # The definition itself, plus one call per close site.
+    calls = [p for p in rollups if not source[:p].rstrip().endswith("def")]
+    assert len(calls) >= 3, f"expected at least three close sites, found {len(calls)}"
+
+    for pos in calls:
+        # The close site is a window around the rollup call; the credit sits
+        # beside it in every one of them.
+        window = source[max(0, pos - 1200):pos + 400]
+        assert "_credit_session_to_user_stats(" in window, (
+            "a session close runs the rollup without crediting the lifetime "
+            "totals -- its answers will vanish from Questions/Correct/Accuracy "
+            f"while session_answers keeps them:\n...{source[pos-200:pos+120]}..."
+        )

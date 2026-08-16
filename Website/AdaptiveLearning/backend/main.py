@@ -1712,7 +1712,48 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "questions_answered": (cur.get("questions_answered") or 0) + 1,
         "correct_answers":    (cur.get("correct_answers") or 0) + (1 if payload.correct else 0),
     }).eq("id", session_id).execute()
+    _record_topic_attempt(user["id"], payload.question_id, payload.correct)
     return {"ok": True}
+
+
+def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> None:
+    """Add one attempt to the student's per-topic record.
+
+    The topic is looked up from the **question row**, never taken from the
+    caller. The client already tells us whether it got the answer right, which
+    it has to; letting it also name the topic would let a page credit one
+    subject for work done in another, and this table is what the adaptive
+    engine reads to pick the next question.
+
+    Never raises. It runs after the answer is safely recorded, and a student's
+    answer must not be lost because a topic lookup failed -- the row in
+    `session_answers` is the record that matters and it is already written.
+    """
+    try:
+        q = supabase.table("questions").select("subject").eq("id", question_id) \
+            .limit(1).execute().data or []
+        if not q or not q[0].get("subject"):
+            return
+        topic = supabase.table("math_topics").select("id") \
+            .eq("topic_name", q[0]["subject"]).limit(1).execute().data or []
+        if not topic:
+            # A question whose subject is not in `math_topics`. Nothing to
+            # attribute it to, and inventing a topic row here would put a
+            # subject in the table the generator cannot pick from.
+            return
+        topic_id = topic[0]["id"]
+        existing = supabase.table("user_math_performance") \
+            .select("correct_questions, attempted_questions") \
+            .eq("user_id", user_id).eq("topic_id", topic_id).limit(1).execute().data or []
+        prior = existing[0] if existing else {}
+        supabase.table("user_math_performance").upsert({
+            "user_id":             user_id,
+            "topic_id":            topic_id,
+            "attempted_questions": (prior.get("attempted_questions") or 0) + 1,
+            "correct_questions":   (prior.get("correct_questions") or 0) + (1 if correct else 0),
+        }, on_conflict="user_id,topic_id").execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[answer] could not record topic attempt for {user_id[:8]}: {e}")
 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):

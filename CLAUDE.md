@@ -1098,6 +1098,39 @@ they did not skip. Its "today" is the **browser's local day**, deliberately not 
 helper buckets recorded data against the school's timezone, and this is a nudge about the student's
 own afternoon.
 
+## An answer is recorded by the backend, and the topic comes from the question
+
+`Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all — only `Practice.jsx` did — so every
+question answered on the adaptive path was counted in `localStorage` and nowhere else.
+`session_answers`, `sessions.questions_answered`, `user_stats` and every report built on them read
+zero however long a student practised, while the page's own Topic Accuracy panel showed figures.
+Two records of one afternoon, one of them private to a browser.
+
+**The question id is what made it possible.** `add_question_to_supabase` returned a bool, so the
+generated question reached the page with no id and there was nothing to put in
+`session_answers.question_id`. It now returns the id — **and returns the existing row's id on a
+duplicate** rather than False, because answering a question the generator has produced before is
+exactly as real as answering a novel one.
+
+**`_record_topic_attempt` derives the topic from the question row, never from the caller.** The
+client has to be trusted about correctness; letting it also name the topic would let a page credit
+one subject for work done in another, and `user_math_performance` is what the adaptive engine reads
+to choose what to serve next. It never raises: it runs after `session_answers` is written, and a
+topic lookup failing must not turn a recorded answer into "that answer could not be saved".
+
+**Topic accuracy is read from `user_math_performance`, not from the browser.** It was
+`localStorage.accuracyStats_<uid>` — the only panel in the app whose numbers were not the
+database's. It disagreed with the dashboard on the same screen, started from zero on a school
+computer, and nothing server-side could correct it: a parent erasing a channel left the figures
+standing in the child's browser. The client-side `sendAccuracyToBackend` upsert is **deleted, not
+merely unused** — the backend owns that table now, and a client upsert would overwrite real counts
+with one browser's memory. Its `Number(v) || null` also turned every genuine zero into a null, which
+is why the table sat empty while the panel showed numbers.
+
+There is no "Reset stats" button any more. Against localStorage it cleared a browser key; against
+`user_math_performance` the same button deletes a student's academic record with one click and no
+confirmation. Erasure here is a parent-only, confirmed action.
+
 ## Access control — check the relationship, not the role name
 
 Endpoints serving student data read through the **service-role Supabase client, which bypasses

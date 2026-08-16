@@ -64,11 +64,49 @@ export default function Adaptive() {
   const [timeUpDismissed, setTimeUpDismissed] = useState(false)
   const [finishing, setFinishing]             = useState(false)
 
-  const [accuracyStats, setAccuracyStats] = useState(() => {
-    if (!user?.id) return { total: { correct: 0, attempts: 0 }, subjects: initSubjects() }
-    const saved = localStorage.getItem(`accuracyStats_${user.id}`)
-    return saved ? JSON.parse(saved) : { total: { correct: 0, attempts: 0 }, subjects: initSubjects() }
-  })
+  // Topic accuracy comes from `user_math_performance`, not from this browser.
+  //
+  // It was `localStorage.accuracyStats_<uid>`, which made this the only panel in
+  // the app whose numbers were not the database's. It disagreed with the
+  // dashboard on the same screen, it started from zero on a school computer,
+  // and nothing server-side could correct it -- a parent erasing a channel left
+  // the figures standing in the child's browser.
+  //
+  // Shape kept identical so the render sites are unchanged; `accuracyState` is
+  // what stops a failed read drawing as a student who has never practised.
+  const [accuracyStats, setAccuracyStats] = useState(
+    () => ({ total: { correct: 0, attempts: 0 }, subjects: initSubjects() }))
+  const [accuracyState, setAccuracyState] = useState('loading')  // loading | ready | failed
+
+  const loadAccuracy = useCallback(async () => {
+    if (!user?.id) return
+    // Read directly, the same way this page already reads `math_topics`:
+    // `user_math_performance` carries a FOR ALL own-row policy, so RLS scopes
+    // this to the student whatever the query says.
+    const { data: rows, error } = await supabase
+      .from('user_math_performance')
+      .select('correct_questions, attempted_questions, math_topics(topic_name)')
+      .eq('user_id', user.id)
+    if (error) {
+      console.error('[accuracy] could not load topic performance', error)
+      setAccuracyState('failed')
+      return
+    }
+    const subjects = initSubjects()
+    let correct = 0, attempts = 0
+    for (const r of rows || []) {
+      const name = r.math_topics?.topic_name
+      const c = r.correct_questions || 0
+      const a = r.attempted_questions || 0
+      if (name && subjects[name]) subjects[name] = { correct: c, attempts: a }
+      correct += c
+      attempts += a
+    }
+    setAccuracyStats({ total: { correct, attempts }, subjects })
+    setAccuracyState('ready')
+  }, [user])
+
+  useEffect(() => { loadAccuracy() }, [loadAccuracy])
 
   const [data, setData]             = useState(null)
   const [phase, setPhase]           = useState('idle')
@@ -576,10 +614,14 @@ export default function Adaptive() {
     return () => clearInterval(debugTimer.current)
   }, [stationId, headband.pushMode])
 
+  // Old browser copies are cleared rather than left to rot. They are no longer
+  // read, but a stale `accuracyStats_<uid>` sitting in storage is the next
+  // reader's false lead -- and on a shared computer it is one child's figures
+  // outliving their session for no purpose at all.
   useEffect(() => {
     if (!user?.id) return
-    localStorage.setItem(`accuracyStats_${user.id}`, JSON.stringify(accuracyStats))
-  }, [accuracyStats, user])
+    localStorage.removeItem(`accuracyStats_${user.id}`)
+  }, [user])
 
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
@@ -816,25 +858,16 @@ export default function Adaptive() {
     }
   }
 
-  const sendAccuracyToBackend = async () => {
-    const { data: topicRows, error: topicError } = await supabase.from('math_topics').select('id, topic_name')
-    if (topicError) { console.error(topicError); return }
-    const topicMap = {}
-    topicRows.forEach(t => { topicMap[t.topic_name] = t.id })
-    const rows = Object.entries(accuracyStats.subjects).map(([name, vals]) => ({
-      user_id: user.id,
-      topic_id: topicMap[name],
-      correct_questions: Number(vals.correct) || null,
-      attempted_questions: Number(vals.attempts) || null,
-    }))
-    const { error } = await supabase.from('user_math_performance').upsert(rows, { onConflict: 'user_id,topic_id' })
-    if (error) console.error(error)
-  }
-
+  // `sendAccuracyToBackend` used to run here, pushing this browser's tallies
+  // into `user_math_performance` before every question. It is gone, and it had
+  // to go rather than merely stop being called: the backend now owns that table
+  // and derives the topic from the question row, so a client upsert would
+  // overwrite real counts with whatever one browser happened to remember --
+  // and `Number(vals.correct) || null` turned every genuine zero into a null on
+  // the way, which is why the table sat empty while the panel showed figures.
   const fetchQuestion = async () => {
     setPhase('loading'); setError(false)
     try {
-      await sendAccuracyToBackend()
       const activeSessionId = await getOrCreateSession()
 
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
@@ -852,22 +885,39 @@ export default function Adaptive() {
     }
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const isCorrect = JSON.stringify(data.answer_options[selectedAnswer]) === JSON.stringify(data.correct_answer)
     setCorrect(isCorrect)
     setSessionCount(n => n + 1)
-    setAccuracyStats(prev => {
-      const n = JSON.parse(JSON.stringify(prev))
-      const topic = data.question_topic
-      n.total.attempts += 1
-      if (n.subjects[topic]) n.subjects[topic].attempts += 1
-      if (isCorrect) {
-        n.total.correct += 1
-        if (n.subjects[topic]) n.subjects[topic].correct += 1
-      }
-      return n
-    })
     setPhase('result')
+
+    // The answer goes to the backend. This page never did that -- it had no
+    // `/api/sessions/{id}/answer` call at all -- so every question answered
+    // here was counted in this browser and nowhere else, and `session_answers`,
+    // `user_stats` and every report built on them stayed at zero however long a
+    // student practised. `data.id` is the stored question's id, which the
+    // generator now returns.
+    const sid = sessionIdRef.current
+    if (!sid || !data?.id) {
+      // Loud, because silence here is the failure being fixed. A question with
+      // no id could not be attributed to anything even if it were sent.
+      console.error('[answer] not recorded', { session: sid, question: data?.id })
+      toast.error('That answer could not be saved.')
+      return
+    }
+    try {
+      await apiFetch(`/api/sessions/${sid}/answer`, {
+        method: 'POST',
+        body: { question_id: data.id, selected_index: selectedAnswer, correct: isCorrect },
+      })
+      // Re-read rather than incrementing locally. The backend derives the topic
+      // from the question row, so a local guess could disagree with it -- and
+      // disagreeing copies of this number is the whole bug being removed.
+      await loadAccuracy()
+    } catch (e) {
+      console.error('[answer] not recorded', e)
+      toast.error('That answer could not be saved.')
+    }
   }
 
   const getAcc = (topic) => {
@@ -1329,17 +1379,17 @@ export default function Adaptive() {
             })}
           </div>
 
-          {sessionCount > 0 && (
-            <button
-              onClick={() => {
-                setAccuracyStats({ total: { correct: 0, attempts: 0 }, subjects: initSubjects() })
-                setSessionCount(0)
-                localStorage.removeItem(`accuracyStats_${user.id}`)
-              }}
-              className="mt-5 w-full text-xs text-gray-400 hover:text-rose-500 transition py-2"
-            >
-              Reset stats
-            </button>
+          {/* "Reset stats" is gone. It cleared a browser key, which was
+              harmless while these numbers lived in that browser; against
+              `user_math_performance` the same button would delete a student's
+              academic record from a one-click control with no confirmation --
+              and that record is what the adaptive engine reads to pick the next
+              question. Erasure is a parent-only, confirmed action elsewhere in
+              this product, and this number belongs on that side of the line. */}
+          {accuracyState === 'failed' && (
+            <p className="mt-5 text-xs text-amber-500">
+              Could not load your topic history just now — these are not your real figures.
+            </p>
           )}
         </div>
       </div>

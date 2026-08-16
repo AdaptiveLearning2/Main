@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { LayoutDashboard, Link as LinkIcon, Settings as SettingsIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
@@ -77,6 +77,11 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function ParentLayout() {
+  // The page-transition key. `window.location.pathname` is read straight off
+  // the browser and is not React state, so navigating within the SPA did not
+  // change it during render -- the key stayed equal, AnimatePresence saw the
+  // same element, and the transition it exists for never played.
+  const { pathname } = useLocation()
   const [collapsed, setCollapsed]   = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const { dark, toggleTheme }       = useTheme()
@@ -112,7 +117,7 @@ export default function ParentLayout() {
           <button onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">{dark ? <Sun size={18} className="text-gray-500" /> : <Moon size={18} className="text-gray-500" />}</button>
         </div>
         <main className="flex-1 overflow-y-auto">
-          <motion.div key={window.location.pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+          <motion.div key={pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
             <Outlet />
           </motion.div>
         </main>

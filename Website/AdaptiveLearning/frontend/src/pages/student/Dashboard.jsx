@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRight, Zap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
+import SkeletonList from '../../components/ui/Skeleton'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -41,6 +42,11 @@ function StatCard({ icon: Icon, title, value, sub, color, delay }) {
 
 export default function StudentDashboard() {
   const { user } = useAuth()
+  // `navigate`, not `window.location.href`. Assigning to href is a full browser
+  // navigation: it tears down the SPA, refetches the bundle and replays auth,
+  // so the primary CTA on the student's own dashboard was the slowest way to
+  // reach the lesson and dropped any in-memory state on the way.
+  const navigate = useNavigate()
   const [stats, setStats]     = useState(null)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
@@ -53,7 +59,14 @@ export default function StudentDashboard() {
 
   useEffect(() => {
     Promise.all([
-      apiFetch('/api/stats/me').catch(() => ({ total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 })),
+      // Sentinel, not a zeroed object. Catching to zeros told a student who
+      // had practised all week that they had answered nothing, with no way to
+      // tell that from a genuine fresh start -- the same absence-from-a-failed
+      // -read rule the sessions call below already follows. The backend sends
+      // `retrieved: false` for its own failed read; both arrive here as null.
+      apiFetch('/api/stats/me')
+        .then(s => (s?.retrieved === false ? null : s))
+        .catch(() => null),
       // Sentinel rather than `[]`: an empty list and a failed request are the
       // same value and very different facts, and only one of them is a student
       // who has not practised.
@@ -81,12 +94,16 @@ export default function StudentDashboard() {
 
   const acc  = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
   const name = user?.email?.split('@')[0] || 'there'
+  // Null once loading has finished means the read failed. Distinct from a
+  // student with no record yet, who gets real zeros.
+  const statsFailed = !loading && stats === null
+  const sub = statsFailed ? "couldn't be loaded" : null
 
   const CARDS = [
-    { icon: BookOpen,   title: 'Questions',  value: stats?.total_questions ?? 0,  sub: 'all time',  color: 'bg-gradient-to-br from-indigo-500 to-indigo-600',  delay: 0.1 },
-    { icon: Target,     title: 'Correct',    value: stats?.total_correct ?? 0,    sub: 'all time',  color: 'bg-gradient-to-br from-green-500 to-emerald-600',   delay: 0.2 },
-    { icon: TrendingUp, title: 'Accuracy',   value: `${acc}%`,                    sub: 'overall',   color: 'bg-gradient-to-br from-violet-500 to-purple-600',   delay: 0.3 },
-    { icon: Flame,      title: 'Streak',     value: stats?.current_streak ?? 0,   sub: 'days',      color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
+    { icon: BookOpen,   title: 'Questions',  value: statsFailed ? '—' : (stats?.total_questions ?? 0),  sub: sub ?? 'all time',  color: 'bg-gradient-to-br from-indigo-500 to-indigo-600',  delay: 0.1 },
+    { icon: Target,     title: 'Correct',    value: statsFailed ? '—' : (stats?.total_correct ?? 0),    sub: sub ?? 'all time',  color: 'bg-gradient-to-br from-green-500 to-emerald-600',   delay: 0.2 },
+    { icon: TrendingUp, title: 'Accuracy',   value: statsFailed ? '—' : `${acc}%`,                      sub: sub ?? 'overall',   color: 'bg-gradient-to-br from-violet-500 to-purple-600',   delay: 0.3 },
+    { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: sub ?? 'days',      color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
   ]
 
   return (
@@ -95,6 +112,17 @@ export default function StudentDashboard() {
           outside settings. A sensor resuming is worth telling them about; a
           live readout of their own focus is not. */}
       <ParentRestoredBanner studentId={user?.id} />
+
+      {/* Says so rather than showing zeros. A student whose figures failed to
+          load was told they had answered nothing all term, which is both wrong
+          and discouraging in the one place it matters most. */}
+      {statsFailed && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
+          <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
+            Your progress couldn&apos;t be loaded just now. Your work is saved — try refreshing.
+          </p>
+        </div>
+      )}
 
       {/* The practice reminder. This is the whole of what the Preferences
           toggle switches on, and the toggle's copy says so -- it is a banner
@@ -109,7 +137,7 @@ export default function StudentDashboard() {
           <p className="text-sm font-bold text-indigo-900 dark:text-indigo-200 flex-1 min-w-[12rem]">
             You have not practised today. A few questions is plenty.
           </p>
-          <button onClick={() => window.location.href = '/adaptive'}
+          <button onClick={() => navigate('/adaptive')}
             className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow transition">
             Start a session
           </button>
@@ -127,7 +155,7 @@ export default function StudentDashboard() {
         </div>
         <motion.div
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
-          onClick={() => window.location.href = '/adaptive'}
+          onClick={() => navigate('/adaptive')}
           className="hidden md:flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer"
         >
           <Brain size={16} /> Start AI Session
@@ -146,7 +174,7 @@ export default function StudentDashboard() {
             initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.45 }}
             whileHover={{ scale: 1.005 }}
             className="relative bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 rounded-2xl p-7 text-white overflow-hidden shadow-xl shadow-indigo-200 dark:shadow-indigo-950 cursor-pointer"
-            onClick={() => window.location.href = '/adaptive'}
+            onClick={() => navigate('/adaptive')}
           >
             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -translate-y-16 translate-x-16" />
             <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full translate-y-10 -translate-x-10" />
@@ -237,7 +265,7 @@ export default function StudentDashboard() {
               </Link>
             </div>
             {loading ? (
-              <div className="space-y-2">{[1,2,3].map(i => <div key={i} className="h-12 bg-gray-100 dark:bg-gray-800 rounded-xl animate-pulse" />)}</div>
+              <SkeletonList count={3} height="h-12" gap="space-y-2" />
             ) : sessions.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-4xl mb-2">🏁</p>

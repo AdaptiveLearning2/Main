@@ -928,6 +928,23 @@ export default function Adaptive() {
   const totalAcc = accuracyStats.total.attempts > 0
     ? Math.round((accuracyStats.total.correct / accuracyStats.total.attempts) * 100) : null
 
+  // What this headband has actually delivered.
+  //
+  // `headband.samples` is the *backend poller's* count, and under push there is
+  // no backend poller -- so the card read "0 samples sent" for a whole session
+  // while the sidecar's own status said 178 cognitive and 134 face rows
+  // delivered and the database agreed with the sidecar. Third instance of the
+  // same mistake on this page, after `available` and `connected`: a backend
+  // field standing in for something the backend cannot see in this deployment.
+  //
+  // cognitive + heart, because both come off the headband and this is the
+  // headband's card; the camera has its own. Read from the same `push.recorded`
+  // the RECORDING chip is derived from, so the badge and the number cannot
+  // disagree about whether anything is being written.
+  const headbandSamples = headband.pushMode
+    ? ((push?.recorded?.cognitive || 0) + (push?.recorded?.heart || 0))
+    : headband.samples
+
   const activeClass = classes.find(c => c.id === classId)
   const effectiveGrade = mode === 'class' ? (activeClass?.grade_level || '—') : grade
   const biasLabel = bias === -1 ? 'Easier' : bias === 1 ? 'Harder' : 'Auto'
@@ -980,10 +997,10 @@ export default function Adaptive() {
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
             {headband.phase === 'connecting' && `🔗 Connecting to ${headband.deviceName || 'headband'}...`}
             {headband.phase === 'starting'   && 'Starting EEG session...'}
-            {headband.phase === 'connected'  && `${headband.samples} samples sent · teacher can see your focus & stress live`}
+            {headband.phase === 'connected'  && `${headbandSamples} samples sent · teacher can see your focus & stress live`}
             {headband.phase === 'idle' && (
               headband.connected
-                ? `${headband.samples} samples sent · teacher can see your focus & stress live`
+                ? `${headbandSamples} samples sent · teacher can see your focus & stress live`
                 : headband.pushMode
                   ? (push && push.enabled === false
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'

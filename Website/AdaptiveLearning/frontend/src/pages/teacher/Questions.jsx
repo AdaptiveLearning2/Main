@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 
 const TOPICS = ['all','ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const DIFFS  = ['all','easy','medium','hard']
@@ -64,14 +66,24 @@ export default function Questions() {
   const [topicFilter, setTopicFilter] = useState('all')
   const [diffFilter, setDiffFilter]   = useState('all')
   const [selected, setSelected]   = useState(null)
+  const [failed, setFailed]       = useState(false)
   const [page, setPage]           = useState(1)
   const PER_PAGE = 15
 
-  useEffect(() => {
+  // See History.jsx: already true on mount, so setting it here would be a
+  // synchronous setState inside an effect.
+  const load = () => {
+    // This page paginates the whole bank client-side, so unlike the dashboard
+    // it genuinely wants every row. The limit stays; what changes is that a
+    // failure no longer reads as an empty question bank.
     apiFetch('/api/questions?limit=1000')
-      .then(q => { setQuestions(q || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
+      .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
+      .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
+  }
+
+  const retry = () => { setLoading(true); load() }
+
+  useEffect(load, [])
 
   const filtered = questions.filter(q => {
     const matchSearch = !search || q.question_text?.toLowerCase().includes(search.toLowerCase())
@@ -131,7 +143,11 @@ export default function Questions() {
       </div>
 
       {loading ? (
-        <div className="space-y-2">{[1,2,3,4,5].map(i => <div key={i} className="h-14 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+        <SkeletonList count={5} height="h-14" gap="space-y-2" />
+      ) : failed ? (
+        // Distinct from "No questions found", which invites a teacher to
+        // adjust filters that are not the problem.
+        <LoadError what="the question bank" onRetry={retry} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">🔍</div>

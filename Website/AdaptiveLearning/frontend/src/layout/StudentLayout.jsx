@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Target, Brain, Clock, User,
@@ -111,6 +111,8 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function StudentLayout() {
+  // See ParentLayout: the key has to come from router state, not the browser.
+  const { pathname } = useLocation()
   const [collapsed, setCollapsed]   = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const { dark, toggleTheme } = useTheme()
@@ -173,7 +175,7 @@ export default function StudentLayout() {
 
         <main className="flex-1 overflow-y-auto">
           <motion.div
-            key={window.location.pathname}
+            key={pathname}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}

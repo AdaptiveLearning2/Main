@@ -598,13 +598,19 @@ END $$;
 
 DO $$
 DECLARE
-    owner_id  uuid;
-    other_id  uuid;
-    is_public boolean;
-    visible   int;
-    policies  int;
+    owner_id       uuid;
+    other_id       uuid;
+    is_public      boolean;
+    visible        int;
+    policies       int;
+    -- A separate name from the `owner_id` column on storage.objects itself:
+    -- referencing the bare variable inside a query against that table is
+    -- ambiguous to plpgsql, which cannot tell a column from a variable of the
+    -- same name once both are in scope.
+    fixture_owner  text;
 BEGIN
     SELECT i.owner_id, i.other_id INTO owner_id, other_id FROM _ids i;
+    fixture_owner := owner_id::text;
 
     -- 1. The bucket is private. This one is not an RLS property and cannot be
     --    asserted through storage.objects at all: a public bucket serves every
@@ -637,14 +643,22 @@ BEGIN
     END IF;
 
     INSERT INTO storage.objects (bucket_id, name, owner_id)
-    VALUES ('session-charts', owner_id || '/sess/heart_rate.svg', owner_id::text);
+    VALUES ('session-charts', owner_id || '/sess/heart_rate.svg', fixture_owner);
 
     -- The negative control the check below needs. With no policy, SELECT
     -- returns zero rows whether or not the object is there, so "the owner sees
     -- nothing" would pass just as happily against an empty table -- the same
     -- trap as the heart_signals block above, arriving from the other side.
+    --
+    -- Scoped to this fixture's own owner_id, not a bare count of the bucket. A
+    -- real developer stack has already archived real charts by the time this
+    -- runs, so an unscoped count is never 1 there -- it was written against a
+    -- bucket assumed empty, which only CI's fresh database actually is. Real
+    -- archive rows are written by the backend without an owner_id, so this
+    -- fixture's own value cannot collide with one.
     SELECT count(*) INTO visible
-      FROM storage.objects WHERE bucket_id = 'session-charts';
+      FROM storage.objects o
+     WHERE o.bucket_id = 'session-charts' AND o.owner_id = fixture_owner;
     IF visible <> 1 THEN
         RAISE EXCEPTION 'the fixture object was not stored; the checks below '
                         'would pass for the wrong reason';

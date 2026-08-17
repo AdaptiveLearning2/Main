@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, History, Lock } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import useAdminResource from '../../hooks/useAdminResource'
+import Toggle from '../../components/ui/Toggle'
 
 const CONSENT_FLAG = 'consent_enforcement_enabled'
 
@@ -23,23 +25,6 @@ const LABELS = {
 
 const BYPASS_CHOICES = [15, 30, 60, 120, 240]
 
-function Toggle({ checked, onChange, disabled, tone = 'slate' }) {
-  const on = tone === 'rose' ? 'bg-rose-600' : 'bg-emerald-600'
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-40
-        ${checked ? on : 'bg-gray-300 dark:bg-gray-700'}`}
-    >
-      <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform mt-0.5
-        ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
-    </button>
-  )
-}
 
 function FlagHistory({ flagKey }) {
   const [open, setOpen] = useState(false)
@@ -173,45 +158,30 @@ function ConsentPanel({ flag, active, onSet, busy }) {
 }
 
 export default function AdminFlags() {
-  const [flags, setFlags] = useState(null)
-  const [active, setActive] = useState(true)
   const [env, setEnv] = useState([])
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
 
-  const load = useCallback(() => {
-    apiFetch('/api/admin/flags')
-      .then(d => { setFlags(d.flags); setActive(d.consent_enforcement_active) })
-      .catch(e => setError(e.message))
-  }, [])
+  // The 30s poll is not cosmetic: the consent bypass expires on the clock
+  // rather than on a write, so nothing tells the page it is over and the
+  // banner would otherwise claim a bypass that has already lapsed.
+  const { data, busy, error, mutate } = useAdminResource({
+    load: useCallback(() => apiFetch('/api/admin/flags'), []),
+    pollMs: 30_000,
+  })
+  const flags = data?.flags ?? null
+  const active = data?.consent_enforcement_active ?? true
 
-  useEffect(() => { load() }, [load])
+  // Its own read, not the hook's: this one is static, unauthenticated by
+  // comparison, and a failure here means an empty list rather than an error
+  // over the whole page.
   useEffect(() => {
     apiFetch('/api/admin/env-flags').then(d => setEnv(d.flags || [])).catch(() => setEnv([]))
   }, [])
 
-  // The bypass expires on the clock rather than on a write, so nothing tells
-  // the page it is over. Re-reading keeps the banner from claiming a bypass
-  // that has already lapsed.
-  useEffect(() => {
-    const t = setInterval(load, 30_000)
-    return () => clearInterval(t)
-  }, [load])
-
-  const set = async (key, enabled, bypassMinutes) => {
-    setBusy(true); setError(null)
-    try {
-      const d = await apiFetch(`/api/admin/flags/${key}`, {
-        method: 'PUT',
-        body: { enabled, bypass_minutes: bypassMinutes ?? null },
-      })
-      setFlags(d.flags); setActive(d.consent_enforcement_active)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const set = (key, enabled, bypassMinutes) => mutate(() =>
+    apiFetch(`/api/admin/flags/${key}`, {
+      method: 'PUT',
+      body: { enabled, bypass_minutes: bypassMinutes ?? null },
+    }))
 
   if (error && !flags) return <div className="p-6 text-sm text-rose-600">{error}</div>
   if (!flags) return <div className="p-6 text-sm text-gray-400">Loading…</div>
@@ -250,6 +220,7 @@ export default function AdminFlags() {
                       )}
                     </div>
                     <Toggle
+                      tone="emerald"
                       checked={flag.enabled}
                       disabled={busy}
                       onChange={v => set(key, v)}

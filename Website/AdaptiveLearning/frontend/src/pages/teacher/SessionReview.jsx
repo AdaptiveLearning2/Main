@@ -290,10 +290,18 @@ export default function SessionReview() {
   //   'empty'      -- the archive ran and this channel drew nothing
   //   'unavailable'-- a path was recorded and the object could not be read
   //   'unarchived' -- the archive never ran (closed before Phase 8)
-  //   'unknown'    -- we did not ask, or asking failed
+  //   'failed'     -- we asked and the request did not come back
+  //   'pending'    -- we have not finished asking
+  //
+  // The last two used to share one 'unknown' state, and that state's copy was
+  // the *same sentence* as 'unarchived' -- "No signal samples for this
+  // session." So a backend hiccup, a stale 403, or simply the moment before the
+  // request lands all told a teacher the session recorded nothing, which is an
+  // absence asserted from data that never arrived: the one thing every other
+  // surface here is shaped to avoid. Five states, five sentences.
   const archivedChart = (name) => {
-    if (archiveErr) return 'unknown'
-    if (!archive) return 'unknown'
+    if (archiveErr) return 'failed'
+    if (!archive) return 'pending'
     if (!archive.archived) return 'unarchived'
     if ((archive.unavailable || []).includes(name)) return 'unavailable'
     const url = (archive.charts || {})[name]
@@ -302,11 +310,17 @@ export default function SessionReview() {
 
   // One sentence for the states that are not a URL, so each empty block says
   // the same true thing rather than each inventing its own wording.
+  // One sentence per state, and no two of them the same. `unarchived` and the
+  // old `unknown` shared this string, which made "we could not find out" read
+  // as "there was nothing" -- and left a teacher no way to tell a session that
+  // predates chart archiving from one whose charts simply failed to load, where
+  // the useful next action is to try again.
   const NO_CHART_COPY = {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',
     unarchived: 'No signal samples for this session.',
-    unknown: 'No signal samples for this session.',
+    failed: 'The archived charts could not be loaded — try again.',
+    pending: 'Loading the archived charts…',
   }
 
   const isUrl = (v) => typeof v === 'string' && v.startsWith('http')

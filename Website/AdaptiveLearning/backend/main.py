@@ -18,9 +18,61 @@ import eeg_poller
 
 load_dotenv()
 
+def _env_number(name: str, default, cast, minimum=None):
+    """A numeric setting from the environment, falling back on a bad value.
+
+    These are read at import, so a typo in a deployment's environment would
+    otherwise raise ValueError before the app object exists -- taking down every
+    endpoint over a tuning parameter for one optional feature. Falling back to
+    the shipped default keeps the process up, and the log line is what says the
+    setting is not the one that was configured.
+
+    `minimum` extends that to values that parse but are not usable. A number is
+    not automatically a setting: every caller here has a floor below which the
+    value does not tune the feature but disables or breaks it, quietly and in
+    whichever direction the parameter happens to point -- see the call sites.
+    Clamping rather than falling back to the default, because a deployer who
+    wrote a small number was asking for a small number, and the nearest usable
+    one is closer to that than the shipped value is.
+
+    The non-finite check is separate from both, and falls back rather than
+    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
+    comparison -- inf because it is above every floor, nan because every
+    comparison against it is False -- so neither of the guards above sees them,
+    and they are not magnitudes there is a nearest usable value to clamp to.
+    They reach the call sites as settings that break rather than tune:
+    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
+    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
+    makes future.result() time out instantly, switching the model pass off for
+    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
+    the cast, so this only bites the float callers.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        print(f"[config] {name}={raw!r} is not a number; using {default}")
+        return default
+    if not math.isfinite(value):
+        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
+        return default
+    if minimum is not None and value < minimum:
+        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
+        return minimum
+    return value
+
+
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-BACKEND_PORT     = int(os.getenv("BACKEND_PORT", "8000"))
+# Every numeric setting goes through this, including this one. It was
+# `int(os.getenv(...))`, which is the pattern the helper exists to replace:
+# read at import, so a malformed BACKEND_PORT raised ValueError before the
+# app object existed and took the whole backend down over the port number.
+# The helper lives here rather than 2600 lines below, next to the settings
+# it serves and above the first one that needs it.
+BACKEND_PORT     = _env_number("BACKEND_PORT", 8000, int, minimum=1)
 
 if not SUPABASE_URL or not SERVICE_ROLE_KEY:
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
@@ -50,12 +102,9 @@ async def _lifespan(app: FastAPI):
             _shutdown_strategy_pool()
         finally:
             try:
-                _shutdown_live_signals_pool()
+                _shutdown_admin_live_pool()
             finally:
-                try:
-                    _shutdown_admin_live_pool()
-                finally:
-                    chart_archive.shutdown_pool()
+                chart_archive.shutdown_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -2674,52 +2723,6 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── at-home learning strategies ─────────────────────────────────────────
 
-def _env_number(name: str, default, cast, minimum=None):
-    """A numeric setting from the environment, falling back on a bad value.
-
-    These are read at import, so a typo in a deployment's environment would
-    otherwise raise ValueError before the app object exists -- taking down every
-    endpoint over a tuning parameter for one optional feature. Falling back to
-    the shipped default keeps the process up, and the log line is what says the
-    setting is not the one that was configured.
-
-    `minimum` extends that to values that parse but are not usable. A number is
-    not automatically a setting: every caller here has a floor below which the
-    value does not tune the feature but disables or breaks it, quietly and in
-    whichever direction the parameter happens to point -- see the call sites.
-    Clamping rather than falling back to the default, because a deployer who
-    wrote a small number was asking for a small number, and the nearest usable
-    one is closer to that than the shipped value is.
-
-    The non-finite check is separate from both, and falls back rather than
-    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
-    comparison -- inf because it is above every floor, nan because every
-    comparison against it is False -- so neither of the guards above sees them,
-    and they are not magnitudes there is a nearest usable value to clamp to.
-    They reach the call sites as settings that break rather than tune:
-    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
-    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
-    makes future.result() time out instantly, switching the model pass off for
-    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
-    the cast, so this only bites the float callers.
-    """
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        value = cast(raw)
-    except (TypeError, ValueError):
-        print(f"[config] {name}={raw!r} is not a number; using {default}")
-        return default
-    if not math.isfinite(value):
-        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
-        return default
-    if minimum is not None and value < minimum:
-        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
-        return minimum
-    return value
-
-
 # The model pass is opt-in. Off, the endpoint answers from the deterministic
 # rules below and never opens a socket -- which is what CI, and any deployment
 # without a local Ollama, should do. Enabling it changes only whether the
@@ -3547,6 +3550,70 @@ def create_class(payload: CreateClassRequest, request: Request):
         "join_code":   code,
     }).execute()
     return res.data[0]
+
+# Registered **before** `/api/classes/{class_id}`, and it has to be: FastAPI
+# matches in registration order, so with the parameterised route first a GET
+# of /api/classes/summary binds `class_id="summary"` and answers 404 "Class
+# not found" -- a literal path quietly shadowed by a placeholder, which reads
+# as the endpoint not existing rather than as a routing mistake.
+@app.get("/api/classes/summary")
+def class_summaries(request: Request):
+    """Per-class headline averages for the teacher's dashboard, in three reads.
+
+    The page fetched `/api/classes`, then the **full roster of every class**,
+    and averaged two numbers out of each -- one request per class, every 60s
+    refresh, to render an accuracy figure and a streak figure per card. It also
+    meant every student's name, email and lifetime totals crossing the wire to
+    compute two integers.
+
+    Same arithmetic, deliberately, because the cards render it unchanged:
+    accuracy is averaged over the students who have *attempted* something (a
+    student with no attempts is not a 0% student, they are not in the average),
+    while the streak is averaged over the whole roster. `None` accuracy means
+    nobody has attempted anything, which the card already draws as an em dash.
+
+    `retrieved` rides on each class for the same reason it does everywhere else
+    here: the page has to be able to tell "this class has no attempts yet" from
+    "we could not find out", and both otherwise arrive as a missing number.
+    """
+    user = get_user(request)
+    classes = supabase.table("classes").select("id") \
+        .eq("teacher_id", user["id"]).execute().data or []
+    ids = _unique_ids(c["id"] for c in classes)
+    if not ids:
+        return {}
+
+    try:
+        members = supabase.table("class_memberships").select("class_id, student_id") \
+            .in_("class_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[classes] could not read memberships for {len(ids)} classes: {e}")
+        return {cid: {"avgAccuracy": None, "avgStreak": 0, "retrieved": False}
+                for cid in ids}
+
+    by_class: dict[str, list] = {}
+    for m in members:
+        by_class.setdefault(m.get("class_id"), []).append(m.get("student_id"))
+
+    stats = _stats_including_open_session_many(
+        _unique_ids(m.get("student_id") for m in members))
+
+    out = {}
+    for cid in ids:
+        roster = [stats.get(sid) or {} for sid in by_class.get(cid, [])]
+        # One unretrieved student makes the class figure unretrieved: it is an
+        # average, so a missing member does not make it partly right.
+        retrieved = all(s.get("retrieved", False) for s in roster) if roster else True
+        attempted = [s for s in roster if (s.get("total_questions") or 0) > 0]
+        avg_accuracy = round(sum(
+            (s.get("total_correct") or 0) / s["total_questions"] * 100
+            for s in attempted) / len(attempted)) if attempted else None
+        avg_streak = round(sum(s.get("current_streak") or 0
+                               for s in roster) / len(roster)) if roster else 0
+        out[cid] = {"avgAccuracy": avg_accuracy, "avgStreak": avg_streak,
+                    "retrieved": retrieved}
+    return out
+
 
 @app.get("/api/classes/{class_id}")
 def get_class(class_id: str, request: Request):
@@ -4675,13 +4742,13 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # the switch on that page would make the control silently change a view it
     # is absent from.
     user = get_user(request)
-    try:
-        sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
-    except Exception:
-        raise HTTPException(404, "Session not found")
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    _verify_can_view_student(user, sess.data["user_id"])
+    # `_row_or_404`, not a third copy of its body. Ownership is not the rule
+    # here -- a teacher and a parent may both read this -- so it resolves the
+    # row and `_verify_can_view_student` decides, which is why this does not go
+    # through `_session_or_403`.
+    sess = _row_or_404(
+        supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
+    _verify_can_view_student(user, sess["user_id"])
 
     cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
     fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
@@ -4728,16 +4795,14 @@ def session_charts(session_id: str, request: Request):
     above, and a flag that is never false is a state that does not exist.
     """
     user = get_user(request)
-    try:
-        sess = supabase.table("sessions").select("user_id, chart_paths") \
-            .eq("id", session_id).single().execute()
-    except Exception:
-        raise HTTPException(404, "Session not found")
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    _verify_can_view_student(user, sess.data["user_id"])
+    # Same as `session_signals` above: shared helper for the lookup, and a
+    # relationship check rather than ownership, because a parent reads this too.
+    sess = _row_or_404(
+        supabase.table("sessions").select("user_id, chart_paths").eq("id", session_id),
+        "Session")
+    _verify_can_view_student(user, sess["user_id"])
 
-    paths = sess.data.get("chart_paths")
+    paths = sess.get("chart_paths")
     if paths is None:
         # Column-NULL is its own answer and needs no storage call: the archive
         # never ran for this session. Distinct from `{}` and from four nulls.
@@ -4750,71 +4815,55 @@ def session_charts(session_id: str, request: Request):
     # would be signed by an endpoint that had just correctly confirmed the
     # caller owns *this* session. Presence is all it decides.
     urls, unavailable = chart_archive.signed_chart_urls(
-        supabase, paths, sess.data["user_id"], session_id)
+        supabase, paths, sess["user_id"], session_id)
     return {"archived": True, "charts": urls, "unavailable": unavailable,
             "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 
 
 # ─── live monitoring (only show truly active sessions) ───────────────────
 
-# Small and dedicated rather than reused from _strategy_pool: that pool's
-# worker count and wait bounds are tuned for the LLM call it exists to gate,
-# and conflating the two would let a live-monitoring poll compete with a
-# strategies request for the same two slots. Four is enough to fan the reads
-# below out concurrently for one session at a time -- this endpoint's own
-# per-member loop stays sequential, so peak concurrency here never exceeds
-# the four reads for whichever session is currently open.
-#
-# Same lazy-init-under-lock / _lifespan-shutdown shape as _strategy_pool,
-# for the same reason: a shutdown call cannot interrupt a worker already
-# mid-request (the interpreter's own atexit join is what eventually collects
-# it either way), but resetting the global to None matters for a reload in
-# the same process, and cancelling not-yet-started futures costs nothing.
-_LIVE_SIGNALS_POOL: ThreadPoolExecutor | None = None
-_live_signals_pool_lock = threading.Lock()
 
 
-def _live_signals_pool() -> ThreadPoolExecutor:
-    global _LIVE_SIGNALS_POOL
-    with _live_signals_pool_lock:
-        if _LIVE_SIGNALS_POOL is None:
-            _LIVE_SIGNALS_POOL = ThreadPoolExecutor(max_workers=4,
-                                                    thread_name_prefix="live-signals")
-        return _LIVE_SIGNALS_POOL
+_SIGNAL_CHANNELS = ("cognitive", "face", "heart", "answer")
 
 
-def _shutdown_live_signals_pool():
-    """Drop the queue on the way out. Called from _lifespan. See
-    _shutdown_strategy_pool for why wait=False/cancel_futures=True and the
-    global reset, rather than a clean join."""
-    global _LIVE_SIGNALS_POOL
-    with _live_signals_pool_lock:
-        pool, _LIVE_SIGNALS_POOL = _LIVE_SIGNALS_POOL, None
-    if pool is not None:
-        pool.shutdown(wait=False, cancel_futures=True)
+def _latest_signals_many(session_ids) -> dict[str, dict[str, dict]]:
+    """The newest cognitive, face, heart and answer row for many sessions, once.
 
+    `{session_id: {channel: row}}`, with a channel absent when that session has
+    no row on it.
 
-def _latest_session_signals(session_id: str) -> tuple[list, list, list, list]:
-    """The four independent per-session reads class_live needs for one open
-    session, fanned out concurrently instead of run one after another.
+    This was four queries per session, fanned into a four-worker pool, called
+    once per student in a loop -- so a class of thirty cost 120 queries a poll
+    at four in flight, on a page that polls every second. It is now one call to
+    `latest_signals_for_sessions` (20260827000000), which does the same
+    `DISTINCT ON` selection in SQL for the whole roster.
 
-    Each pays its own network round-trip, and this endpoint is polled on an
-    interval by the live-monitoring page -- sequentially that cost is
-    additive per open session, and heart_signals added a third such
-    round-trip on top of the two that were already here.
+    **Widening the fan-out was the wrong fix and worth not re-attempting.** The
+    pool was the ceiling rather than the loop, and fanning the outer loop into
+    that same pool deadlocks -- the waiters and the work they wait on share four
+    slots. `_admin_live_pool` exists because of exactly that trap.
+
+    Deliberately not caught. `class_live` is the caller and a failed read turned
+    into an empty map would draw every student as idle -- an absence asserted
+    from data that never loaded, on the surface a teacher uses to decide who
+    needs help.
     """
-    pool = _live_signals_pool()
-    futures = [
-        pool.submit(lambda: supabase.table("cognitive_signals").select("*")
-                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        pool.submit(lambda: supabase.table("face_signals").select("*")
-                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        pool.submit(lambda: supabase.table("heart_signals").select("*")
-                    .eq("session_id", session_id).order("ts", desc=True).limit(1).execute().data),
-        pool.submit(lambda: supabase.table("session_answers").select("answered_at")
-                    .eq("session_id", session_id).order("answered_at", desc=True).limit(1).execute().data),
-    ]
-    return tuple(f.result() for f in futures)
+    ids = _unique_ids(session_ids)
+    if not ids:
+        return {}
+    res = supabase.rpc("latest_signals_for_sessions",
+                       {"p_session_ids": ids}).execute()
+    rows = res.data or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    out: dict[str, dict[str, dict]] = {}
+    for r in rows:
+        sid = r.get("session_id")
+        channel = r.get("channel")
+        if sid and channel in _SIGNAL_CHANNELS:
+            out.setdefault(sid, {})[channel] = r.get("payload") or {}
+    return out
 
 
 @app.get("/api/teacher/classes/{class_id}/live")
@@ -4846,6 +4895,11 @@ def class_live(class_id: str, request: Request):
     # every few seconds before the per-session signal reads even started.
     profiles = _profiles_many(roster)
     open_by_student = _open_sessions_many(roster)
+    # Three reads for the roster, and the third covers every open session's four
+    # channels at once -- it used to be four per student, in a loop, on a page
+    # that polls every second.
+    latest_by_session = _latest_signals_many(
+        s["id"] for rows in open_by_student.values() for s in rows[:1])
     out = []
     for m in members:
         sid = m["student_id"]
@@ -4858,7 +4912,11 @@ def class_live(class_id: str, request: Request):
         if open_sessions:
             sess = open_sessions[0]
             sid2 = sess["id"]
-            c, f, h, a = _latest_session_signals(sid2)
+            newest = latest_by_session.get(sid2) or {}
+            c = [newest["cognitive"]] if "cognitive" in newest else []
+            f = [newest["face"]] if "face" in newest else []
+            h = [newest["heart"]] if "heart" in newest else []
+            a = [newest["answer"]] if "answer" in newest else []
 
             latest_cog  = c[0] if c else None
             latest_face = f[0] if f else None
@@ -5780,18 +5838,19 @@ _STALE_AFTER_SEC = 600
 # payload says it was reached rather than quietly truncating.
 _ADMIN_LIVE_SESSION_CAP = 200
 
-# **Its own pool, deliberately not `_live_signals_pool`.** Two reasons, and the
-# second is a correctness bug rather than a tuning choice:
+# **Nothing submitted here may wait on anything else in here.** The reads are
+# submitted flat and gathered afterwards, and that is the rule to preserve: a
+# task that blocks on another task in its own pool puts the waiter and the work
+# it waits for in the same fixed queue, which is a deadlock rather than a
+# slowdown.
 #
-# 1. That pool has four workers and every teacher's live monitor polls through
-#    it. This endpoint is platform-wide, so at any real session count it would
-#    starve the page teachers actually watch a lesson with.
-# 2. `_latest_session_signals` *blocks* on futures it submitted to that same
-#    pool. Fanning this endpoint's outer loop into it would put the waiters and
-#    the work they wait for in one four-slot queue -- four sessions occupying
-#    every worker while their own reads sit behind them, which is a deadlock,
-#    not a slowdown. Nothing submitted below waits on anything else in here:
-#    the reads are submitted flat and gathered afterwards.
+# This pool once had a second reason to exist -- `class_live` had a four-worker
+# `_live_signals_pool` of its own, and `_latest_session_signals` blocked on
+# futures it had submitted to it, so fanning this endpoint's outer loop into
+# that pool would have deadlocked exactly as described. That pool is gone:
+# `class_live` now reads every open session's channels in one SQL call
+# (`latest_signals_for_sessions`, 20260827000000) and needs no threads at all.
+# The rule above outlived the pool that taught it.
 _ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
 _admin_live_pool_lock = threading.Lock()
 
@@ -5806,8 +5865,9 @@ def _admin_live_pool() -> ThreadPoolExecutor:
 
 
 def _shutdown_admin_live_pool():
-    """Drop the queue on the way out. Same shape as
-    `_shutdown_live_signals_pool`, and called from the same place."""
+    """Drop the queue on the way out. Same shape as `_shutdown_strategy_pool`
+    -- see it for why wait=False/cancel_futures=True and the global reset,
+    rather than a clean join -- and called from `_lifespan` alongside it."""
     global _ADMIN_LIVE_POOL
     with _admin_live_pool_lock:
         pool, _ADMIN_LIVE_POOL = _ADMIN_LIVE_POOL, None
@@ -5829,12 +5889,12 @@ def _latest_signal_ts(session_ids: list[str]) -> dict:
 
     **Selects `ts` alone**, so the readings never leave the database rather than
     being fetched and then dropped on the way out. `class_live` needs the rows
-    themselves and `_latest_session_signals` fetches them; this endpoint needs
-    only whether something arrived, and asking for less is a stronger version of
-    the same privacy property than filtering afterwards.
+    themselves and `_latest_signals_many` fetches them; this endpoint needs only
+    whether something arrived, and asking for less is a stronger version of the
+    same privacy property than filtering afterwards.
 
-    Two reads per session, not four: `_latest_session_signals` also fetches
-    `heart_signals` and `session_answers`, which this endpoint discarded.
+    Two channels, not four: `_latest_signals_many` also reads `heart_signals`
+    and `session_answers`, which this endpoint discarded.
 
     Every read is submitted before any is waited on, so the pool runs them
     concurrently across sessions as well as across channels.

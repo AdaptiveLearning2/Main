@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { apiFetch } from '../../lib/api'
+import useAdminResource from '../../hooks/useAdminResource'
 
 // What each state means to a person. The backend keeps six apart on purpose --
 // "not gating on a year" and "inside the year" both record, for different
@@ -14,37 +15,37 @@ const STATE_COPY = {
 }
 
 export default function AdminSchoolYear() {
-  const [data, setData] = useState(null)
-  const [form, setForm] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
+  // The user's unsaved edits, or `null` for "showing what the server said".
+  const [draft, setDraft] = useState(null)
   const [saved, setSaved] = useState(false)
 
-  const apply = d => {
-    setData(d)
-    setForm({
-      enforced: d.enforced !== false,
-      starts_on: d.starts_on || '',
-      ends_on: d.ends_on || '',
-      timezone: d.timezone || 'UTC',
-    })
-  }
+  const { data, busy, error, mutate } = useAdminResource({
+    load: useCallback(() => apiFetch('/api/admin/retention-window'), []),
+  })
 
-  useEffect(() => {
-    apiFetch('/api/admin/retention-window').then(apply).catch(e => setError(e.message))
-  }, [])
+  // Derived, not synced. Mirroring the server's payload into state through an
+  // effect means a render with the old form, a setState, and a second render --
+  // and it is what `react-hooks/set-state-in-effect` is warning about. The
+  // draft simply wins while it exists, and clearing it after a save re-derives
+  // from what the server actually stored, which is the reconcile the save
+  // wanted anyway.
+  //
+  // `enforced !== false` because a row predating the column, or one PostgREST
+  // returns without it, must read as enforced rather than as the gate being off.
+  const form = draft ?? (data && {
+    enforced: data.enforced !== false,
+    starts_on: data.starts_on || '',
+    ends_on: data.ends_on || '',
+    timezone: data.timezone || 'UTC',
+  })
 
   const save = async () => {
-    setBusy(true); setError(null); setSaved(false)
-    try {
-      const d = await apiFetch('/api/admin/retention-window', { method: 'PUT', body: form })
-      apply(d)
-      setSaved(true)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setBusy(false)
-    }
+    setSaved(false)
+    const ok = await mutate(() =>
+      apiFetch('/api/admin/retention-window', { method: 'PUT', body: form }))
+    // Drop the draft so the form re-derives from what came back: the endpoint
+    // clamps, so the stored row is the authority, not what was typed.
+    if (ok) { setDraft(null); setSaved(true) }
   }
 
   if (error && !data) return <div className="p-6 text-sm text-rose-600">{error}</div>
@@ -77,7 +78,7 @@ export default function AdminSchoolYear() {
           <input
             type="checkbox"
             checked={form.enforced}
-            onChange={e => setForm({ ...form, enforced: e.target.checked })}
+            onChange={e => setDraft({ ...form, enforced: e.target.checked })}
             className="mt-1"
           />
           <span>
@@ -96,7 +97,7 @@ export default function AdminSchoolYear() {
               type="date"
               value={form.starts_on}
               disabled={!form.enforced}
-              onChange={e => setForm({ ...form, starts_on: e.target.value })}
+              onChange={e => setDraft({ ...form, starts_on: e.target.value })}
               className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm disabled:opacity-40"
             />
           </div>
@@ -106,7 +107,7 @@ export default function AdminSchoolYear() {
               type="date"
               value={form.ends_on}
               disabled={!form.enforced}
-              onChange={e => setForm({ ...form, ends_on: e.target.value })}
+              onChange={e => setDraft({ ...form, ends_on: e.target.value })}
               className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm disabled:opacity-40"
             />
           </div>
@@ -116,7 +117,7 @@ export default function AdminSchoolYear() {
           <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Timezone</label>
           <input
             value={form.timezone}
-            onChange={e => setForm({ ...form, timezone: e.target.value })}
+            onChange={e => setDraft({ ...form, timezone: e.target.value })}
             placeholder="America/Chicago"
             className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
           />

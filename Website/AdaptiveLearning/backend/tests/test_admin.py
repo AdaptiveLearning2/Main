@@ -533,13 +533,30 @@ def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
     assert s["eeg"]["seen"] is True, "one bad channel took a good one with it"
 
 
-def test_live_signals_does_not_share_the_pool_it_waits_on(monkeypatch):
-    """`_latest_session_signals` blocks on futures it submitted to
-    `_live_signals_pool`. Fanning this endpoint into that same four-slot pool
-    would put the waiters and the work they wait for in one queue, which
-    deadlocks rather than merely running slowly -- so the two must stay
-    separate, and this fails if someone consolidates them."""
-    assert main._admin_live_pool() is not main._live_signals_pool()
+def test_live_signals_submits_every_read_before_waiting_on_any():
+    """Nothing submitted to `_admin_live_pool` may block on anything else in it.
+
+    This used to assert that `_admin_live_pool` and `_live_signals_pool` were
+    different objects, because `_latest_session_signals` blocked on futures it
+    had submitted to the second one -- so fanning this endpoint into that pool
+    would have put the waiters and the work they waited for in a single fixed
+    queue, which deadlocks rather than running slowly.
+
+    That pool is gone: `class_live` reads every open session's channels in one
+    SQL call now and needs no threads. The rule outlived it, and this is the
+    half that still has teeth -- gathering inside the submit loop would
+    reintroduce the same shape within this pool alone.
+    """
+    import inspect
+
+    source = inspect.getsource(main._latest_signal_ts)
+    last_submit = source.rindex(".submit(")
+    first_wait = source.index(".result(")
+
+    assert first_wait > last_submit, (
+        "a read is awaited before the rest are submitted, so the pool runs them "
+        "one at a time -- and a task that waits on a task behind it in the same "
+        "queue does not run at all")
 
 
 def test_consent_summary_returns_counts_and_no_identities(monkeypatch):

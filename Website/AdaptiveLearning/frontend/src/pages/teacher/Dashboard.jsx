@@ -91,28 +91,16 @@ export default function TeacherDashboard() {
         const rows = await apiFetch('/api/classes')
         if (killed) return
         setClasses(rows || [])
-        const averages = {}
-        await Promise.all((rows || []).map(async (c) => {
-          try {
-            const students = await apiFetch(`/api/classes/${c.id}/students`)
-            const withAttempts = (students || []).filter(s => (s.total_questions || 0) > 0)
-            const avgAccuracy = withAttempts.length
-              ? Math.round(
-                  withAttempts.reduce((sum, s) => sum + (s.total_correct / s.total_questions) * 100, 0)
-                  / withAttempts.length
-                )
-              : null
-            const avgStreak = (students || []).length
-              ? Math.round((students || []).reduce((sum, s) => sum + (s.current_streak || 0), 0) / students.length)
-              : 0
-            // `null` accuracy here means "nobody has attempted anything",
-            // which the card already renders as an em dash. A class whose
-            // roster failed to load is marked separately below.
-            averages[c.id] = { avgAccuracy, avgStreak, retrieved: true }
-          } catch {
-            averages[c.id] = { avgAccuracy: null, avgStreak: 0, retrieved: false }
-          }
-        }))
+        // One request for every class's averages, not one request per class.
+        // The page used to fetch each full roster -- names, emails and lifetime
+        // totals for every student -- to reduce them to two integers per card,
+        // every 60s. The backend has the rows already and does the same
+        // arithmetic; see /api/classes/summary for why accuracy averages over
+        // the students who attempted something and the streak over everyone.
+        //
+        // Its own catch: the cards degrade to "unavailable" per class rather
+        // than the class list failing, which is what the roster loop did.
+        const averages = await apiFetch('/api/classes/summary').catch(() => ({}))
         if (killed) return
         setClassAverages(averages)
         setClassesFailed(false)

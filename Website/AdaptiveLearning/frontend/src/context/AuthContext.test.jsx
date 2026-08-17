@@ -102,7 +102,7 @@ it('takes the role from the backend, not from the claim in the session', async (
   render(<AuthProvider><RoleProbe /></AuthProvider>)
 
   expect(await screen.findByText('role:admin')).toBeInTheDocument()
-  expect(apiFetch).toHaveBeenCalledWith('/api/profile/me')
+  expect(apiFetch).toHaveBeenCalledWith('/api/profile/me', expect.any(Object))
 })
 
 it('believes the backend over a claim that disagrees', async () => {
@@ -138,6 +138,22 @@ it('says loading until the role has actually resolved', async () => {
   expect(await screen.findByText('role:teacher')).toBeInTheDocument()
 })
 
+it('bounds the role read, so a hung request cannot strand the app', async () => {
+  // The whole app sits behind `loading`. A request that *fails* is caught below
+  // and resolves to the claim; a request that *hangs* has nothing waiting for
+  // it, and would leave every signed-in user behind an infinite loader. The
+  // `.catch` is not a bound -- the timeout is, and this asserts the call
+  // actually carries one.
+  getSession.mockResolvedValue({ data: { session: SESSION('teacher') } })
+  apiFetch.mockReturnValue(new Promise(() => {}))
+
+  render(<AuthProvider><RoleProbe /></AuthProvider>)
+
+  await waitFor(() => expect(apiFetch).toHaveBeenCalled())
+  const [, opts] = apiFetch.mock.calls[0]
+  expect(opts?.timeoutMs).toBeGreaterThan(0)
+})
+
 it('falls back to the claim when the backend cannot be reached', async () => {
   // A blip is not a demotion. Falling back to 'student' would drop every
   // teacher into the wrong application whenever the API was down.
@@ -163,7 +179,8 @@ it('does not read the role from inside the auth callback', async () => {
   expect(apiFetch).not.toHaveBeenCalled()
 
   // ...and it does still happen, immediately afterwards.
-  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/profile/me'))
+  await waitFor(() =>
+    expect(apiFetch).toHaveBeenCalledWith('/api/profile/me', expect.any(Object)))
 })
 
 it('does not re-read the role when a token refresh replaces the session', async () => {

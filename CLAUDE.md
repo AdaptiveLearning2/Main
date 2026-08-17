@@ -1378,6 +1378,18 @@ Three things about that read are load-bearing:
 `loading` stays true until the role resolves, or the guards see `role === null` for a frame and
 render the "this account isn't set up" screen on every page load.
 
+**That makes this the one request in the app that may not hang, so it is the one that passes
+`timeoutMs`.** A request that *fails* is caught and falls back to the claim; a request that never
+settles has nothing waiting for it, and leaves `role` null and `loading` true for ever — an infinite
+loader over the whole application for every signed-in user. A `.catch` is not a bound. `apiFetch`'s
+`timeoutMs` is **opt-in with no default**, because a blanket one would abort
+`/api/students/{id}/learning-strategies`, which is bounded server-side at `STRATEGY_LLM_TIMEOUT` and
+can queue behind other waiters first — and `sidecar.js` already documents what a client timeout
+shorter than the work does: it does not cancel anything, it just stops you finding out what happened.
+The bound covers the **whole call**, not the `fetch`: `getAccessToken` awaits
+`supabase.auth.getSession()`, which goes to the network when the token needs refreshing, so wrapping
+`fetch` alone leaves exactly the hang it was added to stop.
+
 Login and Register navigate to `/` and let `HomeRedirect` choose, rather than computing a home from
 the claim. They each carried a second copy of the role-to-home map that `homeRoute.js` exists to be
 the only one of, and both were keyed on the value that does not know about `admin`.

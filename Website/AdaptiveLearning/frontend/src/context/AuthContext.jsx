@@ -5,6 +5,21 @@ import { clearViewPrefs } from '../lib/viewPrefs'
 
 const AuthContext = createContext()
 
+/** How long the app waits to find out what role someone has before falling back
+ *  to the claim on their session.
+ *
+ *  This one read gates `loading`, which gates every route, so it is the one
+ *  request in the app that must not be able to hang: a failure is caught below
+ *  and resolves to the claimed role, but a request that never settles leaves
+ *  `role` null and `loading` true for ever -- an infinite loader over the whole
+ *  application for every signed-in user. The `.catch` is not a bound; this is.
+ *
+ *  Ten seconds because it is a single-row select on the hot path of every page
+ *  load. Long enough that a slow connection still gets the authoritative answer,
+ *  short enough that a stalled proxy costs a wait rather than a dead app.
+ */
+const ROLE_TIMEOUT_MS = 10000
+
 export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null)
   const [session, setSession] = useState(null)
@@ -68,7 +83,7 @@ export function AuthProvider({ children }) {
     // second account signing in would be routed by the previous one's role for
     // as long as the request took.
     setRole(null)
-    apiFetch('/api/profile/me')
+    apiFetch('/api/profile/me', { timeoutMs: ROLE_TIMEOUT_MS })
       .then(p => { if (!cancelled) setRole(p?.role || claimedRole(userRef.current)) })
       // The backend being unreachable is not a demotion. Falling back to the
       // claim keeps a teacher on the teacher app, which is what happened before

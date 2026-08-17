@@ -1184,11 +1184,11 @@ numbers not moving. It logs that case by name and cites the migration.
 
 **A roster surface reads once for the roster, never once per student.** `_profiles_many`,
 `_topic_performance_many`, `_open_sessions_many` and `_stats_including_open_session_many` are the
-batch forms; `class_students`, `my_children` and `class_live` use them. The stats half was batched
-first and the profile lookup was left in the loop beside it, which is the shape to watch for. Two
-deliberate exceptions: `my_children` still reads the five most recent sessions **per child**,
-because "top N per group" has no PostgREST form and one `in_` query returns one busy child's five;
-and `leaderboard` is still N+1, noted here rather than fixed.
+batch forms; `class_students`, `my_children`, `class_live` and `leaderboard` use them. The stats half
+was batched first and the profile lookup was left in the loop beside it, which is the shape to watch
+for. One deliberate exception: `my_children` still reads the five most recent sessions **per child**,
+because "top N per group" has no PostgREST form — one `in_` query returns the newest five overall,
+which is one busy child's five.
 
 **Topic accuracy is read from `user_math_performance`, not from the browser.** It was
 `localStorage.accuracyStats_<uid>` — the only panel in the app whose numbers were not the

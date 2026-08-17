@@ -3195,10 +3195,14 @@ def leaderboard(request: Request, limit: int = 20):
         .select("user_id, total_correct, total_questions, current_streak, best_streak") \
         .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
+    # One read for the board, not one per row. `_LEADERBOARD_MAX` bounds this at
+    # a page of names rather than the whole user base, so the batch cannot grow
+    # past what the clamp above already allows.
+    profiles = _profiles_many(r.get("user_id") for r in rows)
     enriched = []
     for i, row in enumerate(rows):
         uid = row.pop("user_id", None)
-        p = _profile(uid)
+        p = profiles.get(uid) or {}
         enriched.append({
             **row,
             "display_name": p.get("display_name") or "Student",

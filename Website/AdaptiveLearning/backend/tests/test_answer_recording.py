@@ -678,10 +678,11 @@ def test_only_one_place_reads_user_stats():
     #
     # `leaderboard` reads every user's row in one query to rank them. Routing it
     # through `_stats_including_open_session` would mean a second query per user
-    # on a board that already has an N+1 problem, to add an in-flight session to
-    # a *ranking* -- where being one session stale is both harmless and uniform
-    # across everyone on the board. Listed with its reason rather than left to
-    # slip through a regex, so the next reader still has to justify itself.
+    # -- reintroducing the N+1 the profile lookup beside it was just batched out
+    # of -- to add an in-flight session to a *ranking*, where being one session
+    # stale is both harmless and uniform across everyone on the board. Listed
+    # with its reason rather than left to slip through a regex, so the next
+    # reader still has to justify itself.
     ALLOWED = {"_stats_including_open_session", "_stats_including_open_session_many",
                "_credit_session_to_user_stats"}
     ALLOWLIST = {"leaderboard": "ranks all users; one query, staleness is uniform"}

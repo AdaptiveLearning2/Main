@@ -2483,11 +2483,23 @@ def _leaderboard_tables(n=5):
     # Scores stay three digits across the range used here: _Query.order sorts
     # by str(), so mixed-width numbers would rank 99 above 100 and the ordering
     # assertions below would be testing the fake rather than the endpoint.
-    return {"user_stats": [
-        {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
-         "current_streak": 1, "best_streak": 2}
-        for i in range(n)
-    ]}
+    #
+    # `profiles` is real data now rather than a monkeypatched `_profile`. The
+    # names are resolved in one batched read, so patching the single-student
+    # helper would no longer intercept anything -- it would sit in each test
+    # looking like it pinned the display name while the endpoint read straight
+    # past it.
+    return {
+        "user_stats": [
+            {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
+             "current_streak": 1, "best_streak": 2}
+            for i in range(n)
+        ],
+        "profiles": [
+            {"id": f"student-{i}", "display_name": f"Name {i}", "email": f"s{i}@x.com"}
+            for i in range(n)
+        ],
+    }
 
 
 def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
@@ -2496,14 +2508,12 @@ def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
     # More rows available than the cap, so a failure to clamp is visible.
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(main._LEADERBOARD_MAX + 50)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     assert len(main.leaderboard(None, limit=999999)) == main._LEADERBOARD_MAX
 
 
 def test_leaderboard_rejects_a_nonsense_limit(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(5)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     assert len(main.leaderboard(None, limit=0)) == 1
     assert len(main.leaderboard(None, limit=-5)) == 1
 
@@ -2514,11 +2524,47 @@ def test_leaderboard_never_returns_user_ids(monkeypatch):
     user_stats attributable to named students."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     rows = main.leaderboard(None)
     assert rows, "fixture must produce rows"
     for row in rows:
         assert "user_id" not in row
+
+
+def test_leaderboard_names_the_board_in_one_read(monkeypatch):
+    """It resolved a display name per row, inside the loop.
+
+    Every roster surface had this shape and the other three were batched first,
+    which left this one -- the board that is capped at `_LEADERBOARD_MAX` rows
+    precisely because it hands out names -- doing a round trip per name.
+    """
+    fake = _FakeSupabase(_leaderboard_tables(30))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+
+    rows = main.leaderboard(None, limit=30)
+
+    assert fake.table_calls.count("profiles") == 1, (
+        f"one read for the board, got {fake.table_calls.count('profiles')}")
+    # And the names still land, so the assertion above cannot be satisfied by
+    # not reading profiles at all.
+    assert rows[0]["display_name"] == "Name 0"
+
+
+def test_leaderboard_still_names_a_student_with_no_profile_row(monkeypatch):
+    """The batch resolves its fallback per student, not for the whole call.
+
+    A missing row and a failed read are indistinguishable to the caller, and
+    both have to come back as the placeholder -- a rank with no name against it
+    reads as bad data rather than as a profile that could not be read.
+    """
+    tables = _leaderboard_tables(3)
+    tables["profiles"] = [r for r in tables["profiles"] if r["id"] != "student-1"]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+
+    rows = main.leaderboard(None)
+
+    assert [r["display_name"] for r in rows] == ["Name 0", "Student", "Name 2"]
 
 
 def test_leaderboard_marks_the_callers_own_row(monkeypatch):
@@ -2526,7 +2572,6 @@ def test_leaderboard_marks_the_callers_own_row(monkeypatch):
     reason it ever needed an id, so the server answers it directly."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)   # student-1
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     rows = main.leaderboard(None)
     mine = [r for r in rows if r["is_me"]]
     assert len(mine) == 1

@@ -1086,5 +1086,86 @@ BEGIN
     END IF;
 END $$;
 
+-- ── the batch summary agrees with the body it delegates to ──────────────────
+--
+-- `student_signal_summary_many` is a LATERAL fan-out over
+-- `student_signal_summary` (20260824000000). Before that they were two
+-- independent copies of the same six averages and four counts, which is how
+-- 20260823000000 came to fix `count(f.attention)` -> `count(f.emotion)` twice by
+-- hand. Delegation only helps while it *is* delegation, and the cheapest way for
+-- it to stop being so is a future edit that "optimises" the batch back into its
+-- own query.
+--
+-- So this asserts the property the migration claims: same student, same
+-- arguments, same answer. It also checks the channel gates still reach the
+-- inner body -- `p_include_heart`/`p_include_emotion` gate the *read*, and a
+-- fan-out that nulled excluded columns on the way out instead would satisfy
+-- every value assertion while quietly reading rows a parent opted out of.
+--
+-- Its own student, deliberately. Sharing `owner_id` would make these counts
+-- depend on which of the blocks above happened to leave rows inside the
+-- seven-day window, so the assertion would pass or fail on the calendar.
+
+DO $$
+DECLARE
+    usr  uuid := gen_random_uuid();
+    sess uuid := gen_random_uuid();
+    one  record;
+    many record;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'summary@test.invalid');
+    INSERT INTO public.profiles (id, email, role)
+    VALUES (usr, 'summary@test.invalid', 'student') ON CONFLICT (id) DO NOTHING;
+    INSERT INTO public.sessions (id, user_id) VALUES (sess, usr);
+
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    SELECT sess, usr, now() - (g || ' min')::interval, 0.6 + g * 0.01, 0.3, 0.5
+      FROM generate_series(1, 4) g;
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT sess, usr, now() - (g || ' min')::interval, 'happy', true
+      FROM generate_series(1, 3) g;
+    INSERT INTO public.heart_signals (session_id, user_id, ts, source, heart_rate_bpm,
+                                      rmssd_ms, trusted)
+    SELECT sess, usr, now() - (g || ' min')::interval, 'muse_optics', 70 + g, 40, true
+      FROM generate_series(1, 2) g;
+
+    SELECT * INTO one  FROM public.student_signal_summary(usr, 7, true, true, 'UTC');
+    SELECT * INTO many FROM public.student_signal_summary_many(ARRAY[usr], 7, true, true, 'UTC');
+
+    IF many.student_id IS DISTINCT FROM usr THEN
+        RAISE EXCEPTION 'the fan-out lost the student id: %', many.student_id;
+    END IF;
+
+    IF (one.focus, one.stress, one.engagement, one.face_attention,
+        one.heart_rate_bpm, one.rmssd_ms, one.sessions,
+        one.cognitive_samples, one.face_samples, one.heart_samples)
+       IS DISTINCT FROM
+       (many.focus, many.stress, many.engagement, many.face_attention,
+        many.heart_rate_bpm, many.rmssd_ms, many.sessions,
+        many.cognitive_samples, many.face_samples, many.heart_samples) THEN
+        RAISE EXCEPTION 'the batch summary disagrees with the single-student '
+                        'body it delegates to: one=% many=%', one, many;
+    END IF;
+
+    -- Non-vacuous: if both returned all-nulls the comparison above would pass.
+    IF one.cognitive_samples <> 4 OR one.face_samples <> 3 OR one.heart_samples <> 2 THEN
+        RAISE EXCEPTION 'the fixture rows did not reach the summary: %', one;
+    END IF;
+
+    SELECT * INTO many
+      FROM public.student_signal_summary_many(ARRAY[usr], 7, false, false, 'UTC');
+    IF many.face_samples <> 0 OR many.heart_samples <> 0
+       OR many.heart_rate_bpm IS NOT NULL OR many.face_attention IS NOT NULL THEN
+        RAISE EXCEPTION 'an excluded channel came back through the fan-out: %', many;
+    END IF;
+    -- And the cognitive channel is *not* gated by those flags -- it has no
+    -- opt-out on the aggregate, which is why the payload calls its consent
+    -- state `eeg_enabled` rather than `eeg_included`.
+    IF many.cognitive_samples <> 4 THEN
+        RAISE EXCEPTION 'the cognitive channel was gated by a flag that does '
+                        'not apply to it: %', many;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

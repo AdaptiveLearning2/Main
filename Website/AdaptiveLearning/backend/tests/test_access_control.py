@@ -1365,6 +1365,123 @@ def test_every_single_row_lookup_handles_the_missing_row():
         "Use _row_or_404(), or catch it where 'absent' is a legitimate answer.")
 
 
+def test_the_class_summary_route_is_not_shadowed_by_the_id_route():
+    """A literal path registered after a placeholder is unreachable.
+
+    FastAPI matches in registration order, so with `/api/classes/{class_id}`
+    first, a GET of `/api/classes/summary` binds `class_id="summary"` and comes
+    back 404 "Class not found" -- which reads as the endpoint not existing
+    rather than as a routing mistake, and no test of the handler itself would
+    catch it because the handler is never reached.
+    """
+    from fastapi.routing import APIRoute
+
+    order = [r.endpoint.__name__ for r in main.app.routes
+             if isinstance(r, APIRoute) and r.path in
+             ("/api/classes/summary", "/api/classes/{class_id}")]
+
+    assert order.index("class_summaries") < order.index("get_class"), (
+        "/api/classes/summary is registered after /api/classes/{class_id}, so "
+        "it is shadowed and answers 404")
+
+
+class _ClassSummaryClient:
+    """Classes, memberships and the stats the roster averages come from."""
+
+    def __init__(self, classes, members, stats, raises=()):
+        self.classes, self.members, self.stats = classes, members, stats
+        self.raises = set(raises)
+        self.tables = []
+
+    def table(self, name):
+        client, table = self, name
+
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a, **_k): return self
+            def in_(self, *_a, **_k): return self
+            def is_(self, *_a, **_k): return self
+
+            def execute(self):
+                client.tables.append(table)
+                if table in client.raises:
+                    raise RuntimeError(f"{table} unavailable")
+                return _Result({"classes": client.classes,
+                                "class_memberships": client.members,
+                                "user_stats": client.stats}.get(table, []))
+
+        return _Q()
+
+
+def test_class_summary_averages_accuracy_over_students_who_attempted(monkeypatch):
+    """The arithmetic the page used to do, moved but not changed.
+
+    A student with no attempts is not a 0% student -- they are not in the
+    accuracy average at all -- while the streak averages over the whole roster.
+    Getting that backwards makes every class with a new joiner look worse.
+    """
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}],
+        members=[{"class_id": "c1", "student_id": s} for s in ("a", "b", "c")],
+        stats=[{"user_id": "a", "total_questions": 10, "total_correct": 8, "current_streak": 4},
+               {"user_id": "b", "total_questions": 10, "total_correct": 4, "current_streak": 2},
+               # No attempts: out of the accuracy average, in the streak one.
+               {"user_id": "c", "total_questions": 0, "total_correct": 0, "current_streak": 0}],
+    ))
+
+    out = main.class_summaries(None)
+
+    assert out["c1"]["avgAccuracy"] == 60      # (80 + 40) / 2, not / 3
+    assert out["c1"]["avgStreak"] == 2         # (4 + 2 + 0) / 3
+    assert out["c1"]["retrieved"] is True
+
+
+def test_a_class_nobody_has_attempted_reports_null_not_zero(monkeypatch):
+    """`None` is "nobody has tried anything yet", which the card draws as a
+    dash. `0` would be a class that tried and got everything wrong."""
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}],
+        members=[{"class_id": "c1", "student_id": "a"}],
+        stats=[{"user_id": "a", "total_questions": 0, "total_correct": 0, "current_streak": 0}],
+    ))
+
+    assert main.class_summaries(None)["c1"]["avgAccuracy"] is None
+
+
+def test_a_failed_membership_read_is_not_a_class_of_zeros(monkeypatch):
+    """Same three-state rule as everywhere else: the page has to tell "no
+    attempts yet" from "we could not find out"."""
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    monkeypatch.setattr(main, "supabase", _ClassSummaryClient(
+        classes=[{"id": "c1"}], members=[], stats=[],
+        raises=["class_memberships"]))
+
+    out = main.class_summaries(None)
+
+    assert out["c1"]["retrieved"] is False
+    assert out["c1"]["avgAccuracy"] is None
+
+
+def test_the_summary_does_not_read_a_roster_per_class(monkeypatch):
+    """The point of the endpoint. It replaced one request per class from the
+    browser, so doing one query per class here would move the N rather than
+    remove it."""
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    client = _ClassSummaryClient(
+        classes=[{"id": f"c{i}"} for i in range(12)],
+        members=[{"class_id": f"c{i}", "student_id": f"s{i}"} for i in range(12)],
+        stats=[{"user_id": f"s{i}", "total_questions": 4, "total_correct": 2,
+                "current_streak": 1} for i in range(12)])
+    monkeypatch.setattr(main, "supabase", client)
+
+    main.class_summaries(None)
+
+    assert len(client.tables) <= 4, (
+        f"twelve classes cost {len(client.tables)} queries: {client.tables}")
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:
@@ -1424,8 +1541,26 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
         "session_answers":    [],
         "profiles":           [{"id": "student-1", "display_name": "Ada", "email": "a@x.com"}],
     }
+    # The live monitor reads every open session's four channels through one RPC
+    # now, rather than four queries per student in a loop, so the fake answers
+    # it from the same canned tables.
+    _CHANNEL_TABLE = {"cognitive": "cognitive_signals", "face": "face_signals",
+                      "heart": "heart_signals", "answer": "session_answers"}
+
+    def _rpc(_self, name, params):
+        assert name == "latest_signals_for_sessions", f"unexpected rpc {name}"
+        rows = []
+        for sid in params["p_session_ids"]:
+            for channel, table in _CHANNEL_TABLE.items():
+                canned = tables.get(table) or []
+                if canned:
+                    rows.append({"session_id": sid, "channel": channel,
+                                 "payload": canned[0]})
+        return type("R", (), {"execute": lambda _s: type("X", (), {"data": rows})()})()
+
     monkeypatch.setattr(main, "supabase",
-                        type("S", (), {"table": lambda _s, n: _Tbl(n, tables, updates)})())
+                        type("S", (), {"table": lambda _s, n: _Tbl(n, tables, updates),
+                                       "rpc": _rpc})())
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
     stop_calls = []
     monkeypatch.setattr(main.eeg_poller, "stop",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
@@ -33,7 +33,16 @@ export default function Sessions() {
   // loaded fine and is worth showing.
   const [partial, setPartial] = useState(0)
 
-  useEffect(() => {
+  // Named, like the seven other pages this change converted. They were left
+  // inline here, and the cost was not tidiness: `LoadError` renders its button
+  // only when it is handed an `onRetry`, so this was the one converted page
+  // whose error state had no way out of it but knowing to reload the browser --
+  // which is the thing the whole change says it is fixing.
+  const loadClasses = useCallback(() => {
+    // No `setLoading(true)` here, unlike the roster read below. It starts true,
+    // and on a retry the error stays on screen until the request settles rather
+    // than flashing a skeleton -- which is also what keeps this effect off the
+    // `set-state-in-effect` lint backlog the project is trying not to grow.
     apiFetch('/api/classes').then(rows => {
       setClasses(rows || [])
       setFailed(false)
@@ -45,7 +54,7 @@ export default function Sessions() {
     })
   }, [])
 
-  useEffect(() => {
+  const loadSessions = useCallback(() => {
     if (!classId) return
     setLoading(true)
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
@@ -73,9 +82,28 @@ export default function Sessions() {
     })
   }, [classId])
 
+  useEffect(() => { loadClasses() }, [loadClasses])
+  useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Whichever read is the one that failed. `classId` is only set once the class
+  // list has arrived, so an empty one means the failure was the outer request.
+  const retry = classId ? loadSessions : loadClasses
+
   const allRows = students.flatMap(s =>
     (sessionsByStudent[s.user_id] || []).map(sess => ({ ...sess, _student: s }))
   ).sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
+
+  // Every student's list failed, which is a *failed load* rather than a partial
+  // one -- there is nothing left for it to be partial about.
+  //
+  // The roster call succeeding while every per-student call fails is not exotic:
+  // it is what a degraded `/api/sessions/student/*` looks like for the whole
+  // class rather than for one child. `failed` stayed false, `allRows` was empty,
+  // and the page drew "N students' sessions couldn't be loaded" directly above
+  // "No sessions yet -- when students start practicing, sessions will show
+  // here" -- the confident wrong empty state this change exists to remove,
+  // reached by the one path it had not covered.
+  const allFailed = students.length > 0 && partial === students.length
 
   const filteredRows = allRows.filter(s =>
     (s._student?.name || '').toLowerCase().includes(search.trim().toLowerCase())
@@ -109,7 +137,7 @@ export default function Sessions() {
         
       {/* Some students' session lists failed while the rest loaded. Said out
           loud, because the table below is missing rows and looks complete. */}
-      {!loading && !failed && partial > 0 && (
+      {!loading && !failed && !allFailed && partial > 0 && (
         <div className="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
             {partial} student{partial === 1 ? "'s" : "s'"} sessions couldn&apos;t be
@@ -120,8 +148,8 @@ export default function Sessions() {
 
       {loading ? (
         <SkeletonList count={4} height="h-16" gap="space-y-2" />
-      ) : failed ? (
-        <LoadError what="this class's sessions" />
+      ) : failed || allFailed ? (
+        <LoadError what="this class's sessions" onRetry={retry} />
       ) : allRows.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-3">📭</div>

@@ -1355,11 +1355,35 @@ Self-service teacher sign-up is unaffected and still intentional: `handle_new_us
 registration form chose. What changed is that the value cannot be edited afterwards by the account
 it describes.
 
-The frontend's `AuthContext.extractRole` still reads `user_metadata.role`, deliberately: it picks
-which dashboard to render, and someone who edits it sees a different nav and gets a 403 from every
-endpoint behind it. **That is a preference, not a permission** — it is commented as such, and
-nothing that matters may be gated on it. Same reasoning as `AdminGuard` being a UI convenience over
-a backend check.
+**The frontend reads the same column, through `GET /api/profile/me`.** `AuthContext` used to derive
+its role from `user_metadata.role` on the grounds that it only picks which dashboard to render — true
+while every role was chosen at sign-up, and wrong the moment one was not. An account promoted to
+`admin` in the SQL editor has no `role` in its metadata at all, so it rendered as a student: student
+nav, a badge reading "Student", and no link to the console it administers. `/admin` itself worked,
+because `AdminGuard` asks the backend — which is the shape of the bug. The authoritative check was
+right and every surface around it was reading a different source.
+
+Three things about that read are load-bearing:
+
+- **It is not in the `onAuthStateChange` callback.** `apiFetch` calls `getSession()` for the token,
+  supabase-js holds an auth lock while dispatching, and awaiting it there deadlocks — the app hangs
+  on a loader for ever. It lives in an effect the callback merely schedules.
+- **Keyed on the user *id*, not the user object**, so a token refresh mid-lesson does not re-fetch
+  and put the whole app back through a loading state.
+- **A failed read falls back to the claim, not to `student`.** A blip is not a demotion; defaulting
+  to the least-privileged role here would drop every teacher into the wrong application whenever the
+  API was down. That is the opposite direction to `_role` on the backend, deliberately: that one
+  decides *access*, this one decides which nav to draw.
+
+`loading` stays true until the role resolves, or the guards see `role === null` for a frame and
+render the "this account isn't set up" screen on every page load.
+
+Login and Register navigate to `/` and let `HomeRedirect` choose, rather than computing a home from
+the claim. They each carried a second copy of the role-to-home map that `homeRoute.js` exists to be
+the only one of, and both were keyed on the value that does not know about `admin`.
+
+The claim survives only as that fallback, and nothing that matters may be gated on it — same
+reasoning as `AdminGuard` being a UI convenience over a backend check.
 
 Tests: `backend/tests/test_role_gates.py`, which asserts both halves — that the code reads the right
 column, and that a migration takes the write away.

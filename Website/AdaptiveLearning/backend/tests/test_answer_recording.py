@@ -308,7 +308,7 @@ def test_closing_an_open_session_still_credits_it(monkeypatch):
     monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: None)
     monkeypatch.setattr(main, "_credit_session_to_user_stats",
                         lambda uid, q, c: credited.append((uid, q, c)))
-    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a: False)
+    monkeypatch.setattr(main, "_discard_if_nothing_recorded", lambda *_a, **_k: False)
     monkeypatch.setattr(main, "_rollup_session_days", lambda *_a: None)
     monkeypatch.setattr(main.chart_archive, "schedule", lambda *_a, **_k: None)
 
@@ -325,13 +325,27 @@ class _ClaimClient:
     `is_("ended_at", "null")` update matches anything.
     """
 
-    def __init__(self, stored, answers=(), claim_wins=True, confirmed_ended_at=None):
+    def __init__(self, stored, answers=(), claim_wins=True):
         self.stored = stored
         self.answers = list(answers)
         self.claim_wins = claim_wins
-        self.confirmed_ended_at = confirmed_ended_at
         self.updates = []
         self.deleted = []
+
+    def rpc(self, name, params):
+        client = self
+
+        class _R:
+            def execute(self):
+                # `session_answer_counts` -- two integers, as the SQL returns
+                # them, rather than the answer rows the close used to sum here.
+                assert name == "session_answer_counts", name
+                return type("R", (), {"data": [{
+                    "total": len(client.answers),
+                    "correct": sum(1 for a in client.answers if a.get("correct")),
+                }]})()
+
+        return _R()
 
     def table(self, name):
         client, table = self, name
@@ -384,10 +398,7 @@ class _ClaimClient:
                 if table == "session_answers":
                     return type("R", (), {"data": client.answers})()
                 if table == "sessions":
-                    row = dict(client.stored)
-                    if client.confirmed_ended_at is not None:
-                        row["ended_at"] = client.confirmed_ended_at
-                    return type("R", (), {"data": [row]})()
+                    return type("R", (), {"data": [dict(client.stored)]})()
                 return type("R", (), {"data": []})()
 
         return _Q()
@@ -416,7 +427,6 @@ def test_a_close_that_loses_the_stamp_credits_nothing(monkeypatch):
          "started_at": "2026-08-15T10:00:00Z"},
         answers=[{"correct": True}] * 6,
         claim_wins=False,
-        confirmed_ended_at="2026-08-15T11:00:00Z",   # somebody else's stamp
     )
     _close_with(monkeypatch, client, credited)
 
@@ -429,31 +439,29 @@ def test_a_close_that_loses_the_stamp_credits_nothing(monkeypatch):
     assert credited == [], "a close that lost the stamp credited the totals anyway"
 
 
-def test_a_stamp_that_reports_nothing_is_confirmed_rather_than_assumed_lost(monkeypatch):
-    """An empty update result is ambiguous, and guessing costs every close.
+def test_postgrest_update_returns_the_updated_row():
+    """The assumption `_claim_session_close` rests on, pinned against the library.
 
-    PostgREST returns the updated row only when asked to; a client that is not
-    asking returns an empty list from a stamp that landed perfectly well.
-    Reading "empty" as "somebody beat me to it" would silently skip the credit,
-    the rollup and the archive for *every* session -- a far worse failure than
-    the double-credit the claim exists to prevent.
+    It reads an empty `.data` from the conditional stamp as "zero rows matched",
+    which is only true because postgrest-py defaults `update()` to
+    `returning=representation`. If a dependency bump flips that default, every
+    close reads as lost and every session silently loses its credit, its rollup
+    and its archive -- no error, no symptom but the numbers not moving.
+
+    The alternative was a confirming SELECT on every lost race, which paid a
+    round trip forever to guard against a change this catches at install time.
     """
-    credited = []
-    client = _ClaimClient(
-        {"id": "s-1", "user_id": USER, "questions_answered": 6, "correct_answers": 4,
-         "started_at": "2026-08-15T10:00:00Z"},
-        answers=[{"correct": True}] * 4 + [{"correct": False}] * 2,
-        claim_wins=False,
-        confirmed_ended_at=None,          # still open: nobody else stamped it
-    )
-    _close_with(monkeypatch, client, credited)
+    import inspect
 
-    main._close_session(USER, {"id": "s-1", "questions_answered": 6,
-                               "correct_answers": 4,
-                               "started_at": "2026-08-15T10:00:00Z"},
-                        "2026-08-15T11:30:00Z")
+    from postgrest._sync import request_builder
 
-    assert credited == [(USER, 6, 4)]
+    sig = inspect.signature(request_builder.SyncRequestBuilder.update)
+    default = sig.parameters["returning"].default
+
+    assert getattr(default, "value", default) == "representation", (
+        "postgrest's update() no longer returns the updated row by default, so "
+        "_claim_session_close reads every successful stamp as a lost race -- "
+        "every session close silently skips its credit, rollup and archive")
 
 
 def test_the_stamp_is_conditional(monkeypatch):

@@ -87,6 +87,28 @@ def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
 
+def _unique_ids(values) -> list:
+    """The ids worth querying for: in order, without blanks or repeats.
+
+    Every `_*_many` helper opened by writing this out, which is how one of them
+    came to skip the blank-dropping half and pay a round trip for an empty id.
+    """
+    return [v for v in dict.fromkeys(values) if v]
+
+
+def _group_by_user(rows) -> dict[str, list]:
+    """Rows bucketed by `user_id`, order within a bucket preserved.
+
+    The closing half of the same helpers, for the same reason -- and the order
+    matters at one of them: `_open_sessions_many` asks the database for
+    newest-first and its caller takes `[0]`.
+    """
+    grouped: dict[str, list] = {}
+    for r in rows:
+        grouped.setdefault(r.get("user_id"), []).append(r)
+    return grouped
+
+
 def _row_or_404(query, what: str) -> dict:
     """Run a `.single()` lookup and answer 404 when the row is not there.
 
@@ -184,7 +206,7 @@ def _profiles_many(uids) -> dict[str, dict]:
     because the caller cannot tell those apart and a student rendered with no
     name reads as bad data rather than as a read that did not land.
     """
-    ids = [u for u in dict.fromkeys(uids) if u]
+    ids = _unique_ids(uids)
     if not ids:
         return {}
     rows = []
@@ -640,7 +662,8 @@ def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> N
         print(f"[stats] could not credit {total_q} answers for {user_id[:8]}: {e}")
 
 
-def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
+def _discard_if_nothing_recorded(session_id: str, questions,
+                                 answers_counted: bool = False) -> bool:
     """Delete a session that answered nothing and recorded nothing. True if gone.
 
     Pressing Connect Headband creates the session, and it has to -- signals need
@@ -671,7 +694,13 @@ def _discard_if_nothing_recorded(session_id: str, questions) -> bool:
     """
     if questions:
         return False
-    for table in ("session_answers", "cognitive_signals", "face_signals", "heart_signals"):
+    # `session_answers` is skipped only when the caller has *just* counted it
+    # and got zero from the database. That is not the same as trusting the
+    # counter -- which is the whole point of this function -- so a recount that
+    # fell back to the cache leaves the check in place.
+    tables = ("cognitive_signals", "face_signals", "heart_signals") if answers_counted \
+        else ("session_answers", "cognitive_signals", "face_signals", "heart_signals")
+    for table in tables:
         try:
             rows = supabase.table(table).select("session_id") \
                 .eq("session_id", session_id).limit(1).execute().data or []
@@ -767,12 +796,19 @@ def _claim_session_close(session_id: str, ended_at: str) -> bool:
     matches at most one row and Postgres serialises the two writers, so exactly
     one of them updates anything.
 
-    **An empty result is ambiguous, not a loss.** It is also what a client that
-    is not asking PostgREST for the updated row returns, so it is confirmed by
-    reading the row back; only a session that now carries a *different*
-    `ended_at` is somebody else's close. Guessing "lost" on the ambiguity would
-    silently skip the credit, the rollup and the archive for every close, which
-    is a far worse failure than the double-credit this prevents.
+    **An empty result means zero rows matched, and nothing else.** postgrest-py
+    defaults `update()` to `returning=representation` and nothing here overrides
+    it, so the updated row always comes back when one was updated. An earlier
+    version treated empty as *ambiguous* and confirmed it with a second SELECT,
+    on the theory that a client not asking for the representation would also
+    answer empty -- true of some clients, not of the one this pins.
+
+    That assumption is the whole safety property, and getting it wrong is silent
+    and total: if the default ever flips, every close reads as lost and every
+    session silently loses its credit, its rollup and its archive. So it is
+    pinned by `test_postgrest_update_returns_the_updated_row`, which fails on a
+    dependency bump that changes it -- a loud failure in CI instead of a quiet
+    one in production, which is what the extra round trip was buying badly.
 
     Never raises: it runs where a close does, and a session that cannot be
     stamped must not take the caller down with it.
@@ -783,31 +819,10 @@ def _claim_session_close(session_id: str, ended_at: str) -> bool:
     except Exception as e:                                     # noqa: BLE001
         print(f"[session:close] could not stamp {session_id}: {e}")
         return False
-    if claimed:
-        return True
-    try:
-        row = supabase.table("sessions").select("ended_at") \
-            .eq("id", session_id).limit(1).execute().data or []
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[session:close] could not confirm the close of {session_id}: {e}")
-        return False
-    if not row:
-        # Deleted underneath us -- by the discard on a competing close, or from
-        # the dashboard. There is nothing left to credit or summarise.
-        return False
-    stored = row[0].get("ended_at")
-    # `None` means the row is still open, so the update reported nothing because
-    # it was not asked to report anything rather than because it matched
-    # nothing. Equal means this caller's own stamp landed.
-    return stored is None or stored == ended_at
+    return bool(claimed)
 
 
-# Above this many rows a close credits the stored counter instead of recounting.
-# A capped recount is certainly short; the cache is only possibly low.
-_ANSWER_RECOUNT_CAP = 2000
-
-
-def _answer_counts(session_id: str, session: dict) -> tuple[int, int]:
+def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
     """What a closing session actually answered -- the rows, not just the counter.
 
     `sessions.questions_answered` is a denormalised cache. `record_answer`
@@ -823,30 +838,46 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int]:
     reaching the lifetime totals a parent reads. Permanently: no later close
     revisits a session that is already stamped, and nothing logged it.
 
-    One query per close -- not per answer -- which is the price the discard
-    check was already paying to distrust the same field.
+    **Two integers from `session_answer_counts` (20260826000000), not the rows.**
+    This used to fetch up to 2000 `correct` values and sum them here, which
+    meant carrying a cap -- and a cap needs its own fallback, because a capped
+    count is *wrong* rather than merely slow, and crediting a wrong low number
+    is the exact failure this function exists to prevent. Counting in SQL has no
+    cap to reason about, so the constant, its branch and its log line are gone.
 
-    Falls back to the stored counter on a failed read, on a session bigger than
-    the cap, and whenever the rows come back *fewer* than the counter: crediting
-    less than a previous reading of this session is the direction that loses a
-    student's work.
+    One query per close, not per answer.
+
+    Returns `(questions, correct, counted)`. `counted` is whether those numbers
+    came from the rows or fell back to the stored counter, which the caller
+    needs: a *trusted* zero means `session_answers` is empty and the discard
+    check need not go and ask the same question again.
+
+    Falls back to the stored counter on a failed read, and whenever the rows
+    come back *fewer* than the counter -- crediting less than a previous reading
+    of this session is the direction that loses a student's work.
     """
     stored_q = session.get("questions_answered") or 0
     stored_c = session.get("correct_answers") or 0
     try:
-        rows = supabase.table("session_answers").select("correct") \
-            .eq("session_id", session_id).limit(_ANSWER_RECOUNT_CAP).execute().data or []
+        res = supabase.rpc("session_answer_counts",
+                           {"p_session_id": session_id}).execute()
     except Exception as e:                                     # noqa: BLE001
-        print(f"[session:close] could not recount answers for {session_id}: {e}")
-        return stored_q, stored_c
-    if len(rows) >= _ANSWER_RECOUNT_CAP:
-        print(f"[session:close] {session_id} has at least {_ANSWER_RECOUNT_CAP} "
-              f"answers; crediting the stored counter rather than a capped recount")
-        return stored_q, stored_c
-    counted_q = len(rows)
+        if "PGRST202" in str(e):
+            print(f"[session:close] session_answer_counts is missing from the "
+                  f"database -- apply 20260826000000; crediting the stored "
+                  f"counter until then: {e}")
+        else:
+            print(f"[session:close] could not recount answers for {session_id}: {e}")
+        return stored_q, stored_c, False
+    rows = res.data or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not rows:
+        return stored_q, stored_c, False
+    counted_q = rows[0].get("total") or 0
     if counted_q < stored_q:
-        return stored_q, stored_c
-    return counted_q, sum(1 for r in rows if r.get("correct"))
+        return stored_q, stored_c, False
+    return counted_q, rows[0].get("correct") or 0, True
 
 
 def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
@@ -889,9 +920,13 @@ def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
         # answers twice in the lifetime totals.
         return {"discarded": False, "already_closed": True}
 
-    total_q, correct = _answer_counts(sid, session)
+    total_q, correct, counted = _answer_counts(sid, session)
 
-    if _discard_if_nothing_recorded(sid, total_q):
+    # `counted` says the zero came from the database rather than from the cache,
+    # so the discard check does not have to ask `session_answers` the same
+    # question a second time. It still asks when the recount fell back, because
+    # then nobody has actually looked.
+    if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
         return {"discarded": True}
 
     _credit_session_to_user_stats(user_id, total_q, correct)
@@ -1320,7 +1355,8 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
 
 def _signal_summaries(student_ids: list[str], days: int = 7,
                       include_heart: bool = True,
-                      include_emotion: bool = True) -> dict[str, dict] | None:
+                      include_emotion: bool = True,
+                      channels_by_student: dict | None = None) -> dict[str, dict] | None:
     """Headline averages for many students in one round-trip.
 
     The single-student RPC removes the row transfer but still costs one
@@ -1332,6 +1368,19 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
     to say whether it stands in for a failed query or for a child the aggregate
     genuinely reported nothing about. Returning {} for both had the dashboard
     tell a parent their child had recorded nothing whenever the RPC broke.
+
+    **`channels_by_student` is how the per-child consent fields get on.** The
+    batch RPC groups children by flag *pair*, so it cannot carry a per-child
+    revocation date or a per-child `consent_retrieved` -- and without this every
+    row came back with the `_shape_summary` defaults: consent retrieved, EEG on,
+    nothing revoked, whatever the family had actually decided. The one caller
+    patched all five back in by hand afterwards, in both of its branches, which
+    is not something a second caller would know to do. Pass the
+    `ReportChannels` map and they are stamped here instead.
+
+    Omitted, the defaults stand -- so a caller that has no consent map still
+    gets a well-formed payload rather than a crash, and the surfaces that
+    render "off since" simply have nothing to render.
     """
     if not student_ids:
         return {}
@@ -1345,8 +1394,20 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
     rows = res.data or []
     if isinstance(rows, dict):
         rows = [rows]
-    return {str(r.get("student_id")): _shape_summary(r, include_heart, include_emotion)
-            for r in rows if r.get("student_id")}
+    out = {}
+    for r in rows:
+        sid = r.get("student_id")
+        if not sid:
+            continue
+        ch = (channels_by_student or {}).get(sid) or (channels_by_student or {}).get(str(sid))
+        out[str(sid)] = _shape_summary(
+            r, include_heart, include_emotion,
+            consent_retrieved=ch.consent_retrieved if ch else True,
+            emotion_revoked_at=ch.emotion_revoked_at if ch else None,
+            heart_revoked_at=ch.heart_revoked_at if ch else None,
+            eeg_enabled=ch.eeg if ch else True,
+            eeg_revoked_at=ch.eeg_revoked_at if ch else None)
+    return out
 
 
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
@@ -2230,7 +2291,7 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
     # two that write academic history did not.
     #
     # One query, not two: this is the same read the counter bump below needs.
-    cur = _session_or_403(session_id, user["id"], "*")
+    _session_or_403(session_id, user["id"])
     supabase.table("session_answers").insert({
         "session_id":     session_id,
         "user_id":        user["id"],
@@ -2239,10 +2300,28 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "correct":        payload.correct,
         "answered_at":    datetime.utcnow().isoformat(),
     }).execute()
-    supabase.table("sessions").update({
-        "questions_answered": (cur.get("questions_answered") or 0) + 1,
-        "correct_answers":    (cur.get("correct_answers") or 0) + (1 if payload.correct else 0),
-    }).eq("id", session_id).execute()
+    # Incremented in the database, not read-modify-written here. This was
+    # `read + 1` against a row fetched a moment earlier -- the same lost update
+    # `record_topic_attempt` was written to remove, one function away and left
+    # in place: two answers landing together both read the same count and the
+    # second write overwrote the first, so a student answered ten questions and
+    # the session recorded nine.
+    #
+    # It never raises for the same reason the topic attempt does not. The answer
+    # row is already written and is the record; `questions_answered` is a
+    # denormalised cache that `_answer_counts` re-derives at close. Losing the
+    # bump costs a live figure until then, not the answer.
+    try:
+        supabase.rpc("bump_session_counters", {
+            "p_session_id": session_id,
+            "p_correct":    bool(payload.correct),
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        if "PGRST202" in str(e):
+            print(f"[answer] bump_session_counters is missing from the database "
+                  f"-- apply 20260826000000; live counters will not move: {e}")
+        else:
+            print(f"[answer] could not bump counters for {session_id}: {e}")
     # The topic the answer was attributed to, handed straight back. The page
     # keys its Topic Accuracy panel by name, and without this it re-read the
     # student's whole performance table after every single answer -- an extra
@@ -2364,7 +2443,7 @@ def _topic_performance_many(student_ids) -> dict[str, list]:
     Fails to an empty map. The caller renders a Topic Accuracy panel from it,
     and an empty panel is what a student with no attempts already shows.
     """
-    ids = [s for s in dict.fromkeys(student_ids) if s]
+    ids = _unique_ids(student_ids)
     if not ids:
         return {}
     try:
@@ -2373,10 +2452,7 @@ def _topic_performance_many(student_ids) -> dict[str, list]:
     except Exception as e:                                     # noqa: BLE001
         print(f"[perf] could not batch-read topic performance for {len(ids)}: {e}")
         return {}
-    grouped: dict[str, list] = {}
-    for r in rows:
-        grouped.setdefault(r.get("user_id"), []).append(r)
-    return grouped
+    return _group_by_user(rows)
 
 
 def _open_sessions_many(student_ids) -> dict[str, list]:
@@ -2392,16 +2468,13 @@ def _open_sessions_many(student_ids) -> dict[str, list]:
     working -- an absence asserted from data that never loaded, on the surface a
     teacher uses to decide who needs help.
     """
-    ids = [s for s in dict.fromkeys(student_ids) if s]
+    ids = _unique_ids(student_ids)
     if not ids:
         return {}
     rows = supabase.table("sessions").select("*") \
         .in_("user_id", ids).is_("ended_at", "null") \
         .order("started_at", desc=True).execute().data or []
-    grouped: dict[str, list] = {}
-    for r in rows:
-        grouped.setdefault(r.get("user_id"), []).append(r)
-    return grouped
+    return _group_by_user(rows)
 
 
 def _stats_including_open_session(student_id: str) -> dict:
@@ -2450,6 +2523,12 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
     reporting a roster of zeros -- the batch cannot tell which rows it would
     have got, and guessing in the optimistic direction is what the flag exists
     to prevent.
+
+    **One entry per id asked for, queried on the ids worth querying.** Those are
+    different lists: blanks and repeats are dropped before the reads, like the
+    sibling helpers, but the answer still has a key for every id handed in --
+    the single-student wrapper above indexes the result directly, so a filtered
+    id would turn a zeros row into a KeyError.
     """
     if not student_ids:
         return {}
@@ -2458,9 +2537,12 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
               "best_streak": 0, "retrieved": True}
         for sid in student_ids
     }
+    lookup = _unique_ids(student_ids)
+    if not lookup:
+        return base
     try:
         rows = supabase.table("user_stats").select("*") \
-            .in_("user_id", student_ids).execute().data or []
+            .in_("user_id", lookup).execute().data or []
         for r in rows:
             if r.get("user_id") in base:
                 base[r["user_id"]] = {**r, "retrieved": True}
@@ -2470,7 +2552,7 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
     try:
         open_rows = supabase.table("sessions") \
             .select("user_id, questions_answered, correct_answers") \
-            .in_("user_id", student_ids).is_("ended_at", "null").execute().data or []
+            .in_("user_id", lookup).is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
         # The stored totals stand on their own; this only ever adds to them.
         print(f"[stats] could not batch-read open sessions: {e}")
@@ -5298,7 +5380,8 @@ def my_children(request: Request, include_face: bool = True):
     summaries: dict | None = {}
     for (heart_flag, emotion_flag), group in by_channels.items():
         part = _signal_summaries(group, include_heart=heart_flag,
-                                 include_emotion=emotion_flag)
+                                 include_emotion=emotion_flag,
+                                 channels_by_student=channels_by_child)
         if part is None:
             # One failed group fails the whole call, discarding groups that
             # succeeded. Deliberate, and the conservative choice rather than an
@@ -5344,28 +5427,14 @@ def my_children(request: Request, include_face: bool = True):
             # Headline signal averages only. Deliberately not the full weekly
             # report: that pulls thousands of raw rows per child, and this runs
             # on a dashboard that loads every visit.
-            # Grouping keys on the flags alone, so a child whose consent read
-            # *failed* shares a group with one who genuinely declined both
-            # channels -- same RPC call, different meaning. The RPC path cannot
-            # know which, so it is stamped per child here.
-            # emotion_revoked_at / heart_revoked_at are stamped here for the same
-            # reason consent_retrieved is: `_signal_summaries`' batch RPC groups
-            # children by flag pair, not by revocation date, so it cannot carry a
-            # per-child timestamp. Without this a revoked channel came back with
-            # "emotion_revoked_at": null from this endpoint, degrading a surface
-            # that wants "Off since <date>" to the generic "Not recorded".
-            # eeg_enabled / eeg_revoked_at are stamped here for the same reason
-            # as the two above: the batch RPC groups children by flag pair and
-            # has no per-child consent state to carry. Without them the three
-            # cognitive tiles fall back to "on", so a parent who switched the
-            # headband off reads "No sensor" -- a fault -- rather than
-            # "Off since <date>", the thing they did.
-            "signal_summary": {**summaries[str(cid)],
-                               "consent_retrieved": channels_by_child[cid].consent_retrieved,
-                               "emotion_revoked_at": channels_by_child[cid].emotion_revoked_at,
-                               "heart_revoked_at": channels_by_child[cid].heart_revoked_at,
-                               "eeg_enabled": channels_by_child[cid].eeg,
-                               "eeg_revoked_at": channels_by_child[cid].eeg_revoked_at}
+            # The five per-child consent fields are stamped inside
+            # `_signal_summaries` now, because the batch RPC groups children by
+            # flag *pair* and cannot carry a per-child revocation date or a
+            # per-child `consent_retrieved` -- a child whose consent read failed
+            # shares a group with one who genuinely declined. They were patched
+            # back in here, in both branches, which is not something a second
+            # caller would know to do.
+            "signal_summary": summaries[str(cid)]
                               if str(cid) in summaries
                               else _shape_summary(None,
                                                 channels_by_child[cid].heart,

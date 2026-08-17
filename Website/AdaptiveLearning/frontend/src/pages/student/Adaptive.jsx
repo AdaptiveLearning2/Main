@@ -120,21 +120,26 @@ export default function Adaptive() {
   // that had just told the backend what changed.
   const applyAttempt = useCallback((topic, wasCorrect) => {
     if (!topic) return                 // nothing was attributed; nothing moved
+    // One place, so the tile and the running total cannot disagree about what
+    // an attempt does to a tally.
+    const bump = ({ correct, attempts }) => ({
+      correct:  correct  + (wasCorrect ? 1 : 0),
+      attempts: attempts + 1,
+    })
     setAccuracyStats(prev => {
       const prior = prev.subjects[topic]
-      if (!prior) return prev          // a topic this page does not render
+      // The total counts every attempt, even one this page has no tile for.
+      // `TOPICS` is a hardcoded ten and `math_topics` is a table, so the two
+      // agree only until someone adds a row -- and returning early on an
+      // unrecognised topic dropped the attempt from Overall Accuracy as well as
+      // from the tile. `loadAccuracy`, which this replaced, summed every row
+      // the server returned whether or not it recognised the name, so the two
+      // paths disagreed the moment the table grew.
       return {
-        total: {
-          correct:  prev.total.correct  + (wasCorrect ? 1 : 0),
-          attempts: prev.total.attempts + 1,
-        },
-        subjects: {
-          ...prev.subjects,
-          [topic]: {
-            correct:  prior.correct  + (wasCorrect ? 1 : 0),
-            attempts: prior.attempts + 1,
-          },
-        },
+        total: bump(prev.total),
+        subjects: prior
+          ? { ...prev.subjects, [topic]: bump(prior) }
+          : prev.subjects,
       }
     })
   }, [])

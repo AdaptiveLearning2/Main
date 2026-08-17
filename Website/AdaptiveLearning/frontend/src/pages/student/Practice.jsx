@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { apiFetch } from '../../lib/api'
+import { endSession } from '../../lib/session'
 import { supabase } from '../../lib/supabase'
 
 const TIMER = 60
@@ -78,10 +79,6 @@ export default function Practice() {
     //     body: { question_id: q.id, selected_index: idx, correct: idx === q.correct_index }
     //   })
     // } catch {}
-  }
-
-  async function endSession(id) {
-    try { await apiFetch(`/api/sessions/${id}/end`, { method: 'POST' }) } catch {}
   }
 
   function handleTimeout() {

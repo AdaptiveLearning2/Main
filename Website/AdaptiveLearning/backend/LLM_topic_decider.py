@@ -295,7 +295,25 @@ def add_question_to_supabase(question, difficulty):
         return None
 
 
-#Possibility - can just select topic/difficulty manually if LLM generation is too slow. 
+def _attach_stored_id(question, difficulty):
+    """Store the question and put its id on it, in place. Returns the question.
+
+    The id is what an answer refers to. Without it the page has nothing to send
+    to `/api/sessions/{id}/answer`, so nothing generated on the adaptive path is
+    ever recorded -- which is the bug this line was added to fix.
+
+    Both entry points here need it, and each had its own copy of these five
+    lines. That is precisely the shape that lets one path keep the id while the
+    other quietly stops setting it, with no error anywhere and the same symptom
+    as before: a student practising and the database reading zero.
+    """
+    question["id"] = add_question_to_supabase(question, difficulty)
+    if question["id"]:
+        print("Question stored, id " + str(question["id"]))
+    return question
+
+
+#Possibility - can just select topic/difficulty manually if LLM generation is too slow.
 def calculate_topic_and_difficulty(user_id, grade):
     accuracy_response = get_user_performance(user_id)
 
@@ -509,12 +527,7 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     print(question)
 
 
-    # The id rides on the question. It is what an answer refers to, and without
-    # it the page had nothing to send to /api/sessions/{id}/answer -- so nothing
-    # was ever recorded from the adaptive path.
-    question["id"] = add_question_to_supabase(question, difficulty)
-    if question["id"]:
-        print("Question stored, id " + str(question["id"]))
+    _attach_stored_id(question, difficulty)
 
 
     return question
@@ -753,12 +766,7 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     question = question_generation(topic, difficulty, user_id, grade)
     print(question)
 
-    # The id rides on the question. It is what an answer refers to, and without
-    # it the page had nothing to send to /api/sessions/{id}/answer -- so nothing
-    # was ever recorded from the adaptive path.
-    question["id"] = add_question_to_supabase(question, difficulty)
-    if question["id"]:
-        print("Question stored, id " + str(question["id"]))
+    _attach_stored_id(question, difficulty)
 
     # Metadata for the frontend's "EEG eased/raised difficulty" badge -- reuses
     # the same session-scoped EEG read above rather than a second lookup.

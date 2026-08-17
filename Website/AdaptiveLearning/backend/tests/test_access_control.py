@@ -1133,6 +1133,238 @@ def test_the_opt_out_deliberately_does_not_reach_live_or_session_review():
         )
 
 
+# ── a session belongs to one student ─────────────────────────────────────
+#
+# `record_answer` and `end_session` write a student's academic history and never
+# checked whose session they were writing into, while the three `/api/signals/*`
+# endpoints beside them had called `_verify_session_owner` since they existed.
+# Any signed-in student could post answers into a session id they held -- moving
+# another child's counters, and crediting the questions to whoever the row said
+# when it closed -- or end a session someone else was still working in, stopping
+# their poller mid-lesson.
+
+class _OwnedSessionClient:
+    """One `sessions` row with a given owner. Records what was written."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.writes = []
+
+    def rpc(self, name, params):
+        client = self
+
+        class _R:
+            def execute(self):
+                client.writes.append(("rpc", name))
+                return type("R", (), {"data": None})()
+
+        return _R()
+
+    def table(self, name):
+        client, table = self, name
+
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a, **_k): return self
+            def is_(self, *_a, **_k): return self
+            def order(self, *_a, **_k): return self
+            def limit(self, *_a, **_k): return self
+            def single(self): return self
+
+            def insert(self, row):
+                client.writes.append((table, "insert", row))
+                return self
+
+            def update(self, row):
+                client.writes.append((table, "update", row))
+                return self
+
+            def execute(self):
+                if table == "sessions":
+                    return type("R", (), {"data": {
+                        "id": "session-1", "user_id": client.owner,
+                        "questions_answered": 2, "correct_answers": 1,
+                        "started_at": "2026-08-15T10:00:00Z", "ended_at": None}})()
+                return type("R", (), {"data": []})()
+
+        return _Q()
+
+
+@pytest.mark.parametrize("endpoint", ["answer", "end"])
+def test_a_student_may_not_touch_another_students_session(monkeypatch, endpoint):
+    client = _OwnedSessionClient("student-1")
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-2"})
+    stopped = []
+    monkeypatch.setattr(main.eeg_poller, "stop",
+                        lambda *a, **k: stopped.append(a) or {"running": False})
+
+    with pytest.raises(main.HTTPException) as exc:
+        if endpoint == "answer":
+            main.record_answer(
+                session_id="session-1",
+                payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                                           correct=True),
+                request=None)
+        else:
+            main.end_session(session_id="session-1", request=None)
+
+    assert exc.value.status_code == 403
+    # Refused *before* anything was written. The insert used to run first and
+    # the session was read afterwards, so the forged answer row landed whatever
+    # a later check decided -- and `/end` stopped the poller before looking.
+    assert client.writes == [], f"the refusal came too late: {client.writes}"
+    assert stopped == [], "another student's poller was stopped before the check"
+
+
+@pytest.mark.parametrize("endpoint", ["answer", "end"])
+def test_the_owner_is_still_allowed(monkeypatch, endpoint):
+    """The mirror, so the check above cannot be satisfied by refusing everyone."""
+    client = _OwnedSessionClient("student-1")
+    monkeypatch.setattr(main, "supabase", client)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "student-1"})
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *_a, **_k: {"running": False})
+    monkeypatch.setattr(main, "_close_session", lambda *_a: {"discarded": False})
+
+    if endpoint == "answer":
+        out = main.record_answer(
+            session_id="session-1",
+            payload=main.AnswerPayload(question_id="q-1", selected_index=0,
+                                       correct=True),
+            request=None)
+        assert any(w[:2] == ("session_answers", "insert") for w in client.writes)
+    else:
+        out = main.end_session(session_id="session-1", request=None)
+    assert out["ok"] is True
+
+
+def test_the_two_academic_write_endpoints_check_ownership():
+    """Derived, so a fourth writer cannot be added without one.
+
+    The three `/api/signals/*` endpoints have always called the helper; these
+    two were written without it and nothing said so. Matching on the source is
+    what makes "the caller owns this session" a fact about the code rather than
+    a rule someone has to remember per endpoint.
+    """
+    for fn in (main.record_answer, main.end_session):
+        source = inspect.getsource(fn)
+        assert "_session_or_403(" in source or "_verify_session_owner(" in source, (
+            f"{fn.__name__} writes a student's academic history without "
+            "checking whose session it is")
+
+
+class _RaisingSessions:
+    """`.single()` on zero rows, as postgrest actually behaves.
+
+    It raises `APIError(PGRST116)` rather than returning an empty result, so a
+    handler's `if not res.data` branch is never reached for a missing row -- it
+    is dead code standing where the 404 was supposed to be.
+    """
+
+    def table(self, _name):
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a, **_k): return self
+            def single(self): return self
+
+            def execute(self):
+                raise RuntimeError(
+                    "{'code': 'PGRST116', 'details': 'The result contains 0 rows'}")
+
+        return _Q()
+
+
+@pytest.mark.parametrize("call", [
+    lambda: main._session_or_403("does-not-exist", "someone"),
+    lambda: main._verify_session_owner("does-not-exist", "someone"),
+])
+def test_a_missing_session_returns_404_not_500(monkeypatch, call):
+    """The mirror of `test_missing_class_returns_404_not_500`, which the session
+    helper never had.
+
+    `_verify_class_owner` sits a few hundred lines above this one in the same
+    file, does the same `.single()` lookup, and wraps it -- with a comment
+    saying why. The session helper was written with the `if not res.data` check
+    and no `try`, so its 404 was unreachable and a bogus session id came back as
+    an unhandled APIError: a 500, with a stack trace, for input a client can
+    trivially supply.
+
+    It matters more now than when it was one call site. This helper is what
+    `record_answer`, `end_session` and the three `/api/signals/*` endpoints all
+    resolve a session through, so the same 500 is reachable five ways.
+    """
+    monkeypatch.setattr(main, "supabase", _RaisingSessions())
+
+    with pytest.raises(main.HTTPException) as exc:
+        call()
+    assert exc.value.status_code == 404
+
+
+def test_every_single_row_lookup_handles_the_missing_row():
+    """Derived, because a hand-kept list is what let six of eight go unguarded.
+
+    `.single()` raises `APIError(PGRST116)` on zero rows rather than returning
+    an empty result, so `if not res.data: raise HTTPException(404)` never runs
+    for a missing row -- it is dead code standing where the 404 was meant to be,
+    and the id comes back as a 500 with a stack trace.
+
+    Two call sites had the guard and six did not, and nothing distinguished them
+    but whether someone had been bitten there yet. The rule is now structural: a
+    `.single()` either sits inside a `try` or the endpoint does not call it
+    directly at all, having gone through `_row_or_404`.
+
+    Matched on the source rather than by exercising each endpoint, because the
+    failure is a *missing* handler -- there is no behaviour to drive on the
+    sites that do not exist yet.
+
+    Parsed rather than grepped. A regex over the text matched the several
+    mentions of `.single()` in the helpers' own docstrings and reported them as
+    unguarded calls, and "is there a `try:` earlier in this function" is the
+    wrong question anyway -- an unrelated `try` above would answer it yes. The
+    AST gives real call nodes and real nesting.
+    """
+    import ast
+
+    source = open(main.__file__, encoding="utf-8").read()
+    tree = ast.parse(source)
+
+    # Nearest enclosing def for a line, so the failure names something findable.
+    scopes = sorted(
+        ((n.lineno, n.end_lineno, n.name) for n in ast.walk(tree)
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+        key=lambda s: s[1] - s[0])
+
+    def enclosing(lineno):
+        for start, end, name in scopes:
+            if start <= lineno <= end:
+                return name
+        return "<module>"
+
+    offenders = []
+
+    def walk(node, in_try):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "single" and not in_try):
+            offenders.append(f"{enclosing(node.lineno)} (main.py:{node.lineno})")
+        if isinstance(node, ast.Try):
+            # Only the `try` body is protected. A `.single()` in an except or
+            # finally clause is as exposed as one with no try at all.
+            for child in node.body:
+                walk(child, True)
+            for child in [*node.handlers, *node.orelse, *node.finalbody]:
+                walk(child, in_try)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, in_try)
+
+    walk(tree, False)
+
+    assert not offenders, (
+        "these .single() lookups answer a missing row with an unhandled "
+        f"APIError -- a 500 for an id any client can supply: {offenders}. "
+        "Use _row_or_404(), or catch it where 'absent' is a legitimate answer.")
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:
@@ -1159,6 +1391,9 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
 
         def select(self, *_a, **_k): return self
         def eq(self, *_a, **_k): return self
+        # The roster reads are batched now -- one `in_` for the whole class
+        # rather than an `eq` per student.
+        def in_(self, *_a, **_k): return self
         def is_(self, *_a, **_k): return self
         def order(self, *_a, **_k): return self
         def limit(self, *_a, **_k): return self
@@ -1179,7 +1414,10 @@ def test_class_live_clears_the_heart_reading_alongside_cognitive_and_face_when_s
     tables = {
         "classes":            [{"teacher_id": "teacher-1"}],
         "class_memberships":  [{"student_id": "student-1"}],
-        "sessions":           [{"id": "session-1", "started_at": stale_ts}],
+        # `user_id` because the open-session read is now one query for the whole
+        # roster, grouped back per student -- a row without it belongs to nobody.
+        "sessions":           [{"id": "session-1", "user_id": "student-1",
+                                "started_at": stale_ts}],
         "cognitive_signals":  [{"ts": stale_ts, "focus": 0.5}],
         "face_signals":       [{"ts": stale_ts, "emotion": "neutral"}],
         "heart_signals":      [{"ts": stale_ts, "heart_rate_bpm": 72, "trusted": True}],
@@ -2357,11 +2595,23 @@ def _leaderboard_tables(n=5):
     # Scores stay three digits across the range used here: _Query.order sorts
     # by str(), so mixed-width numbers would rank 99 above 100 and the ordering
     # assertions below would be testing the fake rather than the endpoint.
-    return {"user_stats": [
-        {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
-         "current_streak": 1, "best_streak": 2}
-        for i in range(n)
-    ]}
+    #
+    # `profiles` is real data now rather than a monkeypatched `_profile`. The
+    # names are resolved in one batched read, so patching the single-student
+    # helper would no longer intercept anything -- it would sit in each test
+    # looking like it pinned the display name while the endpoint read straight
+    # past it.
+    return {
+        "user_stats": [
+            {"user_id": f"student-{i}", "total_correct": 900 - i, "total_questions": 900,
+             "current_streak": 1, "best_streak": 2}
+            for i in range(n)
+        ],
+        "profiles": [
+            {"id": f"student-{i}", "display_name": f"Name {i}", "email": f"s{i}@x.com"}
+            for i in range(n)
+        ],
+    }
 
 
 def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
@@ -2370,14 +2620,12 @@ def test_leaderboard_clamps_an_oversized_limit(monkeypatch):
     # More rows available than the cap, so a failure to clamp is visible.
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(main._LEADERBOARD_MAX + 50)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     assert len(main.leaderboard(None, limit=999999)) == main._LEADERBOARD_MAX
 
 
 def test_leaderboard_rejects_a_nonsense_limit(monkeypatch):
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(5)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     assert len(main.leaderboard(None, limit=0)) == 1
     assert len(main.leaderboard(None, limit=-5)) == 1
 
@@ -2388,11 +2636,47 @@ def test_leaderboard_never_returns_user_ids(monkeypatch):
     user_stats attributable to named students."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     rows = main.leaderboard(None)
     assert rows, "fixture must produce rows"
     for row in rows:
         assert "user_id" not in row
+
+
+def test_leaderboard_names_the_board_in_one_read(monkeypatch):
+    """It resolved a display name per row, inside the loop.
+
+    Every roster surface had this shape and the other three were batched first,
+    which left this one -- the board that is capped at `_LEADERBOARD_MAX` rows
+    precisely because it hands out names -- doing a round trip per name.
+    """
+    fake = _FakeSupabase(_leaderboard_tables(30))
+    monkeypatch.setattr(main, "supabase", fake)
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+
+    rows = main.leaderboard(None, limit=30)
+
+    assert fake.table_calls.count("profiles") == 1, (
+        f"one read for the board, got {fake.table_calls.count('profiles')}")
+    # And the names still land, so the assertion above cannot be satisfied by
+    # not reading profiles at all.
+    assert rows[0]["display_name"] == "Name 0"
+
+
+def test_leaderboard_still_names_a_student_with_no_profile_row(monkeypatch):
+    """The batch resolves its fallback per student, not for the whole call.
+
+    A missing row and a failed read are indistinguishable to the caller, and
+    both have to come back as the placeholder -- a rank with no name against it
+    reads as bad data rather than as a profile that could not be read.
+    """
+    tables = _leaderboard_tables(3)
+    tables["profiles"] = [r for r in tables["profiles"] if r["id"] != "student-1"]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(tables))
+    monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)
+
+    rows = main.leaderboard(None)
+
+    assert [r["display_name"] for r in rows] == ["Name 0", "Student", "Name 2"]
 
 
 def test_leaderboard_marks_the_callers_own_row(monkeypatch):
@@ -2400,7 +2684,6 @@ def test_leaderboard_marks_the_callers_own_row(monkeypatch):
     reason it ever needed an id, so the server answers it directly."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase(_leaderboard_tables(3)))
     monkeypatch.setattr(main, "get_user", lambda _r: STUDENT)   # student-1
-    monkeypatch.setattr(main, "_profile", lambda _uid: {"display_name": "Someone"})
     rows = main.leaderboard(None)
     mine = [r for r in rows if r["is_me"]]
     assert len(mine) == 1

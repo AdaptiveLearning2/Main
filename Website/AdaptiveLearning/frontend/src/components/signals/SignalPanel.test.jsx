@@ -211,6 +211,48 @@ describe('LiveSignalSummary', () => {
     expect(metric('Engagement').getByText('Calibrating')).toBeInTheDocument()
   })
 
+  it('says Off since <date> when EEG consent was withdrawn', () => {
+    // The three cognitive tiles were the only ones that could not say this:
+    // `eegReason` hardcoded `on: true` because the payload carried no EEG
+    // consent state at all, so a parent who switched the headband off read
+    // "No sensor" -- which is what a fault looks like, not what they did.
+    render(<LiveSignalSummary report={{
+      eeg_enabled: false,
+      eeg_revoked_at: '2026-08-05T09:00:00Z',
+      sample_counts: { cognitive: 0 },
+    }} />)
+    for (const tile of ['Focus', 'Stress', 'Engagement']) {
+      expect(metric(tile).getByText((t) => /^Off since /.test(t) && t.includes('Aug')))
+        .toBeInTheDocument()
+    }
+  })
+
+  it('still reports a withdrawn EEG channel as off when it has readings behind it', () => {
+    // Withdrawal stops future recording and keeps what is stored, and the
+    // cognitive channel has no read filter on the aggregate -- so a withdrawn
+    // channel legitimately still has a value. `eeg_enabled` therefore has to be
+    // consent state rather than an `eeg_included`-style claim that nothing was
+    // read, and this is the case that tells the two apart.
+    render(<LiveSignalSummary report={{
+      latest: { cognitive: { focus: 0.72, stress: 0.31, engagement: 0.5 } },
+      eeg_enabled: false,
+      eeg_revoked_at: '2026-08-05T09:00:00Z',
+      sample_counts: { cognitive: 155 },
+    }} />)
+    // The reading is what a viewer sees; the tile is not blanked. What changes
+    // is that there is a date available for the surfaces that render one.
+    expect(metric('Focus').getByText('72%')).toBeInTheDocument()
+  })
+
+  it('treats a payload with no EEG consent field as on, not off', () => {
+    // Absent means a payload from before the field existed. Defaulting to off
+    // would tell every reader of an older payload that a headband had been
+    // switched off -- a claim about a decision nobody made.
+    render(<LiveSignalSummary report={{ sample_counts: { cognitive: 0 } }} />)
+    expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
+    expect(metric('Focus').queryByText(/^Off since /)).not.toBeInTheDocument()
+  })
+
   it('does not claim a sensor state when the consent read failed', () => {
     render(<LiveSignalSummary report={{
       consent_retrieved: false,

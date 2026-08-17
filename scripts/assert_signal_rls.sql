@@ -1009,5 +1009,177 @@ BEGIN
     END IF;
 END $$;
 
+-- ── record_topic_attempt counts, and counts atomically ──────────────────────
+--
+-- The per-topic attribution moved out of `main.py` and into the database
+-- (20260825000000), because in Python it was four sequential round trips on the
+-- hottest path in the product and the last two of them were a read-modify-write
+-- with no lock: two answers landing together both read the same counts and the
+-- second write overwrote the first, losing attempts from the table the adaptive
+-- engine reads to choose what to serve next.
+--
+-- The backend suite can no longer check the arithmetic -- it drives `main.py`
+-- with a fake client, so what it can assert is that one call is made with the
+-- right three arguments. This is the half that checks the counting, and it is
+-- the only place the increment is exercised at all.
+
+DO $$
+DECLARE
+    usr   uuid;
+    topic integer;
+    q1    uuid := gen_random_uuid();
+    q2    uuid := gen_random_uuid();
+    got   text;
+    n     integer;
+BEGIN
+    SELECT owner_id INTO usr FROM _ids;
+
+    INSERT INTO public.math_topics (topic_name)
+    VALUES ('assert-rls-topic')
+    RETURNING id INTO topic;
+
+    INSERT INTO public.questions (id, subject, question_text)
+    VALUES (q1, 'assert-rls-topic', 'two plus two'),
+           (q2, 'assert-rls-no-such-subject', 'unattributable');
+
+    -- First attempt creates the row, and answers with the topic *name* -- what
+    -- the answer endpoint hands back to the page so it can move one figure
+    -- rather than re-reading the whole table.
+    got := public.record_topic_attempt(usr, q1, true);
+    IF got IS DISTINCT FROM 'assert-rls-topic' THEN
+        RAISE EXCEPTION 'the topic was resolved as % rather than assert-rls-topic', got;
+    END IF;
+
+    -- Three more, so the increment is exercised against an existing row rather
+    -- than only against the INSERT branch.
+    PERFORM public.record_topic_attempt(usr, q1, false);
+    PERFORM public.record_topic_attempt(usr, q1, true);
+    PERFORM public.record_topic_attempt(usr, q1, false);
+
+    SELECT attempted_questions INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 4 THEN
+        RAISE EXCEPTION 'four attempts recorded % -- the increment reads a '
+                        'value the caller supplied rather than the stored one, '
+                        'which is the lost update this replaced', n;
+    END IF;
+
+    SELECT correct_questions INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 2 THEN
+        RAISE EXCEPTION 'two correct answers of four recorded %', n;
+    END IF;
+
+    -- One row, not one per attempt: the ON CONFLICT target has to match the
+    -- (user_id, topic_id) unique constraint or every attempt inserts.
+    SELECT count(*) INTO n FROM public.user_math_performance
+     WHERE user_id = usr AND topic_id = topic;
+    IF n <> 1 THEN
+        RAISE EXCEPTION '% rows for one student and one topic', n;
+    END IF;
+
+    -- A subject with no `math_topics` row records nothing and invents nothing.
+    -- Inventing a topic here would put a subject in the table that the question
+    -- generator cannot pick from.
+    got := public.record_topic_attempt(usr, q2, true);
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'an unattributable question resolved to topic %', got;
+    END IF;
+
+    -- Same for a question that does not exist at all.
+    got := public.record_topic_attempt(usr, gen_random_uuid(), true);
+    IF got IS NOT NULL THEN
+        RAISE EXCEPTION 'an unknown question resolved to topic %', got;
+    END IF;
+
+    PERFORM 1 FROM public.math_topics WHERE id = topic;   -- keep `topic` used
+
+    SELECT count(*) INTO n FROM public.user_math_performance WHERE user_id = usr;
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'an unattributable answer created % performance rows', n - 1;
+    END IF;
+END $$;
+
+-- ── the batch summary agrees with the body it delegates to ──────────────────
+--
+-- `student_signal_summary_many` is a LATERAL fan-out over
+-- `student_signal_summary` (20260824040000). Before that they were two
+-- independent copies of the same six averages and four counts, which is how
+-- 20260823000000 came to fix `count(f.attention)` -> `count(f.emotion)` twice by
+-- hand. Delegation only helps while it *is* delegation, and the cheapest way for
+-- it to stop being so is a future edit that "optimises" the batch back into its
+-- own query.
+--
+-- So this asserts the property the migration claims: same student, same
+-- arguments, same answer. It also checks the channel gates still reach the
+-- inner body -- `p_include_heart`/`p_include_emotion` gate the *read*, and a
+-- fan-out that nulled excluded columns on the way out instead would satisfy
+-- every value assertion while quietly reading rows a parent opted out of.
+--
+-- Its own student, deliberately. Sharing `owner_id` would make these counts
+-- depend on which of the blocks above happened to leave rows inside the
+-- seven-day window, so the assertion would pass or fail on the calendar.
+
+DO $$
+DECLARE
+    usr  uuid := gen_random_uuid();
+    sess uuid := gen_random_uuid();
+    one  record;
+    many record;
+BEGIN
+    INSERT INTO auth.users (id, email) VALUES (usr, 'summary@test.invalid');
+    INSERT INTO public.profiles (id, email, role)
+    VALUES (usr, 'summary@test.invalid', 'student') ON CONFLICT (id) DO NOTHING;
+    INSERT INTO public.sessions (id, user_id) VALUES (sess, usr);
+
+    INSERT INTO public.cognitive_signals (session_id, user_id, ts, focus, stress, engagement)
+    SELECT sess, usr, now() - (g || ' min')::interval, 0.6 + g * 0.01, 0.3, 0.5
+      FROM generate_series(1, 4) g;
+    INSERT INTO public.face_signals (session_id, user_id, ts, emotion, emotion_trusted)
+    SELECT sess, usr, now() - (g || ' min')::interval, 'happy', true
+      FROM generate_series(1, 3) g;
+    INSERT INTO public.heart_signals (session_id, user_id, ts, source, heart_rate_bpm,
+                                      rmssd_ms, trusted)
+    SELECT sess, usr, now() - (g || ' min')::interval, 'muse_optics', 70 + g, 40, true
+      FROM generate_series(1, 2) g;
+
+    SELECT * INTO one  FROM public.student_signal_summary(usr, 7, true, true, 'UTC');
+    SELECT * INTO many FROM public.student_signal_summary_many(ARRAY[usr], 7, true, true, 'UTC');
+
+    IF many.student_id IS DISTINCT FROM usr THEN
+        RAISE EXCEPTION 'the fan-out lost the student id: %', many.student_id;
+    END IF;
+
+    IF (one.focus, one.stress, one.engagement, one.face_attention,
+        one.heart_rate_bpm, one.rmssd_ms, one.sessions,
+        one.cognitive_samples, one.face_samples, one.heart_samples)
+       IS DISTINCT FROM
+       (many.focus, many.stress, many.engagement, many.face_attention,
+        many.heart_rate_bpm, many.rmssd_ms, many.sessions,
+        many.cognitive_samples, many.face_samples, many.heart_samples) THEN
+        RAISE EXCEPTION 'the batch summary disagrees with the single-student '
+                        'body it delegates to: one=% many=%', one, many;
+    END IF;
+
+    -- Non-vacuous: if both returned all-nulls the comparison above would pass.
+    IF one.cognitive_samples <> 4 OR one.face_samples <> 3 OR one.heart_samples <> 2 THEN
+        RAISE EXCEPTION 'the fixture rows did not reach the summary: %', one;
+    END IF;
+
+    SELECT * INTO many
+      FROM public.student_signal_summary_many(ARRAY[usr], 7, false, false, 'UTC');
+    IF many.face_samples <> 0 OR many.heart_samples <> 0
+       OR many.heart_rate_bpm IS NOT NULL OR many.face_attention IS NOT NULL THEN
+        RAISE EXCEPTION 'an excluded channel came back through the fan-out: %', many;
+    END IF;
+    -- And the cognitive channel is *not* gated by those flags -- it has no
+    -- opt-out on the aggregate, which is why the payload calls its consent
+    -- state `eeg_enabled` rather than `eeg_included`.
+    IF many.cognitive_samples <> 4 THEN
+        RAISE EXCEPTION 'the cognitive channel was gated by a flag that does '
+                        'not apply to it: %', many;
+    END IF;
+END $$;
+
 -- Nothing here should persist; the assertions are the product.
 ROLLBACK;

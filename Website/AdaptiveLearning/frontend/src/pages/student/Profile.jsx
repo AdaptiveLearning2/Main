@@ -6,6 +6,22 @@ import { useAuth } from '../../context/AuthContext'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 
+// The three learning preferences, read off a profile the backend returned.
+//
+// One definition, because there are two places that need it -- the initial load
+// and the reconcile after a save -- and they were written out separately with
+// the defaults repeated in each. Two copies of a default is how one of them
+// ends up disagreeing with the column default it is standing in for.
+//
+// `??`, not `||`: 0 is the adaptive bias and false is reminders off, and both
+// are choices a student made. `||` would quietly restore the default every time
+// this ran, so turning reminders off would never stick.
+const prefsFrom = (p) => ({
+  difficulty_bias:          p?.difficulty_bias ?? 0,
+  session_duration_minutes: p?.session_duration_minutes ?? 15,
+  practice_reminders:       p?.practice_reminders ?? true,
+})
+
 const TABS  = ['Overview', 'Account', 'Preferences', 'Devices']
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
@@ -52,14 +68,7 @@ export default function Profile() {
       setProfile(p)
       setEditName(p?.display_name || '')
       setEditGrade(p?.grade_level || '')
-      // `??`, not `||`: 0 is the adaptive bias and false is reminders off, and
-      // both are choices a student made. `||` would quietly restore the default
-      // every time the page loaded, so turning reminders off would never stick.
-      if (p) setPrefs({
-        difficulty_bias:          p.difficulty_bias ?? 0,
-        session_duration_minutes: p.session_duration_minutes ?? 15,
-        practice_reminders:       p.practice_reminders ?? true,
-      })
+      if (p) setPrefs(prefsFrom(p))
     })
   }, [])
 
@@ -77,11 +86,7 @@ export default function Profile() {
     try {
       const saved = await apiFetch('/api/profile/me', { method: 'PUT', body: updated })
       setProfile(saved)
-      setPrefs({
-        difficulty_bias:          saved.difficulty_bias ?? 0,
-        session_duration_minutes: saved.session_duration_minutes ?? 15,
-        practice_reminders:       saved.practice_reminders ?? true,
-      })
+      setPrefs(prefsFrom(saved))
     } catch (e) {
       setPrefs(previous)
       toast.error(e.message || 'Could not save that setting')

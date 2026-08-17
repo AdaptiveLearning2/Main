@@ -177,7 +177,8 @@ def test_one_childs_refusal_does_not_suppress_a_siblings_data(monkeypatch):
     permitted. Grouped by consent instead."""
     calls = []
 
-    def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True):
+    def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True,
+                        channels_by_student=None):
         calls.append((sorted(ids), include_heart, include_emotion))
         return {str(i): {"face_included": include_emotion} for i in ids}
 
@@ -315,9 +316,19 @@ def test_children_are_grouped_on_the_flags_not_the_consent_outcome(monkeypatch):
     for, and keying on it would break the "at most four groups" bound."""
     calls = []
 
-    def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True):
+    def _fake_summaries(ids, days=7, include_heart=True, include_emotion=True,
+                        channels_by_student=None):
         calls.append(sorted(ids))
-        return {str(i): {"face_included": include_emotion} for i in ids}
+        # The per-child stamping lives inside the real `_signal_summaries` now,
+        # so a double that ignored `channels_by_student` would model a function
+        # that no longer exists -- and this test would then be asserting that
+        # `my_children` re-stamps, which is exactly the duplication that moved.
+        # What it checks is that the map reaches the batch and is applied per
+        # child rather than per group.
+        return {str(i): {
+            "face_included": include_emotion,
+            "consent_retrieved": (channels_by_student or {})[i].consent_retrieved,
+        } for i in ids}
 
     outcomes = {"kid-a": main.ReportChannels(False, False, True),    # declined
                 "kid-b": main.ReportChannels(False, False, False)}   # unreadable
@@ -499,3 +510,70 @@ def test_an_unparseable_stamp_does_not_outrank_a_real_one(monkeypatch):
     channels = main._reportable_channels(STUDENT)
 
     assert channels.heart_revoked_at == "2026-08-01T10:00:00+00:00"
+
+
+class _SummaryRpc:
+    """A supabase whose only job is to answer the batch summary RPC."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def rpc(self, _name, _params):
+        rows = self.rows
+
+        class _R:
+            def execute(self):
+                return type("X", (), {"data": rows})()
+
+        return _R()
+
+
+def test_the_batch_summary_stamps_each_childs_own_consent(monkeypatch):
+    """The batch RPC groups children by flag *pair*, so it cannot carry a
+    per-child revocation date or a per-child `consent_retrieved`.
+
+    Without the map every row came back with `_shape_summary`'s defaults --
+    consent retrieved, EEG on, nothing revoked -- whatever the family had
+    decided. It was masked because the one caller patched all five fields back
+    in by hand afterwards, in both of its branches; a second caller would have
+    inherited the defaults and had no reason to suspect them.
+    """
+    monkeypatch.setattr(main, "supabase", _SummaryRpc([
+        {"student_id": "kid-a", "focus": 0.5},
+        {"student_id": "kid-b", "focus": 0.4},
+    ]))
+    monkeypatch.setattr(main, "_retention_window", lambda: {"timezone": "UTC"})
+
+    out = main._signal_summaries(
+        ["kid-a", "kid-b"],
+        channels_by_student={
+            # Headband switched off on the 5th; camera still on.
+            "kid-a": main.ReportChannels(True, True, True, eeg=False,
+                                         eeg_revoked_at="2026-08-05T09:00:00Z"),
+            "kid-b": main.ReportChannels(True, True, True),
+        })
+
+    assert out["kid-a"]["eeg_enabled"] is False
+    assert out["kid-a"]["eeg_revoked_at"] == "2026-08-05T09:00:00Z"
+    # The sibling in the same RPC call is untouched by that -- per child, not
+    # per group, which is the whole reason this cannot live in the SQL.
+    assert out["kid-b"]["eeg_enabled"] is True
+    assert out["kid-b"]["eeg_revoked_at"] is None
+
+
+def test_the_batch_summary_without_a_consent_map_still_returns_a_payload(monkeypatch):
+    """Omitted, the defaults stand rather than the call failing.
+
+    The map is optional on purpose: a caller that has no consent state to hand
+    gets a well-formed summary whose "off since" fields are simply empty, not a
+    crash and not a partial dict some tile has to guess about.
+    """
+    monkeypatch.setattr(main, "supabase",
+                        _SummaryRpc([{"student_id": "kid-a", "focus": 0.5}]))
+    monkeypatch.setattr(main, "_retention_window", lambda: {"timezone": "UTC"})
+
+    out = main._signal_summaries(["kid-a"])
+
+    assert out["kid-a"]["eeg_enabled"] is True
+    assert out["kid-a"]["eeg_revoked_at"] is None
+    assert out["kid-a"]["consent_retrieved"] is True

@@ -178,19 +178,29 @@ function faceReason(report, faceOn) {
  * that look like a contradiction, and the tile that should have said
  * "Calibrating" was the one saying nothing was there.
  *
- * `on: true` because the payload has no way to say otherwise: it carries
- * `emotion_revoked_at` and `heart_revoked_at` and nothing for EEG, so there is
- * no withdrawal date to render and borrowing the face one would report a
- * withdrawal the student never made about a sensor they never touched. That
- * leaves `offLabel` choosing between "Calibrating" (rows arrived, none usable)
- * and "No sensor" (no rows at all), which is the distinction that was missing
- * -- and `consentRetrieved === false` still wins over both. Add
- * `eeg_revoked_at` to the payload before making this conditional.
+ * `on` used to be hardcoded true, because the payload carried
+ * `emotion_revoked_at` and `heart_revoked_at` and nothing at all for EEG --
+ * so these three tiles were the only ones that could not say "Off since
+ * <date>", and a parent who switched the headband off read "No sensor", which
+ * is what a fault looks like rather than what they did. The payload now carries
+ * `eeg_enabled` and `eeg_revoked_at`.
+ *
+ * `eeg_enabled` rather than an `eeg_included` matching the other two, and the
+ * difference is real: the cognitive channel has no opt-out on the aggregate and
+ * is always read, and a withdrawal deliberately keeps what was already
+ * recorded. So a withdrawn EEG channel can still hold true averages from before
+ * the withdrawal, which is exactly the case the date is for.
+ *
+ * Absent means a payload from before the field existed, and that has to read as
+ * *on*: defaulting to off would tell every reader of an older payload that a
+ * headband had been switched off, which is a claim about a decision nobody
+ * made. Same fallback as `emotionOn`, opposite to `heartOn` -- where absent
+ * genuinely meant the channel did not exist yet.
  */
 function eegReason(report) {
   return {
-    on: true,
-    revokedAt: null,
+    on: report?.eeg_enabled !== false,
+    revokedAt: report?.eeg_revoked_at ?? null,
     consentRetrieved: report?.consent_retrieved,
     samples: report?.sample_counts?.cognitive,
   }

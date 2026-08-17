@@ -12,6 +12,45 @@ import pytest  # noqa: E402
 
 import eeg_poller  # noqa: E402
 
+# The close sequence lives in `_close_session`, and `_claim_session_close` is
+# the half of it that writes the stamp. Neither is a *site*; every other
+# function that ends a session is one.
+_CLOSE_HELPERS = ("_close_session", "_claim_session_close")
+
+
+def close_sites():
+    """Every function that ends a session, derived from the source.
+
+    Three test modules each carried their own copy of this loop -- the archive
+    check, the rollup check and the credit check -- which is the duplication the
+    close sequence itself was consolidated to remove, reproduced in the tests
+    that verify the consolidation.
+
+    A site is a function that calls `_close_session(` **or** writes an
+    `"ended_at":` of its own. Both halves matter: the first catches an existing
+    site drifting away from the helper, and the second catches a *new* closer
+    that hand-rolls the stamp and never reaches the helper at all -- which is
+    what all three of these tests were originally written to find, and what
+    matching on the helper call alone would go blind to.
+    """
+    import inspect
+
+    import main
+
+    found = []
+    for name, obj in vars(main).items():
+        if not inspect.isfunction(obj) or obj.__module__ != "main":
+            continue
+        if name in _CLOSE_HELPERS:
+            continue
+        try:
+            source = inspect.getsource(obj)
+        except OSError:                      # pragma: no cover -- defensive
+            continue
+        if "_close_session(" in source or '"ended_at":' in source:
+            found.append((name, source))
+    return found
+
 
 @pytest.fixture(autouse=True)
 def _join_poller_threads():

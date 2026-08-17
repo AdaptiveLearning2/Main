@@ -327,8 +327,18 @@ ensure_model('$LANDMARK_MODEL')
     set_env_key "$BACKEND_ENV" "INGEST_MODE" "push"
     # Same as start.ps1: without this the browser sends no Authorization header
     # to the sidecar and every call 401s, while curl from a terminal works.
-    API_TOKEN_VALUE="$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | head -1)"
-    [ -n "$API_TOKEN_VALUE" ] && set_env_key "$FRONTEND_ENV" "VITE_EEG_LOCAL_TOKEN" "$API_TOKEN_VALUE"
+    # `-f` first: on a first-ever --camera run the file does not exist yet, and
+    # sed on a missing path prints an error that reads like a broken script for
+    # a token nothing needs in order to start. Same guard as start.ps1, where
+    # the unguarded read was fatal rather than noisy.
+    API_TOKEN_VALUE=""
+    [ -f "$EEG_ENV" ] && API_TOKEN_VALUE="$(sed -n 's/^API_TOKEN=//p' "$EEG_ENV" | tail -1)"
+    if [ -n "$API_TOKEN_VALUE" ]; then
+        set_env_key "$FRONTEND_ENV" "VITE_EEG_LOCAL_TOKEN" "$API_TOKEN_VALUE"
+    else
+        echo -e "  ${YELLOW}No API_TOKEN in $EEG_ENV yet -- VITE_EEG_LOCAL_TOKEN not set.${NC}"
+        echo -e "  ${YELLOW}The browser will 401 against the sidecar. Re-run this script once it has started.${NC}"
+    fi
     echo -e "  ${GRAY}EEG_DEVICES = default:sim,camera:face@$CAMERA_INDEX${NC}"
 else
     set_env_key "$EEG_ENV" "FACE_ENABLED" "false"

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { LayoutDashboard, Link as LinkIcon, Settings as SettingsIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import ErrorBoundary from '../components/ui/ErrorBoundary'
 
 const NAV = [
   { path: '/parent',      label: 'Dashboard',  icon: LayoutDashboard, exact: true },
@@ -118,7 +119,9 @@ export default function ParentLayout() {
         </div>
         <main className="flex-1 overflow-y-auto">
           <motion.div key={pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
-            <Outlet />
+            <ErrorBoundary resetKey={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </motion.div>
         </main>
       </div>

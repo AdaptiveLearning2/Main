@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import ErrorBoundary from '../components/ui/ErrorBoundary'
 
 const NAV = [
   { path: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
@@ -180,7 +181,9 @@ export default function StudentLayout() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <Outlet />
+            <ErrorBoundary resetKey={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </motion.div>
         </main>
       </div>

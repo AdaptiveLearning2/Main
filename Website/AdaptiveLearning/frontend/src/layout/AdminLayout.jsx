@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import ErrorBoundary from '../components/ui/ErrorBoundary'
 
 const NAV = [
   { path: '/admin',          label: 'Overview',    icon: ShieldCheck,   exact: true },
@@ -164,7 +165,9 @@ export default function AdminLayout() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <Outlet />
+            <ErrorBoundary resetKey={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </motion.div>
         </main>
       </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ShieldCheck, ToggleLeft, CalendarRange, Activity,
@@ -100,6 +100,13 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed]   = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const { dark, toggleTheme } = useTheme()
+  // The page-transition key. `window.location.pathname` is read straight off
+  // the browser during render, so React has no idea it changed: the value is
+  // not state, nothing subscribes to it, and a client-side navigation
+  // re-renders with the *same* key -- so `motion.div` sees one continuous
+  // element and the enter animation never plays. `useLocation()` is the
+  // subscription, and it is what the other three layouts use.
+  const { pathname } = useLocation()
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-gray-950">
@@ -152,7 +159,7 @@ export default function AdminLayout() {
 
         <main className="flex-1 overflow-y-auto">
           <motion.div
-            key={window.location.pathname}
+            key={pathname}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2 }}

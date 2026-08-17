@@ -37,12 +37,12 @@ beforeEach(() => {
   vi.useRealTimers()
   resetSupabaseMock()
   setSession(buildAuthSession({ accessToken: 't' }))
-  global.fetch = vi.fn().mockResolvedValue(ok())
+  globalThis.fetch = vi.fn().mockResolvedValue(ok())
 })
 
 afterEach(() => { vi.useRealTimers() })
 
-const lastCall = () => global.fetch.mock.calls.at(-1)
+const lastCall = () => globalThis.fetch.mock.calls.at(-1)
 
 describe('the request it builds', () => {
   it('prefixes the path with the API base', async () => {
@@ -92,14 +92,14 @@ describe('an error response', () => {
   it('carries the status code, not just a message', async () => {
     // Callers that tell "this doesn't exist" apart from "the request failed"
     // have only this to go on -- ClassDetail renders a different page for each.
-    global.fetch.mockResolvedValue(failing({ status: 404, body: '{"detail":"no such class"}' }))
+    globalThis.fetch.mockResolvedValue(failing({ status: 404, body: '{"detail":"no such class"}' }))
 
     await expect(apiFetch('/api/classes/x'))
       .rejects.toMatchObject({ status: 404, message: 'no such class' })
   })
 
   it('uses the raw text when the body is not JSON', async () => {
-    global.fetch.mockResolvedValue(failing({ status: 502, body: 'upstream exploded' }))
+    globalThis.fetch.mockResolvedValue(failing({ status: 502, body: 'upstream exploded' }))
 
     await expect(apiFetch('/api/x'))
       .rejects.toMatchObject({ status: 502, message: 'upstream exploded' })
@@ -108,14 +108,14 @@ describe('an error response', () => {
   it('falls back to the status text when the body is empty', async () => {
     // An Error with an empty message reaches a page as a blank error banner,
     // which reads as a rendering fault rather than as a failed request.
-    global.fetch.mockResolvedValue(
+    globalThis.fetch.mockResolvedValue(
       failing({ status: 500, body: '', statusText: 'Internal Server Error' }))
 
     await expect(apiFetch('/api/x')).rejects.toMatchObject({ message: 'Internal Server Error' })
   })
 
   it('does not swallow a fetch that rejects outright', async () => {
-    global.fetch.mockRejectedValue(new TypeError('Failed to fetch'))
+    globalThis.fetch.mockRejectedValue(new TypeError('Failed to fetch'))
     await expect(apiFetch('/api/x')).rejects.toThrow(/failed to fetch/i)
   })
 })
@@ -123,7 +123,7 @@ describe('an error response', () => {
 describe('the optional bound', () => {
   it('rejects a request that never settles, once the bound is up', async () => {
     vi.useFakeTimers()
-    global.fetch.mockReturnValue(new Promise(() => {}))   // hangs for ever
+    globalThis.fetch.mockReturnValue(new Promise(() => {}))   // hangs for ever
 
     const call = apiFetch('/api/profile/me', { timeoutMs: 10_000 })
     const settled = call.then(() => 'resolved', e => e)
@@ -143,7 +143,7 @@ describe('the optional bound', () => {
     // out what happened.
     vi.useFakeTimers()
     let signal
-    global.fetch.mockImplementation((_url, opts) => {
+    globalThis.fetch.mockImplementation((_url, opts) => {
       signal = opts.signal
       return new Promise(() => {})
     })
@@ -162,7 +162,7 @@ describe('the optional bound', () => {
     // is the shape that would pass a test written only against a hung `fetch`.
     vi.useFakeTimers()
     authFns.getSession.mockReturnValue(new Promise(() => {}))
-    global.fetch.mockResolvedValue(ok())
+    globalThis.fetch.mockResolvedValue(ok())
 
     const call = apiFetch('/api/profile/me', { timeoutMs: 4_000 })
     const settled = call.then(() => 'resolved', e => e)
@@ -170,14 +170,14 @@ describe('the optional bound', () => {
     await vi.advanceTimersByTimeAsync(4_001)
     const err = await settled
     expect(err.timeout).toBe(true)
-    expect(global.fetch).not.toHaveBeenCalled()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
   it('leaves a request without a bound alone', async () => {
     // Opt-in, deliberately. A blanket default would abort the LLM-backed
     // endpoints, which are bounded server-side and can queue first.
     vi.useFakeTimers()
-    global.fetch.mockReturnValue(new Promise(() => {}))
+    globalThis.fetch.mockReturnValue(new Promise(() => {}))
 
     const settled = apiFetch('/api/anything').then(() => 'resolved', () => 'rejected')
 
@@ -191,7 +191,7 @@ describe('the optional bound', () => {
   })
 
   it('does not time out a request that comes back in time', async () => {
-    global.fetch.mockResolvedValue(ok({ role: 'admin' }))
+    globalThis.fetch.mockResolvedValue(ok({ role: 'admin' }))
 
     await expect(apiFetch('/api/profile/me', { timeoutMs: 10_000 }))
       .resolves.toEqual({ role: 'admin' })
@@ -199,7 +199,7 @@ describe('the optional bound', () => {
 
   it('still surfaces the status on an error response', async () => {
     // The bound must not swallow what callers already rely on.
-    global.fetch.mockResolvedValue(
+    globalThis.fetch.mockResolvedValue(
       failing({ status: 403, statusText: 'Forbidden', body: JSON.stringify({ detail: 'nope' }) }))
 
     await expect(apiFetch('/api/admin/me', { timeoutMs: 10_000 }))

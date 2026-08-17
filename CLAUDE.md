@@ -114,6 +114,44 @@ database, but the client validates the URL at import, so `SUPABASE_URL` must be 
 `SUPABASE_SERVICE_ROLE_KEY` can be anything non-empty. EEGResearch tests need `EEG_SOURCE=sim`,
 `API_TOKEN`, `ADMIN_TOKEN`.
 
+### Frontend tests mock through `src/test/`, not through a hand-rolled `vi.fn()`
+
+`src/test/mocks/apiFetch.js` and `src/test/mocks/supabase.js` are the shared doubles, reached by
+pointing the factory at the file so the mocked module and the handle driving it are one instance:
+
+```bash
+vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
+```
+
+**`apiFetch`'s double is a router, and an unmatched path throws.** Most pages here fetch two to four
+endpoints in parallel on mount, and the interesting tests need *one* to fail. `mockResolvedValueOnce`
+chains express that by call order — which is the order `Promise.all` happens to start them in — so a
+test written that way passes for a reason unrelated to what it claims and breaks when a page adds a
+fetch. `mockApi({...})` registers the happy path, `overrideApi(path, fn)` layers one failure over it.
+Throwing on an unrouted path is the load-bearing part: a silent `undefined` reaches a page as a
+successful read of nothing, which is the state most of this suite exists to tell apart from a
+failure, so a gap in a test's own setup would arrive dressed as the bug it was written to catch.
+**Method-scoped routes are tried before methodless ones**, whatever order they were written in;
+first-match-wins alone made `{'/api/x': …, 'PUT /api/x': …}` answer the write with the read, fixable
+only by reordering two object keys — not a rule anyone would infer. Reset with `resetApi()`, never
+`mockReset()`, which drops the implementation and every route with it.
+
+Mocking `lib/supabase` as a *module* also sidesteps its import-time throw on missing
+`VITE_SUPABASE_*`, which is the normal state under `vitest` — CI supplies those to the build step
+only. `fireAuthEvent(event, session)` is how the properties that only exist post-mount are reached:
+the `SIGNED_OUT` cleanup an expired refresh token triggers with nobody calling `signOut()`, and the
+`TOKEN_REFRESHED` handling that must not await anything reading the session.
+
+**`lib/api.test.js` is the one place `apiFetch` runs for real**, with only `fetch` and `lib/supabase`
+mocked. Every other test replaces it wholesale, so nothing otherwise exercises the URL it builds,
+whether the bearer is attached, or how a non-2xx becomes an `Error` carrying `.status` — the
+behaviour all of those tests implicitly trust. Fixtures live beside the mocks in
+`src/test/fixtures/` as builders rather than constants (`buildWeeklyReport`, `buildConsentState`,
+`buildChartArchive`, …): every interesting case is one field off the happy path, and a test that
+restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` there is the
+`offLabel` four-state matrix, named for the state each input must produce rather than for its field
+values, since that mapping is the thing under test.
+
 **A daemon thread that prints must be joined before the process exits.** A print landing during
 interpreter shutdown, while the stdout `BufferedWriter` lock is already held, is a fatal
 `_enter_buffered_busy` abort — exit code 134 *after* every test passed, which reads as unrelated

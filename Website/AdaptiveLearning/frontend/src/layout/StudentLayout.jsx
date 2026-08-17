@@ -93,14 +93,14 @@ function SidebarContent({ collapsed, mobile, onClose }) {
       {/* bottom */}
       <div className="px-3 pb-4 pt-3 border-t border-gray-100 dark:border-gray-800 space-y-1">
         <button
-          onClick={toggleTheme}
+          aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme}
           className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition ${collapsed && !mobile ? 'justify-center' : ''}`}
         >
           {dark ? <Sun size={18} /> : <Moon size={18} />}
           {(!collapsed || mobile) && <span>{dark ? 'Light mode' : 'Dark mode'}</span>}
         </button>
         <button
-          onClick={handleSignOut}
+          aria-label="Sign out" onClick={handleSignOut}
           className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition ${collapsed && !mobile ? 'justify-center' : ''}`}
         >
           <LogOut size={18} />
@@ -128,6 +128,7 @@ export default function StudentLayout() {
       >
         <SidebarContent collapsed={collapsed} />
         <button
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={() => setCollapsed(c => !c)}
           className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-indigo-600 transition z-10"
         >
@@ -151,7 +152,7 @@ export default function StudentLayout() {
             >
               <button
                 onClick={() => setMobileOpen(false)}
-                className="absolute top-4 right-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                aria-label="Close menu" className="absolute top-4 right-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
               >
                 <X size={18} className="text-gray-500" />
               </button>
@@ -165,11 +166,11 @@ export default function StudentLayout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* mobile topbar */}
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
-          <button onClick={() => setMobileOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+          <button aria-label="Open menu" onClick={() => setMobileOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
             <Menu size={20} className="text-gray-600 dark:text-gray-400" />
           </button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Adaptive<span className="text-indigo-600">Learning</span></span>
-          <button onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+          <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
             {dark ? <Sun size={18} className="text-gray-500" /> : <Moon size={18} className="text-gray-500" />}
           </button>
         </div>

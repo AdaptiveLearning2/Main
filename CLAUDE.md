@@ -1175,7 +1175,7 @@ There is no "Reset stats" button any more. Against localStorage it cleared a bro
 `user_math_performance` the same button deletes a student's academic record with one click and no
 confirmation. Erasure here is a parent-only, confirmed action.
 
-## Admin is a table, not a role — and the flags can only ever say no
+## Admin is a role, and three migrations are what make that safe — the flags can only ever say no
 
 Admin is `profiles.role = 'admin'` (`20260824020000`), read through the same `_role` every other
 role gate uses. Set from the dashboard SQL editor, like `retention_window`'s row.
@@ -1244,14 +1244,28 @@ already written, and raising would invite a retry that changes nothing and audit
 
 ### The admin read surfaces send counts and timestamps, never readings
 
-`/api/admin/live-signals` answers "is data arriving" for every open session. **The content is
-dropped in the endpoint**, not left to the frontend not to render it — only the newest `ts` per
-channel survives, so no band powers, no emotion label, no bpm. An admin has no relationship to those
-students entitling them to the readings. It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` and
-`_latest_session_signals` with `class_live`, because two sets of numbers would let one page call a
-session live while the other called it stale. Four states per channel, and they are not a scale:
-flowing, quiet, stale, and **never-reported** — a session that never had that sensor is a different
-fact from one whose sensor stopped.
+`/api/admin/live-signals` answers "is data arriving" for every open session. **It selects `ts`
+alone**, so the readings never leave the database rather than being fetched and dropped on the way
+out — no band powers, no emotion label, no bpm. An admin has no relationship to those students
+entitling them to the values, and asking for less is a stronger version of that property than
+filtering afterwards: the test asserts on the *select*, which is the only place the difference shows.
+
+It shares `_LIVE_WINDOW_SEC`/`_STALE_AFTER_SEC` with `class_live` — two sets of numbers would let one
+page call a session live while the other called it stale — but **not `_latest_session_signals`, and
+not its pool.** That helper fetches whole rows and blocks on four futures it submits to
+`_live_signals_pool`; this endpoint is platform-wide where `class_live` is one class, so sharing four
+workers with every teacher's live monitor would starve the page a lesson is actually watched on. The
+sharper reason is that fanning this endpoint's outer loop into that pool **deadlocks**: the waiters
+and the work they wait on end up in one four-slot queue, so four sessions occupy every worker while
+their own reads sit behind them. `_admin_live_pool` is separate, and nothing submitted to it waits on
+anything else in it. A test asserts the two pools are not the same object, because consolidating them
+looks like tidying.
+
+Five states per channel, and they are not a scale: flowing, quiet, stale, **never-reported**, and
+**unreadable** (`seen: null`). The last two are the ones to keep apart — a session that never had
+that sensor is a different fact from one whose sensor stopped, and both are different from a read
+that failed. Reporting a failed read as never-reported is a claim about the deployment that a
+database blip has not earned.
 
 `/api/admin/health` reports `ok` / `degraded` / `unknown`, and **a check that could not run is
 `unknown`, never `ok`.** `/api/admin/consent-summary` is counts only. `/api/admin/env-flags` lists

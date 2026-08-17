@@ -10,6 +10,12 @@ export function AuthProvider({ children }) {
   const [role, setRole]       = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // Which dashboard to show, and nothing more. `user_metadata` is written by
+  // the client at sign-up and can be rewritten with `supabase.auth.updateUser`,
+  // so this is a preference, not a permission: someone who edits it sees a
+  // different nav and gets a 403 from every endpoint behind it. The backend
+  // reads `profiles.role`, which `20260824010000` revoked client writes on.
+  // Never gate anything that matters on this value.
   const extractRole = (u) => u?.user_metadata?.role || 'student'
 
   useEffect(() => {

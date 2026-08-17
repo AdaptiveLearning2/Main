@@ -1728,12 +1728,12 @@ def test_validated_strategies_accepts_and_strips_list_markers():
     ]
 
 
-def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch):
+def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch, set_flag):
     """Default deployment has no local Ollama. The endpoint must answer without
     opening a socket, not fail or hang."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
-    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", False)
+    set_flag("strategy_llm_enabled", False)
     called = []
     monkeypatch.setattr(main, "_llm_strategies", lambda *_a: called.append(1))
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
@@ -1741,12 +1741,12 @@ def test_learning_strategies_skips_the_model_when_not_enabled(monkeypatch):
     assert out["source"] == "rule-based"
 
 
-def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monkeypatch):
+def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monkeypatch, set_flag):
     """The whole point of the validation: rejected output must not reach a
     parent, and the response must say the model was tried and discarded."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
-    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    set_flag("strategy_llm_enabled", True)
     monkeypatch.setattr(main, "_llm_strategies", lambda *_a: None)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
     baseline = main._rule_based_strategies(
@@ -1755,10 +1755,10 @@ def test_learning_strategies_keeps_the_safe_list_when_the_model_is_rejected(monk
     assert out["source"] == "rule-based (model output rejected)"
 
 
-def test_learning_strategies_uses_validated_model_output(monkeypatch):
+def test_learning_strategies_uses_validated_model_output(monkeypatch, set_flag):
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
-    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    set_flag("strategy_llm_enabled", True)
     refined = ["Review fractions for ten minutes", "Take a short break between sets"]
     monkeypatch.setattr(main, "_llm_strategies", lambda *_a: refined)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
@@ -1804,7 +1804,7 @@ def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
     assert client.last_kwargs.get("timeout") == 7.5
 
 
-def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch):
+def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch, set_flag):
     """The client-side timeout is per operation, not for the call as a whole.
 
     A server that keeps resetting it -- dribbling a byte inside every read
@@ -1814,7 +1814,7 @@ def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch):
     """
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
-    monkeypatch.setattr(main, "STRATEGY_LLM_ENABLED", True)
+    set_flag("strategy_llm_enabled", True)
     monkeypatch.setattr(main, "STRATEGY_LLM_TIMEOUT", 0.05)
 
     released = threading.Event()

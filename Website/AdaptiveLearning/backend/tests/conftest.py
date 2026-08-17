@@ -76,3 +76,56 @@ def _school_year_is_open(monkeypatch):
                                  "timezone": "UTC"})
     yield
     main._retention_cache_clear()
+
+
+def _default_flags():
+    import main
+    return {k: {"enabled": v, "bypass_until": None}
+            for k, v in main._FEATURE_FLAG_DEFAULTS.items()}
+
+
+@pytest.fixture(autouse=True)
+def _feature_flags_are_default():
+    """The declared flag defaults for tests that are not about the flags.
+
+    Same reasoning as `_school_year_is_open` above: most tests drive a fake
+    Supabase with no `feature_flags` table, so the real reader would fall back
+    to defaults anyway -- but by way of a caught exception and a printed error
+    per call, which is noise that hides a real one. Pinning the defaults here
+    makes "the flags are not what this test is about" explicit.
+
+    The cache is cleared on both sides, because a successful read in one test
+    must not decide another's answer.
+
+    **Deliberately does not take `monkeypatch`,** unlike its neighbour above.
+    Requesting it from an autouse fixture that pytest orders early hoists
+    `monkeypatch`'s own setup ahead of `_join_poller_threads`, which inverts
+    their teardown: `live_pollers` was still patched when the poller check ran,
+    and three tests that patch it failed in teardown for a reason nothing in
+    their bodies could explain. Patch and restore by hand instead, so this
+    fixture's position cannot move another one's.
+    """
+    import main
+    main._feature_flags_cache_clear()
+    original = main._feature_flags
+    main._feature_flags = _default_flags
+    yield
+    main._feature_flags = original
+    main._feature_flags_cache_clear()
+
+
+@pytest.fixture
+def set_flag(monkeypatch):
+    """Override one feature flag, leaving the rest at their declared defaults.
+
+    Returns a setter rather than taking the flag as a parameter so a test can
+    change one and still name the others by their absence.
+    """
+    def _set(key, enabled, bypass_until=None):
+        import main
+        assert key in main._FEATURE_FLAG_DEFAULTS, f"unknown flag {key!r}"
+        flags = _default_flags()
+        flags[key] = {"enabled": enabled, "bypass_until": bypass_until}
+        monkeypatch.setattr(main, "_feature_flags", lambda: flags)
+        return flags
+    return _set

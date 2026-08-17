@@ -7,8 +7,10 @@ import AuthLayout         from './layout/AuthLayout'
 import StudentLayout      from './layout/StudentLayout'
 import TeacherLayout      from './layout/TeacherLayout'
 import ParentLayout       from './layout/ParentLayout'
+import AdminLayout        from './layout/AdminLayout'
 import RoleGuard          from './components/auth/RoleGuard'
 import HomeRedirect       from './components/auth/HomeRedirect'
+import AdminGuard         from './components/auth/AdminGuard'
 import ScrollToTop        from './components/ui/ScrollToTop'
 import RouteTitle         from './components/ui/RouteTitle'
 import PageLoader         from './components/ui/PageLoader'
@@ -52,6 +54,15 @@ const ParentDashboard  = lazy(() => import('./pages/parent/Dashboard'))
 const ParentLinkChild  = lazy(() => import('./pages/parent/LinkChild'))
 const ParentChild      = lazy(() => import('./pages/parent/ChildDetail'))
 const ParentSettings   = lazy(() => import('./pages/parent/Settings'))
+
+// Split like every other section. These arrived static, from a branch cut
+// before the split existed -- and they are the pages with the fewest viewers in
+// the whole app, so leaving them eager would put the entire admin console in
+// the bundle every student downloads.
+const AdminOverview    = lazy(() => import('./pages/admin/Overview'))
+const AdminFlags       = lazy(() => import('./pages/admin/Flags'))
+const AdminLiveFlow    = lazy(() => import('./pages/admin/LiveFlow'))
+const AdminSchoolYear  = lazy(() => import('./pages/admin/SchoolYear'))
 
 const NotFound = lazy(() => import('./pages/NotFound'))
 
@@ -109,10 +120,21 @@ export default function App() {
               <Route path="/parent/settings"     element={<ParentSettings />} />
             </Route>
 
+            {/* AdminGuard, not RoleGuard: admin is `profiles.role`, which the
+                backend reads and the client cannot write, never the
+                `user_metadata.role` claim RoleGuard goes on. */}
+            <Route element={<AdminGuard><AdminLayout /></AdminGuard>}>
+              <Route path="/admin"       element={<AdminOverview />} />
+              <Route path="/admin/flags" element={<AdminFlags />} />
+              <Route path="/admin/live"  element={<AdminLiveFlow />} />
+              <Route path="/admin/year"  element={<AdminSchoolYear />} />
+            </Route>
+
             {/* Role-aware, not hardcoded to the student home. Sending every
                 role to /dashboard meant a parent landing on / took a bounce
                 through a route they may not see -- which was an infinite one
-                until RoleGuard learned the third role. */}
+                until RoleGuard learned the third role. There are four now, and
+                `homeFor` knows about the fourth. */}
             <Route path="/"  element={<HomeRedirect />} />
             <Route path="*"  element={<NotFound />} />
           </Routes>

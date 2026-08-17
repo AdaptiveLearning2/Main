@@ -13,6 +13,18 @@ export const HOME_BY_ROLE = {
   student: '/dashboard',
   teacher: '/teacher',
   parent:  '/parent',
+  // The fourth role, from the admin console (#125). It arrived while this
+  // module was on another branch, so nothing conflicted and nothing flagged it
+  // -- an admin hitting `/` got `homeFor` = null, fell through to `/dashboard`,
+  // and was refused by the student guard onto the "no role assigned" screen.
+  // Wrong rather than looping, which is the null-not-a-default rule below doing
+  // its job; this is the entry that makes it right.
+  //
+  // `/admin` is guarded by AdminGuard on `profiles.role`, while the `role` this
+  // map is keyed by comes from `user_metadata.role`. The two agree for an admin
+  // whose metadata says so, and where they disagree AdminGuard is the one that
+  // decides access -- this only decides where to *send* someone.
+  admin:   '/admin',
 }
 
 /** The route this role should land on, or null if we do not recognise it.

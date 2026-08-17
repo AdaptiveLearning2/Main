@@ -90,6 +90,23 @@ it('waits for auth instead of guessing while it loads', () => {
 })
 
 it('has no home for a role it does not know', () => {
-  expect(homeFor('admin')).toBeNull()
+  // Was `admin`, which is now a real role with a real home (#125). An example
+  // that quietly becomes valid is worse than no example: this assertion would
+  // have gone on passing for `undefined` alone while claiming to cover the
+  // unknown-role case, which is the case the null-not-a-default rule exists for.
+  expect(homeFor('librarian')).toBeNull()
   expect(homeFor(undefined)).toBeNull()
+  expect(homeFor(null)).toBeNull()
+})
+
+it('knows where each real role lives', () => {
+  // Every role the app actually has, so a fifth one added to the routes without
+  // an entry here fails rather than sending that user to a route their guard
+  // will refuse. `admin` is the one that got in without this: it arrived on a
+  // branch that never touched this file, so nothing conflicted and nothing
+  // flagged it, and an admin hitting `/` landed on "no role assigned".
+  expect(homeFor('student')).toBe('/dashboard')
+  expect(homeFor('teacher')).toBe('/teacher')
+  expect(homeFor('parent')).toBe('/parent')
+  expect(homeFor('admin')).toBe('/admin')
 })

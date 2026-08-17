@@ -178,7 +178,26 @@ describe('the archived-chart fallback', () => {
 
     await waitFor(() => expect(screen.getByText('Session Review')).toBeInTheDocument())
     expect(screen.queryByText(/could not load session/i)).not.toBeInTheDocument()
+    // And it says *that* it failed. This used to assert "No signal samples for
+    // this session" -- the same sentence a session with no archive gets -- so
+    // the test was pinning the bug: a backend hiccup told a teacher the session
+    // recorded nothing, and there was no way to tell that from the truth.
+    expect(screen.getByText(/archived charts could not be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no signal samples for this session/i)).not.toBeInTheDocument()
+  })
+
+  it('still says a pre-archive session recorded nothing', async () => {
+    // The mirror. The two states have to stay tellable apart in both
+    // directions, or the fix above is just the same collapse worded differently.
+    apiFetch.mockImplementation((url) =>
+      String(url).endsWith('/charts')
+        ? Promise.resolve({ archived: false, charts: {}, unavailable: [] })
+        : Promise.resolve({ ...EXPIRED, answers: [{ correct: true }] }))
+    renderAt()
+
+    await waitFor(() => expect(screen.getByText('Session Review')).toBeInTheDocument())
     expect(screen.getByText(/no signal samples for this session/i)).toBeInTheDocument()
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument()
   })
 })
 

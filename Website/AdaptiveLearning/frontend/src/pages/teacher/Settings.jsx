@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Settings } from 'lucide-react'
+import Toggle from '../../components/ui/Toggle'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
 import { useNavigate } from 'react-router-dom'
@@ -8,18 +9,6 @@ import { toast } from 'sonner'
 
 const TABS = ['General', 'Notifications', 'Security', 'Appearance']
 
-function Toggle({ value, onChange }) {
-  return (
-    <button onClick={() => onChange(!value)}
-      className={`w-11 h-6 rounded-full transition-colors duration-200 relative flex-shrink-0 ${value ? 'bg-violet-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-      {/* `left-0` is load-bearing -- see the copy in student/Profile.jsx. A
-          button centres its content, so without it the knob's static position
-          is the middle of the track and both states draw it right of centre:
-          on lands 18px outside the pill, off sits against the right end. */}
-      <span className={`absolute left-0 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
-    </button>
-  )
-}
 
 export default function TeacherSettings() {
   const { user, signOut }       = useAuth()
@@ -111,7 +100,7 @@ export default function TeacherSettings() {
                   <p className="font-semibold text-gray-900 dark:text-white text-sm">{n.label}</p>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{n.desc}</p>
                 </div>
-                <Toggle value={notifs[n.key]} onChange={v => setNotifs(p => ({ ...p, [n.key]: v }))} />
+                <Toggle tone="violet" checked={notifs[n.key]} onChange={v => setNotifs(p => ({ ...p, [n.key]: v }))} />
               </div>
             ))}
           </div>

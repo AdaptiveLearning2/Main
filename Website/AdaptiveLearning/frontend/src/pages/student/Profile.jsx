@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Copy, Check, Save } from 'lucide-react'
 import ConsentChannels from '../../components/consent/ConsentChannels'
+import Toggle from '../../components/ui/Toggle'
 import { useAuth } from '../../context/AuthContext'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
@@ -122,19 +123,7 @@ export default function Profile() {
   const initials = (profile?.display_name || user?.email || '?')[0].toUpperCase()
   const joined   = user?.created_at ? new Date(user.created_at).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : 'Unknown'
 
-  const Toggle = ({ value, onChange }) => (
-    <button onClick={() => onChange(!value)}
-      className={`w-11 h-6 rounded-full transition-colors duration-200 relative flex-shrink-0 ${value ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-      {/* `left-0` is load-bearing. Without it `left` resolves to the span's
-          static position, and a button centres its content -- so the knob
-          started at 22px, the middle of a 44px track, and the translate moved
-          it from there. On read as 46px on a 44px track (18px outside the
-          pill); off read as 26px, hard against the right end. Both states drew
-          the knob to the right of centre, so the control could not be read at
-          all -- and no state ever looked broken enough to be obviously a bug. */}
-      <span className={`absolute left-0 top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${value ? 'translate-x-6' : 'translate-x-1'}`} />
-    </button>
-  )
+
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -326,7 +315,7 @@ export default function Profile() {
                     <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Practice reminder</p>
                     <p className="text-xs text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
                   </div>
-                  <Toggle value={prefs.practice_reminders}
+                  <Toggle checked={prefs.practice_reminders}
                           onChange={v => savePrefs({ ...prefs, practice_reminders: v })} />
                 </div>
               </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, History, Lock } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import Toggle from '../../components/ui/Toggle'
 
 const CONSENT_FLAG = 'consent_enforcement_enabled'
 
@@ -23,23 +24,6 @@ const LABELS = {
 
 const BYPASS_CHOICES = [15, 30, 60, 120, 240]
 
-function Toggle({ checked, onChange, disabled, tone = 'slate' }) {
-  const on = tone === 'rose' ? 'bg-rose-600' : 'bg-emerald-600'
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-40
-        ${checked ? on : 'bg-gray-300 dark:bg-gray-700'}`}
-    >
-      <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform mt-0.5
-        ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
-    </button>
-  )
-}
 
 function FlagHistory({ flagKey }) {
   const [open, setOpen] = useState(false)
@@ -250,6 +234,7 @@ export default function AdminFlags() {
                       )}
                     </div>
                     <Toggle
+                      tone="emerald"
                       checked={flag.enabled}
                       disabled={busy}
                       onChange={v => set(key, v)}

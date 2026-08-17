@@ -18,9 +18,61 @@ import eeg_poller
 
 load_dotenv()
 
+def _env_number(name: str, default, cast, minimum=None):
+    """A numeric setting from the environment, falling back on a bad value.
+
+    These are read at import, so a typo in a deployment's environment would
+    otherwise raise ValueError before the app object exists -- taking down every
+    endpoint over a tuning parameter for one optional feature. Falling back to
+    the shipped default keeps the process up, and the log line is what says the
+    setting is not the one that was configured.
+
+    `minimum` extends that to values that parse but are not usable. A number is
+    not automatically a setting: every caller here has a floor below which the
+    value does not tune the feature but disables or breaks it, quietly and in
+    whichever direction the parameter happens to point -- see the call sites.
+    Clamping rather than falling back to the default, because a deployer who
+    wrote a small number was asking for a small number, and the nearest usable
+    one is closer to that than the shipped value is.
+
+    The non-finite check is separate from both, and falls back rather than
+    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
+    comparison -- inf because it is above every floor, nan because every
+    comparison against it is False -- so neither of the guards above sees them,
+    and they are not magnitudes there is a nearest usable value to clamp to.
+    They reach the call sites as settings that break rather than tune:
+    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
+    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
+    makes future.result() time out instantly, switching the model pass off for
+    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
+    the cast, so this only bites the float callers.
+    """
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        print(f"[config] {name}={raw!r} is not a number; using {default}")
+        return default
+    if not math.isfinite(value):
+        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
+        return default
+    if minimum is not None and value < minimum:
+        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
+        return minimum
+    return value
+
+
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-BACKEND_PORT     = int(os.getenv("BACKEND_PORT", "8000"))
+# Every numeric setting goes through this, including this one. It was
+# `int(os.getenv(...))`, which is the pattern the helper exists to replace:
+# read at import, so a malformed BACKEND_PORT raised ValueError before the
+# app object existed and took the whole backend down over the port number.
+# The helper lives here rather than 2600 lines below, next to the settings
+# it serves and above the first one that needs it.
+BACKEND_PORT     = _env_number("BACKEND_PORT", 8000, int, minimum=1)
 
 if not SUPABASE_URL or not SERVICE_ROLE_KEY:
     raise RuntimeError("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY")
@@ -2674,52 +2726,6 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── at-home learning strategies ─────────────────────────────────────────
 
-def _env_number(name: str, default, cast, minimum=None):
-    """A numeric setting from the environment, falling back on a bad value.
-
-    These are read at import, so a typo in a deployment's environment would
-    otherwise raise ValueError before the app object exists -- taking down every
-    endpoint over a tuning parameter for one optional feature. Falling back to
-    the shipped default keeps the process up, and the log line is what says the
-    setting is not the one that was configured.
-
-    `minimum` extends that to values that parse but are not usable. A number is
-    not automatically a setting: every caller here has a floor below which the
-    value does not tune the feature but disables or breaks it, quietly and in
-    whichever direction the parameter happens to point -- see the call sites.
-    Clamping rather than falling back to the default, because a deployer who
-    wrote a small number was asking for a small number, and the nearest usable
-    one is closer to that than the shipped value is.
-
-    The non-finite check is separate from both, and falls back rather than
-    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
-    comparison -- inf because it is above every floor, nan because every
-    comparison against it is False -- so neither of the guards above sees them,
-    and they are not magnitudes there is a nearest usable value to clamp to.
-    They reach the call sites as settings that break rather than tune:
-    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
-    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
-    makes future.result() time out instantly, switching the model pass off for
-    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
-    the cast, so this only bites the float callers.
-    """
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        value = cast(raw)
-    except (TypeError, ValueError):
-        print(f"[config] {name}={raw!r} is not a number; using {default}")
-        return default
-    if not math.isfinite(value):
-        print(f"[config] {name}={raw!r} is not a finite number; using {default}")
-        return default
-    if minimum is not None and value < minimum:
-        print(f"[config] {name}={raw!r} is below the usable minimum; using {minimum}")
-        return minimum
-    return value
-
-
 # The model pass is opt-in. Off, the endpoint answers from the deterministic
 # rules below and never opens a socket -- which is what CI, and any deployment
 # without a local Ollama, should do. Enabling it changes only whether the
@@ -4675,13 +4681,13 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # the switch on that page would make the control silently change a view it
     # is absent from.
     user = get_user(request)
-    try:
-        sess = supabase.table("sessions").select("user_id").eq("id", session_id).single().execute()
-    except Exception:
-        raise HTTPException(404, "Session not found")
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    _verify_can_view_student(user, sess.data["user_id"])
+    # `_row_or_404`, not a third copy of its body. Ownership is not the rule
+    # here -- a teacher and a parent may both read this -- so it resolves the
+    # row and `_verify_can_view_student` decides, which is why this does not go
+    # through `_session_or_403`.
+    sess = _row_or_404(
+        supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
+    _verify_can_view_student(user, sess["user_id"])
 
     cog = supabase.table("cognitive_signals").select("*").eq("session_id", session_id)
     fac = supabase.table("face_signals").select("*").eq("session_id", session_id)
@@ -4728,16 +4734,14 @@ def session_charts(session_id: str, request: Request):
     above, and a flag that is never false is a state that does not exist.
     """
     user = get_user(request)
-    try:
-        sess = supabase.table("sessions").select("user_id, chart_paths") \
-            .eq("id", session_id).single().execute()
-    except Exception:
-        raise HTTPException(404, "Session not found")
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    _verify_can_view_student(user, sess.data["user_id"])
+    # Same as `session_signals` above: shared helper for the lookup, and a
+    # relationship check rather than ownership, because a parent reads this too.
+    sess = _row_or_404(
+        supabase.table("sessions").select("user_id, chart_paths").eq("id", session_id),
+        "Session")
+    _verify_can_view_student(user, sess["user_id"])
 
-    paths = sess.data.get("chart_paths")
+    paths = sess.get("chart_paths")
     if paths is None:
         # Column-NULL is its own answer and needs no storage call: the archive
         # never ran for this session. Distinct from `{}` and from four nulls.
@@ -4750,7 +4754,7 @@ def session_charts(session_id: str, request: Request):
     # would be signed by an endpoint that had just correctly confirmed the
     # caller owns *this* session. Presence is all it decides.
     urls, unavailable = chart_archive.signed_chart_urls(
-        supabase, paths, sess.data["user_id"], session_id)
+        supabase, paths, sess["user_id"], session_id)
     return {"archived": True, "charts": urls, "unavailable": unavailable,
             "expires_in": chart_archive.SIGNED_URL_TTL_SECONDS}
 

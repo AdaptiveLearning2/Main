@@ -3,10 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
-import { supabase } from '../../lib/supabase'
 import { toast } from 'sonner'
-
-const ROLE_HOME = { student: '/dashboard', teacher: '/teacher', parent: '/parent' }
 
 export default function Login() {
   const [email, setEmail]       = useState('')
@@ -21,10 +18,14 @@ export default function Login() {
     setLoading(true)
     try {
       await signIn(email, password)
-      await new Promise(r => setTimeout(r, 200))
-      const { data: { user } } = await supabase.auth.getUser()
-      const role = user?.user_metadata?.role || 'student'
-      navigate(ROLE_HOME[role] || '/dashboard')
+      // `/` rather than a home computed here. This read `user_metadata.role`,
+      // which an account promoted in the SQL editor does not have -- so an
+      // administrator was sent to the student dashboard. It was also a second
+      // copy of the role-to-home map that `homeRoute.js` exists to be the only
+      // one of. `HomeRedirect` waits for the resolved role and knows all four,
+      // which is what let the 200ms sleep go too: it was here to give the
+      // session time to appear.
+      navigate('/')
       toast.success('Welcome back! 👋')
     } catch (err) {
       toast.error(err.message || 'Sign in failed')

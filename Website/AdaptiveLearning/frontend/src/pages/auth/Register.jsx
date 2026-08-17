@@ -11,7 +11,6 @@ const ROLES = [
   { id: 'parent',  emoji: '👪', title: 'Parent',   sub: 'Monitor your child' },
 ]
 
-const ROLE_HOME = { student: '/dashboard', teacher: '/teacher', parent: '/parent' }
 
 function StrengthBar({ password }) {
   if (!password) return null
@@ -44,7 +43,9 @@ export default function Register() {
     setLoading(true)
     try {
       await signUp(email, password, role, displayName)
-      navigate(ROLE_HOME[role] || '/dashboard')
+      // See Login: one role-to-home map, in homeRoute.js, reached through
+      // HomeRedirect once the role has actually resolved.
+      navigate('/')
       toast.success('Account created! Welcome 🎉')
     } catch (err) {
       toast.error(err.message || 'Failed to create account')

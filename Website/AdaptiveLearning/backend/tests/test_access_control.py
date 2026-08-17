@@ -1253,6 +1253,53 @@ def test_the_two_academic_write_endpoints_check_ownership():
             "checking whose session it is")
 
 
+class _RaisingSessions:
+    """`.single()` on zero rows, as postgrest actually behaves.
+
+    It raises `APIError(PGRST116)` rather than returning an empty result, so a
+    handler's `if not res.data` branch is never reached for a missing row -- it
+    is dead code standing where the 404 was supposed to be.
+    """
+
+    def table(self, _name):
+        class _Q:
+            def select(self, *_a, **_k): return self
+            def eq(self, *_a, **_k): return self
+            def single(self): return self
+
+            def execute(self):
+                raise RuntimeError(
+                    "{'code': 'PGRST116', 'details': 'The result contains 0 rows'}")
+
+        return _Q()
+
+
+@pytest.mark.parametrize("call", [
+    lambda: main._session_or_403("does-not-exist", "someone"),
+    lambda: main._verify_session_owner("does-not-exist", "someone"),
+])
+def test_a_missing_session_returns_404_not_500(monkeypatch, call):
+    """The mirror of `test_missing_class_returns_404_not_500`, which the session
+    helper never had.
+
+    `_verify_class_owner` sits a few hundred lines above this one in the same
+    file, does the same `.single()` lookup, and wraps it -- with a comment
+    saying why. The session helper was written with the `if not res.data` check
+    and no `try`, so its 404 was unreachable and a bogus session id came back as
+    an unhandled APIError: a 500, with a stack trace, for input a client can
+    trivially supply.
+
+    It matters more now than when it was one call site. This helper is what
+    `record_answer`, `end_session` and the three `/api/signals/*` endpoints all
+    resolve a session through, so the same 500 is reachable five ways.
+    """
+    monkeypatch.setattr(main, "supabase", _RaisingSessions())
+
+    with pytest.raises(main.HTTPException) as exc:
+        call()
+    assert exc.value.status_code == 404
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:

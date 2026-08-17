@@ -4263,9 +4263,29 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
     `columns` must include `user_id`. It fails the safe way if it does not --
     the comparison is against `.get("user_id")`, so an absent column is `None`,
     which matches no caller and refuses everyone rather than admitting them.
+
+    **The missing-row case is an exception, not an empty result.** `.single()`
+    raises `APIError(PGRST116)` on zero rows, so the `if not sess.data` below is
+    not what answers a bogus session id -- without the `try` it escaped as an
+    unhandled 500, with a stack trace, for input any client can supply. The 404
+    was written and unreachable. `_verify_class_owner` makes the same lookup a
+    few hundred lines up and has carried the guard, and a comment saying why,
+    since long before this helper existed.
+
+    Reachable five ways now rather than one: `record_answer`, `end_session` and
+    the three `/api/signals/*` endpoints all resolve a session through here.
     """
-    sess = supabase.table("sessions").select(columns) \
-        .eq("id", session_id).single().execute()
+    try:
+        sess = supabase.table("sessions").select(columns) \
+            .eq("id", session_id).single().execute()
+    except HTTPException:
+        raise
+    except Exception:                                          # noqa: BLE001
+        # Deliberately not distinguishing "no such row" from "the read failed":
+        # this is an access check, and answering 404 for both tells a caller
+        # nothing about a session they may not own. A failed read must not
+        # become a way past the ownership comparison below.
+        raise HTTPException(404, "Session not found")
     if not sess.data:
         raise HTTPException(404, "Session not found")
     if sess.data.get("user_id") != user_id:

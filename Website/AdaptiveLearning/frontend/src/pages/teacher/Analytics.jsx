@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
 import { apiFetch } from '../../lib/api'
+import LoadError from '../../components/ui/LoadError'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const COLORS  = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#84cc16','#f97316','#14b8a6']
@@ -21,12 +22,22 @@ function CustomTooltip({ active, payload, label }) {
 export default function TeacherAnalytics() {
   const [questions, setQuestions] = useState([])
   const [loading, setLoading]     = useState(true)
+  const [failed, setFailed]       = useState(false)
 
-  useEffect(() => {
+  // See History.jsx: already true on mount, so setting it here would be a
+  // synchronous setState inside an effect.
+  const load = () => {
     apiFetch('/api/questions?limit=1000')
-      .then(q => { setQuestions(q || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
+      .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
+      // Every chart on this page is derived by filtering `questions`, so a
+      // swallowed failure drew a full set of charts reading zero -- the shape
+      // of a real answer, with nothing behind it.
+      .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
+  }
+
+  const retry = () => { setLoading(true); load() }
+
+  useEffect(load, [])
 
   const topicData = TOPICS.map((t, i) => ({
     topic: t.replace('_', ' '),
@@ -55,6 +66,11 @@ export default function TeacherAnalytics() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">Question bank distribution and insights.</p>
       </motion.div>
 
+      {/* Above the charts, not instead of them: the stat cards below already
+          render "—" while unloaded, so the page degrades to blanks with one
+          sentence saying why rather than to a confident set of zeros. */}
+      {failed && <LoadError what="the question bank" onRetry={retry} />}
+
       {/* summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {summaryCards.map((c, i) => (
@@ -66,7 +82,7 @@ export default function TeacherAnalytics() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">{c.label}</p>
-                <p className="text-3xl font-black text-gray-900 dark:text-white">{loading ? '—' : c.value}</p>
+                <p className="text-3xl font-black text-gray-900 dark:text-white">{loading || failed ? '—' : c.value}</p>
               </div>
               <div className={`w-10 h-10 bg-gradient-to-br ${c.color} rounded-xl flex items-center justify-center text-lg shadow`}>{c.emoji}</div>
             </div>
@@ -83,6 +99,8 @@ export default function TeacherAnalytics() {
             <div className="h-64 flex items-center justify-center">
               <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin" />
             </div>
+          ) : failed ? (
+            <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Not loaded</div>
           ) : topicData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No questions yet</div>
           ) : (

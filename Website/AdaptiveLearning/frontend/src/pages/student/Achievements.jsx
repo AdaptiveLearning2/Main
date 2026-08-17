@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Star } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import LoadError from '../../components/ui/LoadError'
 
 const ALL = [
   { id: 'first_q',  emoji: '🎯', title: 'First Steps',      desc: 'Answer your first question',    threshold: 1,   stat: 'total_questions' },
@@ -22,12 +23,28 @@ const ALL = [
 export default function Achievements() {
   const [stats, setStats]     = useState(null)
   const [loading, setLoading] = useState(true)
+  const [failed, setFailed]   = useState(false)
 
-  useEffect(() => {
+  // See History.jsx: already true on mount, so setting it here would be a
+  // synchronous setState inside an effect.
+  const load = () => {
     apiFetch('/api/stats/me')
-      .then(s => { setStats(s); setLoading(false) })
-      .catch(() => { setStats({ total_questions: 0, total_correct: 0, current_streak: 0, best_streak: 0 }); setLoading(false) })
-  }, [])
+      // The backend reports its own failed read this way rather than raising.
+      .then(s => {
+        if (s?.retrieved === false) { setFailed(true); setStats(null) }
+        else { setStats(s); setFailed(false) }
+        setLoading(false)
+      })
+      // Catching to zeros re-locked every achievement the student had already
+      // earned and drew the progress bar at 0% -- not a blank page but a
+      // confident, wrong one, on the screen a child is most likely to take
+      // personally.
+      .catch(e => { console.error('Failed to load stats:', e); setFailed(true); setLoading(false) })
+  }
+
+  const retry = () => { setLoading(true); load() }
+
+  useEffect(load, [])
 
   const unlocked = ALL.filter(a => (stats?.[a.stat] ?? 0) >= a.threshold)
   const locked   = ALL.filter(a => (stats?.[a.stat] ?? 0) < a.threshold)
@@ -40,11 +57,13 @@ export default function Achievements() {
           <Star className="text-yellow-500" size={28} /> Achievements
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">
-          {loading ? '...' : `${unlocked.length} / ${ALL.length} unlocked`}
+          {loading ? '...' : failed ? '' : `${unlocked.length} / ${ALL.length} unlocked`}
         </p>
       </motion.div>
 
-      {!loading && (
+      {failed && <LoadError what="your achievements" onRetry={retry} />}
+
+      {!loading && !failed && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm mb-8">
           <div className="flex justify-between items-center mb-2">
@@ -80,7 +99,11 @@ export default function Achievements() {
         </div>
       )}
 
-      {locked.length > 0 && (
+      {/* `!failed` as well as a non-empty list: with no stats every threshold
+          compares against 0, so a failed read renders the entire set as
+          locked -- the most discouraging possible reading of a network
+          error. */}
+      {!failed && locked.length > 0 && (
         <div>
           <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔒 Locked <span className="text-sm font-semibold text-gray-400">({locked.length})</span></h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">

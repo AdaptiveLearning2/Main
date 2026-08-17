@@ -2030,11 +2030,41 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
 
 @app.get("/api/questions")
 def get_questions(limit: int = 100, subject: str | None = None, difficulty: str | None = None):
-    q = supabase.table("questions").select("*").limit(limit)
+    # Newest first. Without an order this returned whatever Postgres handed
+    # back, so the teacher dashboard's "Recent Questions" panel was showing an
+    # arbitrary five of however many it had pulled -- a list that looks
+    # chronological and is not.
+    q = supabase.table("questions").select("*").order("created_at", desc=True).limit(limit)
     if subject:    q = q.eq("subject", subject)
     if difficulty: q = q.eq("difficulty", difficulty)
     res = q.execute()
     return res.data or []
+
+
+@app.get("/api/questions/count")
+def count_questions(subject: str | None = None, difficulty: str | None = None):
+    """How many questions exist, without transferring them.
+
+    The teacher dashboard wanted a total and five recent rows, and got both by
+    fetching `?limit=1000` on every mount -- a megabyte or so of question text
+    to render one number and five list items. It was also *wrong* above 1000,
+    silently: the count was the length of a capped page, so a bank that grew
+    past the cap simply stopped counting and nothing said so.
+
+    `count="exact"` makes PostgREST return the count in the Content-Range
+    header and no rows at all.
+    """
+    try:
+        q = supabase.table("questions").select("id", count="exact").limit(1)
+        if subject:    q = q.eq("subject", subject)
+        if difficulty: q = q.eq("difficulty", difficulty)
+        res = q.execute()
+        return {"total": res.count if res.count is not None else 0, "retrieved": True}
+    except Exception as e:                                     # noqa: BLE001
+        # Same three-state rule as the reporting helpers: a failed count must
+        # not render as a question bank with nothing in it.
+        print(f"[questions] could not count: {e}")
+        return {"total": None, "retrieved": False}
 
 
 # ─── llm generation ──────────────────────────────────────────────────────

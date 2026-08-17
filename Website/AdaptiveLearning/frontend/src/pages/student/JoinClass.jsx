@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Users, Hash, GraduationCap } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
+import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 import { toast } from 'sonner'
 
 export default function JoinClass() {
@@ -9,12 +11,22 @@ export default function JoinClass() {
   const [loading, setLoading]   = useState(false)
   const [classes, setClasses]   = useState([])
   const [loadingClasses, setLoadingClasses] = useState(true)
+  const [classesFailed, setClassesFailed]   = useState(false)
 
-  useEffect(() => {
+  // See History.jsx: already true on mount, so setting it here would be a
+  // synchronous setState inside an effect.
+  const loadClasses = () => {
     apiFetch('/api/classes')
-      .then(c => { setClasses(c); setLoadingClasses(false) })
-      .catch(() => setLoadingClasses(false))
-  }, [])
+      .then(c => { setClasses(c); setClassesFailed(false); setLoadingClasses(false) })
+      // Swallowed, this drew "You haven't joined any classes yet" at a student
+      // who had -- and the page's whole purpose is joining one, so it invited
+      // them to re-join a class they are already in.
+      .catch(e => { console.error('Failed to load classes:', e); setClassesFailed(true); setLoadingClasses(false) })
+  }
+
+  const retryClasses = () => { setLoadingClasses(true); loadClasses() }
+
+  useEffect(loadClasses, [])
 
   const handleJoin = async (e) => {
     e.preventDefault()
@@ -58,7 +70,9 @@ export default function JoinClass() {
 
       <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">My Classes</h2>
       {loadingClasses ? (
-        <div className="space-y-2">{[1,2].map(i => <div key={i} className="h-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+        <SkeletonList count={2} height="h-16" gap="space-y-2" />
+      ) : classesFailed ? (
+        <LoadError what="your classes" onRetry={retryClasses} />
       ) : classes.length === 0 ? (
         <div className="text-center py-10 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <p className="text-4xl mb-3">🏫</p>

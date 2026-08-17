@@ -49,14 +49,21 @@ export default function Profile() {
   // a default as though the student had chosen it.
   const [prefs, setPrefs] = useState(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
+  const [sessionsFailed, setSessionsFailed] = useState(false)
 
   useEffect(() => {
     Promise.all([
-      apiFetch('/api/stats/me').catch(() => null),
-      apiFetch('/api/sessions').catch(() => []),
+      apiFetch('/api/stats/me')
+        .then(s => (s?.retrieved === false ? null : s))
+        .catch(() => null),
+      // `null`, not `[]`. An empty array is a student who has never practised;
+      // this is a request that did not come back, and the two drove the same
+      // "no sessions" rendering below.
+      apiFetch('/api/sessions').catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, p]) => {
       setStats(s)
+      setSessionsFailed(sess === null)
       setSessions(sess || [])
       setProfile(p)
       setEditName(p?.display_name || '')
@@ -193,10 +200,13 @@ export default function Profile() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'Total Sessions',     value: sessions.length,             icon: '📋' },
-                    { label: 'Questions Answered', value: stats?.total_questions ?? 0, icon: '📝' },
-                    { label: 'Correct Answers',    value: stats?.total_correct ?? 0,   icon: '✅' },
-                    { label: 'Best Streak',        value: stats?.best_streak ?? 0,     icon: '🔥' },
+                    // Em dash where the read failed, zero where it succeeded
+                    // and found nothing. A student's own profile is the last
+                    // place to report a network error as "you did nothing".
+                    { label: 'Total Sessions',     value: sessionsFailed ? '—' : sessions.length,        icon: '📋' },
+                    { label: 'Questions Answered', value: stats ? stats.total_questions ?? 0 : '—',      icon: '📝' },
+                    { label: 'Correct Answers',    value: stats ? stats.total_correct ?? 0 : '—',        icon: '✅' },
+                    { label: 'Best Streak',        value: stats ? stats.best_streak ?? 0 : '—',          icon: '🔥' },
                   ].map(c => (
                     <div key={c.label} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm text-center">
                       <div className="text-2xl mb-1">{c.icon}</div>

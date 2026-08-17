@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Users, Plus, X, Copy, Check, GraduationCap, Pencil, Save, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
+import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
@@ -15,6 +17,7 @@ export default function Classes() {
   const [newName, setNewName]     = useState('')
   const [newGrade, setNewGrade]   = useState('5th Grade')
   const [showForm, setShowForm]   = useState(false)
+  const [failed, setFailed]       = useState(false)
   const [copiedId, setCopiedId]   = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [editGrade, setEditGrade] = useState('')
@@ -22,7 +25,16 @@ export default function Classes() {
   useEffect(() => { loadClasses() }, [])
 
   async function loadClasses() {
-    try { setClasses(await apiFetch('/api/classes')) } catch {}
+    try {
+      setClasses(await apiFetch('/api/classes'))
+      setFailed(false)
+    } catch (e) {
+      // An empty `catch {}` here left the list empty and drew "No classes
+      // yet", with a Create Class prompt beside it -- inviting a teacher to
+      // recreate classes that already exist because the read failed.
+      console.error('Failed to load classes:', e)
+      setFailed(true)
+    }
     setLoading(false)
   }
 
@@ -109,7 +121,9 @@ export default function Classes() {
       </AnimatePresence>
 
       {loading ? (
-        <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
+        <SkeletonList count={3} height="h-20" />
+      ) : failed ? (
+        <LoadError what="your classes" onRetry={loadClasses} />
       ) : classes.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-4">🏫</div>

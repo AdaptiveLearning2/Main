@@ -86,6 +86,36 @@ def get_user(request: Request):
 def rand_code(n=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=n))
 
+
+def _row_or_404(query, what: str) -> dict:
+    """Run a `.single()` lookup and answer 404 when the row is not there.
+
+    **`.single()` raises on zero rows** -- `APIError(PGRST116)` -- rather than
+    returning an empty result. So the `if not res.data: raise HTTPException(404)`
+    that six endpoints were written with is dead code standing exactly where
+    their 404 was supposed to be, and a bogus id escaped as a 500 with a stack
+    trace, for input any client can supply.
+
+    One place, because the alternative is the same four lines written out at
+    every `.single()` in the file -- which is how it came to be right at two of
+    them and wrong at the other six. The empty check stays below the `try`
+    rather than being dropped: it costs nothing and it is what protects a
+    caller if the client library ever stops raising here.
+
+    Not for lookups that have a legitimate "absent" answer. `generate_question`
+    reads a class only to refine a default grade, so a missing one must fall
+    back rather than fail the request -- it does its own narrow catch.
+    """
+    try:
+        res = query.single().execute()
+    except HTTPException:
+        raise
+    except Exception:                                          # noqa: BLE001
+        raise HTTPException(404, f"{what} not found")
+    if not res.data:
+        raise HTTPException(404, f"{what} not found")
+    return res.data
+
 # The four values `profiles.role` may hold. `admin` is the only one a person
 # cannot choose for themselves at sign-up -- `handle_new_user` whitelists the
 # other three (20260824020000).
@@ -2079,8 +2109,18 @@ def generate_question(
 ):
     effective_grade = grade or "5th Grade"
     if class_id:
-        cls = supabase.table("classes").select("grade_level").eq("id", class_id).single().execute()
-        if cls.data and cls.data.get("grade_level"):
+        # Its own catch rather than `_row_or_404`, because "absent" is a real
+        # answer here: this only refines a default grade, so an unknown class
+        # falls back to `effective_grade` instead of failing the request. That
+        # is the one `.single()` in this file that must not 404 -- and it was
+        # also unguarded, so a bad class_id 500'd rather than falling back.
+        try:
+            cls = supabase.table("classes").select("grade_level") \
+                .eq("id", class_id).single().execute()
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[question] could not read class {class_id}: {e}")
+            cls = None
+        if cls and cls.data and cls.data.get("grade_level"):
             effective_grade = cls.data["grade_level"]
 
     manual_bias = max(-1, min(1, int(bias or 0)))
@@ -3440,24 +3480,27 @@ def get_class(class_id: str, request: Request):
     # read of the row the helper already fetched -- the helper is the shared
     # rule for who may see a class, and re-deriving it inline to save a
     # round-trip is how the class_live guard drifted.
-    res = supabase.table("classes") \
-        .select("id, name, join_code, grade_level") \
-        .eq("id", class_id).single().execute()
-    return res.data
+    return _row_or_404(
+        supabase.table("classes").select("id, name, join_code, grade_level")
+                .eq("id", class_id),
+        "Class")
 
 @app.put("/api/classes/{class_id}")
 def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
     user = get_user(request)
-    cls = supabase.table("classes").select("*").eq("id", class_id).single().execute()
-    if not cls.data:
-        raise HTTPException(404, "Class not found")
-    if cls.data["teacher_id"] != user["id"]:
+    cls = _row_or_404(
+        supabase.table("classes").select("*").eq("id", class_id), "Class")
+    if cls["teacher_id"] != user["id"]:
         raise HTTPException(403, "Not your class")
     fields = {k: v for k, v in payload.dict().items() if v is not None}
     if fields:
         supabase.table("classes").update(fields).eq("id", class_id).execute()
-    res = supabase.table("classes").select("*").eq("id", class_id).single().execute()
-    return res.data
+    # The re-read, so the response is what was stored rather than what was
+    # asked for. 404 here means the row went away between the update and this
+    # line, which is a race rather than a bad id -- but "the class is not there"
+    # is still the truest thing to say about it.
+    return _row_or_404(
+        supabase.table("classes").select("*").eq("id", class_id), "Class")
 
 @app.get("/api/classes")
 def my_classes(request: Request):
@@ -3497,15 +3540,13 @@ def _verify_class_owner(class_id: str, user_id: str):
     so the database will not stop a caller on its own -- the check has to happen
     here or not at all.
     """
-    # .single() raises rather than returning empty when the row is missing, so
-    # a bogus id has to be caught here or it surfaces as a 500 instead of a 404.
-    try:
-        cls = supabase.table("classes").select("teacher_id").eq("id", class_id).single().execute()
-    except Exception:
-        raise HTTPException(404, "Class not found")
-    if not cls.data:
-        raise HTTPException(404, "Class not found")
-    if cls.data["teacher_id"] != user_id:
+    # `.single()` raises rather than returning empty when the row is missing.
+    # This endpoint was the first to be caught by that and carried its own
+    # `try`; `_row_or_404` is that guard, shared, after six other `.single()`
+    # calls turned out to be missing it.
+    cls = _row_or_404(
+        supabase.table("classes").select("teacher_id").eq("id", class_id), "Class")
+    if cls["teacher_id"] != user_id:
         raise HTTPException(403, "Not your class")
 
 
@@ -4302,25 +4343,21 @@ def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> 
     few hundred lines up and has carried the guard, and a comment saying why,
     since long before this helper existed.
 
-    Reachable five ways now rather than one: `record_answer`, `end_session` and
-    the three `/api/signals/*` endpoints all resolve a session through here.
+    Reachable seven ways now rather than one: `record_answer`, `end_session`,
+    `/api/eeg/start`, `/api/eeg/stop` and the three `/api/signals/*` endpoints
+    all resolve a session through here.
+
+    `_row_or_404` deliberately does not distinguish "no such row" from "the read
+    failed". This is an access check: 404 for both tells a caller nothing about
+    a session they may not own, and a failed read must never become a way past
+    the ownership comparison below.
     """
-    try:
-        sess = supabase.table("sessions").select(columns) \
-            .eq("id", session_id).single().execute()
-    except HTTPException:
-        raise
-    except Exception:                                          # noqa: BLE001
-        # Deliberately not distinguishing "no such row" from "the read failed":
-        # this is an access check, and answering 404 for both tells a caller
-        # nothing about a session they may not own. A failed read must not
-        # become a way past the ownership comparison below.
-        raise HTTPException(404, "Session not found")
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    if sess.data.get("user_id") != user_id:
+    row = _row_or_404(
+        supabase.table("sessions").select(columns).eq("id", session_id),
+        "Session")
+    if row.get("user_id") != user_id:
         raise HTTPException(403, "Not your session")
-    return sess.data
+    return row
 
 
 def _verify_session_owner(session_id: str, user_id: str):
@@ -5072,13 +5109,11 @@ def eeg_health():
 @app.post("/api/eeg/start")
 def eeg_start(payload: EegSessionRequest, request: Request):
     user = get_user(request)
-    sess = supabase.table("sessions").select("user_id, ended_at") \
-        .eq("id", payload.session_id).single().execute()
-    if not sess.data:
-        raise HTTPException(404, "Session not found")
-    if sess.data["user_id"] != user["id"]:
-        raise HTTPException(403, "Not your session")
-    if sess.data.get("ended_at"):
+    # The shared helper rather than a third hand-written copy of the same two
+    # checks. Both copies here had the unreachable-404 bug, and re-deriving an
+    # access rule per endpoint is what let the `class_live` guard drift.
+    sess = _session_or_403(payload.session_id, user["id"], "user_id, ended_at")
+    if sess.get("ended_at"):
         raise HTTPException(400, "Session already ended")
     # Answered before the liveness check, deliberately -- see the helper.
     _refuse_under_push("start a poller")
@@ -5138,10 +5173,11 @@ def eeg_start(payload: EegSessionRequest, request: Request):
 @app.post("/api/eeg/stop")
 def eeg_stop(payload: EegSessionRequest, request: Request):
     user = get_user(request)
-    sess = supabase.table("sessions").select("user_id") \
-        .eq("id", payload.session_id).single().execute()
-    if not sess.data or sess.data["user_id"] != user["id"]:
-        raise HTTPException(403, "Not your session")
+    # 404 for a session that does not exist, where this used to fold that into
+    # the 403. Nothing chose that -- it fell out of `not sess.data or ...` in a
+    # single condition -- and `/api/eeg/start` two endpoints up already answered
+    # 404 for the same case, so the two disagreed about the same lookup.
+    _session_or_403(payload.session_id, user["id"])
     # eeg_poller.stop releases user["id"]'s reservation too, unconditionally
     # -- not just when a live poller existed. A user who only got as far as
     # scan/connect (#34's pre-claim reservation, never promoted to a poller)

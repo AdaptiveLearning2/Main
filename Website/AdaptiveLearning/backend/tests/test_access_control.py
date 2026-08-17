@@ -1300,6 +1300,71 @@ def test_a_missing_session_returns_404_not_500(monkeypatch, call):
     assert exc.value.status_code == 404
 
 
+def test_every_single_row_lookup_handles_the_missing_row():
+    """Derived, because a hand-kept list is what let six of eight go unguarded.
+
+    `.single()` raises `APIError(PGRST116)` on zero rows rather than returning
+    an empty result, so `if not res.data: raise HTTPException(404)` never runs
+    for a missing row -- it is dead code standing where the 404 was meant to be,
+    and the id comes back as a 500 with a stack trace.
+
+    Two call sites had the guard and six did not, and nothing distinguished them
+    but whether someone had been bitten there yet. The rule is now structural: a
+    `.single()` either sits inside a `try` or the endpoint does not call it
+    directly at all, having gone through `_row_or_404`.
+
+    Matched on the source rather than by exercising each endpoint, because the
+    failure is a *missing* handler -- there is no behaviour to drive on the
+    sites that do not exist yet.
+
+    Parsed rather than grepped. A regex over the text matched the several
+    mentions of `.single()` in the helpers' own docstrings and reported them as
+    unguarded calls, and "is there a `try:` earlier in this function" is the
+    wrong question anyway -- an unrelated `try` above would answer it yes. The
+    AST gives real call nodes and real nesting.
+    """
+    import ast
+
+    source = open(main.__file__, encoding="utf-8").read()
+    tree = ast.parse(source)
+
+    # Nearest enclosing def for a line, so the failure names something findable.
+    scopes = sorted(
+        ((n.lineno, n.end_lineno, n.name) for n in ast.walk(tree)
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+        key=lambda s: s[1] - s[0])
+
+    def enclosing(lineno):
+        for start, end, name in scopes:
+            if start <= lineno <= end:
+                return name
+        return "<module>"
+
+    offenders = []
+
+    def walk(node, in_try):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "single" and not in_try):
+            offenders.append(f"{enclosing(node.lineno)} (main.py:{node.lineno})")
+        if isinstance(node, ast.Try):
+            # Only the `try` body is protected. A `.single()` in an except or
+            # finally clause is as exposed as one with no try at all.
+            for child in node.body:
+                walk(child, True)
+            for child in [*node.handlers, *node.orelse, *node.finalbody]:
+                walk(child, in_try)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, in_try)
+
+    walk(tree, False)
+
+    assert not offenders, (
+        "these .single() lookups answer a missing row with an unhandled "
+        f"APIError -- a 500 for an id any client can supply: {offenders}. "
+        "Use _row_or_404(), or catch it where 'absent' is a legitimate answer.")
+
+
 def test_missing_class_returns_404_not_500():
     # .single() raises on zero rows, so without handling this surfaced as a 500.
     with pytest.raises(main.HTTPException) as exc:

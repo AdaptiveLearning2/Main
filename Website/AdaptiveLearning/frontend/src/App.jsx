@@ -6,7 +6,9 @@ import AuthLayout         from './layout/AuthLayout'
 import StudentLayout      from './layout/StudentLayout'
 import TeacherLayout      from './layout/TeacherLayout'
 import ParentLayout       from './layout/ParentLayout'
+import AdminLayout        from './layout/AdminLayout'
 import RoleGuard          from './components/auth/RoleGuard'
+import AdminGuard         from './components/auth/AdminGuard'
 import ScrollToTop        from './components/ui/ScrollToTop'
 
 import Login    from './pages/auth/Login'
@@ -37,6 +39,11 @@ import ParentDashboard  from './pages/parent/Dashboard'
 import ParentLinkChild  from './pages/parent/LinkChild'
 import ParentChild      from './pages/parent/ChildDetail'
 import ParentSettings   from './pages/parent/Settings'
+
+import AdminOverview   from './pages/admin/Overview'
+import AdminFlags      from './pages/admin/Flags'
+import AdminLiveFlow   from './pages/admin/LiveFlow'
+import AdminSchoolYear from './pages/admin/SchoolYear'
 
 import NotFound from './pages/NotFound'
 
@@ -86,6 +93,16 @@ export default function App() {
               <Route path="/parent/link"         element={<ParentLinkChild />} />
               <Route path="/parent/child/:id"    element={<ParentChild />} />
               <Route path="/parent/settings"     element={<ParentSettings />} />
+            </Route>
+
+            {/* AdminGuard, not RoleGuard: admin is `profiles.role`, which the
+                backend reads and the client cannot write, never the
+                `user_metadata.role` claim RoleGuard goes on. */}
+            <Route element={<AdminGuard><AdminLayout /></AdminGuard>}>
+              <Route path="/admin"       element={<AdminOverview />} />
+              <Route path="/admin/flags" element={<AdminFlags />} />
+              <Route path="/admin/live"  element={<AdminLiveFlow />} />
+              <Route path="/admin/year"  element={<AdminSchoolYear />} />
             </Route>
 
             <Route path="/"  element={<Navigate to="/dashboard" replace />} />

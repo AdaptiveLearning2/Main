@@ -1089,7 +1089,7 @@ END $$;
 -- ── the batch summary agrees with the body it delegates to ──────────────────
 --
 -- `student_signal_summary_many` is a LATERAL fan-out over
--- `student_signal_summary` (20260824000000). Before that they were two
+-- `student_signal_summary` (20260824040000). Before that they were two
 -- independent copies of the same six averages and four counts, which is how
 -- 20260823000000 came to fix `count(f.attention)` -> `count(f.emotion)` twice by
 -- hand. Delegation only helps while it *is* delegation, and the cheapest way for

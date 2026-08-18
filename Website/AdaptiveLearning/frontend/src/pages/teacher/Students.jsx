@@ -323,7 +323,11 @@ export default function Students() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Users className="text-violet-600" size={28} /> Students
         </h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">All enrolled students on the platform.</p>
+        {/* Not "on the platform". The query scopes to classes this teacher
+            owns, so that claimed a reach the page does not have -- and on a
+            page about who a teacher may look at, overstating the scope is the
+            wrong direction to be wrong in. */}
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Students enrolled in your classes.</p>
       </motion.div>
 
       {/* search */}
@@ -346,12 +350,16 @@ export default function Students() {
           <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">
             {students.length === 0 ? 'No students yet' : 'No results'}
           </h3>
+          {/* The setup note that used to sit here -- "requires a `profiles`
+              table with a `role` column in Supabase" -- was a message to
+              whoever deploys this, shown to every teacher who has no students
+              yet. It named a schema they cannot see and cannot act on, in
+              place of the one thing they can do about it. */}
           <p className="text-gray-500 dark:text-gray-400 text-sm">
             {students.length === 0
-              ? 'Students will appear here once they sign up.'
+              ? 'Students appear here once they join one of your classes with its join code.'
               : 'Try a different search term.'}
           </p>
-          <p className="text-xs text-gray-400 mt-2">Requires a <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">profiles</code> table with a <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">role</code> column in Supabase.</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">

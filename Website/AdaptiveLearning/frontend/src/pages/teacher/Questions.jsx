@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import useDialog from '../../hooks/useDialog'
 
 const TOPICS = ['all','ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const DIFFS  = ['all','easy','medium','hard']
@@ -15,6 +16,12 @@ const DIFF_STYLE = {
 }
 
 function QuestionModal({ question, onClose }) {
+  // Escape to close, Tab kept inside, focus returned to the row that opened
+  // it. The backdrop click was the only way out, so a keyboard-only teacher
+  // could open this and not leave it.
+  const panel = useRef(null)
+  useDialog(panel, onClose)
+
   return (
     <motion.div
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -22,6 +29,10 @@ function QuestionModal({ question, onClose }) {
       onClick={onClose}
     >
       <motion.div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="question-modal-text"
         initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
         transition={{ type: 'spring', stiffness: 200, damping: 20 }}
         className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl p-7 max-w-lg w-full border border-gray-100 dark:border-gray-800"
@@ -36,11 +47,11 @@ function QuestionModal({ question, onClose }) {
               <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${DIFF_STYLE[question.difficulty] || ''}`}>{question.difficulty}</span>
             )}
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition">
             <X size={18} />
           </button>
         </div>
-        <p className="text-base font-semibold text-gray-900 dark:text-white mb-5 leading-relaxed">{question.question_text}</p>
+        <p id="question-modal-text" className="text-base font-semibold text-gray-900 dark:text-white mb-5 leading-relaxed">{question.question_text}</p>
         <div className="space-y-2 mb-5">
           {question.options?.map((opt, i) => (
             <div key={i}

@@ -4,6 +4,14 @@ import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts'
 import { apiFetch } from '../../lib/api'
+import SkeletonList from '../../components/ui/Skeleton'
+
+// One second is what a live monitor is for. `POLL_MAX_MS` is where the backoff
+// stops when the endpoint is failing -- far enough out that a broken backend
+// costs a handful of requests a minute rather than sixty, close enough that a
+// teacher who fixes it sees the page recover without reloading.
+const POLL_MS = 1_000
+const POLL_MAX_MS = 30_000
 
 // Spelled out rather than shown raw. `muse_optics` means nothing to a teacher,
 // and the distinction that matters to them is headband versus camera.
@@ -139,6 +147,9 @@ function StudentCard({ student, history }) {
       {active && (
         <Link
           to={`/teacher/sessions/${active.id}`}
+          // So the review's "Back" returns here rather than to whichever page
+          // it happened to be hardcoded to.
+          state={{ from: '/teacher/live' }}
           className="mt-4 block text-center text-xs font-bold text-violet-600 hover:text-violet-700 dark:text-violet-400"
         >
           Open full session →
@@ -153,22 +164,48 @@ export default function Live() {
   const [classId, setClassId]     = useState('')
   const [students, setStudents]   = useState([])
   const [error, setError]         = useState(null)
+  // Three states, not two. `classes` starts empty and the render below treats
+  // empty as "no classes yet, create one" -- so every visit flashed that
+  // invitation at a teacher who has classes, for as long as the request took.
+  const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, engagement, stress}]
 
   useEffect(() => {
     apiFetch('/api/classes')
       .then(rows => {
-        setClasses(rows)
-        if (rows.length && !classId) setClassId(rows[0].id)
+        setClasses(rows || [])
+        if (rows?.length && !classId) setClassId(rows[0].id)
       })
       .catch(e => setError(e.message))
+      .finally(() => setLoadingClasses(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (!classId) return
     let killed = false
+    // Per-student signal history is keyed by user id and was never cleared, so
+    // switching class kept every student ever viewed -- and each of those keeps
+    // 60 points. A teacher moving between classes for a lesson accumulated the
+    // whole school. The sparkline only ever draws the class on screen.
+    historyRef.current = {}
+
+    // How long to wait before the next poll. One second while the endpoint is
+    // answering; doubling up to a cap once it is not. A fixed 1s retry against
+    // a backend that is down is sixty failing requests a minute for as long as
+    // the tab is open, and the teacher already has the error on screen after
+    // the first one.
+    let delay = POLL_MS
+    let timer = null
+
     const tick = async () => {
+      // Nothing to watch while the tab is hidden, and a live monitor left open
+      // on a second screen otherwise polls all day. The `visibilitychange`
+      // listener below restarts it.
+      if (document.hidden) {
+        timer = setTimeout(tick, POLL_MS)
+        return
+      }
       try {
         // Reads facial signals (the attention gauge, the current emotion and
         // the camera badge below) and deliberately does NOT honour the
@@ -222,13 +259,35 @@ export default function Live() {
           historyRef.current[r.user_id] = [...arr, point].slice(-60)
         })
         setStudents(rows)
+        // Recovered: back to the fast cadence, and drop the error that is no
+        // longer true rather than leaving it on screen over live data.
+        delay = POLL_MS
+        if (!killed) setError(null)
       } catch (e) {
         if (!killed) setError(e.message)
+        delay = Math.min(delay * 2, POLL_MAX_MS)
       }
+      // Scheduled from the end of the request rather than on a fixed interval,
+      // so a slow response cannot stack polls on top of each other -- the
+      // reason this is a chained timeout and not `setInterval`.
+      if (!killed) timer = setTimeout(tick, delay)
     }
+
+    // Waking the tab should not wait out whatever backoff it went to sleep on.
+    const onVisible = () => {
+      if (document.hidden || killed) return
+      delay = POLL_MS
+      clearTimeout(timer)
+      tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     tick()
-    const id = setInterval(tick, 1000)
-    return () => { killed = true; clearInterval(id) }
+    return () => {
+      killed = true
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [classId])
 
   return (
@@ -258,7 +317,11 @@ export default function Live() {
 
       {error && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
 
-      {!classes.length ? (
+      {loadingClasses ? (
+        // Before this, "No classes yet — create one" was drawn for the length
+        // of the request, on every visit, to teachers who have classes.
+        <SkeletonList count={3} height="h-28" />
+      ) : !classes.length ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">🏫</div>
           <p className="font-black text-gray-900 dark:text-white">No classes yet</p>

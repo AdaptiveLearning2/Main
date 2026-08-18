@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
+import { isValidTimezone, knownTimezones } from '../../lib/timezone'
 
 // What each state means to a person. The backend keeps six apart on purpose --
 // "not gating on a year" and "inside the year" both record, for different
@@ -13,6 +14,10 @@ const STATE_COPY = {
   unconfigured:  ['Not recording', 'No school year has been configured.'],
   unreadable:    ['Not recording', 'The window could not be read — check the timezone.'],
 }
+
+// Once per module rather than per render: the list is ~450 strings and does
+// not change while the tab is open.
+const ZONES = knownTimezones()
 
 export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
@@ -39,6 +44,11 @@ export default function AdminSchoolYear() {
     timezone: data.timezone || 'UTC',
   })
 
+  // Checked in the form because the backend's answer to an unresolvable zone is
+  // to *deny*, not to fall back -- so a typo here stops recording for every
+  // student in the deployment, and the only symptom is a status line saying the
+  // window could not be read. `form` is null until the first load, so this is
+  // computed after the guards below rather than here.
   const save = async () => {
     setSaved(false)
     const ok = await mutate(() =>
@@ -50,6 +60,8 @@ export default function AdminSchoolYear() {
 
   if (error && !data) return <div className="p-6 text-sm text-rose-600">{error}</div>
   if (!data || !form) return <div className="p-6 text-sm text-gray-400">Loading…</div>
+
+  const tzValid = isValidTimezone(form.timezone)
 
   const [headline, detail] = STATE_COPY[data.state] || ['Unknown', data.state]
   const recording = data.state === 'open' || data.state === 'not_enforced'
@@ -114,14 +126,35 @@ export default function AdminSchoolYear() {
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Timezone</label>
+          <label htmlFor="school-timezone"
+                 className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Timezone</label>
           <input
+            id="school-timezone"
+            list="school-timezone-options"
             value={form.timezone}
             onChange={e => setDraft({ ...form, timezone: e.target.value })}
             placeholder="America/Chicago"
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm"
+            aria-invalid={!tzValid}
+            aria-describedby="school-timezone-hint"
+            className={`w-full rounded-lg border bg-white dark:bg-gray-900 px-3 py-2 text-sm ${
+              tzValid
+                ? 'border-gray-300 dark:border-gray-700'
+                : 'border-rose-400 dark:border-rose-600'
+            }`}
           />
-          <p className="mt-1 text-xs text-gray-500">
+          {/* Suggestions, not the check. An engine without
+              `Intl.supportedValuesOf` gets an empty list and a field that still
+              validates, rather than a crash. */}
+          <datalist id="school-timezone-options">
+            {ZONES.map(z => <option key={z} value={z} />)}
+          </datalist>
+          {!tzValid && (
+            <p className="mt-1 text-xs font-bold text-rose-600 dark:text-rose-400">
+              Not a timezone this platform can resolve. Saving it would stop
+              recording for every student until it is corrected.
+            </p>
+          )}
+          <p id="school-timezone-hint" className="mt-1 text-xs text-gray-500">
             The school’s own zone. It sets both the term boundaries and the day buckets on every
             report, so a wrong one moves a lesson onto the wrong day of a parent’s chart.
           </p>
@@ -129,7 +162,7 @@ export default function AdminSchoolYear() {
 
         <button
           onClick={save}
-          disabled={busy}
+          disabled={busy || !tzValid}
           className="px-4 py-2 rounded-xl bg-slate-700 text-white text-sm font-bold disabled:opacity-40 hover:bg-slate-800 transition"
         >
           Save

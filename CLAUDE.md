@@ -1957,8 +1957,38 @@ formulas grades 1-3 haven't reached regardless of which difficulty tier picked t
 tables exist only to fail safely if that gate is ever bypassed -- write real curriculum depth into
 `ordering`, `geometry`, and `expressions` first if extending this further, since those three are
 what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
-three across all four bands; it is a dashboard-run script rather than a migration, because a
-migration would re-apply its text over any later dashboard edit on every rebuild.
+three across all four bands, and `lesson_plans_remaining_topics.sql` seeds the other seven at
+`upper`/`advanced` only — 26 rows in total, with `early`/`middle` left unseeded for those seven
+because `_allowed_topics` already keeps them out of grade 1-5 and an unseeded cell fails open to the
+heuristics. Both are dashboard-run scripts rather than migrations, because a migration would
+re-apply their text over any later dashboard edit on every rebuild.
+
+**A lesson plan must describe question shapes the generator can actually emit, and the limits are
+tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will
+attempt — and the solver then scores it, correctly or not. Read off the code, then confirmed by
+generating: `algebra` takes `solve(...)[0]` and splits on a single `=`, so one linear equation with
+one solution — a quadratic would present one root as the answer and mark the other correct choice
+wrong. `probability` has three scenarios (one named category, its complement, a die condition) and
+no compound or conditional events. `rationals` is `a/b` fractions with mixed numbers forbidden by
+the prompt. `mean`/`median`/`mode` are a listed dataset and one statistic — no box plots, no MAD, no
+comparing distributions. `angle_relationships` is two angles in one stated relationship, with no
+diagram to refer to. So at these bands **`advanced` means harder numbers and one more reasoning step
+inside the same question shape, not different mathematics.**
+
+**Three wrong-answer bugs came from seed text alone, all found by reading generated output and none
+catchable by `grade_appropriateness`** (2026-08-18, llama3.1:8b). "Counted from a described
+condition" produced *"either blue or yellow"* — a compound event — scored **1 against a true 10/21**.
+"Recognise that a dataset may have no mode at all" is true of the subject and wrong as an
+instruction: nine distinct rainfall readings, **no mode, answer 0**. And a percentage framing
+("80% of 15 brands") also scored **1**, because percentages give the solver no counts to divide.
+Each is now forbidden in the objectives *and* in the row's `notes`, which is where a future editor
+will look. The general rule: **an objective that is pedagogically true can still be an instruction
+the solver cannot score** — check what a cell generates before trusting it, not just what it says.
+
+One limit the text cannot fix and does not claim to: scenario 5's coefficients are unconstrained, so
+`angle_relationships` still yields non-integer solutions (11.875, reported `11.88`) despite the
+objective asking for whole numbers. That is a generator limitation and a fix belongs in
+`LLM_angle_relationship_generation`, not in a lesson plan.
 
 ### `grade_appropriateness` checks the output, because everything else only checks the prompt
 

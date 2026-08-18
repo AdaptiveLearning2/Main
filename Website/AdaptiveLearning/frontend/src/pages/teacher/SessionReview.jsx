@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
 import {
@@ -55,6 +55,16 @@ function ArchivedChart({ url, label }) {
 
 export default function SessionReview() {
   const { sessionId } = useParams()
+  // Where "Back" goes, from where the teacher came. Both links were hardcoded
+  // to `/teacher/live`, so opening a session from the Sessions history sent
+  // them to Live Monitoring on the way out -- a different page, with their
+  // place in the list lost. `StudentReport.jsx` already carries this pattern.
+  //
+  // Falls back to Live rather than to `history.back()`: a teacher who arrived
+  // by pasting a link has no history to go back to, and Live is where the
+  // session ids are most likely to have come from.
+  const location = useLocation()
+  const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
   const [loading, setLoading] = useState(true)
@@ -111,7 +121,7 @@ export default function SessionReview() {
   if (err) {
     return (
       <div className="p-8">
-        <Link to="/teacher/live" className="text-sm text-violet-600 font-bold flex items-center gap-1 mb-4">
+        <Link to={backTo} className="text-sm text-violet-600 font-bold flex items-center gap-1 mb-4">
           <ArrowLeft size={14} /> Back
         </Link>
         <div className="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-2xl p-6">
@@ -344,7 +354,7 @@ export default function SessionReview() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-6">
-      <Link to="/teacher/live" className="text-sm text-violet-600 font-bold flex items-center gap-1 hover:text-violet-700">
+      <Link to={backTo} className="text-sm text-violet-600 font-bold flex items-center gap-1 hover:text-violet-700">
         <ArrowLeft size={14} /> Back to live
       </Link>
 

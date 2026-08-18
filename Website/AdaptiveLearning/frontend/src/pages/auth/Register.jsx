@@ -15,8 +15,14 @@ const ROLES = [
 function StrengthBar({ password }) {
   if (!password) return null
   const score = [password.length >= 8, /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length
-  const colors = ['', 'bg-rose-500', 'bg-amber-400', 'bg-yellow-400', 'bg-green-500']
-  const labels = ['', 'Weak', 'Fair', 'Good', 'Strong']
+  // Index 0 is a real score, not a placeholder. Four checks, so a non-empty
+  // password can satisfy none of them -- "abc" scores 0 -- and the arrays used
+  // to hold `''` there, which drew a grey bar and an *empty* label. The one
+  // password most in need of the warning was the only one that got none.
+  // `if (!password) return null` above already covers the empty case, so
+  // everything reaching here has a verdict to give.
+  const colors = ['bg-rose-500', 'bg-rose-500', 'bg-amber-400', 'bg-yellow-400', 'bg-green-500']
+  const labels = ['Weak', 'Weak', 'Fair', 'Good', 'Strong']
   return (
     <div className="mt-2">
       <div className="flex gap-1 mb-1">{[1,2,3,4].map(i => <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= score ? colors[score] : 'bg-gray-200 dark:bg-gray-700'}`} />)}</div>
@@ -72,7 +78,11 @@ export default function Register() {
           <p className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">I am joining as...</p>
           <div className="grid grid-cols-3 gap-2">
             {ROLES.map(r => (
+              // Selection was conveyed by border and background colour alone,
+              // so which role is chosen was invisible to a screen reader and
+              // to anyone who cannot separate the two border colours.
               <motion.button key={r.id} type="button" onClick={() => setRole(r.id)}
+                aria-pressed={role === r.id}
                 whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
                 className={`p-3 rounded-xl border-2 text-left transition-all ${role === r.id ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300'}`}>
                 <div className="text-xl mb-1">{r.emoji}</div>
@@ -109,7 +119,7 @@ export default function Register() {
               <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
                 className="w-full pl-10 pr-11 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition text-sm"
                 placeholder="Min 6 characters" required />
-              <button type="button" onClick={() => setShowPw(p => !p)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-indigo-600 transition">
+              <button type="button" aria-label={showPw ? 'Hide password' : 'Show password'} onClick={() => setShowPw(p => !p)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-indigo-600 transition">
                 {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>

@@ -273,3 +273,121 @@ def test_acknowledging_nothing_is_a_404(student):
     with pytest.raises(main.HTTPException) as e:
         main.ack_parent_links(None)
     assert e.value.status_code == 404
+
+
+# ── the parent is told ──────────────────────────────────────────────────────
+#
+# The reverse direction, and the one the consent model had no path for at all:
+# a parent re-enabling raises `needs_student_ack`, and a *student* switching a
+# sensor off raised nothing. Keyed on `parent_child_links.parent_ack_at` rather
+# than on `signal_consent`, which has one row per student -- with two parents
+# linked, the first to acknowledge would have cleared the notice for the second.
+
+
+class _ConsentClient(_Client):
+    """`parent_child_links` plus the one consent read the notice endpoint makes."""
+
+    def __init__(self, links, consent):
+        super().__init__(links)
+        self.consent = consent
+
+    def table(self, name):
+        if name == "signal_consent":
+            rows = self.consent
+            log = self.reads
+
+            class _C:
+                def select(_self, *_cols, **_kw):
+                    class _In:
+                        def in_(_s, col, vals):
+                            _s.matched = [r for r in rows if r.get(col) in vals]
+                            return _s
+
+                        def execute(_s):
+                            log.append(("consent", {}, len(_s.matched)))
+                            return _Result(_s.matched)
+                    return _In()
+            return _C()
+        return super().table(name)
+
+
+@pytest.fixture
+def notices(monkeypatch):
+    c = _ConsentClient(
+        links=[{"id": "l-1", "parent_id": PARENT, "child_id": CHILD,
+                "created_at": "2026-08-01T09:00:00Z",
+                "parent_ack_at": "2026-08-10T09:00:00Z"}],
+        consent=[{"user_id": CHILD,
+                  "eeg_revoked_at": None,
+                  "headband_optical_revoked_at": None,
+                  "camera_revoked_at": None}],
+    )
+    monkeypatch.setattr(main, "supabase", c)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": PARENT})
+    monkeypatch.setattr(main, "_profiles_many",
+                        lambda ids: {i: {"display_name": "Ada"} for i in ids})
+    return c
+
+
+def test_a_withdrawal_after_the_last_look_is_reported(notices):
+    notices.consent[0]["camera_revoked_at"] = "2026-08-12T09:00:00Z"
+    out = main.parent_consent_notices(None)
+    assert out["retrieved"] is True
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
+    assert out["notices"][0]["child_name"] == "Ada"
+
+
+def test_a_withdrawal_the_parent_has_already_seen_is_not_repeated(notices):
+    # Older than `parent_ack_at`. Without this the banner returns on every load
+    # for ever, which is how a notice becomes something people learn to dismiss
+    # without reading.
+    notices.consent[0]["camera_revoked_at"] = "2026-08-09T09:00:00Z"
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_nothing_withdrawn_is_no_notice(notices):
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_a_parent_who_never_acknowledged_sees_everything(notices):
+    notices.links[0]["parent_ack_at"] = None
+    notices.consent[0]["eeg_revoked_at"] = "2026-07-01T09:00:00Z"
+    out = main.parent_consent_notices(None)
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["eeg"]
+
+
+def test_the_read_is_scoped_to_the_caller_s_own_links(notices):
+    """Unscoped, this is a list of which children have withdrawn what,
+    platform-wide."""
+    main.parent_consent_notices(None)
+    kind, filters, _n = notices.reads[0]
+    assert kind == "select"
+    assert filters == {"parent_id": PARENT}
+
+
+def test_a_failed_read_says_so_rather_than_reporting_no_withdrawals(monkeypatch, notices):
+    """Fails open, like the link notice: a blip must not tell a parent their
+    child withdrew something. `retrieved: false` is what stops the banner
+    reading that failure as a confident "nothing happened"."""
+    class _Boom:
+        def table(self, _name):
+            raise RuntimeError("postgrest is down")
+    monkeypatch.setattr(main, "supabase", _Boom())
+
+    assert main.parent_consent_notices(None) == {"notices": [], "retrieved": False}
+
+
+def test_acknowledging_stamps_the_parent_s_links(notices):
+    notices.consent[0]["camera_revoked_at"] = "2026-08-12T09:00:00Z"
+    main.ack_parent_consent_notices(None)
+    assert notices.links[0]["parent_ack_at"] is not None
+    # And the notice is gone on the next read, which is the property that
+    # matters rather than the column being set.
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_acknowledging_is_scoped_to_the_caller(notices):
+    main.ack_parent_consent_notices(None)
+    kind, filters, _n = notices.reads[0]
+    assert kind == "update"
+    assert filters == {"parent_id": PARENT}

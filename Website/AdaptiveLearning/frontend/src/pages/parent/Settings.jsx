@@ -14,7 +14,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ShieldCheck, User, Users, Unlink, Mail, CalendarDays } from 'lucide-react'
+import { ShieldCheck, User, Users, Unlink, Mail, CalendarDays, Plus } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
@@ -223,6 +224,16 @@ export default function ParentSettings() {
               </div>
             ))}
           </div>
+
+          {/* Linking was reachable only from the sidebar nav, which is not where
+              anyone looks for it: Settings is the page about the account and
+              the children on it, and it listed them without offering the one
+              action that changes the list. Rendered whether or not any are
+              linked, so the empty state has a way forward. */}
+          <Link to="/parent/link"
+                className="mt-4 inline-flex items-center gap-1.5 px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-bold text-gray-600 dark:text-gray-300 hover:border-emerald-300 hover:text-emerald-600 transition">
+            <Plus size={14} /> Link another child
+          </Link>
         </section>
 
         {/* ── what is measured ─────────────────────────────────────── */}

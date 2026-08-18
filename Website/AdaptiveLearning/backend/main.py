@@ -5496,6 +5496,98 @@ def ack_parent_links(request: Request):
     return {"ok": True, "acknowledged": len(written)}
 
 
+CONSENT_CHANNEL_LABELS = {
+    "eeg":              "the headband",
+    "headband_optical": "the headband's heart-rate sensor",
+    "camera":           "the camera",
+}
+
+
+@app.get("/api/parent/consent-notices")
+def parent_consent_notices(request: Request):
+    """Channels a linked child has switched off since this parent last looked.
+
+    The consent model notified in one direction only: a parent re-enabling a
+    channel raises `needs_student_ack`, and nothing told a *parent* their child
+    had turned one off. They found out by opening Settings and reading "Off
+    since <date>" on a panel they had no reason to visit -- which means the one
+    event that changes what is being measured was the one nobody was told about.
+
+    Keyed on `parent_child_links.parent_ack_at`, per (parent, child): keeping it
+    on `signal_consent` would have let the first of two linked parents to
+    acknowledge clear the notice for the second.
+
+    Fails **open**, to an empty list with `retrieved: false`, like the link
+    notice: it decides whether an advisory banner is drawn and nothing else, so
+    a blip must not tell a parent their child withdrew something. `_consent()`
+    itself still fails closed, because that one decides whether data may be
+    recorded -- these are different questions about the same table.
+    """
+    user = get_user(request)
+    try:
+        links = supabase.table("parent_child_links").select("child_id, parent_ack_at")             .eq("parent_id", user["id"]).execute().data or []
+    except Exception as e:
+        print(f"[consent-notices] {user['id']}: {e}")
+        return {"notices": [], "retrieved": False}
+    if not links:
+        return {"notices": [], "retrieved": True}
+
+    ids = [l["child_id"] for l in links]
+    try:
+        rows = supabase.table("signal_consent")             .select("user_id, eeg_revoked_at, headband_optical_revoked_at, camera_revoked_at")             .in_("user_id", ids).execute().data or []
+    except Exception as e:
+        print(f"[consent-notices] {user['id']}: {e}")
+        return {"notices": [], "retrieved": False}
+
+    # One read for the names, not one per child -- the same rule every roster
+    # surface here follows.
+    names = _profiles_many(ids)
+    by_child = {r["user_id"]: r for r in rows}
+
+    notices = []
+    for link in links:
+        cid = link["child_id"]
+        consent = by_child.get(cid) or {}
+        since = link.get("parent_ack_at")
+        turned_off = []
+        for channel, label in CONSENT_CHANNEL_LABELS.items():
+            stamp = consent.get(f"{channel}_revoked_at")
+            # Newer than the acknowledgement, or any revocation at all when the
+            # parent has never acknowledged. String comparison is safe here
+            # because both sides are ISO-8601 UTC out of PostgREST; parsing them
+            # to compare would add a failure mode to a banner.
+            if stamp and (not since or stamp > since):
+                turned_off.append({"channel": channel, "label": label, "at": stamp})
+        if turned_off:
+            notices.append({
+                "child_id":   cid,
+                "child_name": (names.get(cid) or {}).get("display_name") or "Your child",
+                "channels":   sorted(turned_off, key=lambda c: c["at"], reverse=True),
+            })
+    return {"notices": notices, "retrieved": True}
+
+
+@app.post("/api/parent/consent-notices/ack")
+def ack_parent_consent_notices(request: Request):
+    """The parent has seen it. Stamps every link they hold.
+
+    Scoped by `parent_id`, and the link id is never taken from the client --
+    which would let a caller clear somebody else's notice.
+
+    Unlike `/api/consent/ack` this is **not** a 404 when nothing changed. There
+    is always something to stamp for a parent with links, and a parent with none
+    has nothing to be told about; a 404 here would fire on the ordinary case of
+    double-clicking the button.
+    """
+    user = get_user(request)
+    try:
+        supabase.table("parent_child_links")             .update({"parent_ack_at": _utc_now().isoformat()})             .eq("parent_id", user["id"]).execute()
+    except Exception as e:
+        print(f"[consent-notices:ack] {user['id']}: {e}")
+        raise HTTPException(500, "Could not acknowledge")
+    return {"ok": True}
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.

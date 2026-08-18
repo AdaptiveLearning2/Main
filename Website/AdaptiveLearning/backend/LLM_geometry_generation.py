@@ -16,6 +16,7 @@ import sympy as sp #pip install sympy
 from sympy import sqrt, symbols, Eq, solve, sympify, Integer, Rational, pi
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_appropriateness
 
 #current geometry scenarions: perimeter, area, volume, missing_side, pythagorean_theorem
 #APPROXIMATING 3.14 for pi for simplicity/consistancy
@@ -535,6 +536,15 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what the
+        # prompt asked for -- see grade_appropriateness for why the prompt
+        # alone isn't trusted here.
+        violation = grade_appropriateness.find_violation(
+            question_data.get("question_text"), "geometry", grade_band)
+        if violation:
+            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue
 
         # If we reach here â†’ SUCCESS

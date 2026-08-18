@@ -17,6 +17,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_appropriateness
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
@@ -174,6 +175,15 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what the
+        # prompt asked for -- see grade_appropriateness for why the prompt
+        # alone isn't trusted here.
+        violation = grade_appropriateness.find_violation(
+            question_data.get("question_text"), "mean", grade_band)
+        if violation:
+            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue
 
         # If we reach here â†’ SUCCESS

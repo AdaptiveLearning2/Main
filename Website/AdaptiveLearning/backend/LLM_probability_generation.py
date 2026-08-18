@@ -17,6 +17,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_appropriateness
 
 
 #current probability scenarions: probability_of, not_probability_of, dice, 
@@ -249,6 +250,15 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         required_keys = ["scenario", "question_text", "target"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what the
+        # prompt asked for -- see grade_appropriateness for why the prompt
+        # alone isn't trusted here.
+        violation = grade_appropriateness.find_violation(
+            question_data.get("question_text"), "probability", grade_band)
+        if violation:
+            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue
 
         # If we reach here â†’ SUCCESS

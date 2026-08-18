@@ -19,10 +19,19 @@ _CACHE_TTL_SECONDS = 30.0
 # write it (same trust level as math_topics/questions).
 _MAX_CONTEXT_CHARS = 2000
 
+# Why a cell did or didn't contribute prompt text. Only FOUND carries text;
+# the rest are four operationally distinct ways of getting None -- see
+# _lookup's docstring for why they are kept apart rather than collapsed.
+FOUND          = "found"
+NO_ROW         = "no_row"          # unseeded: a content gap to write
+BLANK_ROW      = "blank_row"       # seeded but empty: a half-finished edit
+READ_FAILED    = "read_failed"     # an outage; the row may well exist
+NO_CREDENTIALS = "no_credentials"  # misconfigured process, never asked
+
 _client: Client | None = None
 _client_lock = threading.Lock()
 
-_cache = {}  # (topic_name, grade_band) -> (expires_at, str | None)
+_cache = {}  # (topic_name, grade_band) -> (expires_at, str | None, reason)
 _cache_lock = threading.Lock()
 
 
@@ -48,28 +57,35 @@ def _get_client():
     return _client
 
 
-def get_lesson_context(topic_name, grade_band):
-    """Curriculum text for a topic/grade_band, or None if there is nothing
-    to add -- no row on file, a blank row, an unreadable table, or missing
-    Supabase credentials all collapse to the same None. This is prompt
-    grounding, not a consent or access gate, so every failure mode fails
-    open to "generate without lesson-plan context" rather than blocking
-    generation.
+def _lookup(topic_name, grade_band):
+    """(text, reason) for one cell. `text` is None unless reason == FOUND.
 
-    grade_band must be one of the bands LLM_*_generation.py already derives
-    via _grade_band() ("early"/"middle"/"upper"/"advanced") -- lesson plans
-    are stored at that granularity, not per exact grade.
+    The reason exists because all four ways of getting None here are
+    operationally different and used to be indistinguishable: an unseeded
+    cell is a content gap somebody has to write, a blank row is a half-
+    finished edit, a failed read is an outage, and absent credentials is a
+    misconfigured process. All four degrade to the same prompt, so nothing
+    downstream needs to branch on it -- but the log line does, or the first
+    question anyone asks ("is this cell seeded?") has no answer short of
+    opening the dashboard.
     """
     key = (topic_name, grade_band)
     now = time.monotonic()
     with _cache_lock:
         cached = _cache.get(key)
     if cached and now < cached[0]:
-        return cached[1]
+        return cached[1], cached[2]
 
     client = _get_client()
     if client is None:
-        return None
+        # Not cached: credentials can appear later in a process's life
+        # (loaded after import), and caching their absence would outlive
+        # that. Logged every call rather than once, since a deployment
+        # generating questions with no database configured is a real fault
+        # and a single startup line is easy to miss.
+        print(f"[lesson_plan_context] {key}: no Supabase credentials, "
+              f"generating without lesson-plan grounding")
+        return None, NO_CREDENTIALS
 
     try:
         resp = (
@@ -81,27 +97,59 @@ def get_lesson_context(topic_name, grade_band):
             .execute()
         )
     except Exception as e:
-        print(f"[lesson_plan_context] lookup failed for {key}: {e}")
+        print(f"[lesson_plan_context] {key}: READ FAILED ({e}) -- this is an "
+              f"outage, not an unseeded cell; the row may well exist")
         # Not cached -- same reasoning as main.py's _feature_flags(): a
         # transient blip should not keep answering None for the TTL once the
         # database is back.
-        return None
+        return None, READ_FAILED
 
-    text = None
+    text, reason = None, NO_ROW
     if resp.data:
         row = resp.data[0]
         # A row with blank objectives has nothing to ground a question in,
-        # so it is treated the same as no row -- this is about whether
-        # there is content to append, not whether a row exists.
+        # so it produces the same (absent) prompt text as no row -- but it
+        # is a *different fact*, so it gets its own reason rather than being
+        # folded into NO_ROW.
         text = row["objectives"] or None
+        reason = FOUND if text else BLANK_ROW
         if text and row.get("notes"):
             text += "\n" + row["notes"]
         if text:
             text = text[:_MAX_CONTEXT_CHARS]
 
+    if reason == NO_ROW:
+        print(f"[lesson_plan_context] {key}: no row -- cell is unseeded, "
+              f"falling back to the difficulty/grade heuristics")
+    elif reason == BLANK_ROW:
+        print(f"[lesson_plan_context] {key}: row exists but objectives are "
+              f"blank -- a half-finished edit, not an unseeded cell")
+
     with _cache_lock:
-        _cache[key] = (now + _CACHE_TTL_SECONDS, text)
-    return text
+        _cache[key] = (now + _CACHE_TTL_SECONDS, text, reason)
+    return text, reason
+
+
+def lookup_reason(topic_name, grade_band):
+    """Why this cell did or didn't contribute prompt text, as one of the
+    module constants. For diagnostics -- nothing in generation branches on
+    it, since every non-FOUND reason degrades identically."""
+    return _lookup(topic_name, grade_band)[1]
+
+
+def get_lesson_context(topic_name, grade_band):
+    """Curriculum text for a topic/grade_band, or None if there is nothing
+    to add -- no row on file, a blank row, an unreadable table, or missing
+    Supabase credentials all collapse to the same None. This is prompt
+    grounding, not a consent or access gate, so every failure mode fails
+    open to "generate without lesson-plan context" rather than blocking
+    generation. Use lookup_reason() to tell those cases apart.
+
+    grade_band must be one of the bands LLM_*_generation.py already derives
+    via _grade_band() ("early"/"middle"/"upper"/"advanced") -- lesson plans
+    are stored at that granularity, not per exact grade.
+    """
+    return _lookup(topic_name, grade_band)[0]
 
 
 def append_lesson_context(prompt, topic_name, grade_band):

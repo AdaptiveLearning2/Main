@@ -1956,4 +1956,47 @@ formulas grades 1-3 haven't reached regardless of which difficulty tier picked t
 `angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"
 tables exist only to fail safely if that gate is ever bypassed -- write real curriculum depth into
 `ordering`, `geometry`, and `expressions` first if extending this further, since those three are
-what grades 1-3 actually see.
+what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
+three across all four bands; it is a dashboard-run script rather than a migration, because a
+migration would re-apply its text over any later dashboard edit on every rebuild.
+
+### `grade_appropriateness` checks the output, because everything else only checks the prompt
+
+`COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for
+something and nothing verifies it complied. That is the same shape as every rule this codebase has
+already had to move into code, so `find_violation(question_text, topic, grade_band)` runs inside
+each generation retry loop: a violation retries, and exhausting the retries raises, which
+`_prefetch_worker` already catches. Nine topics are wired in.
+
+**It tests one thing — algebraic variable notation reaching a band that must not see it** — and the
+narrowness is the design. A check with a real false-positive rate is worse than no check: it burns
+retries, and a question rejected for a bad reason looks exactly like a model that cannot follow
+instructions. `x` as a multiplication sign is the false positive that actually occurs here, so the
+pattern is `\d+[xyn]\b` — anchored so `2x` matches while **`6 x 4` and `6x4` do not** (the trailing
+`4` kills the word boundary). `test_ordinary_questions_are_not_refused` is the load-bearing half of
+its test file; a naive `/[xyn]/` fails exactly those cases.
+
+**`algebra` is deliberately exempt at every band.** Its own early-band content is one-step equations
+with x, so a blanket rule would reject every question the topic exists to ask — the gate protecting
+grades 1-5 from algebra is `_allowed_topics`, not this. `geometry` is early-only, since `upper`
+legitimately labels triangle sides `a`, `b`, `c`.
+
+What it deliberately does **not** check: magnitude/decimal/negative rules (`-` is also a hyphen and
+a range separator, so detection would be guesswork), and whether the question reflects the
+lesson-plan text's *content* — that needs a model to judge, which puts an unbounded LLM call on the
+hot generation path. **So this bounds the damage a bad lesson plan can do; it does not confirm a
+good one was followed.** Seeding still needs its effect checked by reading generated output.
+
+### A lesson-plan cell has four ways to contribute nothing, and they are named
+
+`lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing
+credentials — all four degrade identically to the difficulty/grade heuristics, which is right, but
+they were also indistinguishable in the log. They are very different problems: a content gap
+somebody has to write, a half-finished edit, an outage, and a misconfigured process. `lookup_reason()`
+names them (`NO_ROW` / `BLANK_ROW` / `READ_FAILED` / `NO_CREDENTIALS` / `FOUND`) and each logs its
+own line. Nothing in generation branches on it — every non-`FOUND` reason degrades the same way —
+so this is diagnostics, deliberately.
+
+**`READ_FAILED` and `NO_CREDENTIALS` are not cached**, unlike the other three: caching an outage
+would keep answering `None` for the full TTL after the database came back, and credentials can be
+loaded later in a process's life. The cached reasons keep the log to one line per cell per TTL.

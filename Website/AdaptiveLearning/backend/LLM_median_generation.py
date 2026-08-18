@@ -17,6 +17,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_appropriateness
 
 
 def format_number(x):
@@ -210,6 +211,15 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what the
+        # prompt asked for -- see grade_appropriateness for why the prompt
+        # alone isn't trusted here.
+        violation = grade_appropriateness.find_violation(
+            question_data.get("question_text"), "median", grade_band)
+        if violation:
+            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue
     
         parts = question_data['variables']

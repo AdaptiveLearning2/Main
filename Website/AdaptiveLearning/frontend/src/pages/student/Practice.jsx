@@ -1,11 +1,31 @@
-import { useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import { endSession } from '../../lib/session'
 import { supabase } from '../../lib/supabase'
+import LoadError from '../../components/ui/LoadError'
 
 const TIMER = 60
+
+/** Whether a question can actually be put in front of a student.
+ *
+ * The render maps `q.options` and indexes it in three more places, none of
+ * them guarded, so one row without an options array threw during render -- and
+ * with no error boundary above it that took the whole application down to a
+ * blank document rather than skipping a question.
+ *
+ * Filtered at the source rather than guarded at each use. A `?.` at the map
+ * would stop the crash and leave a question on screen with no answers to pick,
+ * which is a dead end a student cannot get past; dropping it here means the
+ * only rows that reach the render are ones that can be answered. If that
+ * leaves none, the existing "No Questions Available" state is already the
+ * right thing to say.
+ */
+function isAnswerable(q) {
+  return Boolean(q && Array.isArray(q.options) && q.options.length > 0)
+}
 
 export default function Practice() {
   const [session, setSession]   = useState(null)
@@ -18,18 +38,67 @@ export default function Practice() {
   const [score, setScore]       = useState(0)
   const [finished, setFinished] = useState(false)
   const [timeLeft, setTimeLeft] = useState(TIMER)
+  // Whether the session could be started at all. Three states, not two: a
+  // failed start used to leave `questions` empty and fall through to the "No
+  // Questions Available" screen, which tells a student the question bank is
+  // empty when the truth is that the request did not come back.
+  const [failed, setFailed] = useState(false)
   const timerRef = useRef(null)
 
-  // useEffect(() => { startSession() }, [])
-  useEffect(() => {
-    async function init() {
-      const { data } = await supabase.auth.getSession()
-      if (data.session) {
-        startSession()
-      }
+  // `useCallback` on both of these, and declared before the effect that uses
+  // them: the effect can then depend on `init` honestly rather than carry an
+  // empty array and a suppressed warning. Neither closes over anything but
+  // state setters, which React keeps stable, so the identities never change
+  // and the effect still runs once.
+  const startSession = useCallback(async () => {
+    setLoading(true)
+    setFailed(false)
+    try {
+      const s  = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Practice Session' } })
+      const qs = await apiFetch('/api/questions?limit=10')
+      setSession(s)
+      // Unanswerable rows dropped here rather than guarded at the render --
+      // see `isAnswerable`.
+      setQuestions((qs || []).filter(isAnswerable))
+    } catch (err) {
+      console.error('Failed to start the practice session:', err)
+      // A banner rather than `alert()`. The native dialog blocks the whole tab
+      // until it is dismissed, is unstyled next to every other message in this
+      // app, and leaves nothing behind once clicked -- so the page underneath
+      // still had to say something, and what it said was "No Questions
+      // Available".
+      setFailed(true)
+    } finally {
+      setLoading(false)
     }
-    init()
   }, [])
+
+  const init = useCallback(async () => {
+    // Every path out of here has to clear `loading`. It did not: with no
+    // session the old version simply returned, and `loading` -- which starts
+    // true -- was never set false again, so the page sat on its spinner for
+    // ever with no error, no timeout and nothing to click. A student could
+    // only escape by reloading, and nothing on screen suggested that.
+    setLoading(true)
+    setFailed(false)
+    try {
+      const { data } = await supabase.auth.getSession()
+      if (data?.session) {
+        await startSession()
+        return
+      }
+      // Signed out between the guard admitting them and this running -- an
+      // expired token, usually. Not a crash, but not a session either.
+      setFailed(true)
+      setLoading(false)
+    } catch (e) {
+      console.error('Failed to read the session:', e)
+      setFailed(true)
+      setLoading(false)
+    }
+  }, [startSession])
+
+  useEffect(() => { init() }, [init])
 
   useEffect(() => {
     if (loading || finished) return
@@ -44,41 +113,39 @@ export default function Practice() {
     return () => clearInterval(timerRef.current)
   }, [index, loading, finished])
 
-  async function startSession() {
-    setLoading(true)
-    try {
-      const s  = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Practice Session' } })
-      const qs = await apiFetch('/api/questions?limit=10')
-      setSession(s)
-      setQuestions(qs || [])
-    } catch (err) {
-      alert('Failed to start session: ' + err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   function normalize(val) {
   if (Array.isArray(val)) return val.join(', ')
   return String(val).trim()
   }
 
+  /** Record one answer. Never throws.
+   *
+   * It had no catch at all, and one of its two callers does not await it, so a
+   * failed POST became an unhandled rejection and the student was told
+   * nothing -- they had answered, the screen moved on, and the answer was not
+   * recorded anywhere. `Adaptive.jsx` has said 'That answer could not be
+   * saved.' on exactly this failure for as long as it has existed; this is the
+   * same sentence, deliberately, because it is the same event.
+   *
+   * Swallowing here rather than at each call site is what makes the
+   * fire-and-forget call in `handleTimeout` safe: that one runs from a timer
+   * callback and cannot be awaited.
+   */
   async function postAnswer(q, idx) {
-    if (!session) return
+    if (!session || !q) return
 
     const selectedVal = idx >= 0 ? q.options[idx] : null
     const isCorrect = selectedVal !== null && normalize(selectedVal) === normalize(q.correct_answer)
-    
-    await apiFetch(`/api/sessions/${session.id}/answer`, {
-      method: 'POST',
-      body: { question_id: q.id, selected_index: idx, correct: isCorrect }
-    })
-    // try {
-    //   await apiFetch(`/api/sessions/${session.id}/answer`, {
-    //     method: 'POST',
-    //     body: { question_id: q.id, selected_index: idx, correct: idx === q.correct_index }
-    //   })
-    // } catch {}
+
+    try {
+      await apiFetch(`/api/sessions/${session.id}/answer`, {
+        method: 'POST',
+        body: { question_id: q.id, selected_index: idx, correct: isCorrect }
+      })
+    } catch (e) {
+      console.error('Failed to record the answer:', e)
+      toast.error('That answer could not be saved.')
+    }
   }
 
   function handleTimeout() {
@@ -118,6 +185,15 @@ export default function Practice() {
     <div className="min-h-[60vh] flex items-center justify-center">
       <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
         className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full" />
+    </div>
+  )
+
+  // Before the empty state, and that order is the whole point: a failed start
+  // leaves `questions` empty too, so checking length first told a student the
+  // question bank was empty whenever the backend was simply unreachable.
+  if (failed) return (
+    <div className="max-w-lg mx-auto px-4 py-8">
+      <LoadError what="this practice session" onRetry={init} />
     </div>
   )
 

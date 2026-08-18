@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
-import { endSession } from '../../lib/session'
+import { endSession, recordAnswer } from '../../lib/session'
 import { supabase } from '../../lib/supabase'
 import LoadError from '../../components/ui/LoadError'
 
@@ -11,20 +10,35 @@ const TIMER = 60
 
 /** Whether a question can actually be put in front of a student.
  *
- * The render maps `q.options` and indexes it in three more places, none of
- * them guarded, so one row without an options array threw during render -- and
- * with no error boundary above it that took the whole application down to a
- * blank document rather than skipping a question.
+ * Two ways a row fails that, and both are silent in their own way.
+ *
+ * **No options.** The render maps `q.options` and indexes it in three more
+ * places, none of them guarded, so such a row threw during render -- and with
+ * no error boundary above it that took the whole application down to a blank
+ * document rather than skipping a question.
+ *
+ * **No correct answer.** `questions.correct_answer` is nullable
+ * (`20260625000000_init.sql:198`) and correctness is decided by
+ * `normalize(picked) === normalize(q.correct_answer)`. `normalize` stringifies,
+ * so a null becomes the literal `"null"`, which no real option matches: the
+ * question renders perfectly and is unwinnable whatever the student picks,
+ * with nothing on screen, in the console or in the boundary to say why. That
+ * is worse than the crash, because nobody finds out.
  *
  * Filtered at the source rather than guarded at each use. A `?.` at the map
  * would stop the crash and leave a question on screen with no answers to pick,
  * which is a dead end a student cannot get past; dropping it here means the
- * only rows that reach the render are ones that can be answered. If that
- * leaves none, the existing "No Questions Available" state is already the
+ * only rows that reach the render are ones that can be answered *and* won. If
+ * that leaves none, the existing "No Questions Available" state is already the
  * right thing to say.
  */
 function isAnswerable(q) {
-  return Boolean(q && Array.isArray(q.options) && q.options.length > 0)
+  return Boolean(
+    q
+    && Array.isArray(q.options) && q.options.length > 0
+    // Not `!!q.correct_answer`: 0 and "" are falsy and a question whose answer
+    // is genuinely "0" is ordinary in a maths bank.
+    && q.correct_answer !== null && q.correct_answer !== undefined)
 }
 
 export default function Practice() {
@@ -53,6 +67,16 @@ export default function Practice() {
   const startSession = useCallback(async () => {
     setLoading(true)
     setFailed(false)
+    // Back to question one, unanswered. The end-of-session "Try Again" button
+    // reset these by hand and nothing else did, so every other way of starting
+    // a session -- the first load, and now the retry on the failed screen --
+    // inherited whatever the last one left behind. Resetting here covers all
+    // three, and is the belt to the timer gate's braces above.
+    setIndex(0)
+    setScore(0)
+    setSelected(null)
+    setSelectedAnswer(null)
+    setRevealed(false)
     try {
       const s  = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Practice Session' } })
       const qs = await apiFetch('/api/questions?limit=10')
@@ -101,7 +125,14 @@ export default function Practice() {
   useEffect(() => { init() }, [init])
 
   useEffect(() => {
-    if (loading || finished) return
+    // Gated on there actually being a question to time, not just on the page
+    // having stopped loading. `loading || finished` left the countdown running
+    // over the failed-start screen and the empty state, where there is nothing
+    // to answer: sixty seconds there called `handleTimeout`, which set
+    // `revealed` on a question that was not on screen. Nothing reset it, so the
+    // next successful start rendered question one already revealed, with every
+    // option `disabled={revealed}` -- correct-looking and unanswerable.
+    if (loading || finished || failed || !questions.length) return
     setTimeLeft(TIMER)
     clearInterval(timerRef.current)
     timerRef.current = setInterval(() => {
@@ -111,41 +142,33 @@ export default function Practice() {
       })
     }, 1000)
     return () => clearInterval(timerRef.current)
-  }, [index, loading, finished])
+  }, [index, loading, finished, failed, questions.length])
 
   function normalize(val) {
   if (Array.isArray(val)) return val.join(', ')
   return String(val).trim()
   }
 
-  /** Record one answer. Never throws.
+  /** Decide whether the pick was right, and hand it to `recordAnswer`.
    *
-   * It had no catch at all, and one of its two callers does not await it, so a
-   * failed POST became an unhandled rejection and the student was told
-   * nothing -- they had answered, the screen moved on, and the answer was not
-   * recorded anywhere. `Adaptive.jsx` has said 'That answer could not be
-   * saved.' on exactly this failure for as long as it has existed; this is the
-   * same sentence, deliberately, because it is the same event.
-   *
-   * Swallowing here rather than at each call site is what makes the
-   * fire-and-forget call in `handleTimeout` safe: that one runs from a timer
-   * callback and cannot be awaited.
+   * Correctness stays here because it is page-specific -- this page's questions
+   * carry `options`, the adaptive page's carry `answer_options`, and the two
+   * compare differently. Everything after that (the POST, the failure toast,
+   * never throwing) is shared, which is what stopped the two pages disagreeing
+   * about whether a lost answer is worth mentioning.
    */
   async function postAnswer(q, idx) {
-    if (!session || !q) return
+    if (!q) return
 
     const selectedVal = idx >= 0 ? q.options[idx] : null
     const isCorrect = selectedVal !== null && normalize(selectedVal) === normalize(q.correct_answer)
 
-    try {
-      await apiFetch(`/api/sessions/${session.id}/answer`, {
-        method: 'POST',
-        body: { question_id: q.id, selected_index: idx, correct: isCorrect }
-      })
-    } catch (e) {
-      console.error('Failed to record the answer:', e)
-      toast.error('That answer could not be saved.')
-    }
+    await recordAnswer({
+      sessionId: session?.id,
+      questionId: q.id,
+      selectedIndex: idx,
+      correct: isCorrect,
+    })
   }
 
   function handleTimeout() {

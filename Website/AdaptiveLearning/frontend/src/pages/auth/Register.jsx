@@ -12,21 +12,37 @@ const ROLES = [
 ]
 
 
+// One rung per score, bar colour and label together. Previously two arrays
+// indexed in parallel, which is how index 0 came to hold `''` in both: nothing
+// tied them, so nothing showed that one had been left behind. The text colour
+// joins them for the same reason -- it was a third expression deriving the same
+// verdict from `score` in a separate place.
+const STRENGTH = [
+  { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
+  { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
+  { bar: 'bg-amber-400',  text: 'text-amber-500',  label: 'Fair' },
+  { bar: 'bg-yellow-400', text: 'text-green-500',  label: 'Good' },
+  { bar: 'bg-green-500',  text: 'text-green-500',  label: 'Strong' },
+]
+
 function StrengthBar({ password }) {
   if (!password) return null
   const score = [password.length >= 8, /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length
-  // Index 0 is a real score, not a placeholder. Four checks, so a non-empty
-  // password can satisfy none of them -- "abc" scores 0 -- and the arrays used
-  // to hold `''` there, which drew a grey bar and an *empty* label. The one
-  // password most in need of the warning was the only one that got none.
-  // `if (!password) return null` above already covers the empty case, so
-  // everything reaching here has a verdict to give.
-  const colors = ['bg-rose-500', 'bg-rose-500', 'bg-amber-400', 'bg-yellow-400', 'bg-green-500']
-  const labels = ['Weak', 'Weak', 'Fair', 'Good', 'Strong']
+  // One array of pairs rather than two indexed in parallel. The bug this
+  // replaces was exactly that shape: `colors` and `labels` both held `''` at
+  // index 0, and nothing tied them together, so index 0 could be -- and was --
+  // forgotten in both. Editing one array without the other is no longer
+  // possible.
+  //
+  // Index 0 is a real score. Four checks, so a non-empty password can satisfy
+  // none of them ("abc" scores 0), and `if (!password) return null` above
+  // already covers the empty case -- everything reaching here has a verdict to
+  // give.
+  const rung = STRENGTH[score]
   return (
     <div className="mt-2">
-      <div className="flex gap-1 mb-1">{[1,2,3,4].map(i => <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= score ? colors[score] : 'bg-gray-200 dark:bg-gray-700'}`} />)}</div>
-      <p className={`text-xs font-semibold ${score <= 1 ? 'text-rose-500' : score <= 2 ? 'text-amber-500' : 'text-green-500'}`}>{labels[score]}</p>
+      <div className="flex gap-1 mb-1">{[1,2,3,4].map(i => <div key={i} className={`h-1.5 flex-1 rounded-full transition-colors ${i <= score ? rung.bar : 'bg-gray-200 dark:bg-gray-700'}`} />)}</div>
+      <p className={`text-xs font-semibold ${rung.text}`}>{rung.label}</p>
     </div>
   )
 }

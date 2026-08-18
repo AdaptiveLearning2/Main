@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
-import { endSession } from '../../lib/session'
+import { endSession, recordAnswer } from '../../lib/session'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, museRefresh, museConnect,
@@ -35,6 +35,15 @@ const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 const SHORT  = { angle_relationships: 'Angle Rel.' }
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+
+/** What to put under a toast when the only detail is the thrown thing.
+ *
+ * The three hardware failures on this page each wrote this out, one of them
+ * without the `?.` -- so how an error reaches a student depended on which
+ * device had failed. One place to change if that should ever say something
+ * other than the raw message.
+ */
+const errorDetail = (e) => e?.message || String(e)
 
 const initSubjects = () => {
   const s = {}; TOPICS.forEach(t => { s[t] = { correct: 0, attempts: 0 } }); return s
@@ -737,7 +746,7 @@ export default function Adaptive() {
     } catch (e) {
       console.error('[camera]', e)
       toast.error('The camera could not be switched.', {
-        description: e?.message || String(e),
+        description: errorDetail(e),
       })
     } finally {
       setCamera(c => ({ ...c, busy: false }))
@@ -768,7 +777,7 @@ export default function Adaptive() {
       console.error('[headband] could not start a session', e)
       setHeadband(s => ({ ...s, phase: 'idle' }))
       toast.error('Could not start a session.', {
-        description: e?.message || String(e),
+        description: errorDetail(e),
       })
       return
     }
@@ -940,7 +949,7 @@ export default function Adaptive() {
       clearTimeout(phaseTimer.current)
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
       toast.error('The headband could not connect.', {
-        description: e.message || String(e),
+        description: errorDetail(e),
       })
     }
   }
@@ -984,28 +993,26 @@ export default function Adaptive() {
     // `user_stats` and every report built on them stayed at zero however long a
     // student practised. `data.id` is the stored question's id, which the
     // generator now returns.
-    const sid = sessionIdRef.current
-    if (!sid || !data?.id) {
-      // Loud, because silence here is the failure being fixed. A question with
-      // no id could not be attributed to anything even if it were sent.
-      console.error('[answer] not recorded', { session: sid, question: data?.id })
-      toast.error('That answer could not be saved.')
-      return
-    }
-    try {
-      const res = await apiFetch(`/api/sessions/${sid}/answer`, {
-        method: 'POST',
-        body: { question_id: data.id, selected_index: selectedAnswer, correct: isCorrect },
-      })
+    // The POST, the missing-id guard and the failure toast all live in
+    // `lib/session.js` now: `Practice.jsx` makes the same call against the same
+    // endpoint and had drifted into having no `catch` at all, which is the
+    // second time these two pages have disagreed about whether a failure is
+    // worth mentioning -- `endSession` was extracted from the same pair for the
+    // same reason. Correctness stays here, because the two pages hold questions
+    // in different shapes and compare them differently.
+    const res = await recordAnswer({
+      sessionId: sessionIdRef.current,
+      questionId: data?.id,
+      selectedIndex: selectedAnswer,
+      correct: isCorrect,
+    })
+    if (res) {
       // The response names the topic the backend attributed this to, so there
       // is nothing left to go and ask. A local *guess* at the topic is what had
       // to be avoided -- disagreeing copies of this number is the whole bug
       // that moved these figures out of localStorage -- and this is not one:
       // the name comes from the question row, the same place the write did.
       applyAttempt(res?.topic, isCorrect)
-    } catch (e) {
-      console.error('[answer] not recorded', e)
-      toast.error('That answer could not be saved.')
     }
   }
 

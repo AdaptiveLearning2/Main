@@ -9,10 +9,10 @@ vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabas
 const toastError = vi.fn()
 vi.mock('sonner', () => ({ toast: { error: (...a) => toastError(...a), success: vi.fn() } }))
 
-// `endSession` is its own module and posts on its own; these tests are about
-// starting and answering, so it is stubbed to stop a failing close showing up
-// as a failure of something else.
-vi.mock('../../lib/session', () => ({ endSession: vi.fn().mockResolvedValue({}) }))
+// `lib/session` is deliberately **not** mocked. `recordAnswer` lives there now,
+// and it owns the failure toast these tests assert on -- stubbing the module
+// would test the stub. Its only dependency is `apiFetch`, which is mocked
+// above, so the close and the answer POST both go to the router below.
 
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import { buildAuthSession, resetSupabaseMock, setSession } from '../../test/mocks/supabase'
@@ -32,6 +32,11 @@ const QUESTION = {
 const draw = () => render(<MemoryRouter><Practice /></MemoryRouter>)
 
 beforeEach(() => {
+  // One test drives the countdown with fake timers. Restoring here rather than
+  // only in its own teardown: if it fails mid-test the restore can be skipped,
+  // and every test after it then waits on a clock that never advances -- which
+  // surfaces as five unrelated timeouts rather than as the one real failure.
+  vi.useRealTimers()
   resetApi()
   resetSupabaseMock()
   toastError.mockReset()
@@ -43,6 +48,10 @@ beforeEach(() => {
     'POST /api/sessions/start': () => ({ id: 'sess-1' }),
     [QUESTIONS_PATH]: () => [QUESTION],
     'POST /api/sessions/sess-1/answer': () => ({ ok: true }),
+    // Reached by the real `endSession` at the end of a run. Registered so it
+    // succeeds quietly rather than toasting a close failure into the middle of
+    // an assertion about answers.
+    'POST /api/sessions/sess-1/end': () => ({ ok: true }),
   })
 })
 
@@ -111,6 +120,60 @@ describe('starting a session', () => {
     // The usable one is still offered, and the broken one is simply not there.
     expect(await screen.findByText('What is 2 + 2?')).toBeInTheDocument()
     expect(screen.queryByText('no options here')).not.toBeInTheDocument()
+  })
+
+  it('drops a question that cannot be got right', async () => {
+    // `correct_answer` is nullable (init.sql:198) and `normalize` stringifies,
+    // so `normalize(null)` is the literal "null" and no real option matches it.
+    // Such a row passes an options-only filter, renders, and is unwinnable
+    // whatever the student picks -- with nothing on screen, in the console or
+    // in the boundary to say why.
+    overrideApi(QUESTIONS_PATH, () => ([
+      { id: 'bad', question_text: 'unwinnable', options: ['a', 'b'] },
+      QUESTION,
+    ]))
+
+    draw()
+
+    expect(await screen.findByText('What is 2 + 2?')).toBeInTheDocument()
+    expect(screen.queryByText('unwinnable')).not.toBeInTheDocument()
+  })
+
+  it('does not leave the retried question already revealed', async () => {
+    // The countdown runs whenever the page is neither loading nor finished --
+    // including while the failed-start screen is up, where there is no question
+    // at all. Sixty seconds there sets `revealed`, nothing resets it, and the
+    // retry then renders question one with every option `disabled={revealed}`:
+    // on screen, correct-looking, and unanswerable.
+    // `shouldAdvanceTime` so the clock still moves on its own. Without it the
+    // fetches this page awaits during the initial render never settle -- the
+    // promise chain is waiting on a timer that only moves when the test says
+    // so, and the test is waiting on the promise chain.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    try {
+      let attempts = 0
+      overrideApi('/api/sessions/start', () => {
+        attempts += 1
+        if (attempts === 1) throw apiError(500, 'down')
+        return { id: 'sess-1' }
+      }, 'POST')
+
+      draw()
+      await vi.waitFor(() =>
+        expect(screen.getByText(/couldn't load this practice session/i)).toBeInTheDocument())
+
+      // Longer than TIMER, on the screen that has nothing to time.
+      await vi.advanceTimersByTimeAsync(61_000)
+
+      await user.click(screen.getByRole('button', { name: /try again/i }))
+      await vi.waitFor(() =>
+        expect(screen.getByText('What is 2 + 2?')).toBeInTheDocument())
+
+      expect(screen.getByRole('button', { name: /4/ })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('falls back to the empty state when nothing is answerable', async () => {

@@ -7,7 +7,7 @@ async function getAccessToken() {
   try {
     const { data } = await supabase.auth.getSession()
     return data?.session?.access_token || null
-  } catch (e) {
+  } catch {
     return null
   }
 }

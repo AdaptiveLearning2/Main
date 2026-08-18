@@ -172,8 +172,23 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles what CI cannot: enum values, SDK signatures and the guarded packet handling. It still
 proves nothing about a real headband.
 
-`npm run lint` is non-blocking in CI against a backlog of ~48 pre-existing errors. Don't add to it,
-and don't make it blocking until the backlog is gone.
+`npm run lint` is non-blocking in CI against a backlog of **16** pre-existing errors, none of them
+`no-unused-vars`. Don't add to it, and don't make it blocking until the backlog is gone.
+
+**`react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay
+on.** `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup —
+`motion` from framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused
+import. That was **40 of the 65** errors the backlog held, all false, and the noise is what hid the
+real ones: the same sweep found one genuinely dead `motion` import that had been sitting among 33
+identical false positives. The plugin's `recommended` config is deliberately *not* extended — it
+brings a large ruleset that would add to the backlog rather than clear it.
+
+`ignoreRestSiblings: true` goes with it, for the destructure-to-omit idiom (`const { x, ...rest } =
+obj` to build an object *without* `x`, which is how the tests construct a payload predating a
+field). The binding is unused by design; deleting it to satisfy the rule would put the key back.
+
+With both, `no-unused-vars` is now **clean and therefore load-bearing** — a hit is real dead code,
+so fix it rather than adding it to the backlog.
 
 Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, cross-platform by
 design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses

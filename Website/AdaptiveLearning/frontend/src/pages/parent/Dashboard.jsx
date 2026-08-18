@@ -9,7 +9,7 @@ import { useAuth } from '../../context/AuthContext'
 // was patched. emotionOn -- whether a payload in hand was built with the
 // emotion channel in it -- is aliased to faceIncluded, this page's existing
 // name for the same check.
-import { pct, valueOrReason, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
+import { pct, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
 // Exactly the values the tiles below can render -- deliberately not every
 // field the summary carries. engagement is absent because this page has no

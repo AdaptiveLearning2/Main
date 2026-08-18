@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
 import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -170,7 +169,7 @@ export default function Sessions() {
             <div className="col-span-2">Progress</div>
             <div className="col-span-2 text-right">Status</div>
           </div>
-          {filteredRows.map((s, i) => {
+          {filteredRows.map((s) => {
             const live = !s.ended_at
             const acc  = (s.questions_answered || 0) > 0
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null

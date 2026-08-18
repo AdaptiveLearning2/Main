@@ -133,12 +133,6 @@ async function expandAda() {
 
 const summaryCalls = () => apiCalls.filter(p => p.includes('/signal-summary'))
 
-function deferred() {
-  let resolve
-  const promise = new Promise(r => { resolve = r })
-  return { promise, resolve }
-}
-
 beforeEach(() => {
   localStorage.clear()
   fromCalls.length = 0

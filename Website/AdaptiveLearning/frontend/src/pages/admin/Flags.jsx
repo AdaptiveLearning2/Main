@@ -78,7 +78,14 @@ function ConsentPanel({ flag, active, onSet, busy }) {
 
   // Cleared whenever the panel returns to the enforced state, so an
   // acknowledgement cannot carry over into a second, unrelated bypass.
-  useEffect(() => { if (active) setAck(false) }, [active])
+  // Adjusted during render rather than in an effect: React re-runs this
+  // component before touching the DOM, so the box is never painted still
+  // ticked for the frame between enforcement resuming and an effect firing.
+  const [wasActive, setWasActive] = useState(active)
+  if (active !== wasActive) {
+    setWasActive(active)
+    if (active) setAck(false)
+  }
 
   const until = flag?.bypass_until ? new Date(flag.bypass_until) : null
 

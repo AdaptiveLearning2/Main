@@ -16,6 +16,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
 
 
 #current probability scenarions: probability_of, not_probability_of, dice, 
@@ -171,6 +172,10 @@ def _grade_band(grade):
         return "upper"
     return "advanced"
 
+# "probability" isn't reachable before grade 6 at all --
+# LLM_topic_decider._safe_topic() withholds it from every grade below that
+# (see its docstring) -- so "early" and "middle" here are defense-in-depth
+# only, not primary content.
 GRADE_COMPLEXITY = {
     "early":    "Keep the total number of items (or dice sides) small, no more than 10 total.",
     "middle":   "Total items may be up to 20.",
@@ -209,10 +214,12 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
             f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
+            f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "probability", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

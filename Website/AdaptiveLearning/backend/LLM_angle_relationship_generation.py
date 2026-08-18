@@ -16,6 +16,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 )
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
  
 # Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -163,11 +164,21 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [5],
 }
 
-def _pick_scenario(difficulty):
-    return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
+# Scenario 5 (algebra_complementary) requires setting up and solving an
+# equation for x -- it was gated to "hard" difficulty only, but nothing kept
+# a grade-1 student marked "hard" from landing on it: difficulty and grade
+# are independent inputs, so a struggling-topic or randomized "hard" pick
+# could reach it regardless of grade. Withheld from "early"/"middle" bands
+# (grades 1-6) here, with a fallback to the medium tier's non-algebraic
+# scenarios; "angle_relationships" isn't in LLM_topic_decider's grade-1-3
+# allowlist either, so "early" reaching this function at all is already
+# defense-in-depth.
+def _pick_scenario(difficulty, grade_band):
+    candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
+    if grade_band in ("early", "middle"):
+        candidates = [s for s in candidates if s != 5] or DIFFICULTY_SCENARIOS["medium"]
+    return random.choice(candidates)
 
-# Difficulty governs which scenario gets picked above; grade controls the
-# magnitude of angle measures used within whatever scenario gets chosen.
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -179,7 +190,7 @@ def _grade_band(grade):
     return "advanced"
 
 GRADE_COMPLEXITY = {
-    "early":    "Use angle measures that are whole numbers between 10 and 80.",
+    "early":    "Use angle measures that are whole numbers between 10 and 80, in multiples of 5 for easy mental math.",
     "middle":   "Use angle measures that are whole numbers between 5 and 170.",
     "upper":    "No additional restriction on angle measures.",
     "advanced": "No additional restriction on angle measures.",
@@ -197,8 +208,9 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             prompt = angle_prompt
 
 
-        #select a scenario from the tier matching this question's difficulty.
-        scenario = _pick_scenario(difficulty)
+        #select a scenario from the tier matching this question's difficulty and grade.
+        grade_band = _grade_band(grade)
+        scenario = _pick_scenario(difficulty, grade_band)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
         print(scenario)
@@ -217,8 +229,9 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         )
         prompt += (
             f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
+            f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "angle_relationships", grade_band)
 
         response = generate(
             model="llama3.1:8b",

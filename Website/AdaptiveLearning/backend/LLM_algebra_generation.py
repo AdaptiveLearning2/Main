@@ -36,6 +36,7 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 ) #treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
 
 # Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -89,19 +90,6 @@ Rules:
 
 solution = -1
 
-# Algebra's difficulty was previously just a soft prompt hint on top of a
-# fixed "up to three operations, up to two x terms" rule applied identically
-# at every difficulty. Now the equation's actual structure scales with it.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use a ONE-STEP equation: a single operation applied to x (e.g. x + a = b or x - a = b). The coefficient of x must be 1.",
-    "medium": "Use a TWO-STEP equation (e.g. ax + b = c) with the coefficient of x greater than 1.",
-    "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d).",
-}
-
-# Grade controls value magnitude/sign, independent of difficulty's effect on
-# equation structure above -- the two stack rather than conflict (e.g. a 2nd
-# grader on "hard" still gets small whole-number constants, just combined
-# using a harder equation structure).
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -112,11 +100,43 @@ def _grade_band(grade):
         return "upper"
     return "advanced"  # Highschool, College, or unrecognized
 
-GRADE_COMPLEXITY = {
-    "early":    "Keep all constants and coefficients between 1 and 20. Do not use negative numbers.",
-    "middle":   "Keep all constants and coefficients between 1 and 100. Negative constants are allowed.",
-    "upper":    "Constants and coefficients may be as large as 200. Negative coefficients are allowed.",
-    "advanced": "No additional magnitude restriction beyond what's typical for the equation.",
+# Grade-band-first, replacing a fixed structure-by-difficulty table that
+# applied the same "one-step equation with x" framing at every grade,
+# scaled only by constant magnitude. That's backwards for "early" (grades
+# 1-3): those students haven't been taught equation-solving notation at
+# all, so no value of x is "easy" there -- the content itself is wrong, not
+# just too hard.
+#
+# In practice this file is defense-in-depth for "early" and most of
+# "middle": LLM_topic_decider._safe_topic() keeps "algebra" from being
+# selected before grade 6 at all (see its docstring), so these two bands
+# exist only to fail safely if that gate is ever bypassed, not as primary
+# content -- hence "fact family" framing instead of a genuinely different
+# JSON contract, which would need sympy to parse something other than an
+# x-equation downstream. "middle" band is realistically only ever grade 6
+# once the gate holds, which is why it matches the original "easy"/"medium"
+# tiers rather than getting its own defense-in-depth-only framing.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use a ONE-STEP equation with a coefficient of 1 and values under 10 (e.g. x + 2 = 5). Frame it as a missing-number fact, not formal algebra.",
+        "medium": "Use a ONE-STEP equation with a coefficient of 1 and values under 20 (e.g. x + 7 = 15).",
+        "hard":   "Use a ONE-STEP equation with a coefficient of 1 and values under 20, including subtraction (e.g. x - 6 = 9).",
+    },
+    "middle": {
+        "easy":   "Use a ONE-STEP equation: a single operation applied to x (e.g. x + a = b or x - a = b). The coefficient of x must be 1. Keep constants under 50.",
+        "medium": "Use a TWO-STEP equation (e.g. ax + b = c) with the coefficient of x greater than 1. Keep constants under 100.",
+        "hard":   "Use a TWO-STEP equation (e.g. ax + b = c) with the coefficient of x greater than 1, constants under 100. Keep x on one side only.",
+    },
+    "upper": {
+        "easy":   "Use a TWO-STEP equation (e.g. ax + b = c). Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
+        "medium": "Use up to three operations on the left-hand side. Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
+        "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d). Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
+    },
+    "advanced": {
+        "easy":   "Use a TWO-STEP equation (e.g. ax + b = c). No additional magnitude restriction beyond what's typical for the equation.",
+        "medium": "Use up to three operations on the left-hand side. No additional magnitude restriction beyond what's typical for the equation.",
+        "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d). No additional magnitude restriction beyond what's typical for the equation.",
+    },
 }
 
 #Potential improvements:
@@ -140,14 +160,13 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+
+        prompt = lesson_plan_context.append_lesson_context(prompt, "algebra", grade_band)
 
         response = generate(
             model="llama3.1:8b",

@@ -12,6 +12,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
+import lesson_plan_context
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
@@ -96,18 +97,6 @@ def shuffle_incorrect_answers(solution):
 
     return [list(ans) for ans in incorrect_answers]
 
-# Value count and value types weren't tied to difficulty before -- the LLM
-# picked freely regardless. Now both scale, from whole numbers/simple decimals
-# at easy up to fractions and negatives mixed in at hard.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values (e.g. 4, 7, 2.5). No fractions.",
-    "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions (e.g. 1/2, 3/4).",
-    "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value.",
-}
-
-# Difficulty already governs which value TYPES appear above (whole/decimal/
-# fraction/negative); grade controls magnitude only, so the two don't give
-# contradictory instructions (e.g. "no fractions" vs "use fractions").
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -118,11 +107,33 @@ def _grade_band(grade):
         return "upper"
     return "advanced"
 
-GRADE_COMPLEXITY = {
-    "early":    "Keep all values below 20 in magnitude.",
-    "middle":   "Values may be up to 100 in magnitude.",
-    "upper":    "Values may be up to 200 in magnitude.",
-    "advanced": "No additional magnitude restriction.",
+# Grade-band-first: what "easy"/"medium"/"hard" MEANS changes fundamentally
+# by grade, not just the magnitude of the numbers. Decimals are typically a
+# grade-4+ concept and fractions grade-3+ -- a "no fractions" easy tier next
+# to a "use fractions" hard tier, both layered under the SAME magnitude cap,
+# used to hand a 1st grader fraction comparisons at "hard" difficulty just
+# because their grade only capped the numbers below 20.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use 3 values, whole numbers below 20 only. No decimals, no fractions, no negatives.",
+        "medium": "Use 4 values, whole numbers below 50 only. No decimals, no fractions, no negatives.",
+        "hard":   "Use 4-5 values, whole numbers below 100 only. No decimals, no fractions, no negatives.",
+    },
+    "middle": {
+        "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values (e.g. 4, 7, 2.5). No fractions. Keep magnitude below 100.",
+        "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions (e.g. 1/2, 3/4). Keep magnitude below 100.",
+        "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places) and simple fractions. Keep magnitude below 100.",
+    },
+    "upper": {
+        "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values. No fractions. Magnitude up to 200.",
+        "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions. Magnitude up to 200.",
+        "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value. Magnitude up to 200.",
+    },
+    "advanced": {
+        "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values. No fractions.",
+        "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions.",
+        "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value.",
+    },
 }
 
 def generate_ordering_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
@@ -143,14 +154,12 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "ordering", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

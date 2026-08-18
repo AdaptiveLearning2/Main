@@ -15,6 +15,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import sqrt, symbols, Eq, solve, sympify, Integer, Rational, pi
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
 
 #current geometry scenarions: perimeter, area, volume, missing_side, pythagorean_theorem
 #APPROXIMATING 3.14 for pi for simplicity/consistancy
@@ -432,8 +433,20 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [7, 8, 9, 17, 18],
 }
 
-def _pick_scenario(difficulty):
-    return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
+# Circle scenarios (5, 6 -- area/circumference need pi and multiplication)
+# and every 3D or pythagorean-theorem scenario assume formulas grades 1-3
+# haven't reached, regardless of difficulty tier -- restrict "early" band to
+# flat rectangle/triangle area and perimeter, which is roughly where grade-3
+# geometry standards land (grade 1-2 within that band get the ceiling of
+# what this topic can offer them; the four-band system is coarser than a
+# single grade).
+EARLY_BAND_SCENARIOS = {1, 2, 3, 4}
+
+def _pick_scenario(difficulty, grade_band):
+    candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
+    if grade_band == "early":
+        candidates = [s for s in candidates if s in EARLY_BAND_SCENARIOS] or sorted(EARLY_BAND_SCENARIOS)
+    return random.choice(candidates)
 
 # Difficulty governs which scenario gets picked above; grade controls the
 # magnitude of the given measurements (side lengths, radii, etc.) within
@@ -454,6 +467,9 @@ GRADE_COMPLEXITY = {
     "upper":    "Measurements may range from 1 to 100.",
     "advanced": "No additional restriction.",
 }
+# Kept separate from EARLY_BAND_SCENARIOS above rather than folded into one
+# dict: this scales a number, that gates which formulas are even in play,
+# and conflating them would make either change look like it needs the other.
 
 
 #Potential improvements:
@@ -466,8 +482,9 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         else:
             prompt = geometry_prompt
 
-        #select a scenario from the tier matching this question's difficulty.
-        scenario = _pick_scenario(difficulty)
+        #select a scenario from the tier matching this question's difficulty and grade.
+        grade_band = _grade_band(grade)
+        scenario = _pick_scenario(difficulty, grade_band)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
         print(scenario)
@@ -484,8 +501,9 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         )
         prompt += (
             f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
+            f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "geometry", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

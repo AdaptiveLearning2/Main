@@ -16,6 +16,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
 
 
 def format_number(x):
@@ -116,18 +117,6 @@ def generate_incorrect_answers(solution, values):
     return incorrect_answers
 
 
-# Odd-length datasets need no averaging (just pick the middle value); even-length
-# datasets require averaging the two middle values -- one genuine extra step.
-# Tying that step to difficulty, plus dataset size, replaces what was
-# previously an unconstrained (LLM's free choice) dataset size at every level.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use an ODD number of values (3-5 total), so the median is simply the middle value with no averaging needed.",
-    "medium": "Use an ODD number of values (5-7 total).",
-    "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values.",
-}
-
-# Difficulty governs count/averaging above; grade controls value magnitude
-# and whether negatives appear.
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -138,11 +127,32 @@ def _grade_band(grade):
         return "upper"
     return "advanced"
 
-GRADE_COMPLEXITY = {
-    "early":    "Use whole numbers between 1 and 30, no negatives.",
-    "middle":   "Use whole numbers between 1 and 200, no negatives.",
-    "upper":    "Use whole numbers between 1 and 500; negative numbers may be used.",
-    "advanced": "No additional restriction.",
+# Grade-band-first. Odd-length datasets need no averaging (just pick the
+# middle value); even-length datasets require averaging the two middle
+# values -- one genuine extra step, reserved for grades that have division.
+# "median" isn't in LLM_topic_decider's grade-1-3 allowlist, so "early" is
+# defense-in-depth only.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use an ODD number of values (3 total), whole numbers below 20, so the median is simply the middle value once sorted.",
+        "medium": "Use an ODD number of values (3-5 total), whole numbers below 30.",
+        "hard":   "Use an ODD number of values (5 total), whole numbers below 50.",
+    },
+    "middle": {
+        "easy":   "Use an ODD number of values (3-5 total), so the median is simply the middle value with no averaging needed. Whole numbers between 1 and 200, no negatives.",
+        "medium": "Use an ODD number of values (5-7 total). Whole numbers between 1 and 200, no negatives.",
+        "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values. Whole numbers between 1 and 200, no negatives.",
+    },
+    "upper": {
+        "easy":   "Use an ODD number of values (3-5 total). Whole numbers between 1 and 500; negative numbers may be used.",
+        "medium": "Use an ODD number of values (5-7 total). Whole numbers between 1 and 500; negative numbers may be used.",
+        "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values. Whole numbers between 1 and 500; negative numbers may be used.",
+    },
+    "advanced": {
+        "easy":   "Use an ODD number of values (3-5 total).",
+        "medium": "Use an ODD number of values (5-7 total).",
+        "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values.",
+    },
 }
 
 #Potential improvements:
@@ -165,14 +175,12 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "median", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

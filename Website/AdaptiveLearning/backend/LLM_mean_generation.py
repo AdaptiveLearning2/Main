@@ -16,6 +16,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
@@ -81,16 +82,6 @@ Rules:
 
 solution = -1
 
-# Dataset size wasn't constrained at all before -- the LLM picked freely
-# regardless of difficulty. Now it scales the number of values to average.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use 3-4 values, each a one or two-digit whole number.",
-    "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
-    "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers.",
-}
-
-# Difficulty already governs dataset size/magnitude above, so grade controls
-# something it doesn't touch: whether negative values appear.
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -101,11 +92,32 @@ def _grade_band(grade):
         return "upper"
     return "advanced"
 
-GRADE_COMPLEXITY = {
-    "early":    "Use only positive whole numbers.",
-    "middle":   "Use only positive whole numbers.",
-    "upper":    "Negative whole numbers may be used (e.g. representing temperatures or scores relative to zero).",
-    "advanced": "No additional restriction; negative numbers may be used freely.",
+# Grade-band-first. "mean" isn't in LLM_topic_decider's grade-1-3 allowlist
+# (see _allowed_topics() there), so "early" is defense-in-depth only -- kept
+# to whole-number datasets that divide evenly, so a student who hasn't been
+# taught division yet still lands on a whole-number average rather than a
+# decimal one, whichever tier fires.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use 3 values, one or two-digit whole numbers under 20, that divide evenly (no remainder) for a whole-number average.",
+        "medium": "Use 3-4 values, whole numbers under 30, that divide evenly for a whole-number average.",
+        "hard":   "Use 4 values, whole numbers under 50, that divide evenly for a whole-number average.",
+    },
+    "middle": {
+        "easy":   "Use 3-4 values, each a one or two-digit whole number. Use only positive whole numbers.",
+        "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers. Use only positive whole numbers.",
+        "hard":   "Use 6-7 values, which may include two-digit or three-digit whole numbers. Use only positive whole numbers.",
+    },
+    "upper": {
+        "easy":   "Use 3-4 values, each a one or two-digit whole number.",
+        "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
+        "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers; negative whole numbers may be used (e.g. representing temperatures or scores relative to zero).",
+    },
+    "advanced": {
+        "easy":   "Use 3-4 values, each a one or two-digit whole number.",
+        "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
+        "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers; negative numbers may be used freely.",
+    },
 }
 
 #Potential improvements:
@@ -128,14 +140,12 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "mean", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

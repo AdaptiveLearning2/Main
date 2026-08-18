@@ -16,6 +16,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
+import lesson_plan_context
 
 #POSSIBLY: manually generate solution using numbers from question_text.
 #This way I can count the # of modes present and ensure solution matches
@@ -130,19 +131,6 @@ def normalize_answer(ans):
         return [str(x) for x in ans]
     return [str(ans)]
 
-# The solver (mode()/generate_incorrect_answers() above) already supports
-# multi-modal datasets (returns a list of tied values), but the prompt used
-# to unconditionally forbid them ("SINGULAR most common value"), so that
-# path never actually got exercised. Now bimodal datasets are allowed at
-# hard difficulty specifically, alongside dataset size scaling.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use 5-6 values with a SINGLE clear mode -- the most frequent value should appear at least 2 more times than any other value.",
-    "medium": "Use 7-9 values with a SINGLE mode, but the most frequent value should appear only ONE more time than the next most frequent value, requiring careful counting.",
-    "hard":   "Use 8-10 values. The dataset MAY be bimodal (two values tied for most frequent) in addition to single-mode datasets.",
-}
-
-# Difficulty governs count/single-vs-multi-modal above; grade controls value
-# magnitude and whether negatives appear.
 def _grade_band(grade):
     g = (grade or "").strip().lower()
     if g in {"1st grade", "2nd grade", "3rd grade"}:
@@ -153,11 +141,33 @@ def _grade_band(grade):
         return "upper"
     return "advanced"
 
-GRADE_COMPLEXITY = {
-    "early":    "Use whole numbers between 1 and 20, no negatives.",
-    "middle":   "Use whole numbers between 1 and 100, no negatives.",
-    "upper":    "Use whole numbers between 1 and 200; negative numbers may be used.",
-    "advanced": "No additional restriction.",
+# Grade-band-first. The solver (mode()/generate_incorrect_answers() above)
+# supports multi-modal datasets (returns a list of tied values); bimodal
+# datasets are reserved for "hard" difficulty everywhere, since spotting a
+# tie is a genuine extra step over a single clear mode. "mode" isn't in
+# LLM_topic_decider's grade-1-3 allowlist, so "early" is defense-in-depth
+# only.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use 4-5 values, whole numbers below 20, with a SINGLE clear mode appearing at least 2 more times than any other value.",
+        "medium": "Use 5-6 values, whole numbers below 20, with a SINGLE clear mode.",
+        "hard":   "Use 6-7 values, whole numbers below 30, with a SINGLE mode that appears only ONE more time than the next most frequent value.",
+    },
+    "middle": {
+        "easy":   "Use 5-6 values with a SINGLE clear mode -- the most frequent value should appear at least 2 more times than any other value. Whole numbers between 1 and 100, no negatives.",
+        "medium": "Use 7-9 values with a SINGLE mode, but the most frequent value should appear only ONE more time than the next most frequent value, requiring careful counting. Whole numbers between 1 and 100, no negatives.",
+        "hard":   "Use 8-10 values. The dataset MAY be bimodal (two values tied for most frequent) in addition to single-mode datasets. Whole numbers between 1 and 100, no negatives.",
+    },
+    "upper": {
+        "easy":   "Use 5-6 values with a SINGLE clear mode. Whole numbers between 1 and 200; negative numbers may be used.",
+        "medium": "Use 7-9 values with a SINGLE mode, requiring careful counting. Whole numbers between 1 and 200; negative numbers may be used.",
+        "hard":   "Use 8-10 values. The dataset MAY be bimodal. Whole numbers between 1 and 200; negative numbers may be used.",
+    },
+    "advanced": {
+        "easy":   "Use 5-6 values with a SINGLE clear mode -- the most frequent value should appear at least 2 more times than any other value.",
+        "medium": "Use 7-9 values with a SINGLE mode, but the most frequent value should appear only ONE more time than the next most frequent value, requiring careful counting.",
+        "hard":   "Use 8-10 values. The dataset MAY be bimodal (two values tied for most frequent) in addition to single-mode datasets.",
+    },
 }
 
 #Potential improvements:
@@ -180,14 +190,12 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "mode", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,

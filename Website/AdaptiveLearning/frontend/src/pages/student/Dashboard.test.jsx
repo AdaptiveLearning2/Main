@@ -17,6 +17,11 @@ vi.mock('../../context/AuthContext', () => ({
 
 // Its own network call, and not what these tests are about.
 vi.mock('../../components/consent/ParentRestoredBanner', () => ({ default: () => null }))
+// Both banners fetch on mount and both have their own file. Unmocked, this
+// page's route table has no entry for them, and the `noRoute` throw would be
+// swallowed by the banner's own catch -- so the test would pass with an error
+// nobody sees.
+vi.mock('../../components/consent/ParentLinkedBanner', () => ({ default: () => null }))
 
 import { mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import Dashboard from './Dashboard'

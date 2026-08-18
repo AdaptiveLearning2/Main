@@ -5,6 +5,7 @@ import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRig
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
+import ParentLinkedBanner from '../../components/consent/ParentLinkedBanner'
 import SkeletonList from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
 
@@ -161,6 +162,11 @@ export default function StudentDashboard() {
           outside settings. A sensor resuming is worth telling them about; a
           live readout of their own focus is not. */}
       <ParentRestoredBanner studentId={user?.id} />
+
+      {/* A parent linking needs nothing from the child, and grants the parent
+          their reports and the ability to switch a sensor back on. Nothing told
+          them it had happened. */}
+      <ParentLinkedBanner studentId={user?.id} />
 
       {/* Says so rather than showing zeros. A student whose figures failed to
           load was told they had answered nothing all term, which is both wrong

@@ -5432,6 +5432,70 @@ def unlink_child(child_id: str, request: Request):
     return {"ok": True, "child_id": child_id}
 
 
+@app.get("/api/student/parent-links")
+def my_unacknowledged_parent_links(request: Request):
+    """Links to this student that they have not been told about yet.
+
+    A parent creates a link knowing only a user id; nothing asked the child and
+    nothing told them, and from that moment the parent may read their reports
+    and switch a sensor back on that the child switched off. This is the read
+    behind the banner that closes that gap.
+
+    **Notify, not block.** No endpoint waits on the acknowledgement -- an
+    acknowledgement *gate* would put a child between a parent and reports they
+    are entitled to, and this product's students are children, some of whom
+    would simply never clear it.
+
+    Fails **open**, to an empty list. It decides whether an advisory banner is
+    drawn and nothing else, so the reporting-surface direction is the right one
+    here: a database blip must not put a notice on a child's dashboard about a
+    link that may not exist. That is the opposite of `_consent()`, which fails
+    closed because it decides whether data may be recorded.
+    """
+    user = get_user(request)
+    try:
+        rows = supabase.table("parent_child_links")             .select("id, parent_id, created_at")             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .order("created_at", desc=True).limit(10).execute().data or []
+    except Exception as e:
+        print(f"[parent-links] {user['id']}: {e}")
+        return {"links": [], "retrieved": False}
+    # Names in one read rather than one per link, and only for the handful of
+    # rows that survived the filter -- normally none.
+    names = _profiles_many([r["parent_id"] for r in rows])
+    return {
+        "links": [{
+            "id":          r["id"],
+            "parent_name": (names.get(r["parent_id"]) or {}).get("display_name") or "A parent",
+            "linked_at":   r["created_at"],
+        } for r in rows],
+        "retrieved": True,
+    }
+
+
+@app.post("/api/student/parent-links/ack")
+def ack_parent_links(request: Request):
+    """The student has seen the notice.
+
+    Stamps every unacknowledged link for the caller, not one by one: the banner
+    names them together and dismissing it is one decision. Scoped by
+    `child_id`, so a student can only ever acknowledge their own -- and the link
+    id is never taken from the client, which would let a caller stamp a link
+    that is not theirs and suppress somebody else's notice.
+
+    A write that matched nothing is a 404 rather than a cheerful ok, like
+    `/api/consent/ack` beside it: reporting success for a dismissal that did not
+    land leaves the client believing a notice is gone that is still there.
+    """
+    user = get_user(request)
+    try:
+        written = supabase.table("parent_child_links")             .update({"student_ack_at": _utc_now().isoformat()})             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .execute().data or []
+    except Exception as e:
+        print(f"[parent-links:ack] {user['id']}: {e}")
+        raise HTTPException(500, "Could not acknowledge")
+    if not written:
+        raise HTTPException(404, "Nothing to acknowledge")
+    return {"ok": True, "acknowledged": len(written)}
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.

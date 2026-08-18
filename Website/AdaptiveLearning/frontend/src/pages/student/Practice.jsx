@@ -47,7 +47,6 @@ export default function Practice() {
   const [index, setIndex]       = useState(0)
   const [loading, setLoading]   = useState(true)
   const [selected, setSelected] = useState(null)
-  const [selectedAnswer, setSelectedAnswer] = useState(null)
   const [revealed, setRevealed] = useState(false)
   const [score, setScore]       = useState(0)
   const [finished, setFinished] = useState(false)
@@ -75,7 +74,6 @@ export default function Practice() {
     setIndex(0)
     setScore(0)
     setSelected(null)
-    setSelectedAnswer(null)
     setRevealed(false)
     try {
       const s  = await apiFetch('/api/sessions/start', { method: 'POST', body: { title: 'Practice Session' } })
@@ -183,7 +181,6 @@ export default function Practice() {
     setSelected(idx)
     setRevealed(true)
     const q = questions[index]
-    setSelectedAnswer(q.options[idx])
     const selectedVal = q.options[idx]
     if (normalize(selectedVal) === normalize(q.correct_answer)) {
       setScore(s => s + 1)
@@ -199,7 +196,6 @@ export default function Practice() {
     } else {
       setIndex(i => i + 1)
       setSelected(null)
-      setSelectedAnswer(null)
       setRevealed(false)
     }
   }
@@ -250,7 +246,7 @@ export default function Practice() {
             </div>
           </div>
           <div className="flex gap-3 justify-center">
-            <button onClick={() => { setFinished(false); setIndex(0); setScore(0); setSelected(null); setSelectedAnswer(null); setRevealed(false); startSession() }}
+            <button onClick={() => { setFinished(false); setIndex(0); setScore(0); setSelected(null); setRevealed(false); startSession() }}
               className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition">
               Try Again
             </button>

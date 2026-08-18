@@ -112,6 +112,54 @@ def test_older_bands_keep_their_operators(band):
                              "expressions", band, "hard") is None
 
 
+# --- angle answers: whole numbers through 5th grade ----------------------
+
+import LLM_angle_relationship_generation as ang  # noqa: E402
+
+
+@pytest.mark.parametrize("grade,required", [
+    ("1st grade", True), ("4th grade", True), ("5th grade", True),
+    ("6th grade", False), ("7th grade", False), ("College", False),
+    ("Highschool", False), ("", False), (None, False),
+])
+def test_whole_number_answers_are_required_only_through_5th_grade(grade, required):
+    assert ang._requires_whole_number_solution(grade) is required
+
+
+def test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed():
+    """4th, 5th and 6th all sit in `middle`, and the rule divides them. No
+    band boundary is in the right place, so keying this on _grade_band()
+    would either impose whole numbers on a 6th grader or allow decimals for
+    a 4th -- the same reason _allowed_topics is grade-keyed."""
+    bands = {g: ang._grade_band(g) for g in ("4th grade", "5th grade", "6th grade")}
+    assert set(bands.values()) == {"middle"}
+    assert ang._requires_whole_number_solution("5th grade") is True
+    assert ang._requires_whole_number_solution("6th grade") is False
+
+
+def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
+    """(5x + 15) + (3x - 20) = 90 gives 11.875 -- the real observed answer,
+    reported as 11.88. Whole through 5th grade, ordinary from 6th."""
+    solved = ang.normalize_solution(ang._solve_scenario(
+        {"scenario": "algebra_complementary", "variables": ["5x + 15", "3x - 20"]}))
+    assert not float(solved).is_integer()
+    assert ang._requires_whole_number_solution("5th grade")
+    assert not ang._requires_whole_number_solution("6th grade")
+
+
+def test_a_whole_number_answer_passes_at_every_grade():
+    solved = ang.normalize_solution(ang._solve_scenario(
+        {"scenario": "complementary", "variables": ["35"]}))
+    assert float(solved).is_integer()
+    assert ang.format_answer(solved) == "55"
+
+
+def test_an_unrecognised_scenario_is_retryable_rather_than_fatal():
+    """None sends the loop round again; raising would take out a question
+    that a regenerate would have fixed."""
+    assert ang._solve_scenario({"scenario": "nope", "variables": ["1"]}) is None
+
+
 def test_a_topic_with_no_rule_is_never_a_violation():
     assert ga.find_violation("Simplify 2x + 3x.", "not_a_real_topic", "early") is None
 

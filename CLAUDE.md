@@ -1985,10 +1985,28 @@ Each is now forbidden in the objectives *and* in the row's `notes`, which is whe
 will look. The general rule: **an objective that is pedagogically true can still be an instruction
 the solver cannot score** — check what a cell generates before trusting it, not just what it says.
 
-One limit the text cannot fix and does not claim to: scenario 5's coefficients are unconstrained, so
-`angle_relationships` still yields non-integer solutions (11.875, reported `11.88`) despite the
-objective asking for whole numbers. That is a generator limitation and a fix belongs in
-`LLM_angle_relationship_generation`, not in a lesson plan.
+### Angle answers are whole numbers through 5th grade, and decimals after
+
+Scenario 5's coefficients are unconstrained, so `algebra_complementary` returns things like 11.875
+(displayed `11.88`). The lesson-plan text asking for whole numbers did not stop it — prompt, not
+enforcement, as usual — so `LLM_angle_relationship_generation` now checks the **solved value** and
+regenerates when it is fractional for a young student. A decimal answer is not a defect in itself:
+from 6th grade it is ordinary mathematics, and the rule is scoped to the grades where it is not.
+
+**Keyed on the raw grade string, not `_grade_band()`.** The line falls between grade 5 and grade 6
+while `middle` spans 4, 5 **and** 6 — so no band boundary is in the right place, and using one would
+either impose whole numbers on a 6th grader or allow decimals for a 4th. Same reason
+`LLM_topic_decider._allowed_topics` is grade-keyed; `test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed`
+pins it. An unrecognised grade falls through to "decimals allowed", matching `_grade_band()`'s own
+`advanced` default: the constraint is a scaffold for younger students, so the safe direction when
+the grade is unknown is to leave the mathematics alone.
+
+**The solve moved inside the retry loop to make this possible** (`_solve_scenario`). Whether the
+answer is a whole number is a property of the *solved value*, not of the question text, so it cannot
+be checked until the scenario has been evaluated — and a question that fails has to be regenerated,
+not patched. An unrecognised scenario now returns `None` and retries rather than falling through
+with `solution` unbound. Measured after: grades 4-5 whole on 6 of 6, grades 6+ free to return
+`14.29`/`16.67` as before.
 
 ### `grade_appropriateness` checks the output, because everything else only checks the prompt
 

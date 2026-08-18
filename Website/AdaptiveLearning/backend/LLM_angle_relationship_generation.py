@@ -197,6 +197,53 @@ GRADE_COMPLEXITY = {
     "advanced": "No additional restriction on angle measures.",
 }
 
+# Through 5th grade the ANSWER must come out to a whole number of degrees;
+# from 6th, a decimal answer is ordinary mathematics rather than a defect.
+#
+# Keyed on the raw grade string, NOT on _grade_band(), because the line falls
+# between grade 5 and grade 6 while the "middle" band spans 4, 5 AND 6 -- the
+# same reason LLM_topic_decider._allowed_topics is grade-keyed rather than
+# band-keyed. Using the band here would either impose whole numbers on a 6th
+# grader or allow decimals for a 4th grader; there is no band boundary in the
+# right place.
+#
+# An unrecognised grade (Highschool, College, anything else) falls through to
+# False, matching _grade_band()'s own "advanced" default: the constraint is a
+# scaffold for younger students, so the safe direction when the grade is
+# unknown is to leave the mathematics alone rather than to constrain it.
+WHOLE_NUMBER_SOLUTION_GRADES = {
+    "1st grade", "2nd grade", "3rd grade", "4th grade", "5th grade",
+}
+
+
+def _requires_whole_number_solution(grade):
+    return (grade or "").strip().lower() in WHOLE_NUMBER_SOLUTION_GRADES
+
+
+def _solve_scenario(question_data):
+    """The numeric answer for one parsed question, or None for a scenario
+    this file does not recognise.
+
+    Split out of the body below so the solve can happen INSIDE the retry
+    loop: whether the answer is a whole number is a property of the solved
+    value, not of the question text, so it cannot be checked until the
+    scenario has been evaluated -- and a question that fails that check has
+    to be regenerated rather than patched.
+    """
+    variables = preprocess_variables(question_data["variables"])
+    match question_data["scenario"]:
+        case "complementary":
+            return complementary_angle(variables[0])
+        case "supplementary":
+            return supplementary_angle(variables[0])
+        case "linear_pair":
+            return linear_pair(variables[0])
+        case "triangle_sum":
+            return triangle_missing_angle(variables[0], variables[1])
+        case "algebra_complementary":
+            return solve_complementary(variables[0], variables[1])
+    return None
+
 
 #Potential improvements:
 #Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
@@ -232,6 +279,13 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
+        if _requires_whole_number_solution(grade):
+            # Asking costs nothing and saves retries; the check after the
+            # solve is what actually enforces it.
+            prompt += (
+                "\nThe ANSWER must be a whole number of degrees. Choose the "
+                "given angle measures so the result has no decimal part.\n"
+            )
         prompt = lesson_plan_context.append_lesson_context(prompt, "angle_relationships", grade_band)
 
         response = generate(
@@ -273,6 +327,34 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue
 
+        # Solved here rather than after the loop so a question whose ANSWER
+        # is wrong for the grade can be regenerated. The prompt asks for
+        # whole-number answers at these grades and is not reliably obeyed --
+        # measured 2026-08-18, (5x+15)+(3x-20)=90 gives 11.875 -- which is
+        # the same prompt-is-not-enforcement problem as everywhere else in
+        # this codebase, so it gets the same treatment.
+        try:
+            solution = _solve_scenario(question_data)
+        except Exception as e:
+            print(f"[Attempt {attempt+1}] Could not solve: {e}")
+            continue
+
+        if solution is None:
+            print(f"[Attempt {attempt+1}] Unrecognised scenario:",
+                  question_data.get("scenario"))
+            continue
+
+        solution = normalize_solution(solution)
+
+        if _requires_whole_number_solution(grade) and not float(solution).is_integer():
+            # A decimal answer is fine from 6th grade; before that it is
+            # arithmetic the student has not met, and rounding it for display
+            # would make the correct answer disagree with a correct
+            # calculation.
+            print(f"[Attempt {attempt+1}] Non-whole-number answer "
+                  f"({solution}) for a {grade} student")
+            continue
+
         # If we reach here â†’ SUCCESS
         break
 
@@ -280,24 +362,6 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
 
-    scenario = question_data["scenario"]
-    vars = question_data["variables"]
-    vars = preprocess_variables(vars)
-
-    match scenario: 
-        case "complementary":
-           solution = complementary_angle(vars[0])
-        case "supplementary":
-           solution = supplementary_angle(vars[0])
-        case "linear_pair":
-            solution = linear_pair(vars[0])
-        case "triangle_sum":
-           solution = triangle_missing_angle(vars[0], vars[1])
-        case "algebra_complementary":
-            solution = solve_complementary(vars[0], vars[1])
-    
-    
-    solution = normalize_solution(solution)
     solution = format_answer(solution)
     # solution = str(solution) if solution is not None else None
 

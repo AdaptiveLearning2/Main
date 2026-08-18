@@ -69,6 +69,49 @@ def test_algebra_is_exempt_at_every_band():
         assert ga.find_violation("Solve for x: x + 2 = 5.", "algebra", band) is None
 
 
+# --- early-band expressions: forbidden operators -------------------------
+#
+# Measured, not hypothetical. Against the seeded lesson plans on
+# llama3.1:8b (2026-08-18, grade 1 / easy), 2 of 8 generated questions came
+# back with parentheses -- "Solve 5 + (2 - 1)." -- and a separate run gave
+# "Evaluate (3+2)*4-1.", both while the prompt in the same call forbade
+# them. The scenario examples in expr_prompt are written for older students
+# and the model followed their shape over the constraint.
+
+@pytest.mark.parametrize("text,difficulty", [
+    ("Solve 5 + (2 - 1).",   "easy"),    # the real observed failure
+    ("Evaluate (3+2)*4-1.",  "easy"),    # the other real observed failure
+    ("What is 8 / 2 + 1?",   "easy"),    # division, never allowed early
+    ("What is 8 / 2 + 1?",   "hard"),    # not even at hard
+    ("What is 3 * 4 + 1?",   "easy"),    # multiplication above easy's rule
+    ("What is 3 * 4 + 1?",   "medium"),
+    ("What is 3 * 4 + 1?",   None),      # absent difficulty reads as strict
+])
+def test_forbidden_operators_are_refused_for_early_expressions(text, difficulty):
+    assert ga.find_violation(text, "expressions", "early", difficulty) is not None
+
+
+@pytest.mark.parametrize("text,difficulty", [
+    ("What is 7 + 8 - 4?",  "easy"),
+    ("What is 9 minus 3 plus 2?", "easy"),
+    ("Solve 14 + 9 - 3.",   "medium"),
+    # early/hard admits multiplication facts, so this one is legitimate.
+    ("What is 3 * 4 + 1?",  "hard"),
+])
+def test_permitted_early_expressions_are_not_refused(text, difficulty):
+    assert ga.find_violation(text, "expressions", "early", difficulty) is None
+
+
+@pytest.mark.parametrize("band", ["middle", "upper", "advanced"])
+def test_older_bands_keep_their_operators(band):
+    """The operator rule is early-band only. Parentheses and multiplication
+    are the whole point of `order_of_operations`, which middle band upward
+    is meant to see -- a rule that leaked upward would reject every
+    question that scenario exists to ask."""
+    assert ga.find_violation("Solve (2+15)*8-(49-23)+19.",
+                             "expressions", band, "hard") is None
+
+
 def test_a_topic_with_no_rule_is_never_a_violation():
     assert ga.find_violation("Simplify 2x + 3x.", "not_a_real_topic", "early") is None
 

@@ -126,10 +126,39 @@ def _grade_band(grade):
 # treats grade 6 as pre-algebra-ready) won't see "simplify" from this topic
 # either -- a deliberate simplification rather than adding a fifth grade
 # bucket just for this one scenario.
+# Scenario 2 ("order_of_operations") is withheld from "early" as well, on top
+# of scenario 3. Order of operations is CCSS 5.OA.1 -- a grade-5 concept --
+# and the scenario is *defined* by mixing precedence levels, so it cannot be
+# expressed within the early band's addition-and-subtraction-only rule. It
+# was measurably harmful, not just conceptually wrong: see EARLY_BAND_EXAMPLE.
 def _pick_scenario(grade_band):
-    if grade_band in ("early", "middle"):
+    if grade_band == "early":
+        return 1
+    if grade_band == "middle":
         return random.randint(1, 2)
     return random.randint(1, 3)
+
+
+# Every scenario example in expr_prompt above is written for older students --
+# scenario 1's is "36/3+(8*2)-(15-7)+4" -- and a few-shot example beats a
+# textual constraint. Measured on llama3.1:8b against the seeded lesson plans
+# (2026-08-18, grade 1 / easy): 2 of 8 questions came back with parentheses,
+# and a separate run produced "Evaluate (3+2)*4-1.", despite
+# COMPLEXITY_BY_GRADE forbidding both in the same prompt. So the early band
+# gets a worked example in the shape it is actually allowed, and
+# `grade_appropriateness` rejects the ones that still slip through.
+EARLY_BAND_EXAMPLE = """
+EXAMPLE OF A CORRECT QUESTION FOR THIS GRADE LEVEL -- follow this shape, NOT
+the scenario examples above, which are written for much older students:
+{
+  "question_text": "What is 7 + 8 - 4?",
+  "question_topic": "expressions",
+  "scenario": "evaluate",
+  "variables": ["7", "+", "8", "-", "4"]
+}
+The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
+"/", and no parentheses of any kind.
+"""
 
 # Grade-band-first: which OPERATIONS are even available changes by grade,
 # not just how many of them or how big the numbers are. Multiplication/
@@ -194,6 +223,8 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
+        if grade_band == "early":
+            prompt += EARLY_BAND_EXAMPLE
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
         response = generate(
             model="llama3.1:8b",
@@ -228,7 +259,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         # prompt asked for -- see grade_appropriateness for why the prompt
         # alone isn't trusted here.
         violation = grade_appropriateness.find_violation(
-            question_data.get("question_text"), "expressions", grade_band)
+            question_data.get("question_text"), "expressions", grade_band, difficulty)
         if violation:
             print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
             continue

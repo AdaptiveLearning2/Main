@@ -79,13 +79,53 @@ _VARIABLE_PATTERNS = [
 ]
 
 
-def find_violation(question_text, topic, grade_band):
+def _operator_violation(question_text, difficulty):
+    """Forbidden arithmetic operators in an early-band `expressions`
+    question, or None.
+
+    This is the one magnitude-adjacent rule that IS checkable, and it is
+    checked because it was measurably broken: every scenario example in
+    `expr_prompt` is written for older students, and on llama3.1:8b a
+    few-shot example beat the textual constraint 2 times in 8 (2026-08-18,
+    grade 1 / easy -- "Solve 5 + (2 - 1).", "Evaluate (3+2)*4-1.").
+
+    Unlike negatives and decimals -- where "-" is also a hyphen and "." a
+    full stop, so detection would be guesswork -- these characters have
+    exactly one meaning inside a generated arithmetic expression. The
+    prompt also constrains the whole topic to "+", "-", "*", "/", "(", ")",
+    so there is no third reading available.
+
+    Difficulty-aware because the early band's own rules are: `hard` admits
+    multiplication facts up to 5x5, `easy`/`medium` do not, and none of the
+    three admits division or parentheses.
+    """
+    if "(" in question_text or ")" in question_text:
+        return "parentheses"
+    if "/" in question_text or "÷" in question_text:
+        return "division"
+    if difficulty != "hard" and ("*" in question_text or "×" in question_text):
+        return "multiplication"
+    return None
+
+
+def find_violation(question_text, topic, grade_band, difficulty=None):
     """Describe why `question_text` is wrong for this band, or None if it is
     fine. None is also the answer for any topic/band with no rule -- absence
-    of a rule is not a violation."""
-    if grade_band not in FORBIDDEN_BANDS.get(topic, ()):
-        return None
+    of a rule is not a violation.
+
+    `difficulty` is optional so a caller with no opinion still gets the
+    band-level checks; only the early-band `expressions` operator rule reads
+    it, and it errs toward the stricter reading when it is absent."""
     if not question_text:
+        return None
+
+    if topic == "expressions" and grade_band == "early":
+        found = _operator_violation(question_text, difficulty)
+        if found:
+            return (f"{found} is not appropriate for the early band of topic "
+                    f"'expressions' at {difficulty or 'unspecified'} difficulty")
+
+    if grade_band not in FORBIDDEN_BANDS.get(topic, ()):
         return None
 
     for pattern, description in _VARIABLE_PATTERNS:

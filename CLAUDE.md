@@ -1987,6 +1987,25 @@ lesson-plan text's *content* — that needs a model to judge, which puts an unbo
 hot generation path. **So this bounds the damage a bad lesson plan can do; it does not confirm a
 good one was followed.** Seeding still needs its effect checked by reading generated output.
 
+**Forbidden operators in early-band `expressions` are the one exception, and they are checked
+because reading the output found them.** Measured on llama3.1:8b with the lesson plans seeded
+(2026-08-18, grade 1 / easy): **2 of 8 questions came back with parentheses** — `Solve 5 + (2 - 1).`
+— and a separate run produced `Evaluate (3+2)*4-1.`, both while the *same prompt* said "ADDITION AND
+SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses." **A few-shot example beats a
+textual constraint**: every scenario example in `expr_prompt` is written for older students
+(scenario 1's is `36/3+(8*2)-(15-7)+4`), and the model followed their shape over the rule. Three
+changes, all needed: scenario 2 (`order_of_operations`) is withheld from `early` — it is CCSS 5.OA.1
+and is *defined* by mixing precedence, so it cannot be expressed within the band's rule at all —
+`EARLY_BAND_EXAMPLE` gives the band a worked example in the shape it is allowed, and the operator
+check rejects what still slips through. Re-measured after: **10 of 10 compliant**. Unlike negatives
+and decimals these characters have exactly one reading inside a generated expression, and the prompt
+already constrains the topic to `+ - * / ( )`, so there is no third interpretation available.
+
+**That is the general lesson, not a fact about one topic: seeding a lesson plan does not make the
+model follow it, and neither does an unambiguous instruction sitting next to a contradicting
+example.** Anything added to these prompts needs its effect read off generated output before it is
+believed — which is what `scripts/` has no home for yet and was done by hand here.
+
 ### A lesson-plan cell has four ways to contribute nothing, and they are named
 
 `lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing

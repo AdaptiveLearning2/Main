@@ -141,10 +141,15 @@ export default function Classes() {
               <div className="flex items-center justify-between p-5 flex-wrap gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
-                    {cls.name[0].toUpperCase()}
+                    {/* `(cls.name || '?')`, the same guard `ClassDetail.jsx`
+                        already carries and regression-tests. `''[0]` is
+                        undefined and `.toUpperCase()` on it throws during
+                        render, so one class row with a blank name took out the
+                        whole list -- on the first page a teacher opens. */}
+                    {(cls.name || '?')[0].toUpperCase()}
                   </div>
                   <div>
-                    <h3 className="font-black text-gray-900 dark:text-white">{cls.name}</h3>
+                    <h3 className="font-black text-gray-900 dark:text-white">{cls.name || 'Untitled class'}</h3>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className="text-xs text-gray-500 dark:text-gray-400">Code:</span>
                       <span className="font-mono font-black text-violet-600 dark:text-violet-400 text-sm tracking-widest">{cls.join_code}</span>

@@ -5392,6 +5392,46 @@ def link_child(payload: LinkChildRequest, request: Request):
     }).execute()
     return {"ok": True, "child_id": payload.child_id, "child_name": p.get("display_name") or "Student"}
 
+
+@app.delete("/api/parent/children/{child_id}")
+def unlink_child(child_id: str, request: Request):
+    """Remove one parent-child link.
+
+    There was no route for this, so a link was permanent once made: a parent
+    who pasted the wrong UUID, or whose child left the household, had a
+    standing relationship that `_verify_can_view_student` reads as entitlement
+    to that child's reports and that `signal_consent` reads as the right to
+    re-enable a sensor the child switched off. A relationship nobody can end is
+    the wrong shape for the one relationship in this product that grants the
+    most access.
+
+    Scoped by `parent_id` as well as `child_id`, so this can only ever delete
+    the caller's own link. Scoped by the child alone it would take every
+    parent's link to that child -- an endpoint one parent could use to cut
+    another off from their own child. The row id is never taken from the client
+    for the same reason `/charts` derives its object path rather than reading it
+    back out of `chart_paths`.
+
+    **Consent and recorded signals are untouched.** Unlinking is not erasure and
+    not a withdrawal: `signal_consent` still holds what the family decided, and
+    a re-link restores the view of a history that was never destroyed. Erasure
+    is `POST /api/consent/{id}/erase`, which is deliberately a separate request
+    a parent has to make by name -- wiring destruction to this would make the
+    reversible control the irreversible one by a side effect nobody asked for,
+    which is the same rule `test_changing_consent_never_erases` pins one table
+    over.
+    """
+    user = get_user(request)
+    res = supabase.table("parent_child_links").delete()         .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
+    # 404 on a link that was not there, rather than a cheerful ok. The two are
+    # different facts about the caller's account, and a parent who unlinked the
+    # wrong child needs to be able to tell "that is done" from "that was never
+    # yours".
+    if not res.data:
+        raise HTTPException(404, "Not linked to this child")
+    return {"ok": True, "child_id": child_id}
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.

@@ -6,6 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
 import SkeletonList from '../../components/ui/Skeleton'
+import StatCard from '../../components/ui/StatCard'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
@@ -15,29 +16,6 @@ function greeting() {
   if (h < 12) return 'Good morning'
   if (h < 17) return 'Good afternoon'
   return 'Good evening'
-}
-
-function StatCard({ icon: Icon, title, value, sub, color, delay }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay }}
-      whileHover={{ y: -4, transition: { duration: 0.15 } }}
-      className="relative group bg-white dark:bg-gray-900 rounded-2xl p-5 border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-lg transition-shadow"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-indigo-400/10 to-violet-500/10 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-1">{title}</p>
-          <p className="text-3xl font-black text-gray-900 dark:text-white">{value ?? '—'}</p>
-          {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</p>}
-        </div>
-        <div className={`p-2.5 ${color} rounded-xl shadow-md`}>
-          <Icon size={20} className="text-white" />
-        </div>
-      </div>
-    </motion.div>
-  )
 }
 
 export default function StudentDashboard() {

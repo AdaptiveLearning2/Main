@@ -413,7 +413,7 @@ export default function Students() {
                         ) : (
                           <>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
-                              <StatCard
+                              <MiniStat
                                 icon={<TrendingUp size={16} />}
                                 label="Total Accuracy"
                                 value={stats.totalAccuracy !== null ? `${stats.totalAccuracy}%` : '—'}
@@ -424,14 +424,14 @@ export default function Students() {
                               />
                               {!hideSensors && (
                                 <>
-                                  <StatCard
+                                  <MiniStat
                                     icon={<Flame size={16} />}
                                     label="Stress Level"
                                     value={stats.stressLevel ?? '—'}
                                     sub={eegSub(stats.signalCount, stats.signalsFailed)}
                                     color="rose"
                                   />
-                                  <StatCard
+                                  <MiniStat
                                     icon={<Target size={16} />}
                                     label="Focus Score"
                                     value={stats.focusScore ?? '—'}
@@ -440,7 +440,7 @@ export default function Students() {
                                   />
                                 </>
                               )}
-                              <StatCard
+                              <MiniStat
                                 icon={<Zap size={16} />}
                                 label="Current Streak"
                                 value={stats.statsRetrieved ? stats.currentStreak : '—'}
@@ -457,7 +457,7 @@ export default function Students() {
                                 changing what was fetched. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              <StatCard
+                              <MiniStat
                                 icon={<Brain size={16} />}
                                 label="Engagement"
                                 value={stats.engagement ?? '—'}
@@ -471,7 +471,7 @@ export default function Students() {
                                   note below it -- with the switch off no facial
                                   data was requested, so a summary outage did
                                   not cost these two tiles anything. */}
-                              <StatCard
+                              <MiniStat
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
                                 value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
@@ -490,7 +490,7 @@ export default function Students() {
                                 "Hide sensor data" -- see above. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              <StatCard
+                              <MiniStat
                                 icon={<Heart size={16} />}
                                 label="Avg Heart Rate"
                                 value={stats.heartIncluded ? (stats.heartRate !== null ? `${stats.heartRate} bpm` : '—') : 'Off'}
@@ -499,7 +499,7 @@ export default function Students() {
                                   : 'not recorded'}
                                 color="rose"
                               />
-                              <StatCard
+                              <MiniStat
                                 icon={<Activity size={16} />}
                                 label="Avg HRV"
                                 value={stats.heartIncluded ? (stats.rmssd !== null ? `${stats.rmssd} ms` : '—') : 'Off'}
@@ -581,7 +581,7 @@ export default function Students() {
   )
 }
 
-function StatCard({ icon, label, value, sub, color }) {
+function MiniStat({ icon, label, value, sub, color }) {
   const colorMap = {
     indigo: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
     rose:   'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300',

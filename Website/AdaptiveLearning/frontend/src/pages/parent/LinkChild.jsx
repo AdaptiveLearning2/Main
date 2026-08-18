@@ -53,10 +53,22 @@ export default function ParentLinkChild() {
         className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1.5">Child's User ID</label>
+            {/* `htmlFor`/`id`, so the label is the field's accessible name.
+                Without the pair a screen reader announces an unlabelled text
+                box, and clicking the words does not focus it -- on the one
+                form in the parent flow where the value is a 36-character UUID
+                nobody can retype from memory. */}
+            <label htmlFor="child-user-id"
+                   className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1.5">Child&apos;s User ID</label>
             <div className="relative">
               <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
+                id="child-user-id"
+                // Named, so a password manager or an autofill heuristic does
+                // not offer to fill a UUID field with an email address.
+                name="child-user-id"
+                autoComplete="off"
+                aria-describedby="child-user-id-hint"
                 value={childId}
                 onChange={e => setChildId(e.target.value)}
                 className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-emerald-500 dark:text-white outline-none transition text-sm font-mono"
@@ -64,7 +76,7 @@ export default function ParentLinkChild() {
                 required
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1">This is a UUID — looks like: <span className="font-mono">a1b2c3d4-e5f6-...</span></p>
+            <p id="child-user-id-hint" className="text-xs text-gray-400 mt-1">This is a UUID — looks like: <span className="font-mono">a1b2c3d4-e5f6-...</span></p>
           </div>
 
           <motion.button type="submit" disabled={loading || !childId.trim()}

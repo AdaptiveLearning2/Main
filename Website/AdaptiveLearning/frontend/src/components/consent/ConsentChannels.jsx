@@ -107,6 +107,15 @@ function Switch({ on, disabled, onChange, label }) {
       <span className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${
         on ? 'left-6' : 'left-1'
       }`} />
+      {/* The switch draws 48x28, which is under the 44px minimum touch target
+          in both dimensions once a finger rather than a cursor is aiming at it
+          -- and on the one control in the product that decides whether a child
+          is recorded, a near-miss is either a sensor left on that a parent
+          meant to turn off, or one switched off that they did not. Expanded
+          rather than enlarged: a negative inset on a child grows the hit area
+          without moving anything on the page, so the rows keep their spacing.
+          `aria-hidden`, since it is a hit area and not content. */}
+      <span aria-hidden="true" className="absolute -inset-y-2 inset-x-0" />
     </button>
   )
 }

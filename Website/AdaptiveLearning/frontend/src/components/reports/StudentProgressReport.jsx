@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
@@ -8,6 +8,12 @@ import { apiFetch } from '../../lib/api'
 // facial reporting off and having it silently come back on the next page is
 // the kind of thing that makes a privacy control untrustworthy. Shared with the
 // teacher student list, which reads the same facial signals.
+
+function topicAccuracy(p) {
+  return p.attempted_questions > 0
+    ? Math.round((p.correct_questions / p.attempted_questions) * 100)
+    : 0
+}
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
@@ -56,6 +62,20 @@ export default function StudentProgressReport({
   const [stats, setStats]         = useState(null)
   const [sessions, setSessions]   = useState([])
   const [perf, setPerf]           = useState([])
+
+  // Weakest first. This panel is read to answer "what is my child finding
+  // hard", and it rendered in whatever order PostgREST returned -- so the
+  // answer was somewhere in a list the reader had to scan. The student
+  // dashboard's own weakest-topic prompt makes the same call.
+  //
+  // Ties broken by attempts, so a topic tried twenty times sits above one tried
+  // twice at the same accuracy: the first is a pattern and the second is a
+  // small sample, and ordering them arbitrarily invites reading them as equal.
+  const sortedPerf = useMemo(
+    () => [...perf].sort((a, b) =>
+      topicAccuracy(a) - topicAccuracy(b)
+      || (b.attempted_questions || 0) - (a.attempted_questions || 0)),
+    [perf])
   const [loading, setLoading]     = useState(true)
   const [name, setName]           = useState(initialName)
   const [signalReport, setSignalReport] = useState(null)
@@ -262,9 +282,9 @@ export default function StudentProgressReport({
                 <p className="text-gray-400 text-sm text-center py-6">{emptyTopicText}</p>
               ) : (
                 <div className="space-y-3">
-                  {perf.map(p => {
+                  {sortedPerf.map(p => {
                     const topicName = p.math_topics?.topic_name || 'unknown'
-                    const topicAcc  = p.attempted_questions > 0 ? Math.round((p.correct_questions / p.attempted_questions) * 100) : 0
+                    const topicAcc  = topicAccuracy(p)
                     return (
                       <div key={p.topic_id}>
                         <div className="flex items-center justify-between mb-1">

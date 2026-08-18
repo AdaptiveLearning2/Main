@@ -163,3 +163,55 @@ it('hides the sensor panels when the caller asks, without changing the request',
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
   expect(screen.queryByText(/Weekly EEG/)).not.toBeInTheDocument()
 })
+
+describe('topic performance ordering', () => {
+  // The panel a parent reads to answer "what is my child finding hard". It
+  // rendered in whatever order PostgREST returned, so the answer was somewhere
+  // in a list they had to scan.
+  const PERF = [
+    { topic_id: 't1', attempted_questions: 10, correct_questions: 9,
+      math_topics: { topic_name: 'geometry' } },      // 90%
+    { topic_id: 't2', attempted_questions: 10, correct_questions: 2,
+      math_topics: { topic_name: 'algebra' } },       // 20%
+    { topic_id: 't3', attempted_questions: 10, correct_questions: 5,
+      math_topics: { topic_name: 'ordering' } },      // 50%
+  ]
+
+  function withPerf(rows) {
+    apiFetch.mockImplementation(url =>
+      String(url).includes('/performance/') ? Promise.resolve(rows) : defaultFetch(url))
+  }
+
+  it('puts the weakest topic first', async () => {
+    withPerf(PERF)
+    renderReport()
+    await screen.findByText('algebra')
+    const shown = screen.getAllByText(/^(algebra|geometry|ordering)$/).map(n => n.textContent)
+    expect(shown).toEqual(['algebra', 'ordering', 'geometry'])
+  })
+
+  it('breaks a tie on attempts, so a pattern outranks a small sample', async () => {
+    // Both 50%. Twenty attempts is evidence; two is barely a signal, and
+    // ordering them arbitrarily invites reading them as equal.
+    withPerf([
+      { topic_id: 't1', attempted_questions: 2,  correct_questions: 1,
+        math_topics: { topic_name: 'geometry' } },
+      { topic_id: 't2', attempted_questions: 20, correct_questions: 10,
+        math_topics: { topic_name: 'algebra' } },
+    ])
+    renderReport()
+    await screen.findByText('algebra')
+    const shown = screen.getAllByText(/^(algebra|geometry)$/).map(n => n.textContent)
+    expect(shown).toEqual(['algebra', 'geometry'])
+  })
+
+  it('does not reorder the caller-s array in place', async () => {
+    // `perf` is state. Sorting it directly would mutate what React holds and
+    // make the reorder invisible to the next render's equality check.
+    const rows = [...PERF]
+    withPerf(rows)
+    renderReport()
+    await screen.findByText('algebra')
+    expect(rows.map(r => r.topic_id)).toEqual(['t1', 't2', 't3'])
+  })
+})

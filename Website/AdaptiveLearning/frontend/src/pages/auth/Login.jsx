@@ -64,7 +64,7 @@ export default function Login() {
               <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
                 className="w-full pl-10 pr-11 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition text-sm"
                 placeholder="••••••••" required />
-              <button type="button" onClick={() => setShowPw(p => !p)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-indigo-600 transition">
+              <button type="button" aria-label={showPw ? 'Hide password' : 'Show password'} onClick={() => setShowPw(p => !p)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-indigo-600 transition">
                 {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>

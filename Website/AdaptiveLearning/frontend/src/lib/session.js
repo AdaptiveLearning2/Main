@@ -23,6 +23,51 @@ import { toast } from 'sonner'
  * @param {string} id  session id; a falsy id is a no-op, not an error
  * @returns {Promise<boolean>} whether the backend confirmed the close
  */
+/**
+ * Record one answer against a session.
+ *
+ * The same story as `endSession` below, one endpoint over: both question pages
+ * POST to `/api/sessions/{id}/answer` with the same three fields and both have
+ * to say the same thing when it fails. They were written separately, and had
+ * already diverged in the way that matters -- `Adaptive` reported the failure,
+ * `Practice` had no `catch` at all, so a lost answer was an unhandled rejection
+ * and the student was told nothing while the screen moved on.
+ *
+ * **Never throws**, which is what makes it safe to call without awaiting --
+ * `Practice`'s countdown does exactly that from a timer callback, where there
+ * is nothing to catch a rejection.
+ *
+ * Returns the backend's response so a caller that needs it can use it:
+ * `Adaptive` reads `topic` off it to update its own tallies without guessing
+ * which topic the question belonged to. `null` means the answer did not land.
+ *
+ * What it deliberately does *not* do is decide correctness. The two pages hold
+ * questions in different shapes -- `options` against `answer_options` -- and
+ * compare differently, so `correct` stays the caller's answer to give.
+ *
+ * @returns {Promise<object|null>} the response, or null if nothing was recorded
+ */
+export async function recordAnswer({ sessionId, questionId, selectedIndex, correct }) {
+  // Loud rather than silent. An answer with no session or no question id cannot
+  // be attributed to anything even if it were sent, and this is the failure the
+  // whole call exists to stop being invisible.
+  if (!sessionId || !questionId) {
+    console.error('[answer] not recorded', { session: sessionId, question: questionId })
+    toast.error('That answer could not be saved.')
+    return null
+  }
+  try {
+    return await apiFetch(`/api/sessions/${sessionId}/answer`, {
+      method: 'POST',
+      body: { question_id: questionId, selected_index: selectedIndex, correct },
+    })
+  } catch (e) {
+    console.error('[answer] not recorded', e)
+    toast.error('That answer could not be saved.')
+    return null
+  }
+}
+
 export async function endSession(id) {
   if (!id) return false
   try {

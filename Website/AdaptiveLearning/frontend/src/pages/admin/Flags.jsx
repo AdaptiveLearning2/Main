@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import useValueChange from '../../hooks/useValueChange'
 import { AlertTriangle, History, Lock } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
@@ -81,11 +82,7 @@ function ConsentPanel({ flag, active, onSet, busy }) {
   // Adjusted during render rather than in an effect: React re-runs this
   // component before touching the DOM, so the box is never painted still
   // ticked for the frame between enforcement resuming and an effect firing.
-  const [wasActive, setWasActive] = useState(active)
-  if (active !== wasActive) {
-    setWasActive(active)
-    if (active) setAck(false)
-  }
+  useValueChange(active, next => { if (next) setAck(false) })
 
   const until = flag?.bypass_until ? new Date(flag.bypass_until) : null
 

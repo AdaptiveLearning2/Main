@@ -121,3 +121,33 @@ it('retries the class list when that is the read that failed', async () => {
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
   expect(screen.getByText('Ada')).toBeInTheDocument()
 })
+
+it('does not flash "no sessions yet" between a successful retry and the roster', async () => {
+  // The retry path only. `loading` starts true, so the *first* load never showed
+  // this -- which is why it survived. On a retry `loading` is already false, and
+  // `loadClasses` picking a class programmatically left the page with no rows,
+  // no error and no skeleton for as long as the roster took to arrive.
+  const classes = new Error('down')
+  wire({ classes })
+
+  draw()
+  await screen.findByText(ERROR)
+
+  // The class list now works; the roster is held open so the gap is observable.
+  let releaseRoster
+  apiFetch.mockImplementation(async (path) => {
+    if (path === '/api/classes') return CLASSES
+    if (path.endsWith('/students')) return new Promise(r => { releaseRoster = r })
+    return []
+  })
+
+  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+
+  // The roster has not landed. Whatever is on screen must not be an assertion
+  // that this class has no sessions.
+  await waitFor(() => expect(releaseRoster).toBeTypeOf('function'))
+  expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
+
+  releaseRoster(ROSTER)
+  await waitFor(() => expect(screen.queryByText(EMPTY)).not.toBeInTheDocument())
+})

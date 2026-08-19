@@ -98,7 +98,18 @@ function StudentSearch() {
   const q = term.trim()
   const enough = q.length >= 2
   const searching = enough && hits.q !== q
-  const results = enough && hits.q === q ? hits.students : []
+  // The last results we have, kept on screen while a newer query is in flight.
+  //
+  // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
+  // the 300ms debounce had even started -- so typing a name flashed the results
+  // away and back on each letter. The concern that produced it is real (hits
+  // for one term sitting under another), and it is answered by saying so rather
+  // than by showing nothing: `searching` is up throughout, and the list is
+  // dimmed while it is.
+  //
+  // Cleared only when the query gets too short to search, which is the one case
+  // where there is no newer answer coming.
+  const results = enough ? hits.students : []
 
   useEffect(() => {
     if (!enough) return
@@ -126,9 +137,13 @@ function StudentSearch() {
           className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400"
         />
       </div>
-      {searching && <p className="mt-2 text-xs text-gray-400">Searching…</p>}
+      {searching && (
+        <p className="mt-2 text-xs text-gray-400">
+          Searching…{results.length > 0 && <> showing results for &ldquo;{hits.q}&rdquo;</>}
+        </p>
+      )}
       {results.length > 0 && (
-        <ul className="mt-3 space-y-2">
+        <ul className={`mt-3 space-y-2 transition-opacity ${searching ? 'opacity-50' : ''}`}>
           {results.map(s => (
             <li key={s.id}>
               <Link

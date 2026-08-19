@@ -88,6 +88,34 @@ describe('the student search', () => {
     expect(searchCalls()).toHaveLength(1)
   })
 
+  it('keeps the last results on screen while a newer query is in flight', async () => {
+    // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
+    // the 300ms debounce had even started -- so typing a name flashed the
+    // results away and back on each letter. The staleness is said out loud
+    // instead, which is what the concern behind the blanking actually needed.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+
+    // One more character: a new query is now pending and the old hits are stale.
+    await user.type(box(), 'm')
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText(/Searching/)).toBeInTheDocument()
+  })
+
+  it('names the term the visible results actually answer', async () => {
+    // Showing them is only safe if it is clear they are not for what is in the
+    // box -- otherwise it is the "hits under a newer term" the blanking was
+    // trying to avoid.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    await user.type(box(), 'm')
+
+    expect(screen.getByText(/showing results for/)).toHaveTextContent('ada')
+  })
+
   it('drops the list when the term falls back below two characters', async () => {
     // And does not leave the previous query's hits standing under a term that
     // is no longer being searched for.

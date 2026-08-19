@@ -45,8 +45,19 @@ export default function Sessions() {
     apiFetch('/api/classes').then(rows => {
       setClasses(rows || [])
       setFailed(false)
-      if (rows?.length) setClassId(rows[0].id)
-      else setLoading(false)
+      if (rows?.length) {
+        // Raised here, not only by the selector. Picking a class programmatically
+        // is the other way `loadSessions` gets triggered, and on a *retry*
+        // `loading` is already false -- so between this line and that response
+        // the page had no rows, no error and no skeleton, and drew "No sessions
+        // yet" over a class whose roster was still on its way. The first load
+        // never showed it, because `loading` starts true; only the retry path
+        // did, which is why it survived the tests.
+        setLoading(true)
+        setClassId(rows[0].id)
+      } else {
+        setLoading(false)
+      }
     }).catch(e => {
       console.error('Failed to load classes:', e)
       setFailed(true); setLoading(false)

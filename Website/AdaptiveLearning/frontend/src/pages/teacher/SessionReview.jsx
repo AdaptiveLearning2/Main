@@ -53,8 +53,31 @@ function ArchivedChart({ url, label }) {
   )
 }
 
+/** Remount on a new session id, so nothing from the previous one survives.
+ *
+ * Two bugs came out of state outliving the session it described, and both are
+ * navigation-ordinary rather than exotic:
+ *
+ * - **A→B→A showed A's first-visit data with no skeleton.** `loading` is derived
+ *   as `loadedFor !== sessionId`, and B's request is cancelled on the way out
+ *   without ever advancing `loadedFor` -- so coming back to A found it still
+ *   reading `'A'`, called the page loaded, and drew stale rows while a fresh
+ *   fetch was in flight.
+ * - **An error on A masked a B that loaded fine.** `err` was never cleared, and
+ *   the `if (err)` branch sits below `if (loading)`, so once B resolved the page
+ *   fell straight through to A's error message.
+ *
+ * A key is the fix rather than clearing four pieces of state on the way in:
+ * that would be one more thing to remember for the next one added, and it is
+ * exactly the `set-state-in-effect` shape this component was refactored to
+ * remove. `ChildDetail.jsx` already does this for the same reason.
+ */
 export default function SessionReview() {
   const { sessionId } = useParams()
+  return <SessionReviewBody key={sessionId} sessionId={sessionId} />
+}
+
+function SessionReviewBody({ sessionId }) {
   // Where "Back" goes, from where the teacher came. Both links were hardcoded
   // to `/teacher/live`, so opening a session from the Sessions history sent
   // them to Live Monitoring on the way out -- a different page, with their

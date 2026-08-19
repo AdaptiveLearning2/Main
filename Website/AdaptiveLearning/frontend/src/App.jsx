@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { MotionConfig } from 'framer-motion'
 import { Toaster } from 'sonner'
 import { ThemeProvider }  from './context/ThemeContext'
 import { AuthProvider }   from './context/AuthContext'
@@ -68,6 +69,25 @@ const NotFound = lazy(() => import('./pages/NotFound'))
 
 export default function App() {
   return (
+    // `reducedMotion="user"` honours the OS "reduce motion" setting, which
+    // nothing here did. Every page animates, and several animate *for ever* --
+    // a rotating icon on both dashboards, a bouncing emoji on the 404 and on
+    // the adaptive session's idle screen -- so a user who has asked their
+    // system for less motion got a permanent, un-stoppable loop instead.
+    //
+    // At the provider rather than per call site, deliberately. The per-site fix
+    // is `useReducedMotion()` and clearing *both* `animate` and `transition`,
+    // which is a rule every future animation has to remember; there are already
+    // eleven infinite loops across ten files. This is one line that covers them
+    // and everything added later.
+    //
+    // "user" disables transform and layout animation while leaving opacity and
+    // colour alone, which is the right cut: the vestibular trigger is movement,
+    // and a fade carries none of it. Loading spinners stop spinning under it --
+    // accepted, and the better trade. `PageLoader` says "Loading..." in text
+    // beside its ring, and a still ring is a smaller harm than motion someone
+    // has explicitly asked not to be shown.
+    <MotionConfig reducedMotion="user">
     <ThemeProvider>
       <AuthProvider>
         <Toaster position="top-right" richColors closeButton />
@@ -142,5 +162,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
+    </MotionConfig>
   )
 }

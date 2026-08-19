@@ -1,5 +1,4 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import ParentDashboard from './Dashboard'
@@ -39,10 +38,6 @@ const withoutFace = [{
     face_attention: null, face_samples: 0, face_included: false,
   },
 }]
-
-function urls() {
-  return apiFetch.mock.calls.map(c => String(c[0]))
-}
 
 function tile(label) {
   return within(screen.getByText(label).closest('div'))

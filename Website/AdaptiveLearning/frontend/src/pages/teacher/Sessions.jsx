@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { motion } from 'framer-motion'
 import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
@@ -170,12 +169,17 @@ export default function Sessions() {
             <div className="col-span-2">Progress</div>
             <div className="col-span-2 text-right">Status</div>
           </div>
-          {filteredRows.map((s, i) => {
+          {filteredRows.map((s) => {
             const live = !s.ended_at
             const acc  = (s.questions_answered || 0) > 0
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null
             return (
               <Link key={s.id} to={`/teacher/sessions/${s.id}`}
+                // The review's "Back" was hardcoded to Live Monitoring, so
+                // opening a session from this history and coming back landed
+                // on a different page with the teacher's place in the list
+                // gone.
+                state={{ from: '/teacher/sessions' }}
                 className="grid grid-cols-12 items-center px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 hover:bg-slate-50 dark:hover:bg-gray-800 transition group">
                 <div className="col-span-3 flex items-center gap-3">
                   <div className="w-8 h-8 bg-gradient-to-br from-violet-400 to-purple-500 rounded-full flex items-center justify-center text-white text-xs font-black flex-shrink-0">

@@ -323,7 +323,11 @@ export default function Students() {
         <h1 className="text-3xl font-black text-gray-900 dark:text-white flex items-center gap-3">
           <Users className="text-violet-600" size={28} /> Students
         </h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">All enrolled students on the platform.</p>
+        {/* Not "on the platform". The query scopes to classes this teacher
+            owns, so that claimed a reach the page does not have -- and on a
+            page about who a teacher may look at, overstating the scope is the
+            wrong direction to be wrong in. */}
+        <p className="text-gray-500 dark:text-gray-400 mt-1">Students enrolled in your classes.</p>
       </motion.div>
 
       {/* search */}
@@ -346,12 +350,16 @@ export default function Students() {
           <h3 className="text-xl font-black text-gray-900 dark:text-white mb-2">
             {students.length === 0 ? 'No students yet' : 'No results'}
           </h3>
+          {/* The setup note that used to sit here -- "requires a `profiles`
+              table with a `role` column in Supabase" -- was a message to
+              whoever deploys this, shown to every teacher who has no students
+              yet. It named a schema they cannot see and cannot act on, in
+              place of the one thing they can do about it. */}
           <p className="text-gray-500 dark:text-gray-400 text-sm">
             {students.length === 0
-              ? 'Students will appear here once they sign up.'
+              ? 'Students appear here once they join one of your classes with its join code.'
               : 'Try a different search term.'}
           </p>
-          <p className="text-xs text-gray-400 mt-2">Requires a <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">profiles</code> table with a <code className="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded">role</code> column in Supabase.</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
@@ -413,7 +421,7 @@ export default function Students() {
                         ) : (
                           <>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
-                              <StatCard
+                              <MiniStat
                                 icon={<TrendingUp size={16} />}
                                 label="Total Accuracy"
                                 value={stats.totalAccuracy !== null ? `${stats.totalAccuracy}%` : '—'}
@@ -424,14 +432,14 @@ export default function Students() {
                               />
                               {!hideSensors && (
                                 <>
-                                  <StatCard
+                                  <MiniStat
                                     icon={<Flame size={16} />}
                                     label="Stress Level"
                                     value={stats.stressLevel ?? '—'}
                                     sub={eegSub(stats.signalCount, stats.signalsFailed)}
                                     color="rose"
                                   />
-                                  <StatCard
+                                  <MiniStat
                                     icon={<Target size={16} />}
                                     label="Focus Score"
                                     value={stats.focusScore ?? '—'}
@@ -440,7 +448,7 @@ export default function Students() {
                                   />
                                 </>
                               )}
-                              <StatCard
+                              <MiniStat
                                 icon={<Zap size={16} />}
                                 label="Current Streak"
                                 value={stats.statsRetrieved ? stats.currentStreak : '—'}
@@ -457,7 +465,7 @@ export default function Students() {
                                 changing what was fetched. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              <StatCard
+                              <MiniStat
                                 icon={<Brain size={16} />}
                                 label="Engagement"
                                 value={stats.engagement ?? '—'}
@@ -471,7 +479,7 @@ export default function Students() {
                                   note below it -- with the switch off no facial
                                   data was requested, so a summary outage did
                                   not cost these two tiles anything. */}
-                              <StatCard
+                              <MiniStat
                                 icon={<Smile size={16} />}
                                 label="Dominant Emotion"
                                 value={stats.faceIncluded ? (stats.dominantEmotion ?? '—') : 'Off'}
@@ -490,7 +498,7 @@ export default function Students() {
                                 "Hide sensor data" -- see above. */}
                             {!hideSensors && (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                              <StatCard
+                              <MiniStat
                                 icon={<Heart size={16} />}
                                 label="Avg Heart Rate"
                                 value={stats.heartIncluded ? (stats.heartRate !== null ? `${stats.heartRate} bpm` : '—') : 'Off'}
@@ -499,7 +507,7 @@ export default function Students() {
                                   : 'not recorded'}
                                 color="rose"
                               />
-                              <StatCard
+                              <MiniStat
                                 icon={<Activity size={16} />}
                                 label="Avg HRV"
                                 value={stats.heartIncluded ? (stats.rmssd !== null ? `${stats.rmssd} ms` : '—') : 'Off'}
@@ -581,7 +589,7 @@ export default function Students() {
   )
 }
 
-function StatCard({ icon, label, value, sub, color }) {
+function MiniStat({ icon, label, value, sub, color }) {
   const colorMap = {
     indigo: 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300',
     rose:   'bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300',

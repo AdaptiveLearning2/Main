@@ -1,5 +1,4 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and

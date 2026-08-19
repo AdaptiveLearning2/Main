@@ -5392,6 +5392,110 @@ def link_child(payload: LinkChildRequest, request: Request):
     }).execute()
     return {"ok": True, "child_id": payload.child_id, "child_name": p.get("display_name") or "Student"}
 
+
+@app.delete("/api/parent/children/{child_id}")
+def unlink_child(child_id: str, request: Request):
+    """Remove one parent-child link.
+
+    There was no route for this, so a link was permanent once made: a parent
+    who pasted the wrong UUID, or whose child left the household, had a
+    standing relationship that `_verify_can_view_student` reads as entitlement
+    to that child's reports and that `signal_consent` reads as the right to
+    re-enable a sensor the child switched off. A relationship nobody can end is
+    the wrong shape for the one relationship in this product that grants the
+    most access.
+
+    Scoped by `parent_id` as well as `child_id`, so this can only ever delete
+    the caller's own link. Scoped by the child alone it would take every
+    parent's link to that child -- an endpoint one parent could use to cut
+    another off from their own child. The row id is never taken from the client
+    for the same reason `/charts` derives its object path rather than reading it
+    back out of `chart_paths`.
+
+    **Consent and recorded signals are untouched.** Unlinking is not erasure and
+    not a withdrawal: `signal_consent` still holds what the family decided, and
+    a re-link restores the view of a history that was never destroyed. Erasure
+    is `POST /api/consent/{id}/erase`, which is deliberately a separate request
+    a parent has to make by name -- wiring destruction to this would make the
+    reversible control the irreversible one by a side effect nobody asked for,
+    which is the same rule `test_changing_consent_never_erases` pins one table
+    over.
+    """
+    user = get_user(request)
+    res = supabase.table("parent_child_links").delete()         .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
+    # 404 on a link that was not there, rather than a cheerful ok. The two are
+    # different facts about the caller's account, and a parent who unlinked the
+    # wrong child needs to be able to tell "that is done" from "that was never
+    # yours".
+    if not res.data:
+        raise HTTPException(404, "Not linked to this child")
+    return {"ok": True, "child_id": child_id}
+
+
+@app.get("/api/student/parent-links")
+def my_unacknowledged_parent_links(request: Request):
+    """Links to this student that they have not been told about yet.
+
+    A parent creates a link knowing only a user id; nothing asked the child and
+    nothing told them, and from that moment the parent may read their reports
+    and switch a sensor back on that the child switched off. This is the read
+    behind the banner that closes that gap.
+
+    **Notify, not block.** No endpoint waits on the acknowledgement -- an
+    acknowledgement *gate* would put a child between a parent and reports they
+    are entitled to, and this product's students are children, some of whom
+    would simply never clear it.
+
+    Fails **open**, to an empty list. It decides whether an advisory banner is
+    drawn and nothing else, so the reporting-surface direction is the right one
+    here: a database blip must not put a notice on a child's dashboard about a
+    link that may not exist. That is the opposite of `_consent()`, which fails
+    closed because it decides whether data may be recorded.
+    """
+    user = get_user(request)
+    try:
+        rows = supabase.table("parent_child_links")             .select("id, parent_id, created_at")             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .order("created_at", desc=True).limit(10).execute().data or []
+    except Exception as e:
+        print(f"[parent-links] {user['id']}: {e}")
+        return {"links": [], "retrieved": False}
+    # Names in one read rather than one per link, and only for the handful of
+    # rows that survived the filter -- normally none.
+    names = _profiles_many([r["parent_id"] for r in rows])
+    return {
+        "links": [{
+            "id":          r["id"],
+            "parent_name": (names.get(r["parent_id"]) or {}).get("display_name") or "A parent",
+            "linked_at":   r["created_at"],
+        } for r in rows],
+        "retrieved": True,
+    }
+
+
+@app.post("/api/student/parent-links/ack")
+def ack_parent_links(request: Request):
+    """The student has seen the notice.
+
+    Stamps every unacknowledged link for the caller, not one by one: the banner
+    names them together and dismissing it is one decision. Scoped by
+    `child_id`, so a student can only ever acknowledge their own -- and the link
+    id is never taken from the client, which would let a caller stamp a link
+    that is not theirs and suppress somebody else's notice.
+
+    A write that matched nothing is a 404 rather than a cheerful ok, like
+    `/api/consent/ack` beside it: reporting success for a dismissal that did not
+    land leaves the client believing a notice is gone that is still there.
+    """
+    user = get_user(request)
+    try:
+        written = supabase.table("parent_child_links")             .update({"student_ack_at": _utc_now().isoformat()})             .eq("child_id", user["id"]).is_("student_ack_at", "null")             .execute().data or []
+    except Exception as e:
+        print(f"[parent-links:ack] {user['id']}: {e}")
+        raise HTTPException(500, "Could not acknowledge")
+    if not written:
+        raise HTTPException(404, "Nothing to acknowledge")
+    return {"ok": True, "acknowledged": len(written)}
+
+
 @app.get("/api/parent/children")
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.

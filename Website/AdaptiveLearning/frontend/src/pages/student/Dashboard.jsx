@@ -5,39 +5,39 @@ import { LayoutDashboard, BookOpen, Target, TrendingUp, Flame, Brain, ArrowUpRig
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ParentRestoredBanner from '../../components/consent/ParentRestoredBanner'
+import ParentLinkedBanner from '../../components/consent/ParentLinkedBanner'
 import SkeletonList from '../../components/ui/Skeleton'
+import StatCard from '../../components/ui/StatCard'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+
+// Below this many attempts a topic has no accuracy worth showing, and
+// certainly none worth calling anyone's weakest: one unlucky question is 0%.
+// It is a floor on *claims*, not on display -- a topic with one attempt still
+// shows its figure, it just cannot win the "weakest" label.
+const MIN_ATTEMPTS_TO_RANK = 3
+
+/** How a topic tile is tinted, from the accuracy the backend computed.
+ *
+ * **Never colour alone.** Each tile shows its percentage as text beside the
+ * tint, because roughly one boy in twelve cannot separate the red from the
+ * green -- and this is a page for children. The number is the signal; the
+ * colour only makes it scannable.
+ */
+function toneFor(accuracy) {
+  if (accuracy >= 80) return 'bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300'
+  if (accuracy >= 50) return 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+  return 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+}
+
+const prettyTopic = (t) => t.replace(/_/g, ' ')
 
 function greeting() {
   const h = new Date().getHours()
   if (h < 12) return 'Good morning'
   if (h < 17) return 'Good afternoon'
   return 'Good evening'
-}
-
-function StatCard({ icon: Icon, title, value, sub, color, delay }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay }}
-      whileHover={{ y: -4, transition: { duration: 0.15 } }}
-      className="relative group bg-white dark:bg-gray-900 rounded-2xl p-5 border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-lg transition-shadow"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-indigo-400/10 to-violet-500/10 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-1">{title}</p>
-          <p className="text-3xl font-black text-gray-900 dark:text-white">{value ?? '—'}</p>
-          {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</p>}
-        </div>
-        <div className={`p-2.5 ${color} rounded-xl shadow-md`}>
-          <Icon size={20} className="text-white" />
-        </div>
-      </div>
-    </motion.div>
-  )
 }
 
 export default function StudentDashboard() {
@@ -56,6 +56,16 @@ export default function StudentDashboard() {
   // back is the reporting rule this project keeps writing down, arriving on a
   // student's own screen as a small untruth about their week.
   const [nudge, setNudge] = useState(null)
+  // Per-topic accuracy, keyed by `topic_name` -- which is the same slug as
+  // `TOPICS` above, because `math_topics.topic_name` joins to
+  // `questions.subject` and the generators write these exact strings.
+  //
+  // `{}` on failure rather than a sentinel, and that is safe *here* only
+  // because an unmeasured tile and a tile whose read failed render
+  // identically: the plain, untinted one this grid has always drawn. Neither
+  // claims anything, so neither can be wrong. Do not add copy to that state
+  // without giving the failure its own flag first.
+  const [topics, setTopics] = useState({})
 
   useEffect(() => {
     Promise.all([
@@ -92,6 +102,22 @@ export default function StudentDashboard() {
     })
   }, [])
 
+  // Its own effect rather than a fourth entry in the `Promise.all` above: this
+  // one needs the student's id, so it has a dependency the others do not, and
+  // folding it in would re-run all four whenever that resolved.
+  useEffect(() => {
+    if (!user?.id) return
+    let cancelled = false
+    apiFetch(`/api/students/${user.id}/topic-breakdown`)
+      .then(rows => {
+        if (cancelled) return
+        setTopics(Object.fromEntries(
+          (rows || []).map(r => [r.topic_name, r])))
+      })
+      .catch(() => { /* tiles stay plain -- see `topics` above */ })
+    return () => { cancelled = true }
+  }, [user?.id])
+
   const acc  = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
   const name = user?.email?.split('@')[0] || 'there'
   // Null once loading has finished means the read failed. Distinct from a
@@ -99,12 +125,36 @@ export default function StudentDashboard() {
   const statsFailed = !loading && stats === null
   const sub = statsFailed ? "couldn't be loaded" : null
 
+  // The streak card now carries the personal best as its subtitle. `best_streak`
+  // was in the payload all along and rendered nowhere, so a student on a bad
+  // week saw only the number they had fallen to.
+  //
+  // Only when it beats the current one: while a student is *on* their best
+  // streak the two are equal, and "best 6" under a 6 reads as though something
+  // is missing rather than as an achievement.
+  const best = stats?.best_streak ?? 0
+  const streakSub = statsFailed
+    ? sub
+    : (best > (stats?.current_streak ?? 0) ? `best ${best} days` : 'days')
+
   const CARDS = [
     { icon: BookOpen,   title: 'Questions',  value: statsFailed ? '—' : (stats?.total_questions ?? 0),  sub: sub ?? 'all time',  color: 'bg-gradient-to-br from-indigo-500 to-indigo-600',  delay: 0.1 },
     { icon: Target,     title: 'Correct',    value: statsFailed ? '—' : (stats?.total_correct ?? 0),    sub: sub ?? 'all time',  color: 'bg-gradient-to-br from-green-500 to-emerald-600',   delay: 0.2 },
     { icon: TrendingUp, title: 'Accuracy',   value: statsFailed ? '—' : `${acc}%`,                      sub: sub ?? 'overall',   color: 'bg-gradient-to-br from-violet-500 to-purple-600',   delay: 0.3 },
-    { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: sub ?? 'days',      color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
+    { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: streakSub,          color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
   ]
+
+  // The topic the adaptive engine will actually start on, so naming it here is
+  // a description of what happens next rather than a promise this page makes.
+  // `LLM_topic_decider` picks the weakest topic itself; the hero banner beside
+  // this already says so.
+  //
+  // Ranked only among topics with enough attempts to mean anything -- one
+  // unlucky question is 0%, and calling that a student's weakest subject would
+  // be both wrong and discouraging.
+  const weakest = Object.values(topics)
+    .filter(t => (t.attempted_questions ?? 0) >= MIN_ATTEMPTS_TO_RANK)
+    .sort((a, b) => a.accuracy - b.accuracy)[0] || null
 
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
@@ -112,6 +162,11 @@ export default function StudentDashboard() {
           outside settings. A sensor resuming is worth telling them about; a
           live readout of their own focus is not. */}
       <ParentRestoredBanner studentId={user?.id} />
+
+      {/* A parent linking needs nothing from the child, and grants the parent
+          their reports and the ability to switch a sensor back on. Nothing told
+          them it had happened. */}
+      <ParentLinkedBanner studentId={user?.id} />
 
       {/* Says so rather than showing zeros. A student whose figures failed to
           load was told they had answered nothing all term, which is both wrong
@@ -146,7 +201,7 @@ export default function StudentDashboard() {
 
       {/* header */}
       <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
-        className="flex items-center justify-between">
+        className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-black text-gray-900 dark:text-white">
             {greeting()}, <span className="text-indigo-600">{name}</span> 👋
@@ -156,7 +211,10 @@ export default function StudentDashboard() {
         <motion.div
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
           onClick={() => navigate('/adaptive')}
-          className="hidden md:flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer"
+          // `hidden md:flex` put the page's primary action out of reach on a
+          // phone -- the one device most likely to be a student's. It wraps
+          // under the greeting on a narrow screen instead of disappearing.
+          className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer shrink-0"
         >
           <Brain size={16} /> Start AI Session
         </motion.div>
@@ -207,18 +265,55 @@ export default function StudentDashboard() {
               <BookOpen size={16} className="text-indigo-600" /> Topics in the Curriculum
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-              {TOPICS.map((t, i) => (
-                <motion.div key={t}
-                  initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.55 + i * 0.03 }}
-                  whileHover={{ scale: 1.06 }}
-                  className="flex flex-col items-center p-3 bg-slate-50 dark:bg-gray-800 rounded-xl text-center gap-1"
-                >
-                  <span className="text-xl">{ICONS[t]}</span>
-                  <span className="text-xs font-semibold text-gray-600 dark:text-gray-400 capitalize leading-tight">{t.replace('_', ' ')}</span>
-                </motion.div>
-              ))}
+              {TOPICS.map((t, i) => {
+                const row = topics[t]
+                const attempted = row?.attempted_questions ?? 0
+                // A topic with no attempts, and a topic whose read failed,
+                // draw the same plain tile this grid has always drawn --
+                // neither asserts anything, so neither can be wrong.
+                const measured = attempted > 0
+                return (
+                  <motion.div key={t}
+                    initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.55 + i * 0.03 }}
+                    whileHover={{ scale: 1.06 }}
+                    className={`flex flex-col items-center p-3 rounded-xl text-center gap-1 ${
+                      measured ? toneFor(row.accuracy) : 'bg-slate-50 dark:bg-gray-800'}`}
+                  >
+                    <span className="text-xl">{ICONS[t]}</span>
+                    <span className={`text-xs font-semibold capitalize leading-tight ${
+                      measured ? '' : 'text-gray-600 dark:text-gray-400'}`}>
+                      {prettyTopic(t)}
+                    </span>
+                    {/* The number, not just the tint. See `toneFor`. */}
+                    {measured && (
+                      <span className="text-[11px] font-black tabular-nums">
+                        {row.accuracy}%
+                      </span>
+                    )}
+                  </motion.div>
+                )
+              })}
             </div>
+
+            {/* Named because it is what `/adaptive` will actually open on --
+                the decider picks the weakest topic itself, which the banner
+                above already tells the student. Absent until a topic has
+                enough attempts to rank, so this never guesses. */}
+            {weakest && (
+              <button
+                onClick={() => navigate('/adaptive')}
+                className="mt-4 w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900 hover:bg-indigo-100 dark:hover:bg-indigo-950/70 transition text-left"
+              >
+                <span className="text-sm font-bold text-indigo-900 dark:text-indigo-200">
+                  Weakest so far: <span className="capitalize">{prettyTopic(weakest.topic_name)}</span>
+                  <span className="font-semibold text-indigo-700 dark:text-indigo-300"> · {weakest.accuracy}%</span>
+                </span>
+                <span className="flex items-center gap-1 text-xs font-black text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
+                  Practise it <ArrowUpRight size={14} />
+                </span>
+              </button>
+            )}
           </motion.div>
         </div>
 

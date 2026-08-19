@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
 import { supabase } from '../../lib/supabase'
 import { apiFetch } from '../../lib/api'
-import { endSession } from '../../lib/session'
+import { endSession, recordAnswer } from '../../lib/session'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
          deviceStart, deviceStop, museRefresh, museConnect,
@@ -35,6 +35,15 @@ const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 const SHORT  = { angle_relationships: 'Angle Rel.' }
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
+
+/** What to put under a toast when the only detail is the thrown thing.
+ *
+ * The three hardware failures on this page each wrote this out, one of them
+ * without the `?.` -- so how an error reaches a student depended on which
+ * device had failed. One place to change if that should ever say something
+ * other than the raw message.
+ */
+const errorDetail = (e) => e?.message || String(e)
 
 const initSubjects = () => {
   const s = {}; TOPICS.forEach(t => { s[t] = { correct: 0, attempts: 0 } }); return s
@@ -209,6 +218,22 @@ export default function Adaptive() {
   const phaseTimer  = useRef(null)
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+
+  // Unmount cleanup for the two things that outlived this page.
+  //
+  // `phaseTimer` is the 30s safety net that puts the headband card back to
+  // idle if a connection attempt neither finishes nor throws. It was cleared
+  // at the *start* of the next attempt and inside the catch, so navigating
+  // away mid-connect left it pending: it fired half a minute later against an
+  // unmounted component.
+  //
+  // `window.AL_currentSessionId` is set when the recorder is created and was
+  // never unset, so it named a finished session for the rest of the tab's
+  // life -- and the next reader of it could not tell that from a live one.
+  useEffect(() => () => {
+    clearTimeout(phaseTimer.current)
+    delete window.AL_currentSessionId
+  }, [])
 
   // The clock starts when the session does, not when the page opened. A student
   // who leaves the tab sitting on the setup screen for an hour has not been
@@ -429,6 +454,10 @@ export default function Adaptive() {
       setData(null)
       setPhase('idle')
       setFinishing(false)
+      // Cleared with the rest of the session state. It is set when the
+      // recorder is created and named a finished session until the tab closed,
+      // which the next reader could not tell from a live one.
+      delete window.AL_currentSessionId
     }
   }
 
@@ -716,7 +745,9 @@ export default function Adaptive() {
       }
     } catch (e) {
       console.error('[camera]', e)
-      alert('Camera could not be switched: ' + (e?.message || String(e)))
+      toast.error('The camera could not be switched.', {
+        description: errorDetail(e),
+      })
     } finally {
       setCamera(c => ({ ...c, busy: false }))
     }
@@ -745,7 +776,9 @@ export default function Adaptive() {
     } catch (e) {
       console.error('[headband] could not start a session', e)
       setHeadband(s => ({ ...s, phase: 'idle' }))
-      alert('Could not start a session:\n\n' + (e?.message || String(e)))
+      toast.error('Could not start a session.', {
+        description: errorDetail(e),
+      })
       return
     }
     // Use a local var, not the recorder state var directly: setRecorder()
@@ -813,6 +846,8 @@ export default function Adaptive() {
       // gets recorded. Recreating it on the next connect binds it to
       // whatever stationId is selected then.
       setRecorder(null)
+      // Set alongside the recorder, so it goes when the recorder does.
+      delete window.AL_currentSessionId
       // `battery: null` with the rest: a charge percentage describes the
       // headband that just went away, and it is the one number here a student
       // acts on. The bridge clears its own copy on disconnect for the same
@@ -865,11 +900,19 @@ export default function Adaptive() {
 
       if (devices.length === 0) {
         setHeadband(s => ({ ...s, phase: 'idle' }))
-        alert(
+        // A longer dwell than the default, and the `Toaster` in App.jsx has a
+        // close button: this one is instructions a student has to act on, not
+        // a notification they only have to read.
+        toast.error(
           bluetoothEnabled === false
-            ? 'Bluetooth is turned off on this PC.\n\nTurn on Bluetooth in Windows Settings, then click Connect Headband again.'
-            : 'No Muse headband found after 12 s.\n\n• Make sure the headband is turned on\n• Keep it within 1 m of your computer\n• Bluetooth must be enabled on your PC'
-        )
+            ? 'Bluetooth is turned off on this PC.'
+            : 'No headband found.',
+          {
+            description: bluetoothEnabled === false
+              ? 'Turn Bluetooth on in Windows Settings, then click Connect Headband again.'
+              : 'Check the headband is switched on and within a metre of the computer, and that Bluetooth is enabled.',
+            duration: 12_000,
+          })
         return
       }
 
@@ -890,12 +933,12 @@ export default function Adaptive() {
 
       if (!muse_ok) {
         setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
-        alert(
-          'Headband found but connection failed (BadStateError).\n\n' +
-          'The headband firmware is stuck in streaming mode.\n\n' +
-          'Fix: hold the power button until it powers OFF (descending beeps), ' +
-          'wait 10 seconds, power back ON, then click Connect Headband again.'
-        )
+        toast.error('The headband was found but would not connect.', {
+          description: 'Its firmware is still streaming from a previous session. '
+            + 'Hold the power button until it switches off (descending beeps), wait ten '
+            + 'seconds, switch it back on, then click Connect Headband again.',
+          duration: 15_000,
+        })
         return
       }
 
@@ -905,7 +948,9 @@ export default function Adaptive() {
       console.error('[headband]', e)
       clearTimeout(phaseTimer.current)
       setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
-      alert('Headband connection failed: ' + (e.message || String(e)))
+      toast.error('The headband could not connect.', {
+        description: errorDetail(e),
+      })
     }
   }
 
@@ -948,28 +993,26 @@ export default function Adaptive() {
     // `user_stats` and every report built on them stayed at zero however long a
     // student practised. `data.id` is the stored question's id, which the
     // generator now returns.
-    const sid = sessionIdRef.current
-    if (!sid || !data?.id) {
-      // Loud, because silence here is the failure being fixed. A question with
-      // no id could not be attributed to anything even if it were sent.
-      console.error('[answer] not recorded', { session: sid, question: data?.id })
-      toast.error('That answer could not be saved.')
-      return
-    }
-    try {
-      const res = await apiFetch(`/api/sessions/${sid}/answer`, {
-        method: 'POST',
-        body: { question_id: data.id, selected_index: selectedAnswer, correct: isCorrect },
-      })
+    // The POST, the missing-id guard and the failure toast all live in
+    // `lib/session.js` now: `Practice.jsx` makes the same call against the same
+    // endpoint and had drifted into having no `catch` at all, which is the
+    // second time these two pages have disagreed about whether a failure is
+    // worth mentioning -- `endSession` was extracted from the same pair for the
+    // same reason. Correctness stays here, because the two pages hold questions
+    // in different shapes and compare them differently.
+    const res = await recordAnswer({
+      sessionId: sessionIdRef.current,
+      questionId: data?.id,
+      selectedIndex: selectedAnswer,
+      correct: isCorrect,
+    })
+    if (res) {
       // The response names the topic the backend attributed this to, so there
       // is nothing left to go and ask. A local *guess* at the topic is what had
       // to be avoided -- disagreeing copies of this number is the whole bug
       // that moved these figures out of localStorage -- and this is not one:
       // the name comes from the question row, the same place the write did.
       applyAttempt(res?.topic, isCorrect)
-    } catch (e) {
-      console.error('[answer] not recorded', e)
-      toast.error('That answer could not be saved.')
     }
   }
 
@@ -1077,7 +1120,11 @@ export default function Adaptive() {
             out where `stations` is set, so a deployment with one headband and a
             camera auto-selects the headband and never sees this. */}
         {stations.length > 1 && !headband.connected && (
+          // Its only label was the disabled placeholder option, which is the
+          // selected *value* rather than a name for the field -- several
+          // screen readers announce nothing for it.
           <select
+            aria-label="Headband"
             value={stationId || ''}
             onChange={e => setStationId(e.target.value)}
             className="text-xs font-bold rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 px-2 py-1.5"
@@ -1110,7 +1157,13 @@ export default function Adaptive() {
             that has not said yet. `!= null` catches undefined too, and lets 0
             through: a flat battery is exactly what this is for. */}
         {headband.connected && headband.battery != null && (
+          // `aria-label` as well as `title`. A title tooltip is not reliably
+          // announced by screen readers and never appears on touch, so the one
+          // number a student is asked to act on had no accessible name at all.
+          // Interpolated so it reads as a value rather than a bare percentage
+          // next to an icon.
           <span title="Headband charge"
+            aria-label={`Headband charge ${headband.battery}%`}
             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold ${
               headband.battery <= 20 ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400'
               : headband.battery <= 40 ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400'

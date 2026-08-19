@@ -6,29 +6,8 @@ import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import { toast } from 'sonner'
 import SkeletonList, { Skeleton } from '../../components/ui/Skeleton'
+import StatCard from '../../components/ui/StatCard'
 
-function StatCard({ icon: Icon, title, value, sub, color, delay }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay }}
-      whileHover={{ y: -4, transition: { duration: 0.15 } }}
-      className="relative group bg-white dark:bg-gray-900 rounded-2xl p-5 border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-lg transition-shadow"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-violet-400/10 to-purple-500/10 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-1">{title}</p>
-          <p className="text-3xl font-black text-gray-900 dark:text-white">{value ?? '—'}</p>
-          {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</p>}
-        </div>
-        <div className={`p-2.5 ${color} rounded-xl shadow-md`}>
-          <Icon size={20} className="text-white" />
-        </div>
-      </div>
-    </motion.div>
-  )
-}
 
 
 
@@ -195,7 +174,12 @@ export default function TeacherDashboard() {
 
       {/* stat cards */}
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-        {CARDS.map(c => <StatCard key={c.title} {...c} />)}
+        {/* The teacher portal's accent, against the shared component's indigo
+            default. The only thing that ever differed between this page's copy
+            of StatCard and the student dashboard's. */}
+        {CARDS.map(c => (
+          <StatCard key={c.title} hoverTint="from-violet-400/10 to-purple-500/10" {...c} />
+        ))}
       </div>
       {/* Your Classes */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>

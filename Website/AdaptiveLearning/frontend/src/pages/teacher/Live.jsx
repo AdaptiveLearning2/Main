@@ -4,7 +4,7 @@ import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { LineChart, Line, YAxis } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
-import { describeSeries } from '../../components/charts/describeSeries'
+import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 
@@ -49,6 +49,16 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
   )
 }
 
+// No `rowKey`, so no table: a 60-point rolling window has no meaningful row
+// labels, and tabulating it would be noise rather than an alternative. The
+// summary is the reading.
+const SPARK_COLUMNS = [
+  { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
+  { key: 'engagement', label: 'Engagement', unit: '%',    scale: asPercent },
+  { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
+  { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
+]
+
 function StudentCard({ student, history }) {
   const active = student.active_session
   const cog    = student.latest_cognitive
@@ -56,18 +66,12 @@ function StudentCard({ student, history }) {
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
 
-  // What the sparkline shows, as a sentence. Named per student, because a
-  // screen-reader user reaching this card has no other way to tell whose
-  // reading it is -- the card's own heading is several elements back.
-  const sparkSummary = [
-    `${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`,
-    ...[
-      describeSeries(history, 'focus', 'Focus', ''),
-      describeSeries(history, 'engagement', 'Engagement', ''),
-      describeSeries(history, 'stress', 'Stress', ''),
-      describeSeries(history, 'bpm', 'Heart rate', ' bpm'),
-    ].filter(Boolean),
-  ].join(' ')
+  // Percentages, because the rolling window holds raw 0..1 ratios -- the chart
+  // plots them against `domain={[0, 1]}`. Unscaled this said "Focus 0 to 1" for
+  // every student on the page, whatever they were doing.
+  //
+  // Named per student: a screen-reader user reaching this card has no other way
+  // to tell whose reading it is, since the heading is several elements back.
 
   return (
     <motion.div
@@ -147,7 +151,9 @@ function StudentCard({ student, history }) {
           the reading is. No data table: this is a 60-point rolling window with
           no meaningful row labels, and a table of it would be noise rather than
           the alternative the trend chart's is. The summary is the reading. */}
-      <AccessibleChart summary={sparkSummary} className="h-12 -mx-1">
+      <AccessibleChart className="h-12 -mx-1"
+        headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
+        rows={history} columns={SPARK_COLUMNS}>
           <LineChart data={history}>
             {/* Two hidden axes with explicit ids. Heart rate is bpm and the
                 others are ratios; sharing one axis would flatten the ratios

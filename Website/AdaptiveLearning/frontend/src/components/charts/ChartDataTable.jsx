@@ -34,6 +34,8 @@
  * "not recorded" rather than as a blank, which is indistinguishable from a
  * table that failed to render.
  */
+import { readValue } from './describeSeries'
+
 export default function ChartDataTable({ caption, rows, rowKey, rowLabel, columns }) {
   return (
     <table className="sr-only">
@@ -50,9 +52,13 @@ export default function ChartDataTable({ caption, rows, rowKey, rowLabel, column
             <th scope="row">{r[rowKey]}</th>
             {columns.map(c => (
               <td key={c.key}>
-                {typeof r[c.key] === 'number'
-                  ? `${Math.round(r[c.key])}${c.unit ?? ''}`
-                  : 'not recorded'}
+                {/* Through `readValue`, so the scale applied here is the same
+                    one the summary sentence used -- the two disagreeing is the
+                    bug this spec exists to make impossible. */}
+                {(() => {
+                  const v = readValue(r, c)
+                  return v === null ? 'not recorded' : `${Math.round(v)}${c.unit ?? ''}`
+                })()}
               </td>
             ))}
           </tr>

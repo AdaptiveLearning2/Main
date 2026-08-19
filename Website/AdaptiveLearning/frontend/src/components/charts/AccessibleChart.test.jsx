@@ -10,24 +10,57 @@ const ROWS = [
   { day: 'Mon', focus: 40, bpm: null },
   { day: 'Tue', focus: 80, bpm: 72 },
 ]
-const TABLE = {
-  rows: ROWS, rowKey: 'day', rowLabel: 'Day',
-  columns: [{ key: 'focus', label: 'Focus', unit: '%' },
-            { key: 'bpm', label: 'Heart rate', unit: ' bpm' }],
-}
+const COLUMNS = [
+  { key: 'focus', label: 'Focus', unit: '%' },
+  { key: 'bpm', label: 'Heart rate', unit: ' bpm' },
+]
 
 const draw = (props = {}) => render(
   <div style={{ width: 400, height: 200 }}>
-    <AccessibleChart summary="Focus 40% to 80%." table={TABLE} {...props}>
+    <AccessibleChart headline="Signal trend." rows={ROWS} rowKey="day" rowLabel="Day"
+                     columns={COLUMNS} {...props}>
       <LineChart data={ROWS}><Line dataKey="focus" /></LineChart>
     </AccessibleChart>
   </div>,
 )
 
 describe('AccessibleChart', () => {
-  it('names the chart', () => {
+  it('names the chart, with each series as a range', () => {
     draw()
     expect(screen.getByRole('img', { name: /Focus 40% to 80%/ })).toBeInTheDocument()
+  })
+
+  it('describes the summary and the table from one spec', () => {
+    // They were separate literals at first and disagreed twice in one PR: a key
+    // named `bpm` where the rows carried `heart_rate_bpm`, and raw 0..1 ratios
+    // described with a `%` unit. Neither is visible on screen and neither
+    // surface could contradict the other, because both were wrong at once.
+    draw({ rows: [{ day: 'Mon', focus: 0.42 }, { day: 'Tue', focus: 0.78 }],
+           columns: [{ key: 'focus', label: 'Focus', unit: '%', scale: v => v * 100 }] })
+
+    expect(screen.getByRole('img', { name: /Focus 42% to 78%/ })).toBeInTheDocument()
+    expect(screen.getByRole('table')).toHaveTextContent('42%')
+  })
+
+  it('leaves out a series with no readings rather than calling it zero', () => {
+    // A gap in the line is not a zero, and the sentence has to make the same
+    // distinction -- otherwise it claims a flat run the chart never drew.
+    draw({ rows: [{ day: 'Mon', focus: 40 }] })
+    const name = screen.getByRole('img', { name: /Focus/ }).getAttribute('aria-label')
+    expect(name).not.toMatch(/heart rate/i)
+  })
+
+  it('samples a long series rather than emitting a row per sample', () => {
+    // 4Hz for an hour is ~14,000 rows, every one built on every render for a
+    // table nobody sighted sees -- and unusable for those who do.
+    const many = Array.from({ length: 5000 }, (_, i) => ({ day: `d${i}`, focus: i % 100 }))
+    draw({ rows: many })
+
+    const rows = screen.getAllByRole('row')
+    expect(rows.length).toBeLessThan(200)
+    // And says so, because a silently shortened table claims the session was
+    // shorter than it was.
+    expect(screen.getByRole('table')).toHaveTextContent(/sampled evenly across 5000/)
   })
 
   it('keeps the table outside the role="img" subtree', () => {
@@ -59,7 +92,7 @@ describe('AccessibleChart', () => {
   it('still names the chart when there is no table to give', () => {
     // A sparkline has no meaningful row labels, so the summary is all there is.
     // It must still get a name rather than falling back to a bare `<svg>`.
-    draw({ table: undefined })
+    draw({ rowKey: undefined })
     expect(screen.getByRole('img', { name: /Focus/ })).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
   })
@@ -76,21 +109,34 @@ function jsxFiles(dir, out = []) {
   return out
 }
 
-it('is the only place that renders a ResponsiveContainer', () => {
-  // Derived from the source rather than from a list someone maintains, which is
-  // the same shape as the backend's `_MODE_AWARE` and `close_sites()` checks.
+it('is the only place that renders a Recharts chart', () => {
+  // Derived from the source rather than from a maintained list, which is the
+  // distinction that matters: the backend's `close_sites()` discovers its own
+  // members the same way, and it is the only precedent worth citing. An earlier
+  // version of this comment also named `_MODE_AWARE` -- wrongly, since that one
+  // *is* a hand-written list, and CLAUDE.md records it being extended one
+  // endpoint at a time across five review rounds because of exactly that.
   //
   // Centralising the component does not by itself stop the next chart being
-  // hand-assembled the old way -- and the old way's bug is invisible in the
-  // browser *and* in a jsdom test, so nothing else would catch it. This is what
-  // makes copying the pattern forward impossible: reach for Recharts' own
-  // container and this fails, naming the file.
-  // `fileURLToPath`, not `new URL(...).pathname` -- the latter yields
-  // `/C:/...` on Windows, which `readdirSync` cannot open.
+  // hand-assembled the old way, and the old way's bug is invisible in the
+  // browser *and* in a jsdom test, so nothing else would catch it.
+  //
+  // Matched on the chart *components*, not on `ResponsiveContainer` alone: a
+  // chart given explicit width and height needs no container, so keying on that
+  // one import let a whole class of hand-rolled chart through with CI green.
+  // It still cannot see a hand-written `<svg>`, which is the honest limit of a
+  // source check -- noted rather than papered over.
+  const CHART_IMPORTS = /\b(ResponsiveContainer|LineChart|BarChart|PieChart|AreaChart|RadarChart|ScatterChart|ComposedChart)\b/
+
   const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
   const offenders = jsxFiles(root)
     .filter(f => !f.endsWith('AccessibleChart.jsx'))
-    .filter(f => readFileSync(f, 'utf8').includes('ResponsiveContainer'))
+    .filter(f => {
+      const src = readFileSync(f, 'utf8')
+      // The chart tree itself is passed in as children, so a page naming
+      // `<LineChart>` is fine *provided* it goes through the component.
+      return CHART_IMPORTS.test(src) && !src.includes('AccessibleChart')
+    })
     .map(f => f.slice(root.length + 1).split(sep).join('/'))
 
   expect(offenders).toEqual([])

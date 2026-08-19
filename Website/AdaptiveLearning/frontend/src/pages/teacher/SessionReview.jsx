@@ -7,7 +7,7 @@ import {
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
-import { describeSeries } from '../../components/charts/describeSeries'
+import { asPercent, describeSlices } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 
 // Fixed per label, so a colour means the same thing between two sessions --
@@ -319,18 +319,25 @@ function SessionReviewBody({ sessionId }) {
   const correctAnswers = answers.filter(a => a.correct).length
   const acc = totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0
 
-  // The replay chart as a sentence. Built only from series that have readings,
-  // so a channel this session never recorded is absent rather than described as
-  // flat at zero -- the same distinction the gaps in the line already make.
-  const timelineSummary = [
-    `Session replay over ${series.length} readings.`,
-    ...[
-      describeSeries(series, 'focus', 'Focus'),
-      describeSeries(series, 'stress', 'EEG stress'),
-      describeSeries(series, 'engagement', 'Engagement'),
-      describeSeries(series, 'bpm', 'Heart rate', ' bpm'),
-    ].filter(Boolean),
-  ].join(' ')
+  // One spec, driving the summary sentence and the sr-only table alike.
+  //
+  // `asPercent` because this page's cognitive rows are raw 0..1 ratios -- the
+  // chart plots them against `domain={[0, 1]}` -- so describing them with a `%`
+  // unit and no scaling announced a session ranging 42-78% as "Focus 0% to 1%".
+  // `SignalPanel` scales on the way into its chart data and so never hit this;
+  // here the chart wants ratios and only the text wants percentages.
+  //
+  // `heart_rate_bpm` and `rmssd_ms` are the field names the chart plots. Named
+  // `bpm` at first, which made a visibly-drawn heart line read as "not
+  // recorded" in both the sentence and the table -- and RMSSD was absent from
+  // the table entirely while being plotted beside it.
+  const TIMELINE_COLUMNS = [
+    { key: 'focus',          label: 'Focus',      unit: '%',    scale: asPercent },
+    { key: 'stress',         label: 'EEG stress', unit: '%',    scale: asPercent },
+    { key: 'engagement',     label: 'Engagement', unit: '%',    scale: asPercent },
+    { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
+    { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
+  ]
 
   const hasChart = series.length >= 2
 
@@ -472,16 +479,10 @@ function SessionReviewBody({ sessionId }) {
             )}
           </div>
         ) : (
-          <AccessibleChart summary={timelineSummary} className="h-72"
-            table={{
-              rows: series, rowKey: 't', rowLabel: 'Seconds in',
-              columns: [
-                { key: 'focus',      label: 'Focus',      unit: '%' },
-                { key: 'stress',     label: 'EEG stress', unit: '%' },
-                { key: 'engagement', label: 'Engagement', unit: '%' },
-                { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
-              ],
-            }}>
+          <AccessibleChart className="h-72"
+            headline={`Session replay over ${series.length} readings.`}
+            rows={series} rowKey="t" rowLabel="Seconds in"
+            columns={TIMELINE_COLUMNS}>
               <LineChart data={series} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
@@ -637,11 +638,9 @@ function SessionReviewBody({ sessionId }) {
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                summary={`Emotion mix. ${emotionSlices.map(sl => `${sl.name} ${sl.value} samples`).join(', ')}.`}
-                table={{
-                  rows: emotionSlices, rowKey: 'name', rowLabel: 'Emotion',
-                  columns: [{ key: 'value', label: 'Samples' }],
-                }}>
+                summary={describeSlices('Emotion mix', emotionSlices, 'samples')}
+                rows={emotionSlices} rowKey="name" rowLabel="Emotion"
+                columns={[{ key: 'value', label: 'Samples' }]}>
                   <PieChart>
                     <Pie data={emotionSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -670,11 +669,9 @@ function SessionReviewBody({ sessionId }) {
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                summary={`Heart-rate stress. ${stressSlices.map(sl => `${sl.name} ${sl.value} windows`).join(', ')}.`}
-                table={{
-                  rows: stressSlices, rowKey: 'name', rowLabel: 'Band',
-                  columns: [{ key: 'value', label: 'Windows' }],
-                }}>
+                summary={describeSlices('Heart-rate stress', stressSlices, 'windows')}
+                rows={stressSlices} rowKey="name" rowLabel="Band"
+                columns={[{ key: 'value', label: 'Windows' }]}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>

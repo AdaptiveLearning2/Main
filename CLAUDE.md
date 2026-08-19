@@ -172,8 +172,19 @@ cmake -S . -B build_on -DENABLE_LIBMUSE=ON -DLIBMUSE_SDK_DIR=../libmuse_windows_
 It compiles what CI cannot: enum values, SDK signatures and the guarded packet handling. It still
 proves nothing about a real headband.
 
-`npm run lint` is non-blocking in CI against a backlog of **16** pre-existing errors, none of them
-`no-unused-vars`. Don't add to it, and don't make it blocking until the backlog is gone.
+`npm run lint` is non-blocking in CI against a backlog of **11** pre-existing errors, none of them
+`no-unused-vars` or `react-hooks/set-state-in-effect`. Don't add to it, and don't make it blocking
+until the backlog is gone.
+
+**`set-state-in-effect` is cleared, and the two shapes that cleared it are worth reusing.** Where the
+state is a reset driven by a prop changing — an acknowledgement cleared when enforcement resumes, a
+pulse started by a new timestamp — adjust it *during render* against a `useState` holding the
+previous value, which React re-runs before painting. Where it is a `loading` flag around a fetch,
+don't store one: keep the key the data in hand belongs to (`loadedFor`) and derive
+`loading = loadedFor !== id`, so switching session or class raises the skeleton on the render that
+changes the id and no previous subject's charts can be painted under this one's heading. A flag
+raised by a *user action* stays a flag — `Sessions.jsx` sets it in the class selector's `onChange`,
+which is an event handler and not an effect.
 
 **`react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay
 on.** `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup —

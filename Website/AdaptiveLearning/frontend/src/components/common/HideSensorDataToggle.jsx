@@ -22,7 +22,16 @@ export default function HideSensorDataToggle({ hidden, onChange }) {
       role="switch"
       aria-checked={hidden}
       onClick={() => onChange(!hidden)}
-      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 transition">
+      // `py-2.5` rather than `py-1.5`: at text-xs the control drew about 28px
+      // tall, under the 44px minimum once a finger rather than a cursor is
+      // aiming at it. The second of the two switches the accessibility pass
+      // named; `ConsentChannels`' was fixed and this one was missed.
+      //
+      // Padded rather than given an overlay hit area like the drawer's, because
+      // this button has visible text and a border: growing the box is what a
+      // reader expects here, where an invisible margin around a bordered
+      // control would let a tap land outside something that looks tappable.
+      className="inline-flex items-center gap-2 px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 transition">
       {hidden ? <EyeOff size={14} /> : <Eye size={14} />}
       Hide sensor data
       <span className={`ml-1 w-8 h-4 rounded-full relative transition ${

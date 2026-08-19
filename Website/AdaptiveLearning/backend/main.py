@@ -4070,6 +4070,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
     fields: dict = {}
     guards: dict = {}
     re_enabled = False
+    withdrawn: list[str] = []
     for c in CONSENT_CHANNELS:
         requested = getattr(payload, f"{c}_enabled")
         if requested is None:
@@ -4090,6 +4091,14 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         fields[f"{c}_enabled"] = requested
         fields[f"{c}_revoked_at"] = None if requested else now
         fields[f"{c}_revoked_by"] = None if requested else user["id"]
+        if not requested:
+            # Recorded as an event as well as as current state. `*_revoked_at`
+            # answers "is this off, and since when", and is correctly *nulled*
+            # when the channel comes back -- which makes it unusable as the
+            # source for "what happened": a parent re-enabling erased the
+            # withdrawal notice for every linked parent at once. Appended here,
+            # written below with the same request.
+            withdrawn.append(c)
         # The state this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
         if requested and actor == "parent":
@@ -4148,7 +4157,39 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
     if not written:
         raise HTTPException(409, "Consent changed while you were editing it; reload and try again")
 
+    _record_withdrawals(student_id, withdrawn, user["id"], now)
+
     return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
+
+
+def _record_withdrawals(student_id: str, channels: list[str],
+                        by: str, at: str) -> None:
+    """Append one row per channel switched off. Never raises.
+
+    Written **after** the conditional update has been confirmed, so a lost race
+    does not record a withdrawal that did not happen -- the consent row is the
+    authority and this is the log of how it got there.
+
+    It cannot be the other way round either: recording first and writing second
+    would leave a notice standing for a change that was rejected, which is a
+    parent being told their child did something they did not.
+
+    Swallows its own failure by design. The consent decision is already durable
+    at this point, and raising here would turn a successful withdrawal into a
+    500 -- telling a student their refusal did not save when it did. The cost of
+    the failure is a notice a parent does not get, which is the smaller harm and
+    the one that leaves a log line.
+    """
+    if not channels:
+        return
+    try:
+        supabase.table("consent_withdrawals").insert([
+            {"user_id": student_id, "channel": c,
+             "withdrawn_at": at, "withdrawn_by": by}
+            for c in channels
+        ]).execute()
+    except Exception as e:
+        print(f"[consent:withdrawal-log] {student_id} {channels}: {e}")
 
 
 @app.post("/api/consent/{student_id}/erase")
@@ -5494,6 +5535,141 @@ def ack_parent_links(request: Request):
     if not written:
         raise HTTPException(404, "Nothing to acknowledge")
     return {"ok": True, "acknowledged": len(written)}
+
+
+# A cap on one parent's banner, not on the table. A parent who has not opened
+# the dashboard in months would otherwise pull a term of events to render a
+# handful of lines -- and the endpoint dedupes to one line per channel anyway,
+# so beyond a few dozen rows there is nothing left to say.
+_MAX_WITHDRAWAL_NOTICES = 200
+
+
+class ConsentNoticeAck(BaseModel):
+    """`{child_id: iso8601}` -- the newest withdrawal the parent was shown, per
+    child. The client hands back what the server gave it rather than a
+    timestamp of its own, so "seen" means one agreed value."""
+    through: dict[str, str] = {}
+
+
+CONSENT_CHANNEL_LABELS = {
+    "eeg":              "the headband",
+    "headband_optical": "the headband's heart-rate sensor",
+    "camera":           "the camera",
+}
+
+
+@app.get("/api/parent/consent-notices")
+def parent_consent_notices(request: Request):
+    """Channels a linked child has switched off since this parent last looked.
+
+    The consent model notified in one direction only: a parent re-enabling a
+    channel raises `needs_student_ack`, and nothing told a *parent* their child
+    had turned one off. They found out by opening Settings and reading "Off
+    since <date>" on a panel they had no reason to visit -- which means the one
+    event that changes what is being measured was the one nobody was told about.
+
+    Read from `consent_withdrawals`, **not** from `signal_consent`'s
+    `*_revoked_at`. Those columns are nulled when a channel is re-enabled --
+    correctly, since they answer "is this off, and since when" -- so deriving
+    the notice from them meant any parent restoring a channel erased the notice
+    for every linked parent, and a withdraw/restore cycle inside one
+    dashboard-load interval made the feature silently no-op.
+
+    Keyed on `parent_child_links.parent_ack_at`, per (parent, child): keeping it
+    on `signal_consent` would have let the first of two linked parents to
+    acknowledge clear the notice for the second.
+
+    Fails **open**, to an empty list with `retrieved: false`, like the link
+    notice: it decides whether an advisory banner is drawn and nothing else, so
+    a blip must not tell a parent their child withdrew something. `_consent()`
+    itself still fails closed, because that one decides whether data may be
+    recorded -- different questions about the same subject.
+    """
+    user = get_user(request)
+    try:
+        links = supabase.table("parent_child_links").select("child_id, parent_ack_at")             .eq("parent_id", user["id"]).execute().data or []
+    except Exception as e:
+        print(f"[consent-notices] {user['id']}: {e}")
+        return {"notices": [], "retrieved": False}
+    if not links:
+        return {"notices": [], "retrieved": True}
+
+    ids = [l["child_id"] for l in links]
+    # The oldest watermark across this parent's links, so one query covers every
+    # child and the per-child comparison happens below. Bounded, because a
+    # long-unacknowledged parent could otherwise pull a term of events.
+    try:
+        rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at")             .in_("user_id", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
+    except Exception as e:
+        print(f"[consent-notices] {user['id']}: {e}")
+        return {"notices": [], "retrieved": False}
+
+    names = _profiles_many(ids)
+    since_by_child = {l["child_id"]: l.get("parent_ack_at") for l in links}
+
+    by_child: dict[str, list[dict]] = {}
+    for r in rows:
+        cid = r["user_id"]
+        stamp = r["withdrawn_at"]
+        since = since_by_child.get(cid)
+        # Newer than this parent's acknowledgement, or any withdrawal at all
+        # when they have never acknowledged. Both sides are ISO-8601 UTC out of
+        # PostgREST, so lexical comparison is ordering -- and this is a fail-open
+        # advisory banner, not one of the consent gates `_parse_ts` protects.
+        if since and stamp <= since:
+            continue
+        # One line per channel, newest first. A channel switched off twice is
+        # one thing to tell a parent, not two.
+        seen = by_child.setdefault(cid, [])
+        if any(c["channel"] == r["channel"] for c in seen):
+            continue
+        seen.append({"channel": r["channel"],
+                     "label": CONSENT_CHANNEL_LABELS.get(r["channel"], r["channel"]),
+                     "at": stamp})
+
+    notices = []
+    for cid, channels in by_child.items():
+        notices.append({
+            "child_id":   cid,
+            "child_name": (names.get(cid) or {}).get("display_name") or "Your child",
+            "channels":   channels,
+            # The watermark the client hands back on acknowledgement. Sent by
+            # the server rather than recomputed by the client, so "what you were
+            # shown" is one value both sides agree on.
+            "through":    max(c["at"] for c in channels),
+        })
+    return {"notices": notices, "retrieved": True}
+
+
+@app.post("/api/parent/consent-notices/ack")
+def ack_parent_consent_notices(payload: ConsentNoticeAck, request: Request):
+    """The parent has seen these notices, up to the point they were shown.
+
+    **Stamps the watermark the client was given, not `now()`.** Stamping the
+    current time acknowledges withdrawals the parent never saw: one landing
+    between the read that drew the banner and the click that dismissed it was
+    marked as seen and never shown again -- silently, permanently, on the
+    notification whose entire job is to not let that happen.
+
+    Per child, for the same reason the column lives on the link row: acking one
+    child's notice must not clear another's.
+
+    Scoped by `parent_id` on every write, and the link id is never taken from
+    the client -- which would let a caller clear somebody else's notice. A
+    `child_id` the caller is not linked to simply matches no row.
+
+    Not a 404 when nothing changed, unlike `/api/consent/ack`: double-clicking
+    the button is ordinary, and there is nothing wrong with a second
+    acknowledgement of the same watermark.
+    """
+    user = get_user(request)
+    try:
+        for child_id, through in (payload.through or {}).items():
+            supabase.table("parent_child_links")                 .update({"parent_ack_at": through})                 .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
+    except Exception as e:
+        print(f"[consent-notices:ack] {user['id']}: {e}")
+        raise HTTPException(500, "Could not acknowledge")
+    return {"ok": True}
 
 
 @app.get("/api/parent/children")

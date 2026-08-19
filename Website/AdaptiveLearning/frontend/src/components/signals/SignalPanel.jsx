@@ -3,6 +3,8 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
+import { describeSeries } from './describeSeries'
+import { ChartDataTable } from './ChartFallback'
 
 // One string cannot answer for three channels any more, so this is a function
 // of *which* channel and *why* it is not showing a value. The old `FACE_OFF =
@@ -351,6 +353,23 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
 
+  // The sentence that replaces the picture. Built only from series that have
+  // readings, so a channel nobody recorded is absent rather than described as
+  // flat at zero -- the same distinction the gaps in the line already make.
+  const lineSummary = [
+    `Daily signal trend over ${chartData.length} day${chartData.length === 1 ? '' : 's'}.`,
+    ...[
+      describeSeries(chartData, 'focus', 'Focus'),
+      describeSeries(chartData, 'stress', 'Stress'),
+      describeSeries(chartData, 'engagement', 'Engagement'),
+      describeSeries(chartData, 'heart_rate_bpm', 'Heart rate', ' bpm'),
+    ].filter(Boolean),
+  ].join(' ')
+
+  const pieSummary = emotionSlices.length
+    ? `Emotion mix: ${emotionSlices.map(sl => `${sl.name} ${sl.value} samples`).join(', ')}.`
+    : 'Emotion mix: nothing recorded.'
+
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="mb-4">
@@ -392,6 +411,34 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               : 'No weekly signal data available yet.'}
           </div>
         ) : (
+          // `role="img"` + a summary, because Recharts emits bare `<svg>`: with
+          // no name and no walkable structure, the whole trend announced as
+          // nothing. The `sr-only` table below carries the days themselves --
+          // the summary alone is a headline with the data thrown away.
+          // The table is a **sibling** of the `role="img"` wrapper, never a
+          // child. WAI-ARIA's presentational-children rule prunes every
+          // descendant role from an `img` unconditionally, so a table nested
+          // inside it is invisible to real assistive technology -- while
+          // Testing Library, which reads DOM attributes rather than modelling
+          // the accessibility tree, reports it as present. The first version
+          // did exactly that: the table built so a screen-reader user could ask
+          // which day was which was pruned, and the test that was supposed to
+          // prove otherwise could not see the difference.
+          //
+          // So `role="img"` wraps only the SVG, whose internals genuinely are
+          // noise worth pruning, and the data sits outside it.
+          <div className="h-full">
+            <ChartDataTable
+              caption={lineSummary}
+              rows={chartData} rowKey="label" rowLabel="Day"
+              columns={[
+                { key: 'focus',          label: 'Focus',      unit: '%' },
+                { key: 'stress',         label: 'Stress',     unit: '%' },
+                { key: 'engagement',     label: 'Engagement', unit: '%' },
+                { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
+              ]}
+            />
+          <div className="h-full" role="img" aria-label={lineSummary}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
@@ -434,6 +481,8 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
             </LineChart>
           </ResponsiveContainer>
+          </div>
+          </div>
         )}
       </div>
 
@@ -532,7 +581,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
+          {/* Sibling, not child -- see the trend chart above. */}
           <div className="h-52">
+            <ChartDataTable
+              caption={pieSummary}
+              rows={emotionSlices} rowKey="name" rowLabel="Emotion"
+              columns={[{ key: 'value', label: 'Samples' }]}
+            />
+            <div className="h-full" role="img" aria-label={pieSummary}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={emotionSlices} dataKey="value" nameKey="name"
@@ -545,6 +601,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
+            </div>
           </div>
         </div>
       )}

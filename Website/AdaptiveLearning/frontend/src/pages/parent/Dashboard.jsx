@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity, Sparkles, ShieldCheck } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
 // pct, emotionOn are shared rather than redefined here: this page had verbatim
 // copies of both, which is how it kept a fixed weakness in one after the other
 // was patched. emotionOn -- whether a payload in hand was built with the
@@ -55,6 +56,11 @@ export default function ParentDashboard() {
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
+      {/* A child switching a sensor off is the one event that changes what is
+          measured, and it was the one nobody was told about: the notice only
+          existed in the other direction. */}
+      <ChildWithdrewBanner />
+
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-3xl font-black text-gray-900 dark:text-white">Hey, <span className="text-emerald-600">{name}</span> 👋</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">Here's how your {children.length === 1 ? 'child is' : 'children are'} doing this week.</p>

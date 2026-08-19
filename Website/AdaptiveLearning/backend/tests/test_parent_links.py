@@ -273,3 +273,234 @@ def test_acknowledging_nothing_is_a_404(student):
     with pytest.raises(main.HTTPException) as e:
         main.ack_parent_links(None)
     assert e.value.status_code == 404
+
+
+# ── the parent is told ──────────────────────────────────────────────────────
+#
+# The reverse direction, and the one the consent model had no path for at all:
+# a parent re-enabling raises `needs_student_ack`, and a *student* switching a
+# sensor off raised nothing.
+#
+# Read from `consent_withdrawals`, an append-only log, rather than from
+# `signal_consent`'s `*_revoked_at` -- those are nulled when a channel is turned
+# back on, so the first version of this feature had a parent restoring a channel
+# erase the notice for every linked parent at once.
+
+
+class _WithdrawalClient(_Client):
+    """`parent_child_links` plus the append-only withdrawal log."""
+
+    def __init__(self, links, withdrawals):
+        super().__init__(links)
+        self.withdrawals = withdrawals
+
+    def table(self, name):
+        if name == "consent_withdrawals":
+            rows, log = self.withdrawals, self.reads
+
+            class _W:
+                def select(_self, *_cols, **_kw):
+                    class _Q:
+                        def in_(_s, col, vals):
+                            _s.rows = [r for r in rows if r.get(col) in vals]
+                            return _s
+
+                        def order(_s, col, desc=False):
+                            _s.rows = sorted(_s.rows, key=lambda r: r[col],
+                                             reverse=desc)
+                            return _s
+
+                        def limit(_s, n):
+                            _s.rows = _s.rows[:n]
+                            return _s
+
+                        def execute(_s):
+                            log.append(("withdrawals", {}, len(_s.rows)))
+                            return _Result(_s.rows)
+                    return _Q()
+            return _W()
+        return super().table(name)
+
+
+def _w(user_id, channel, at):
+    return {"user_id": user_id, "channel": channel, "withdrawn_at": at}
+
+
+@pytest.fixture
+def notices(monkeypatch):
+    c = _WithdrawalClient(
+        links=[{"id": "l-1", "parent_id": PARENT, "child_id": CHILD,
+                "created_at": "2026-08-01T09:00:00Z",
+                "parent_ack_at": "2026-08-10T09:00:00Z"}],
+        withdrawals=[],
+    )
+    monkeypatch.setattr(main, "supabase", c)
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": PARENT})
+    monkeypatch.setattr(main, "_profiles_many",
+                        lambda ids: {i: {"display_name": "Ada"} for i in ids})
+    return c
+
+
+def test_a_withdrawal_after_the_last_look_is_reported(notices):
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    out = main.parent_consent_notices(None)
+    assert out["retrieved"] is True
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
+    assert out["notices"][0]["child_name"] == "Ada"
+
+
+def test_a_withdrawal_the_parent_has_already_seen_is_not_repeated(notices):
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-09T09:00:00Z"))
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_nothing_withdrawn_is_no_notice(notices):
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_a_parent_who_never_acknowledged_sees_everything(notices):
+    notices.links[0]["parent_ack_at"] = None
+    notices.withdrawals.append(_w(CHILD, "eeg", "2026-07-01T09:00:00Z"))
+    out = main.parent_consent_notices(None)
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["eeg"]
+
+
+def test_re_enabling_the_channel_does_not_erase_the_notice(notices):
+    """The bug this table exists for.
+
+    `set_consent` nulls `*_revoked_at` when a channel is turned back on --
+    correctly, since that column answers "is this off, and since when". Deriving
+    the notice from it meant a parent restoring the channel erased the notice
+    for every linked parent, and a withdraw/restore inside one dashboard-load
+    interval made the whole feature silently no-op.
+
+    The event row is append-only, so the notice survives the restore. Modelled
+    by the fixture holding no consent row at all: if the endpoint still read
+    current state it would have nothing to report.
+    """
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    out = main.parent_consent_notices(None)
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
+
+
+def test_one_channel_switched_off_twice_is_one_line(notices):
+    notices.withdrawals += [_w(CHILD, "camera", "2026-08-12T09:00:00Z"),
+                            _w(CHILD, "camera", "2026-08-11T09:00:00Z")]
+    out = main.parent_consent_notices(None)
+    channels = out["notices"][0]["channels"]
+    assert [c["channel"] for c in channels] == ["camera"]
+    # The newest, so the date shown is the last time it happened.
+    assert channels[0]["at"] == "2026-08-12T09:00:00Z"
+
+
+def test_the_read_is_scoped_to_the_caller_s_own_links(notices):
+    """Unscoped, this is a list of which children have withdrawn what,
+    platform-wide."""
+    main.parent_consent_notices(None)
+    kind, filters, _n = notices.reads[0]
+    assert kind == "select"
+    assert filters == {"parent_id": PARENT}
+
+
+def test_a_failed_read_says_so_rather_than_reporting_no_withdrawals(monkeypatch, notices):
+    """Fails open, like the link notice: a blip must not tell a parent their
+    child withdrew something. `retrieved: false` is what stops the banner
+    reading that failure as a confident "nothing happened"."""
+    class _Boom:
+        def table(self, _name):
+            raise RuntimeError("postgrest is down")
+    monkeypatch.setattr(main, "supabase", _Boom())
+
+    assert main.parent_consent_notices(None) == {"notices": [], "retrieved": False}
+
+
+# ── acknowledging ───────────────────────────────────────────────────────────
+
+
+def _ack(through):
+    return main.ack_parent_consent_notices(main.ConsentNoticeAck(through=through), None)
+
+
+def test_acknowledging_stamps_the_watermark_it_was_given(notices):
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    out = main.parent_consent_notices(None)
+    _ack({CHILD: out["notices"][0]["through"]})
+
+    assert notices.links[0]["parent_ack_at"] == "2026-08-12T09:00:00Z"
+    assert main.parent_consent_notices(None)["notices"] == []
+
+
+def test_a_withdrawal_landing_during_the_read_is_not_swallowed(notices):
+    """The race the watermark exists for.
+
+    Stamping `now()` acknowledges withdrawals the parent never saw: one landing
+    between the read that drew the banner and the click that dismissed it was
+    marked seen and never shown again -- silently and permanently, on the
+    notification whose entire job is to stop that happening.
+    """
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+    shown = main.parent_consent_notices(None)["notices"][0]["through"]
+
+    # Lands after the banner was drawn, before the click.
+    notices.withdrawals.append(_w(CHILD, "eeg", "2026-08-13T09:00:00Z"))
+    _ack({CHILD: shown})
+
+    still = main.parent_consent_notices(None)["notices"]
+    assert [c["channel"] for c in still[0]["channels"]] == ["eeg"]
+
+
+def test_acknowledging_one_child_does_not_clear_another(notices):
+    """Two children, and the ack names one of them.
+
+    `.eq("parent_id", ...)` alone stamps every link the parent holds, so
+    dismissing one child's notice silently dropped the other's.
+    """
+    other = "child-2"
+    notices.links.append({"id": "l-9", "parent_id": PARENT, "child_id": other,
+                          "created_at": "2026-08-01T09:00:00Z",
+                          "parent_ack_at": "2026-08-10T09:00:00Z"})
+    notices.withdrawals += [_w(CHILD, "camera", "2026-08-12T09:00:00Z"),
+                            _w(other, "eeg", "2026-08-12T09:00:00Z")]
+
+    _ack({CHILD: "2026-08-12T09:00:00Z"})
+
+    left = main.parent_consent_notices(None)["notices"]
+    assert [n["child_id"] for n in left] == [other]
+
+
+def test_two_parents_linked_to_one_child_are_told_independently(monkeypatch, notices):
+    """The schema's whole justification, asserted rather than assumed.
+
+    The obvious design puts `parent_ack_at` on `signal_consent`, which has one
+    row per *student* -- so the first of two linked parents to acknowledge would
+    clear the notice for the second, who would never learn their child had
+    turned a camera off. On the link row, each parent has their own.
+    """
+    OTHER_PARENT = "parent-2"
+    notices.links.append({"id": "l-9", "parent_id": OTHER_PARENT, "child_id": CHILD,
+                          "created_at": "2026-08-01T09:00:00Z",
+                          "parent_ack_at": "2026-08-10T09:00:00Z"})
+    notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
+
+    # The first parent reads it and dismisses it.
+    _ack({CHILD: "2026-08-12T09:00:00Z"})
+    assert main.parent_consent_notices(None)["notices"] == []
+
+    # The second parent has not, and still sees it.
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": OTHER_PARENT})
+    out = main.parent_consent_notices(None)
+    assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
+
+
+def test_acknowledging_is_scoped_to_the_caller(notices):
+    """The link id is never taken from the client, and a `child_id` the caller
+    is not linked to matches no row."""
+    _ack({CHILD: "2026-08-12T09:00:00Z"})
+    kind, filters, _n = notices.reads[0]
+    assert kind == "update"
+    assert filters == {"parent_id": PARENT, "child_id": CHILD}
+
+
+def test_acknowledging_a_child_that_is_not_yours_changes_nothing(notices):
+    _ack({"someone-elses-child": "2026-08-12T09:00:00Z"})
+    assert notices.links[0]["parent_ack_at"] == "2026-08-10T09:00:00Z"

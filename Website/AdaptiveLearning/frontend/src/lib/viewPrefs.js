@@ -54,29 +54,25 @@
 // withdrawn still reads "not recorded — turned off on <date>" when the filter
 // is off. The filter hides; it never explains.
 
+import { readBoolPref, writePref, clearPref } from './localPref'
+
 const HIDE_SENSOR_DATA_KEY = 'teacher_hide_sensor_data'
 
 export function readHideSensorData() {
-  try {
-    return localStorage.getItem(HIDE_SENSOR_DATA_KEY) === 'true'
-  } catch {
-    // Safari private mode and friends. Default to showing: this is a
-    // decluttering preference, and the un-decluttered view is the normal one.
-    return false
-  }
+  // Defaults to showing: this is a decluttering preference, and the
+  // un-decluttered view is the normal one. `readBoolPref` carries the guard --
+  // `localStorage` throws rather than returning null in Safari private mode and
+  // friends.
+  return readBoolPref(HIDE_SENSOR_DATA_KEY, false)
 }
 
 export function writeHideSensorData(hidden) {
-  try {
-    localStorage.setItem(HIDE_SENSOR_DATA_KEY, hidden ? 'true' : 'false')
-  } catch { /* best-effort; the switch still works for this session */ }
+  writePref(HIDE_SENSOR_DATA_KEY, hidden ? 'true' : 'false')
 }
 
 // Cleared on sign-out. The key is per-browser, not per-account, so without this
 // the next person to sign in on a shared machine inherits whichever choice the
 // previous one made.
 export function clearViewPrefs() {
-  try {
-    localStorage.removeItem(HIDE_SENSOR_DATA_KEY)
-  } catch { /* nothing to clean up if storage is unavailable */ }
+  clearPref(HIDE_SENSOR_DATA_KEY)
 }

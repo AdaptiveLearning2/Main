@@ -1,4 +1,3 @@
-import { useCallback, useState } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { LayoutDashboard, Link as LinkIcon, Settings as SettingsIcon, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu } from 'lucide-react'
@@ -7,6 +6,7 @@ import { useTheme } from '../context/ThemeContext'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
 import MobileDrawer from '../components/ui/MobileDrawer'
 import useCollapsedSidebar from '../hooks/useCollapsedSidebar'
+import useMobileDrawer from '../hooks/useMobileDrawer'
 
 const NAV = [
   { path: '/parent',      label: 'Dashboard',  icon: LayoutDashboard, exact: true },
@@ -85,12 +85,11 @@ export default function ParentLayout() {
   // change it during render -- the key stayed equal, AnimatePresence saw the
   // same element, and the transition it exists for never played.
   const { pathname } = useLocation()
-  const [collapsed, toggleCollapsed] = useCollapsedSidebar()
-  const [mobileOpen, setMobileOpen] = useState(false)
-  // Stable, because `MobileDrawer` hands it to `useDialog`, which lists it
-  // in its dependencies -- a fresh closure per render would rebuild the
-  // focus trap on each one and yank focus back to the first item.
-  const closeMobile = useCallback(() => setMobileOpen(false), [])
+  // Scoped, so collapsing this sidebar does not collapse the other three
+  // layouts' -- one key would be shared across the whole origin.
+  const [collapsed, toggleCollapsed] = useCollapsedSidebar('parent')
+  const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
+    useMobileDrawer()
   const { dark, toggleTheme }       = useTheme()
 
   return (
@@ -111,7 +110,7 @@ export default function ParentLayout() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
-          <button aria-label="Open menu" onClick={() => setMobileOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Menu size={20} className="text-gray-600" /></button>
+          <button aria-label="Open menu" onClick={openMobile} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Menu size={20} className="text-gray-600" /></button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Parent <span className="text-emerald-600">Portal</span></span>
           <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">{dark ? <Sun size={18} className="text-gray-500" /> : <Moon size={18} className="text-gray-500" />}</button>
         </div>

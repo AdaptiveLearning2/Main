@@ -22,6 +22,16 @@ const ZONES = knownTimezones()
 export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
   const [draft, setDraft] = useState(null)
+
+  // Every edit goes through this rather than `setDraft` directly, so "Saved."
+  // cannot outlive the thing it was said about. Without it the message stayed
+  // up while the admin typed a new timezone over the saved one -- reporting an
+  // unsaved draft as persisted, on the form that decides whether recording is
+  // permitted at all.
+  const edit = (patch) => {
+    setSaved(false)
+    setDraft(patch)
+  }
   const [saved, setSaved] = useState(false)
 
   const { data, busy, error, mutate } = useAdminResource({
@@ -90,7 +100,7 @@ export default function AdminSchoolYear() {
           <input
             type="checkbox"
             checked={form.enforced}
-            onChange={e => setDraft({ ...form, enforced: e.target.checked })}
+            onChange={e => edit({ ...form, enforced: e.target.checked })}
             className="mt-1"
           />
           <span>
@@ -104,22 +114,26 @@ export default function AdminSchoolYear() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Starts on</label>
+            <label htmlFor="school-year-starts-on"
+                   className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Starts on</label>
             <input
+              id="school-year-starts-on"
               type="date"
               value={form.starts_on}
               disabled={!form.enforced}
-              onChange={e => setDraft({ ...form, starts_on: e.target.value })}
+              onChange={e => edit({ ...form, starts_on: e.target.value })}
               className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm disabled:opacity-40"
             />
           </div>
           <div>
-            <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Ends on</label>
+            <label htmlFor="school-year-ends-on"
+                   className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-1">Ends on</label>
             <input
+              id="school-year-ends-on"
               type="date"
               value={form.ends_on}
               disabled={!form.enforced}
-              onChange={e => setDraft({ ...form, ends_on: e.target.value })}
+              onChange={e => edit({ ...form, ends_on: e.target.value })}
               className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm disabled:opacity-40"
             />
           </div>
@@ -132,7 +146,7 @@ export default function AdminSchoolYear() {
             id="school-timezone"
             list="school-timezone-options"
             value={form.timezone}
-            onChange={e => setDraft({ ...form, timezone: e.target.value })}
+            onChange={e => edit({ ...form, timezone: e.target.value })}
             placeholder="America/Chicago"
             aria-invalid={!tzValid}
             aria-describedby="school-timezone-hint"

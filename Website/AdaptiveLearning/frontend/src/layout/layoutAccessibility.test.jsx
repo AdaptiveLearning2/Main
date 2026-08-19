@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 
@@ -161,5 +161,37 @@ describe.each(LAYOUTS)('%s sidebar collapse', (_name, Layout, path) => {
   it('starts expanded when nothing has been stored', () => {
     renderLayout(Layout, path)
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+  })
+})
+
+describe('sidebar collapse is per layout', () => {
+  beforeEach(() => { localStorage.clear() })
+
+  it('does not leak the choice from one role to another', async () => {
+    // One key for all four layouts would be shared across the origin, so on a
+    // shared school machine a teacher collapsing their sidebar would collapse
+    // the next student's. The sidebars are not the same control -- different
+    // navigation, different numbers of items -- so one is not a sensible answer
+    // for the other, and the leak reads as the app losing a setting rather than
+    // as one being shared.
+    const teacher = renderLayout(TeacherLayout, '/teacher')
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    await screen.findByRole('button', { name: 'Expand sidebar' })
+    teacher.unmount()
+
+    renderLayout(StudentLayout, '/dashboard')
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+  })
+
+  it('gives every layout a distinct key', () => {
+    // Derived from the storage rather than from the components, so a fifth
+    // layout added without a scope fails here rather than silently rejoining
+    // whichever key it copied.
+    for (const [, Layout, path] of LAYOUTS) {
+      renderLayout(Layout, path)
+      cleanup()
+    }
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('al_sidebar_collapsed'))
+    expect(new Set(keys).size).toBe(LAYOUTS.length)
   })
 })

@@ -1,4 +1,3 @@
-import { useCallback, useState } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import {
@@ -9,6 +8,7 @@ import { useTheme } from '../context/ThemeContext'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
 import MobileDrawer from '../components/ui/MobileDrawer'
 import useCollapsedSidebar from '../hooks/useCollapsedSidebar'
+import useMobileDrawer from '../hooks/useMobileDrawer'
 
 const NAV = [
   { path: '/admin',          label: 'Overview',    icon: ShieldCheck,   exact: true },
@@ -99,12 +99,11 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function AdminLayout() {
-  const [collapsed, toggleCollapsed] = useCollapsedSidebar()
-  const [mobileOpen, setMobileOpen] = useState(false)
-  // Stable, because `MobileDrawer` hands it to `useDialog`, which lists it
-  // in its dependencies -- a fresh closure per render would rebuild the
-  // focus trap on each one and yank focus back to the first item.
-  const closeMobile = useCallback(() => setMobileOpen(false), [])
+  // Scoped, so collapsing this sidebar does not collapse the other three
+  // layouts' -- one key would be shared across the whole origin.
+  const [collapsed, toggleCollapsed] = useCollapsedSidebar('admin')
+  const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
+    useMobileDrawer()
   const { dark, toggleTheme } = useTheme()
   // The page-transition key. `window.location.pathname` is read straight off
   // the browser during render, so React has no idea it changed: the value is
@@ -137,7 +136,7 @@ export default function AdminLayout() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
-          <button aria-label="Open menu" onClick={() => setMobileOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+          <button aria-label="Open menu" onClick={openMobile} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
             <Menu size={20} className="text-gray-600 dark:text-gray-400" />
           </button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Admin <span className="text-slate-600 dark:text-slate-400">Console</span></span>

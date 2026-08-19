@@ -415,7 +415,19 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           // no name and no walkable structure, the whole trend announced as
           // nothing. The `sr-only` table below carries the days themselves --
           // the summary alone is a headline with the data thrown away.
-          <div className="h-full" role="img" aria-label={lineSummary}>
+          // The table is a **sibling** of the `role="img"` wrapper, never a
+          // child. WAI-ARIA's presentational-children rule prunes every
+          // descendant role from an `img` unconditionally, so a table nested
+          // inside it is invisible to real assistive technology -- while
+          // Testing Library, which reads DOM attributes rather than modelling
+          // the accessibility tree, reports it as present. The first version
+          // did exactly that: the table built so a screen-reader user could ask
+          // which day was which was pruned, and the test that was supposed to
+          // prove otherwise could not see the difference.
+          //
+          // So `role="img"` wraps only the SVG, whose internals genuinely are
+          // noise worth pruning, and the data sits outside it.
+          <div className="h-full">
             <ChartDataTable
               caption={lineSummary}
               rows={chartData} rowKey="label" rowLabel="Day"
@@ -426,6 +438,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                 { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
               ]}
             />
+          <div className="h-full" role="img" aria-label={lineSummary}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
@@ -468,6 +481,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
             </LineChart>
           </ResponsiveContainer>
+          </div>
           </div>
         )}
       </div>
@@ -567,12 +581,14 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
-          <div className="h-52" role="img" aria-label={pieSummary}>
+          {/* Sibling, not child -- see the trend chart above. */}
+          <div className="h-52">
             <ChartDataTable
               caption={pieSummary}
               rows={emotionSlices} rowKey="name" rowLabel="Emotion"
               columns={[{ key: 'value', label: 'Samples' }]}
             />
+            <div className="h-full" role="img" aria-label={pieSummary}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={emotionSlices} dataKey="value" nameKey="name"
@@ -585,6 +601,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
+            </div>
           </div>
         </div>
       )}

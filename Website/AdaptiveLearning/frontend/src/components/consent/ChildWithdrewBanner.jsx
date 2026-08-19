@@ -50,7 +50,15 @@ export default function ChildWithdrewBanner() {
   const acknowledge = async () => {
     setBusy(true)
     try {
-      await apiFetch('/api/parent/consent-notices/ack', { method: 'POST' })
+      // Hands back the watermark the server gave us, per child, rather than
+      // letting the endpoint stamp `now()`. A withdrawal landing between the
+      // read that drew this banner and the click that dismissed it would
+      // otherwise be marked seen and never shown again -- silently, on the
+      // notification whose whole job is to stop exactly that.
+      const through = Object.fromEntries(
+        notices.filter(n => n.through).map(n => [n.child_id, n.through]))
+      await apiFetch('/api/parent/consent-notices/ack',
+                     { method: 'POST', body: { through } })
       setNotices([])
     } catch {
       // Left up. As far as the record is concerned the parent has not been

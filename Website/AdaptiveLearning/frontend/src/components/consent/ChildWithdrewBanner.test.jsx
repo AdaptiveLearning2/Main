@@ -15,6 +15,7 @@ const ONE = {
   notices: [{
     child_id: 'kid-1', child_name: 'Ada',
     channels: [{ channel: 'camera', label: 'the camera', at: '2026-08-12T09:00:00Z' }],
+    through: '2026-08-12T09:00:00Z',
   }],
 }
 
@@ -103,7 +104,12 @@ describe('ChildWithdrewBanner', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
-    expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack', { method: 'POST' })
+    // Hands back the watermark the server gave it, per child. Acking with
+    // `now()` instead would mark as seen any withdrawal that landed between the
+    // read that drew this banner and the click that dismissed it -- silently,
+    // and for ever.
+    expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
+      { method: 'POST', body: { through: { 'kid-1': '2026-08-12T09:00:00Z' } } })
     await waitFor(() =>
       expect(screen.queryByText(/switched a sensor off/i)).not.toBeInTheDocument())
   })
@@ -117,4 +123,26 @@ describe('ChildWithdrewBanner', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Got it/ })).toBeEnabled())
     expect(screen.getByText(/Ada switched a sensor off/i)).toBeInTheDocument()
   })
+})
+
+it('sends a watermark for every child it displayed', async () => {
+  apiFetch.mockResolvedValueOnce({
+    retrieved: true,
+    notices: [
+      { child_id: 'kid-1', child_name: 'Ada', through: '2026-08-12T09:00:00Z',
+        channels: [{ channel: 'camera', label: 'the camera', at: '2026-08-12T09:00:00Z' }] },
+      { child_id: 'kid-2', child_name: 'Basil', through: '2026-08-10T09:00:00Z',
+        channels: [{ channel: 'eeg', label: 'the headband', at: '2026-08-10T09:00:00Z' }] },
+    ],
+  }).mockResolvedValueOnce({ ok: true })
+
+  draw()
+  await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
+
+  // Per child, not one stamp for the family: the two were withdrawn at
+  // different times, and acking both at the later one would swallow anything
+  // that landed for Basil in between.
+  expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
+    { method: 'POST', body: { through: {
+      'kid-1': '2026-08-12T09:00:00Z', 'kid-2': '2026-08-10T09:00:00Z' } } })
 })

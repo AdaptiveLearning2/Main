@@ -615,6 +615,22 @@ describe('chart accessibility', () => {
     expect(name).not.toMatch(/heart rate/i)
   })
 
+  it('keeps the data table out of the role="img" subtree', () => {
+    // The bug this replaces: the table was nested *inside* the `role="img"`
+    // wrapper. WAI-ARIA's presentational-children rule prunes every descendant
+    // role from an `img` unconditionally, so the table built for screen-reader
+    // users was invisible to them -- and the test below could not tell, because
+    // Testing Library reads DOM attributes rather than modelling the
+    // accessibility tree, so `getByRole('table')` found it either way.
+    //
+    // Structure is therefore what gets asserted, since it is the part the
+    // pruning depends on and the part a test in jsdom can actually see.
+    render(<WeeklySignalReport report={report} />)
+    const chart = screen.getByRole('img', { name: /daily signal trend/i })
+    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    expect(chart).not.toContainElement(table)
+  })
+
   it('carries the days themselves, not just the summary', () => {
     // A sighted reader can pick a Tuesday out of a line. Without the table, a
     // screen-reader user gets a range and no way to ask which day was which.
@@ -629,6 +645,16 @@ describe('chart accessibility', () => {
     render(<WeeklySignalReport report={report} />)
     const table = screen.getByRole('table', { name: /daily signal trend/i })
     expect(within(table).getAllByText('not recorded').length).toBeGreaterThan(0)
+  })
+
+  it('keeps the emotion table out of its role="img" subtree too', () => {
+    render(<WeeklySignalReport report={{
+      ...report, emotion_included: true,
+      emotion_distribution: { neutral: 40, happy: 12 },
+    }} />)
+    const chart = screen.getByRole('img', { name: /emotion mix/i })
+    const table = screen.getByRole('table', { name: /emotion mix/i })
+    expect(chart).not.toContainElement(table)
   })
 
   it('names the emotion mix by its slices', () => {

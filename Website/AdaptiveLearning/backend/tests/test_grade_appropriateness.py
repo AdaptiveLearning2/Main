@@ -154,6 +154,61 @@ def test_a_whole_number_answer_passes_at_every_grade():
     assert ang.format_answer(solved) == "55"
 
 
+# --- degenerate angle configurations ------------------------------------
+
+def _solved(scenario, variables):
+    q = {"scenario": scenario, "variables": variables}
+    return q, ang.normalize_solution(ang._solve_scenario(q))
+
+
+def test_the_measured_degenerate_triangle_is_refused():
+    """"A triangle has angles 75 and 105. What is the third angle?" was
+    generated with the answer 0 (2026-08-18). The arithmetic is right and
+    there is no such triangle."""
+    q, solution = _solved("triangle_sum", ["75", "105"])
+    assert solution == 0
+    assert ang._invalid_angle_reason(q, solution) is not None
+
+
+@pytest.mark.parametrize("scenario,variables", [
+    ("triangle_sum",  ["90", "90"]),    # third angle is 0
+    ("triangle_sum",  ["100", "120"]),  # third angle is negative
+    ("complementary", ["90"]),          # the same failure, one scenario over
+    ("complementary", ["120"]),
+    ("supplementary", ["180"]),
+    ("linear_pair",   ["180"]),
+])
+def test_degenerate_configurations_are_refused(scenario, variables):
+    """Keyed on each scenario's total rather than written for triangles
+    alone -- `complementary` with a given angle of 90 fails identically."""
+    q, solution = _solved(scenario, variables)
+    assert ang._invalid_angle_reason(q, solution) is not None
+
+
+@pytest.mark.parametrize("scenario,variables", [
+    ("triangle_sum",  ["75", "60"]),
+    ("triangle_sum",  ["72", "93"]),
+    ("complementary", ["35"]),
+    ("supplementary", ["90"]),   # 90/90 is a legitimate supplementary pair
+    ("linear_pair",   ["75"]),
+])
+def test_valid_configurations_are_not_refused(scenario, variables):
+    q, solution = _solved(scenario, variables)
+    assert ang._invalid_angle_reason(q, solution) is None
+
+
+def test_algebra_complementary_is_judged_on_its_angles_not_on_x():
+    """`solution` there is x, which is unbounded -- 0 < x < 90 would be the
+    wrong test. The two expressions evaluated at x are the angles."""
+    q, solution = _solved("algebra_complementary", ["x + 20", "4x - 15"])
+    assert ang._invalid_angle_reason(q, solution) is None
+    # x = 0 is a perfectly ordinary value; the angles it produces (100 and
+    # -10) are not, and that is what has to be caught.
+    bad, bad_solution = _solved("algebra_complementary", ["2x + 100", "-x - 10"])
+    assert bad_solution == 0
+    assert ang._invalid_angle_reason(bad, bad_solution) is not None
+
+
 def test_an_unrecognised_scenario_is_retryable_rather_than_fatal():
     """None sends the loop round again; raising would take out a question
     that a regenerate would have fixed."""

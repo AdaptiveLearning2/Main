@@ -220,6 +220,70 @@ def _requires_whole_number_solution(grade):
     return (grade or "").strip().lower() in WHOLE_NUMBER_SOLUTION_GRADES
 
 
+# What each scenario's angles must add up to. Every angle in the question --
+# given or asked for -- has to be strictly between 0 and this total.
+_SCENARIO_TOTAL = {
+    "complementary":         90,
+    "supplementary":         180,
+    "linear_pair":           180,
+    "triangle_sum":          180,
+    "algebra_complementary": 90,
+}
+
+
+def _invalid_angle_reason(question_data, solution):
+    """Why this is not a valid angle configuration, or None if it is fine.
+
+    Measured 2026-08-18: "A triangle has angles 75 and 105. What is the
+    third angle?" was generated with the answer 0. The arithmetic is right
+    and the question is not a question -- 75 and 105 already use the whole
+    180, so no such triangle exists. `complementary` has the identical
+    failure at a given angle of 90, which is why this is keyed on the
+    scenario's total rather than written for triangles alone.
+
+    Wrong at every grade, unlike the whole-number rule below, so it is
+    checked first and unconditionally.
+    """
+    scenario = question_data["scenario"]
+
+    if scenario == "algebra_complementary":
+        # Here `solution` is x, not an angle -- x itself is unbounded, so
+        # the check has to be on the two expressions evaluated at x.
+        x = sp.symbols('x')
+        try:
+            angles = [float(expr.subs(x, solution))
+                      for expr in preprocess_variables(question_data["variables"])]
+        except (TypeError, ValueError):
+            return None
+        if any(a <= 0 or a >= 90 for a in angles):
+            return (f"solving gives angles {angles} degrees; each must be "
+                    f"strictly between 0 and 90 to be complementary")
+        return None
+
+    total = _SCENARIO_TOTAL.get(scenario)
+    if total is None:
+        return None
+
+    try:
+        given = [float(expr) for expr in preprocess_variables(question_data["variables"])]
+    except (TypeError, ValueError):
+        # Not numeric -- nothing to check here rather than a reason to refuse.
+        return None
+
+    for angle in given:
+        if angle <= 0 or angle >= total:
+            return (f"a given angle is {angle} degrees; it must be strictly "
+                    f"between 0 and {total}")
+
+    if solution <= 0:
+        return (f"the answer is {solution} degrees -- the given angles already "
+                f"use the whole {total}-degree total, so there is no such figure")
+    if solution >= total:
+        return (f"the answer is {solution} degrees, which leaves nothing for "
+                f"the other angle(s)")
+    return None
+
+
 def _solve_scenario(question_data):
     """The numeric answer for one parsed question, or None for a scenario
     this file does not recognise.
@@ -345,6 +409,13 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             continue
 
         solution = normalize_solution(solution)
+
+        # Checked before the grade rule: a degenerate figure is wrong for
+        # every student, not just a young one.
+        invalid = _invalid_angle_reason(question_data, solution)
+        if invalid:
+            print(f"[Attempt {attempt+1}] Invalid angle question: {invalid}")
+            continue
 
         if _requires_whole_number_solution(grade) and not float(solution).is_integer():
             # A decimal answer is fine from 6th grade; before that it is

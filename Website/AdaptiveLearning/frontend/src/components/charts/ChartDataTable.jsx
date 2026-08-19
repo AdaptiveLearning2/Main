@@ -1,5 +1,11 @@
 /**
- * The text a chart is, for anyone who cannot see it.
+ * The rows behind a chart, for screen readers only.
+ *
+ * Rendered by `AccessibleChart`, which is what places it -- *outside* the
+ * `role="img"` wrapper, since ARIA prunes an `img`'s descendants and would make
+ * this table invisible to the readers it exists for. Use that rather than this
+ * directly; the placement is the part that is easy to get wrong and impossible
+ * to see when it is.
  *
  * Recharts renders bare `<svg>` with no accessible name and no structure a
  * screen reader can walk, so the weekly signal panel — the whole of what a
@@ -28,7 +34,7 @@
  * "not recorded" rather than as a blank, which is indistinguishable from a
  * table that failed to render.
  */
-export function ChartDataTable({ caption, rows, rowKey, rowLabel, columns }) {
+export default function ChartDataTable({ caption, rows, rowKey, rowLabel, columns }) {
   return (
     <table className="sr-only">
       <caption>{caption}</caption>

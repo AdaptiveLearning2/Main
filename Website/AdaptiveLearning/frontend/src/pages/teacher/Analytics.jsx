@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts'
+import AccessibleChart from '../../components/charts/AccessibleChart'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../../components/ui/LoadError'
 
@@ -104,7 +105,13 @@ export default function TeacherAnalytics() {
           ) : topicData.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No questions yet</div>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
+            <AccessibleChart
+              height={280} className=""
+              summary={`Questions per topic. ${topicData.map(d => `${d.topic} ${d.count}`).join(', ')}.`}
+              table={{
+                rows: topicData, rowKey: 'topic', rowLabel: 'Topic',
+                columns: [{ key: 'count', label: 'Questions' }],
+              }}>
               <BarChart data={topicData} margin={{ top: 0, right: 0, left: -20, bottom: 50 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" className="dark:stroke-gray-700" />
                 <XAxis dataKey="topic" tick={{ fontSize: 11, fill: '#94a3b8' }} angle={-35} textAnchor="end" interval={0} />
@@ -114,7 +121,7 @@ export default function TeacherAnalytics() {
                   {topicData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </AccessibleChart>
           )}
         </motion.div>
 
@@ -125,7 +132,13 @@ export default function TeacherAnalytics() {
           {loading || diffData.length === 0 ? (
             <div className="h-48 flex items-center justify-center text-gray-400 text-sm">No data yet</div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
+            <AccessibleChart
+              height={200} className=""
+              summary={`Difficulty split. ${diffData.map(d => `${d.name} ${d.value}`).join(', ')}.`}
+              table={{
+                rows: diffData, rowKey: 'name', rowLabel: 'Difficulty',
+                columns: [{ key: 'value', label: 'Questions' }],
+              }}>
               <PieChart>
                 <Pie data={diffData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
                   {diffData.map((d, i) => <Cell key={i} fill={PIE_COLORS[d.name]} />)}
@@ -133,7 +146,7 @@ export default function TeacherAnalytics() {
                 <Tooltip formatter={(v, n) => [v, n.charAt(0).toUpperCase() + n.slice(1)]} />
                 <Legend formatter={v => <span className="capitalize text-sm font-semibold text-gray-700 dark:text-gray-300">{v}</span>} />
               </PieChart>
-            </ResponsiveContainer>
+            </AccessibleChart>
           )}
           <div className="space-y-2 mt-2">
             {diffData.map(d => (

@@ -1,10 +1,10 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
-import { describeSeries } from './describeSeries'
-import { ChartDataTable } from './ChartFallback'
+import { describeSeries } from '../charts/describeSeries'
+import AccessibleChart from '../charts/AccessibleChart'
 
 // One string cannot answer for three channels any more, so this is a function
 // of *which* channel and *why* it is not showing a value. The old `FACE_OFF =
@@ -415,74 +415,58 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           // no name and no walkable structure, the whole trend announced as
           // nothing. The `sr-only` table below carries the days themselves --
           // the summary alone is a headline with the data thrown away.
-          // The table is a **sibling** of the `role="img"` wrapper, never a
-          // child. WAI-ARIA's presentational-children rule prunes every
-          // descendant role from an `img` unconditionally, so a table nested
-          // inside it is invisible to real assistive technology -- while
-          // Testing Library, which reads DOM attributes rather than modelling
-          // the accessibility tree, reports it as present. The first version
-          // did exactly that: the table built so a screen-reader user could ask
-          // which day was which was pruned, and the test that was supposed to
-          // prove otherwise could not see the difference.
-          //
-          // So `role="img"` wraps only the SVG, whose internals genuinely are
-          // noise worth pruning, and the data sits outside it.
-          <div className="h-full">
-            <ChartDataTable
-              caption={lineSummary}
-              rows={chartData} rowKey="label" rowLabel="Day"
-              columns={[
+          <AccessibleChart
+            summary={lineSummary}
+            table={{
+              rows: chartData, rowKey: 'label', rowLabel: 'Day',
+              columns: [
                 { key: 'focus',          label: 'Focus',      unit: '%' },
                 { key: 'stress',         label: 'Stress',     unit: '%' },
                 { key: 'engagement',     label: 'Engagement', unit: '%' },
                 { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
-              ]}
-            />
-          <div className="h-full" role="img" aria-label={lineSummary}>
-          <ResponsiveContainer width="100%" height="100%">
+              ],
+            }}>
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-              <XAxis dataKey="label" fontSize={11} tickLine={false} />
-              {/* Two axes, because the series are in different units. The left
-                  one is percent for the 0..1 ratios; heart rate is beats per
-                  minute and would either flatten everything else against the
-                  floor or, if scaled to match, be drawn at 7200%. Explicit ids
-                  on both -- adding a second axis without giving the first one
-                  an id silently binds every existing series to the new axis. */}
-              <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
-              {heartShown && (
-                <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
-                       fontSize={11} tickLine={false} unit=" bpm" />
-              )}
-              <Tooltip />
-              {/* Distinct colours per series -- all three were "currentColor",
-                  which rendered them identically and made the chart unreadable.
-                  Matches the MiniMetric tones above. */}
-              {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
-                  which is the colour that file uses for *engagement* -- so one
-                  green line meant focus on this panel and engagement on session
-                  review, and a parent reading both was shown one colour for two
-                  things. The archived SVGs re-render the session charts, so
-                  those are the reference and this is the side that moved. */}
-              {/* Dots, not `dot={false}`. This chart holds at most seven
-                  points, one per day, and a student who practised on a single
-                  day gives every series exactly one -- which draws no segment
-                  and, without a dot, renders as a completely empty chart. That
-                  is the normal case for a new student in their first week, so
-                  the graph was blank precisely when it was first looked at. */}
-              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
-              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
-              {/* Omitted entirely with facial reporting off, rather than drawn
-                  as an all-null series -- an empty legend entry reads as a
-                  measurement that flatlined. */}
-              {/* Same reasoning as the facial series: omitted rather than drawn
-                  as an all-null line, because an empty legend entry reads as a
-                  measurement that flatlined. */}
-              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
-            </LineChart>
-          </ResponsiveContainer>
-          </div>
-          </div>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                <XAxis dataKey="label" fontSize={11} tickLine={false} />
+                {/* Two axes, because the series are in different units. The left
+                    one is percent for the 0..1 ratios; heart rate is beats per
+                    minute and would either flatten everything else against the
+                    floor or, if scaled to match, be drawn at 7200%. Explicit ids
+                    on both -- adding a second axis without giving the first one
+                    an id silently binds every existing series to the new axis. */}
+                <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
+                {heartShown && (
+                  <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
+                         fontSize={11} tickLine={false} unit=" bpm" />
+                )}
+                <Tooltip />
+                {/* Distinct colours per series -- all three were "currentColor",
+                    which rendered them identically and made the chart unreadable.
+                    Matches the MiniMetric tones above. */}
+                {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
+                    which is the colour that file uses for *engagement* -- so one
+                    green line meant focus on this panel and engagement on session
+                    review, and a parent reading both was shown one colour for two
+                    things. The archived SVGs re-render the session charts, so
+                    those are the reference and this is the side that moved. */}
+                {/* Dots, not `dot={false}`. This chart holds at most seven
+                    points, one per day, and a student who practised on a single
+                    day gives every series exactly one -- which draws no segment
+                    and, without a dot, renders as a completely empty chart. That
+                    is the normal case for a new student in their first week, so
+                    the graph was blank precisely when it was first looked at. */}
+                <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
+                <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
+                {/* Omitted entirely with facial reporting off, rather than drawn
+                    as an all-null series -- an empty legend entry reads as a
+                    measurement that flatlined. */}
+                {/* Same reasoning as the facial series: omitted rather than drawn
+                    as an all-null line, because an empty legend entry reads as a
+                    measurement that flatlined. */}
+                {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
+              </LineChart>
+          </AccessibleChart>
         )}
       </div>
 
@@ -581,28 +565,24 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
-          {/* Sibling, not child -- see the trend chart above. */}
-          <div className="h-52">
-            <ChartDataTable
-              caption={pieSummary}
-              rows={emotionSlices} rowKey="name" rowLabel="Emotion"
-              columns={[{ key: 'value', label: 'Samples' }]}
-            />
-            <div className="h-full" role="img" aria-label={pieSummary}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={emotionSlices} dataKey="value" nameKey="name"
-                     innerRadius="45%" outerRadius="75%" paddingAngle={2}>
-                  {emotionSlices.map(slice => (
-                    <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-            </div>
-          </div>
+          <AccessibleChart
+            summary={pieSummary}
+            className="h-52"
+            table={{
+              rows: emotionSlices, rowKey: 'name', rowLabel: 'Emotion',
+              columns: [{ key: 'value', label: 'Samples' }],
+            }}>
+            <PieChart>
+                  <Pie data={emotionSlices} dataKey="value" nameKey="name"
+                       innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                    {emotionSlices.map(slice => (
+                      <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                  <Legend />
+                </PieChart>
+          </AccessibleChart>
         </div>
       )}
 

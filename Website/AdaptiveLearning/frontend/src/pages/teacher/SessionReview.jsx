@@ -3,9 +3,11 @@ import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
+import AccessibleChart from '../../components/charts/AccessibleChart'
+import { describeSeries } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 
 // Fixed per label, so a colour means the same thing between two sessions --
@@ -317,6 +319,19 @@ function SessionReviewBody({ sessionId }) {
   const correctAnswers = answers.filter(a => a.correct).length
   const acc = totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0
 
+  // The replay chart as a sentence. Built only from series that have readings,
+  // so a channel this session never recorded is absent rather than described as
+  // flat at zero -- the same distinction the gaps in the line already make.
+  const timelineSummary = [
+    `Session replay over ${series.length} readings.`,
+    ...[
+      describeSeries(series, 'focus', 'Focus'),
+      describeSeries(series, 'stress', 'EEG stress'),
+      describeSeries(series, 'engagement', 'Engagement'),
+      describeSeries(series, 'bpm', 'Heart rate', ' bpm'),
+    ].filter(Boolean),
+  ].join(' ')
+
   const hasChart = series.length >= 2
 
   // The archive's four states, kept apart rather than collapsed into "is there
@@ -457,8 +472,16 @@ function SessionReviewBody({ sessionId }) {
             )}
           </div>
         ) : (
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <AccessibleChart summary={timelineSummary} className="h-72"
+            table={{
+              rows: series, rowKey: 't', rowLabel: 'Seconds in',
+              columns: [
+                { key: 'focus',      label: 'Focus',      unit: '%' },
+                { key: 'stress',     label: 'EEG stress', unit: '%' },
+                { key: 'engagement', label: 'Engagement', unit: '%' },
+                { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
+              ],
+            }}>
               <LineChart data={series} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
@@ -539,8 +562,7 @@ function SessionReviewBody({ sessionId }) {
                   )
                 })}
               </LineChart>
-            </ResponsiveContainer>
-          </div>
+          </AccessibleChart>
         )}
         {hasChart && answers.length > 0 && (
           <p className="text-[11px] text-gray-400 mt-2">
@@ -614,8 +636,12 @@ function SessionReviewBody({ sessionId }) {
                   ? <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
+              <AccessibleChart className="h-52"
+                summary={`Emotion mix. ${emotionSlices.map(sl => `${sl.name} ${sl.value} samples`).join(', ')}.`}
+                table={{
+                  rows: emotionSlices, rowKey: 'name', rowLabel: 'Emotion',
+                  columns: [{ key: 'value', label: 'Samples' }],
+                }}>
                   <PieChart>
                     <Pie data={emotionSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -626,8 +652,7 @@ function SessionReviewBody({ sessionId }) {
                     <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
-                </ResponsiveContainer>
-              </div>
+              </AccessibleChart>
               )}
             </div>
           )}
@@ -644,8 +669,12 @@ function SessionReviewBody({ sessionId }) {
                   ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
+              <AccessibleChart className="h-52"
+                summary={`Heart-rate stress. ${stressSlices.map(sl => `${sl.name} ${sl.value} windows`).join(', ')}.`}
+                table={{
+                  rows: stressSlices, rowKey: 'name', rowLabel: 'Band',
+                  columns: [{ key: 'value', label: 'Windows' }],
+                }}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -656,8 +685,7 @@ function SessionReviewBody({ sessionId }) {
                     <Tooltip formatter={(v, n) => [`${v} windows`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
-                </ResponsiveContainer>
-              </div>
+              </AccessibleChart>
               )}
             </div>
           )}

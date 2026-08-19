@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts'
+import { LineChart, Line, YAxis } from 'recharts'
+import AccessibleChart from '../../components/charts/AccessibleChart'
+import { describeSeries } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 
@@ -53,6 +55,19 @@ function StudentCard({ student, history }) {
   const face   = student.latest_face
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
+
+  // What the sparkline shows, as a sentence. Named per student, because a
+  // screen-reader user reaching this card has no other way to tell whose
+  // reading it is -- the card's own heading is several elements back.
+  const sparkSummary = [
+    `${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`,
+    ...[
+      describeSeries(history, 'focus', 'Focus', ''),
+      describeSeries(history, 'engagement', 'Engagement', ''),
+      describeSeries(history, 'stress', 'Stress', ''),
+      describeSeries(history, 'bpm', 'Heart rate', ' bpm'),
+    ].filter(Boolean),
+  ].join(' ')
 
   return (
     <motion.div
@@ -127,8 +142,12 @@ function StudentCard({ student, history }) {
         </div>
       )}
 
-      <div className="h-12 -mx-1">
-        <ResponsiveContainer width="100%" height="100%">
+      {/* A sparkline is still a chart. It was a bare `<svg>` with no name, so
+          the live monitor announced a student's card and then silence where
+          the reading is. No data table: this is a 60-point rolling window with
+          no meaningful row labels, and a table of it would be noise rather than
+          the alternative the trend chart's is. The summary is the reading. */}
+      <AccessibleChart summary={sparkSummary} className="h-12 -mx-1">
           <LineChart data={history}>
             {/* Two hidden axes with explicit ids. Heart rate is bpm and the
                 others are ratios; sharing one axis would flatten the ratios
@@ -141,8 +160,7 @@ function StudentCard({ student, history }) {
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
-        </ResponsiveContainer>
-      </div>
+      </AccessibleChart>
 
       {active && (
         <Link

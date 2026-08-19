@@ -48,10 +48,15 @@ describe('the display name', () => {
   it('actually saves it', async () => {
     // "Save Changes" raised a success toast and made no request at all.
     draw()
-    const field = await screen.findByLabelText(/display name/i)
-    // Same race as the parent settings test: the input is `disabled` until
-    // the profile loads, and findByLabelText resolves before that.
-    await waitFor(() => expect(field).toBeEnabled())
+    // Waited for by *value*, not just by presence. Both pages disable the field
+    // until the profile lands -- so that a fast typist cannot have their input
+    // overwritten by the response arriving behind them -- and `findByLabelText`
+    // resolves the moment the input exists, which is before the fetch settles.
+    // `userEvent.clear()` throws on a disabled element, so this raced: it
+    // passed locally every time and failed on CI, where the microtask lands a
+    // tick later.
+    await screen.findByDisplayValue('Ms Patel')
+    const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
     await userEvent.type(field, 'Ms Khan')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))

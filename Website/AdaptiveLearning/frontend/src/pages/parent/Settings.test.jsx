@@ -64,13 +64,15 @@ describe('the account section', () => {
 
   it('saves the display name', async () => {
     render(<ParentSettings />)
-    const field = await screen.findByLabelText(/display name/i)
-    // The input renders immediately but is `disabled` until the profile
-    // arrives, and findByLabelText resolves as soon as the label exists --
-    // so without this wait, clear() lands on a disabled input and throws
-    // "clear() is only supported on editable elements". It passes locally
-    // and fails on a slower CI runner, which is the worst kind of flake.
-    await waitFor(() => expect(field).toBeEnabled())
+    // Waited for by *value*, not just by presence. Both pages disable the field
+    // until the profile lands -- so that a fast typist cannot have their input
+    // overwritten by the response arriving behind them -- and `findByLabelText`
+    // resolves the moment the input exists, which is before the fetch settles.
+    // `userEvent.clear()` throws on a disabled element, so this raced: it
+    // passed locally every time and failed on CI, where the microtask lands a
+    // tick later.
+    await screen.findByDisplayValue('Rae')
+    const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
     await userEvent.type(field, 'Rae Okafor')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))

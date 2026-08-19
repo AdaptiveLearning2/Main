@@ -1,14 +1,14 @@
-import { useState } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
-  LayoutDashboard, Target, Brain, Clock, User,
-  Trophy, Star, LogOut, Moon, Sun,
-  ChevronLeft, ChevronRight, Menu, X, Users
+  LayoutDashboard, Target, Brain, Clock, User, Trophy, Star, LogOut, Moon, Sun, ChevronLeft, ChevronRight, Menu, Users,
 } from 'lucide-react'
 import { useAuth }  from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import ErrorBoundary from '../components/ui/ErrorBoundary'
+import MobileDrawer from '../components/ui/MobileDrawer'
+import useCollapsedSidebar from '../hooks/useCollapsedSidebar'
+import useMobileDrawer from '../hooks/useMobileDrawer'
 
 const NAV = [
   { path: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
@@ -114,8 +114,11 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 export default function StudentLayout() {
   // See ParentLayout: the key has to come from router state, not the browser.
   const { pathname } = useLocation()
-  const [collapsed, setCollapsed]   = useState(false)
-  const [mobileOpen, setMobileOpen] = useState(false)
+  // Scoped, so collapsing this sidebar does not collapse the other three
+  // layouts' -- one key would be shared across the whole origin.
+  const [collapsed, toggleCollapsed] = useCollapsedSidebar('student')
+  const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
+    useMobileDrawer()
   const { dark, toggleTheme } = useTheme()
 
   return (
@@ -129,7 +132,7 @@ export default function StudentLayout() {
         <SidebarContent collapsed={collapsed} />
         <button
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          onClick={() => setCollapsed(c => !c)}
+          onClick={toggleCollapsed}
           className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-indigo-600 transition z-10"
         >
           {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
@@ -137,36 +140,15 @@ export default function StudentLayout() {
       </motion.aside>
 
       {/* mobile drawer */}
-      <AnimatePresence>
-        {mobileOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/50 z-40 md:hidden"
-              onClick={() => setMobileOpen(false)}
-            />
-            <motion.aside
-              initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="fixed left-0 top-0 bottom-0 w-72 bg-white dark:bg-gray-900 z-50 md:hidden shadow-2xl overflow-y-auto"
-            >
-              <button
-                onClick={() => setMobileOpen(false)}
-                aria-label="Close menu" className="absolute top-4 right-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-              >
-                <X size={18} className="text-gray-500" />
-              </button>
-              <SidebarContent mobile onClose={() => setMobileOpen(false)} />
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      <MobileDrawer open={mobileOpen} onClose={closeMobile} label="Navigation">
+        <SidebarContent mobile onClose={closeMobile} />
+      </MobileDrawer>
 
       {/* main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* mobile topbar */}
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
-          <button aria-label="Open menu" onClick={() => setMobileOpen(true)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
+          <button aria-label="Open menu" onClick={openMobile} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
             <Menu size={20} className="text-gray-600 dark:text-gray-400" />
           </button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Adaptive<span className="text-indigo-600">Learning</span></span>

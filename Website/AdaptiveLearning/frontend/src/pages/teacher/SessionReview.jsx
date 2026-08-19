@@ -67,7 +67,11 @@ export default function SessionReview() {
   const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
-  const [loading, setLoading] = useState(true)
+  // Which session the state below belongs to. `loading` falls out of comparing
+  // it to the session in the URL, so arriving at a different session raises the
+  // skeleton on the render that changes the id rather than one effect later.
+  const [loadedFor, setLoadedFor] = useState(null)
+  const loading = loadedFor !== sessionId
   // The archived charts, fetched only when there are no raw rows left. Kept
   // separate from `data` because a failure here must not become the page's
   // error state: the answers, the tiles and the accuracy above do not depend
@@ -78,9 +82,6 @@ export default function SessionReview() {
 
   useEffect(() => {
     let killed = false
-    setLoading(true)
-    setArchive(null)
-    setArchiveErr(false)
     // Returns one session's raw facial samples, plotted below, and
     // deliberately does NOT honour the facial-recognition switch in
     // lib/viewPrefs.js -- that control covers the reporting surfaces, which
@@ -90,6 +91,11 @@ export default function SessionReview() {
       .then(d => {
         if (killed) return
         setData(d)
+        // The previous session's archive is cleared here rather than before the
+        // request, because `loading` is derived: everything below reads it
+        // through an early return, so a stale chart has no frame to appear in.
+        setArchive(null)
+        setArchiveErr(false)
         // Only when every channel is empty. That is precisely the expired
         // case -- `expire_signal_rows` takes all three channels for a day at
         // once and leaves the objects -- so a session that still has rows
@@ -104,7 +110,7 @@ export default function SessionReview() {
           .catch(() => { if (!killed) setArchiveErr(true) })
       })
       .catch(e => { if (!killed) setErr(e.message || String(e)) })
-      .finally(() => { if (!killed) setLoading(false) })
+      .finally(() => { if (!killed) setLoadedFor(sessionId) })
     return () => { killed = true }
   }, [sessionId])
 

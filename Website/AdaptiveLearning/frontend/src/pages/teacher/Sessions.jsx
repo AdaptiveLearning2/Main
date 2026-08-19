@@ -53,9 +53,13 @@ export default function Sessions() {
     })
   }, [])
 
+  // No `setLoading(true)` here either, for the reason given above -- and the
+  // skeleton a class *switch* needs is raised by the selector below, which is an
+  // event handler rather than an effect. That keeps the roster read off the
+  // `set-state-in-effect` backlog without letting one class's sessions sit on
+  // screen under another class's name while the new ones load.
   const loadSessions = useCallback(() => {
     if (!classId) return
-    setLoading(true)
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
       setStudents(kids || [])
       const map = {}
@@ -126,7 +130,7 @@ export default function Sessions() {
               placeholder="Filter by student name..."
               className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white w-48"
             />
-            <select value={classId} onChange={e => setClassId(e.target.value)}
+            <select value={classId} onChange={e => { setClassId(e.target.value); setLoading(true) }}
               className="px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm dark:text-white">
               {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>

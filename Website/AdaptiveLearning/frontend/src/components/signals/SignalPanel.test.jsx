@@ -301,7 +301,7 @@ describe('facial reporting switched off', () => {
 
   it('still reports face data when the flag is absent', () => {
     // Payloads predating the flag must keep rendering facial data.
-    const { face_included, ...legacy } = faceOff   // eslint-disable-line no-unused-vars
+    const { face_included, ...legacy } = faceOff
     render(<WeeklySignalReport report={legacy} />)
   })
 

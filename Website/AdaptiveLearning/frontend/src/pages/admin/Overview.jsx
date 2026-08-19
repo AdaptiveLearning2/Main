@@ -88,24 +88,32 @@ function ConsentCounts() {
 
 function StudentSearch() {
   const [term, setTerm] = useState('')
-  const [results, setResults] = useState([])
-  const [searching, setSearching] = useState(false)
+  // One piece of state, holding the query the results in hand belong to. Both
+  // `searching` and `results` fall out of comparing it to the query in the box,
+  // so neither needs setting on the way in or clearing on every exit path --
+  // and a response that arrives after the term moved on cannot be rendered
+  // against the wrong query.
+  const [hits, setHits] = useState({ q: '', students: [] })
+
+  const q = term.trim()
+  const enough = q.length >= 2
+  const searching = enough && hits.q !== q
+  const results = enough && hits.q === q ? hits.students : []
 
   useEffect(() => {
-    const q = term.trim()
-    if (q.length < 2) { setResults([]); return }
+    if (!enough) return
     // Debounced: the field fires on every keystroke and each one is a query
     // against `profiles`.
     let cancelled = false
-    setSearching(true)
     const t = setTimeout(() => {
       apiFetch(`/api/admin/students/search?q=${encodeURIComponent(q)}`)
-        .then(d => { if (!cancelled) setResults(d.students || []) })
-        .catch(() => { if (!cancelled) setResults([]) })
-        .finally(() => { if (!cancelled) setSearching(false) })
+        // A failed search records the query with no students rather than
+        // leaving the previous query's hits on screen under a new term.
+        .then(d => { if (!cancelled) setHits({ q, students: d.students || [] }) })
+        .catch(() => { if (!cancelled) setHits({ q, students: [] }) })
     }, 300)
     return () => { cancelled = true; clearTimeout(t) }
-  }, [term])
+  }, [q, enough])
 
   return (
     <div>

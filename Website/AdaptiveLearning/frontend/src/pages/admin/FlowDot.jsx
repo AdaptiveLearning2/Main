@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 /**
  * A channel's liveness as a light, not a number.
@@ -21,16 +21,24 @@ import { useEffect, useRef, useState } from 'react'
 export default function FlowDot({ channel, label }) {
   const { flowing, stale, seen, last_ts: lastTs } = channel || {}
   const [pulse, setPulse] = useState(false)
-  const prevTs = useRef(lastTs)
+  const [pulsedFor, setPulsedFor] = useState(lastTs)
 
+  // Starting the pulse is a render-time adjustment, not an effect: it is
+  // derived entirely from a prop changing, and doing it here means the dot
+  // lights on the same commit that delivers the new timestamp.
+  if (lastTs && lastTs !== pulsedFor) {
+    setPulsedFor(lastTs)
+    setPulse(true)
+  }
+
+  // Only *ending* it belongs in an effect, because a timer owns that. Keyed on
+  // `pulsedFor` as well as `pulse`, so a timestamp arriving mid-pulse restarts
+  // the 600ms rather than inheriting the remainder of the previous one.
   useEffect(() => {
-    if (lastTs && lastTs !== prevTs.current) {
-      prevTs.current = lastTs
-      setPulse(true)
-      const t = setTimeout(() => setPulse(false), 600)
-      return () => clearTimeout(t)
-    }
-  }, [lastTs])
+    if (!pulse) return
+    const t = setTimeout(() => setPulse(false), 600)
+    return () => clearTimeout(t)
+  }, [pulse, pulsedFor])
 
   let tone = 'border-2 border-gray-300 dark:border-gray-600 bg-transparent'
   let title = `${label}: no data has ever arrived for this session`

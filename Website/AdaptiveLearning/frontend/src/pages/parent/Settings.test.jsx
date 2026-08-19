@@ -65,6 +65,12 @@ describe('the account section', () => {
   it('saves the display name', async () => {
     render(<ParentSettings />)
     const field = await screen.findByLabelText(/display name/i)
+    // The input renders immediately but is `disabled` until the profile
+    // arrives, and findByLabelText resolves as soon as the label exists --
+    // so without this wait, clear() lands on a disabled input and throws
+    // "clear() is only supported on editable elements". It passes locally
+    // and fails on a slower CI runner, which is the worst kind of flake.
+    await waitFor(() => expect(field).toBeEnabled())
     await userEvent.clear(field)
     await userEvent.type(field, 'Rae Okafor')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))

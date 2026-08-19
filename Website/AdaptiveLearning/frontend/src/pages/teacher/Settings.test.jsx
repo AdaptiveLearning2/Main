@@ -49,6 +49,9 @@ describe('the display name', () => {
     // "Save Changes" raised a success toast and made no request at all.
     draw()
     const field = await screen.findByLabelText(/display name/i)
+    // Same race as the parent settings test: the input is `disabled` until
+    // the profile loads, and findByLabelText resolves before that.
+    await waitFor(() => expect(field).toBeEnabled())
     await userEvent.clear(field)
     await userEvent.type(field, 'Ms Khan')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))

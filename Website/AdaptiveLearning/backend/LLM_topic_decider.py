@@ -9,6 +9,7 @@ import json
 import random
 from statistics import fmean
 import signal_fusion
+import grade_levels
 from collections import deque
 import concurrent.futures
 
@@ -25,9 +26,48 @@ SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
+ALL_TOPICS = [
+    "geometry", "algebra", "expressions", "ordering", "rationals",
+    "mean", "median", "mode", "probability", "angle_relationships",
+]
 
-#Possibly worthwhile to store history in supabase. 
-#Possibly reset history per session. 
+# Code-enforced version of the same rule both topic prompts below state in
+# English ("Grades 1-3 should primarily see ordering, geometry, and
+# expressions... Algebra and probability should only appear after grade 6").
+# An 8B model does not reliably follow that -- the same reason difficulty is
+# also clamped deterministically elsewhere in this file (see the EEG-bias
+# comment in LLM_single_prompt_topic_and_difficulty_decider) -- and
+# randomize_selection()'s fallback path used to pick uniformly across all 10
+# topics with no grade awareness at all. Keyed on the raw grade string, not
+# _grade_band()-style bands, because the rule itself draws its line between
+# grade 5 and grade 6, finer than any of the generation files' four bands.
+def _allowed_topics(grade):
+    # Read numerically via grade_levels rather than by matching the exact
+    # strings the dropdown emits. `profiles.grade_level` is free text, so
+    # "Grade 1" used to miss every branch here and fall through to the
+    # fully-permissive one -- a 1st grader eligible for algebra, which is
+    # the single thing this function exists to prevent. An unreadable grade
+    # is now treated as the youngest rather than the oldest.
+    number = grade_levels.grade_number(grade)
+    if number is None or number <= 3:
+        return ["ordering", "geometry", "expressions"]
+    if number <= 5:
+        return [t for t in ALL_TOPICS if t not in ("algebra", "probability")]
+    return list(ALL_TOPICS)  # 6th grade and up
+
+
+def _safe_topic(topic, grade):
+    """topic if the student's grade may see it, otherwise a random topic
+    from what it may see. Applied to both the LLM's own selection (which the
+    prompt asks for but doesn't enforce) and to randomize_selection()'s
+    fallback, so this is the one place a topic is checked before a question
+    ever generates."""
+    allowed = _allowed_topics(grade)
+    return topic if topic in allowed else random.choice(allowed)
+
+
+#Possibly worthwhile to store history in supabase.
+#Possibly reset history per session.
 
 def get_user_performance(user_id):
     # Fetched fresh every call (not cached) so this reflects the student's
@@ -514,13 +554,12 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
         break
 
     if topic_data and difficulty_data:
-        #WILL add check later to default to randomized selection if LLM topic selection fails. 
-        topic = topic_data["topic"]
+        topic = _safe_topic(topic_data["topic"], grade)
         difficulty = difficulty_data["difficulty"]
-        
+
     else:
         print("LLM selection generation failed, fallback to randomized selection")
-        topic,difficulty = randomize_selection(accuracy_response)
+        topic,difficulty = randomize_selection(accuracy_response, grade)
     
     print(f"Selected topic: {topic} (selection method: {topic_data.get('selection_method', 'N/A')}) at difficulty: {difficulty}")
     question = question_generation(topic, difficulty, user_id, grade)
@@ -734,11 +773,11 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         break
 
     if topic_data:
-        topic = topic_data["topic"]
+        topic = _safe_topic(topic_data["topic"], grade)
         difficulty = topic_data["difficulty"]
     else: #backup if generation failed.
         print("LLM selection generation failed, fallback to randomized selection")
-        topic,difficulty = randomize_selection(accuracy_response)
+        topic,difficulty = randomize_selection(accuracy_response, grade)
 
     # EEG state and the manual Easier/Auto/Harder control were both given to
     # the LLM above as context for topic/difficulty selection, but an 8B model
@@ -791,31 +830,15 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
 
 
-def randomize_selection(accuracy_response):
-    num = random.randint(0, 9)
-    match num:
-        case 0:
-            topic = "ordering"
-        case 1:
-            topic = "rationals"
-        case 2:
-            topic = "expressions"
-        case 3:
-            topic = "algebra"
-        case 4:
-            topic = "geometry"
-        case 5:
-            topic = "angle_relationships"
-        case 6:
-            topic = "mean"
-        case 7:
-            topic = "median"
-        case 8: 
-            topic = "mode"
-        case 9:
-            topic = "probability"
-        
-    #get accuracy from supabase, select difficulty level accordingly 
+def randomize_selection(accuracy_response, grade):
+    # Was a uniform pick across all 10 topics with no grade awareness at all
+    # -- this is the fallback path for a failed LLM call, so it fires often
+    # enough to matter, and used to be the most direct way a 1st grader
+    # landed on "algebra". _allowed_topics() is the single source of truth
+    # for the grade rule; see its docstring.
+    topic = random.choice(_allowed_topics(grade))
+
+    #get accuracy from supabase, select difficulty level accordingly
     for row in accuracy_response.data or []:
         if row.get("math_topics", {}).get("topic_name") == topic:
             correct = row.get("correct_questions") or 0

@@ -18,6 +18,9 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
+import grade_levels
+import grade_appropriateness
 
 
 def extract_json(text):
@@ -77,32 +80,38 @@ Rules:
 
 solution = -1
 
-# Previously a fixed "up to three operations" rule applied at every
-# difficulty. Now operation count and denominator complexity scale with it.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use a SINGLE operation between two fractions that already share the same denominator (e.g. 3/8 + 2/8).",
-    "medium": "Use TWO operations between fractions with different denominators.",
-    "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths).",
-}
-
-# Grade controls numerator magnitude and whether negative fractions appear,
-# independent of difficulty's effect on denominator complexity/operation
-# count above.
 def _grade_band(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
-        return "early"
-    if g in {"4th grade", "5th grade", "6th grade"}:
-        return "middle"
-    if g in {"7th grade", "8th grade"}:
-        return "upper"
-    return "advanced"
+    # Delegated so ten copies of this cannot drift apart, and so an
+    # unreadable grade ("Grade 1") lands in "early" rather than
+    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    return grade_levels.grade_band(grade)
 
-GRADE_COMPLEXITY = {
-    "early":    "Use only positive fractions with numerators and denominators no greater than 12.",
-    "middle":   "Use only positive fractions.",
-    "upper":    "Negative fractions are allowed.",
-    "advanced": "No additional restriction.",
+# Grade-band-first. "rationals" isn't in LLM_topic_decider's grade-1-3
+# allowlist (fractions are typically a grade-3+ concept, fraction
+# *operations* grade-4/5+), so "early" here is defense-in-depth only --
+# kept to same-denominator halves/thirds/fourths framed as parts of a whole,
+# not the denominator/operation-count scaling middle band onward uses.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use a SINGLE addition between two simple fractions sharing the same denominator (halves, thirds, or fourths only, e.g. 1/4 + 2/4).",
+        "medium": "Use a SINGLE addition or subtraction between two simple fractions sharing the same denominator (halves, thirds, fourths, or eighths).",
+        "hard":   "Use a SINGLE addition or subtraction between two simple fractions sharing the same denominator, denominators up to 10.",
+    },
+    "middle": {
+        "easy":   "Use a SINGLE operation between two fractions that already share the same denominator (e.g. 3/8 + 2/8). Use only positive fractions.",
+        "medium": "Use TWO operations between fractions with different denominators. Use only positive fractions.",
+        "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths). Use only positive fractions.",
+    },
+    "upper": {
+        "easy":   "Use a SINGLE operation between two fractions that already share the same denominator. Negative fractions are allowed.",
+        "medium": "Use TWO operations between fractions with different denominators. Negative fractions are allowed.",
+        "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators. Negative fractions are allowed.",
+    },
+    "advanced": {
+        "easy":   "Use a SINGLE operation between two fractions that already share the same denominator.",
+        "medium": "Use TWO operations between fractions with different denominators.",
+        "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths).",
+    },
 }
 
 #Potential improvements:
@@ -125,14 +134,12 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
+        grade_band = _grade_band(grade)
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        prompt = lesson_plan_context.append_lesson_context(prompt, "rationals", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,
@@ -161,6 +168,13 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what
+        # the prompt asked for -- see grade_appropriateness.
+        if grade_appropriateness.refuse(question_data.get("question_text"),
+                                        "rationals", grade_band, difficulty,
+                                        attempt + 1):
             continue
 
         # If we reach here â†’ SUCCESS

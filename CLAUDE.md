@@ -1934,3 +1934,222 @@ does not protect the threadpool.
 Model output is untrusted text: it's parsed, length-bounded, stripped of markdown emphasis and list
 markers, and run through a clinical-term filter, and anything failing validation falls back to the
 rules. Extend `_validated_strategies` rather than rendering raw output.
+
+## Question generation can be grounded in a lesson plan, but nothing seeds one
+
+`lesson_plans` (`20260827010000`) holds curriculum text keyed on `(topic_name, grade_band)`, at the
+same `early`/`middle`/`upper`/`advanced` granularity `LLM_*_generation.py`'s own `_grade_band()`
+already uses — not per exact grade, since one lesson plan already covers a band there. Public read,
+like `math_topics`/`questions`; written only via the dashboard, since it's reference content the
+backend never mutates.
+
+`lesson_plan_context.append_lesson_context(prompt, topic_name, grade_band)` is the one-line call
+site wired into all ten `LLM_*_generation.py` topic files, right after the grade-magnitude block.
+It returns `None` on a missing row, a blank row, a failed read, or missing Supabase credentials --
+same fail-open direction as the reporting helpers: this is prompt grounding, not a consent or
+access gate, so any failure should degrade to the existing difficulty/grade heuristics rather than
+block generation. Cached with the same 30s TTL and `time.monotonic()` pattern as `main.py`'s
+`_feature_flags()` (a lesson-plan edit lands within the TTL, not on the next restart), and clamped
+to 2000 chars before it reaches a prompt -- dashboard-authored text is still bounded like every
+other prompt input here, even though only the dashboard/SQL editor can write it.
+
+**The Supabase client is created lazily, on first lookup, not at import.** `main.py` imports
+`LLM_topic_decider`, which imports the ten generation modules, which import this one -- eager
+`create_client()` at that point ran ahead of `main.py`'s own `RuntimeError` for a missing
+`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`, so a misconfigured deployment saw a bare `KeyError`
+three imports away instead of the clear error `main.py` exists to give it.
+
+The table has no rows yet, so none of this changes generated output until it's seeded per
+`(topic_name, grade_band)`.
+
+**Don't scrape third-party worksheet sites into this table.** Vendors like K5 Learning gate real
+content behind membership and hold copyright on what isn't; their topic taxonomy for a grade also
+doesn't line up with this product's topics (algebra/geometry/angle-relationships/mean/median/mode/
+probability/rationals/ordering are mostly older-than-grade-1 concepts). Write original objectives
+per topic/grade_band instead.
+
+## Grade appropriateness is code-enforced twice: which topic, and what that topic asks
+
+Both layers used to be soft prompt hints only, and both leaked. `LLM_topic_decider.py`'s topic
+prompt has always said "grades 1-3 should primarily see ordering, geometry, and expressions... 
+algebra and probability should only appear after grade 6" -- but nothing enforced it, and
+`randomize_selection()` -- the fallback whenever an LLM call fails to parse, which fires often
+enough to matter -- picked uniformly across all 10 topics with **no grade parameter at all**. That
+was the most direct way a 1st grader landed on "algebra".
+
+`LLM_topic_decider._allowed_topics(grade)` is now the single source of truth for that rule, keyed
+on the grade *number* rather than a `_grade_band()`-style band -- the rule's own line falls
+between grade 5 and grade 6, finer than any four-band split.
+
+**A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
+youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"
+form, and nothing in the schema enforces that. Every grade rule here used to match those exact
+strings and fall through to its *most permissive* branch for anything else — so `"Grade 1"` missed
+every branch of `_allowed_topics` and made a 1st grader eligible for algebra, and missed every
+branch of `_grade_band` and gave them `advanced` content. Both halves matter: fixing the topic gate
+alone still leaves advanced material reaching a child. `grade_levels.grade_number` parses a digit or
+a named label (`Kindergarten`, `Highschool`, `College`), rejects a number outside 0-13 so
+`"2026 cohort"` cannot become grade 2026, and answers `None` when it genuinely cannot tell — which
+every caller treats as the youngest, the same withholding-is-cheap asymmetry `signal_fusion`
+documents. `_grade_band` in all ten generation files now delegates to it rather than carrying a
+tenth copy of the string match. `_safe_topic(topic, grade)` checks
+the LLM's own selection against it (the prompt asks for the right thing but an 8B model doesn't
+reliably comply, same reasoning as the deterministic EEG-bias clamp in
+`LLM_single_prompt_topic_and_difficulty_decider`), and `randomize_selection()` now draws from it
+directly instead of an unconditional 10-way `match`. Both success paths and both fallback paths go
+through one of these two functions -- there is no third way a topic reaches `question_generation()`.
+
+**Below that, each `LLM_*_generation.py` used to scale difficulty and grade independently** --
+`DIFFICULTY_COMPLEXITY[difficulty]` described the question's *structure* ("one-step equation with
+x") and `GRADE_COMPLEXITY[grade_band]` only ever scaled a *number's magnitude* on top of it. That
+meant "easy" always meant "one-step equation with x" for every grade, algebra notation included --
+grade only changed how big the constants in that equation were. Replaced with
+`COMPLEXITY_BY_GRADE[grade_band][difficulty]`, one self-contained instruction per band per tier.
+"early" band content is grounded in grades 1-3 arithmetic specifically (whole numbers,
+addition/subtraction primary, no algebraic notation), not just smaller versions of the same
+structure every other grade gets.
+
+**Seven of the ten topics use that table; `geometry`, `angle_relationships` and `probability`
+deliberately do not, and the difference is not an unfinished migration.** In those three, difficulty
+already selects a *scenario* (`DIFFICULTY_SCENARIOS` → a circle-area question, a triangle-sum
+question), so the question's structure is chosen by picking which question to ask rather than by
+describing it in prose. They keep `GRADE_COMPLEXITY[band]` for magnitude alone. Giving them a
+`COMPLEXITY_BY_GRADE` too would state the difficulty rule twice, in two places that can disagree —
+which is the failure the single table exists to prevent. Grade still gates their scenarios, through
+`_pick_scenario(difficulty, grade_band)`.
+
+Two scenario-level leaks were the concrete bugs behind this, both now gated by `grade_band` rather
+than `difficulty` alone (a "hard"-difficulty 1st grader — a real state, since difficulty and grade
+are independent inputs — could reach either regardless of the topic-selection gate above, once the
+topic itself was already reachable):
+
+- **`expressions`' "simplify" scenario** (`2x + 3x`, algebraic notation) was one of three scenarios
+  picked by unconditional `random.randint(1,3)` at every grade. Withheld from "early"/"middle"
+  bands now (`_pick_scenario(grade_band)`); only "upper"/"advanced" (grades 7+) see it. This means
+  grade 6 -- pre-algebra-ready per the topic-selection rule above -- won't get "simplify" from this
+  particular topic either, a deliberate simplification rather than adding a fifth grade bucket for
+  one scenario.
+- **`angle_relationships`' scenario 5** (`algebra_complementary`, solves an equation for x) was
+  gated to "hard" *difficulty* only, with no grade check -- so a struggling-topic or randomized
+  "hard" pick could still reach it at any grade. Withheld from "early"/"middle" bands the same way.
+
+`geometry` already gated scenarios by difficulty (`DIFFICULTY_SCENARIOS`); added an orthogonal
+`EARLY_BAND_SCENARIOS` filter on top, since circle/volume/pythagorean-theorem scenarios assume
+formulas grades 1-3 haven't reached regardless of which difficulty tier picked them.
+
+**Most of the ten topics are still defense-in-depth for "early" band, not primary content**, since
+`_allowed_topics()` above keeps `algebra`/`probability`/`rationals`/`mean`/`median`/`mode`/
+`angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"
+tables exist only to fail safely if that gate is ever bypassed -- write real curriculum depth into
+`ordering`, `geometry`, and `expressions` first if extending this further, since those three are
+what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
+three across all four bands, and `lesson_plans_remaining_topics.sql` seeds the other seven at
+`upper`/`advanced` only — 26 rows in total, with `early`/`middle` left unseeded for those seven
+because `_allowed_topics` already keeps them out of grade 1-5 and an unseeded cell fails open to the
+heuristics. Both are dashboard-run scripts rather than migrations, because a migration would
+re-apply their text over any later dashboard edit on every rebuild.
+
+**A lesson plan must describe question shapes the generator can actually emit, and the limits are
+tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will
+attempt — and the solver then scores it, correctly or not. Read off the code, then confirmed by
+generating: `algebra` takes `solve(...)[0]` and splits on a single `=`, so one linear equation with
+one solution — a quadratic would present one root as the answer and mark the other correct choice
+wrong. `probability` has three scenarios (one named category, its complement, a die condition) and
+no compound or conditional events. `rationals` is `a/b` fractions with mixed numbers forbidden by
+the prompt. `mean`/`median`/`mode` are a listed dataset and one statistic — no box plots, no MAD, no
+comparing distributions. `angle_relationships` is two angles in one stated relationship, with no
+diagram to refer to. So at these bands **`advanced` means harder numbers and one more reasoning step
+inside the same question shape, not different mathematics.**
+
+**Three wrong-answer bugs came from seed text alone, all found by reading generated output and none
+catchable by `grade_appropriateness`** (2026-08-18, llama3.1:8b). "Counted from a described
+condition" produced *"either blue or yellow"* — a compound event — scored **1 against a true 10/21**.
+"Recognise that a dataset may have no mode at all" is true of the subject and wrong as an
+instruction: nine distinct rainfall readings, **no mode, answer 0**. And a percentage framing
+("80% of 15 brands") also scored **1**, because percentages give the solver no counts to divide.
+Each is now forbidden in the objectives *and* in the row's `notes`, which is where a future editor
+will look. The general rule: **an objective that is pedagogically true can still be an instruction
+the solver cannot score** — check what a cell generates before trusting it, not just what it says.
+
+### Angle answers are whole numbers through 5th grade, and decimals after
+
+Scenario 5's coefficients are unconstrained, so `algebra_complementary` returns things like 11.875
+(displayed `11.88`). The lesson-plan text asking for whole numbers did not stop it — prompt, not
+enforcement, as usual — so `LLM_angle_relationship_generation` now checks the **solved value** and
+regenerates when it is fractional for a young student. A decimal answer is not a defect in itself:
+from 6th grade it is ordinary mathematics, and the rule is scoped to the grades where it is not.
+
+**Keyed on the raw grade string, not `_grade_band()`.** The line falls between grade 5 and grade 6
+while `middle` spans 4, 5 **and** 6 — so no band boundary is in the right place, and using one would
+either impose whole numbers on a 6th grader or allow decimals for a 4th. Same reason
+`LLM_topic_decider._allowed_topics` is grade-keyed; `test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed`
+pins it. An unrecognised grade falls through to "decimals allowed", matching `_grade_band()`'s own
+`advanced` default: the constraint is a scaffold for younger students, so the safe direction when
+the grade is unknown is to leave the mathematics alone.
+
+**The solve moved inside the retry loop to make this possible** (`_solve_scenario`). Whether the
+answer is a whole number is a property of the *solved value*, not of the question text, so it cannot
+be checked until the scenario has been evaluated — and a question that fails has to be regenerated,
+not patched. An unrecognised scenario now returns `None` and retries rather than falling through
+with `solution` unbound. Measured after: grades 4-5 whole on 6 of 6, grades 6+ free to return
+`14.29`/`16.67` as before.
+
+### `grade_appropriateness` checks the output, because everything else only checks the prompt
+
+`COMPLEXITY_BY_GRADE` and the lesson-plan text are both **prompt-level** — they ask the model for
+something and nothing verifies it complied. That is the same shape as every rule this codebase has
+already had to move into code, so `find_violation(question_text, topic, grade_band)` runs inside
+each generation retry loop: a violation retries, and exhausting the retries raises, which
+`_prefetch_worker` already catches. Nine topics are wired in.
+
+**It tests one thing — algebraic variable notation reaching a band that must not see it** — and the
+narrowness is the design. A check with a real false-positive rate is worse than no check: it burns
+retries, and a question rejected for a bad reason looks exactly like a model that cannot follow
+instructions. `x` as a multiplication sign is the false positive that actually occurs here, so the
+pattern is `\d+[xyn]\b` — anchored so `2x` matches while **`6 x 4` and `6x4` do not** (the trailing
+`4` kills the word boundary). `test_ordinary_questions_are_not_refused` is the load-bearing half of
+its test file; a naive `/[xyn]/` fails exactly those cases.
+
+**`algebra` is deliberately exempt at every band.** Its own early-band content is one-step equations
+with x, so a blanket rule would reject every question the topic exists to ask — the gate protecting
+grades 1-5 from algebra is `_allowed_topics`, not this. `geometry` is early-only, since `upper`
+legitimately labels triangle sides `a`, `b`, `c`.
+
+What it deliberately does **not** check: magnitude/decimal/negative rules (`-` is also a hyphen and
+a range separator, so detection would be guesswork), and whether the question reflects the
+lesson-plan text's *content* — that needs a model to judge, which puts an unbounded LLM call on the
+hot generation path. **So this bounds the damage a bad lesson plan can do; it does not confirm a
+good one was followed.** Seeding still needs its effect checked by reading generated output.
+
+**Forbidden operators in early-band `expressions` are the one exception, and they are checked
+because reading the output found them.** Measured on llama3.1:8b with the lesson plans seeded
+(2026-08-18, grade 1 / easy): **2 of 8 questions came back with parentheses** — `Solve 5 + (2 - 1).`
+— and a separate run produced `Evaluate (3+2)*4-1.`, both while the *same prompt* said "ADDITION AND
+SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses." **A few-shot example beats a
+textual constraint**: every scenario example in `expr_prompt` is written for older students
+(scenario 1's is `36/3+(8*2)-(15-7)+4`), and the model followed their shape over the rule. Three
+changes, all needed: scenario 2 (`order_of_operations`) is withheld from `early` — it is CCSS 5.OA.1
+and is *defined* by mixing precedence, so it cannot be expressed within the band's rule at all —
+`EARLY_BAND_EXAMPLE` gives the band a worked example in the shape it is allowed, and the operator
+check rejects what still slips through. Re-measured after: **10 of 10 compliant**. Unlike negatives
+and decimals these characters have exactly one reading inside a generated expression, and the prompt
+already constrains the topic to `+ - * / ( )`, so there is no third interpretation available.
+
+**That is the general lesson, not a fact about one topic: seeding a lesson plan does not make the
+model follow it, and neither does an unambiguous instruction sitting next to a contradicting
+example.** Anything added to these prompts needs its effect read off generated output before it is
+believed — which is what `scripts/` has no home for yet and was done by hand here.
+
+### A lesson-plan cell has four ways to contribute nothing, and they are named
+
+`lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing
+credentials — all four degrade identically to the difficulty/grade heuristics, which is right, but
+they were also indistinguishable in the log. They are very different problems: a content gap
+somebody has to write, a half-finished edit, an outage, and a misconfigured process. `lookup_reason()`
+names them (`NO_ROW` / `BLANK_ROW` / `READ_FAILED` / `NO_CREDENTIALS` / `FOUND`) and each logs its
+own line. Nothing in generation branches on it — every non-`FOUND` reason degrades the same way —
+so this is diagnostics, deliberately.
+
+**`READ_FAILED` and `NO_CREDENTIALS` are not cached**, unlike the other three: caching an outage
+would keep answering `None` for the full TTL after the database came back, and credentials can be
+loaded later in a process's life. The cached reasons keep the log to one line per cell per TTL.

@@ -16,6 +16,9 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 ) #treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
+import lesson_plan_context
+import grade_levels
+import grade_appropriateness
 
 # Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -105,35 +108,81 @@ Rules:
 Return ONLY valid JSON with no text before or after the JSON object.
 """
 
-# expressions' three scenarios (evaluate / order_of_operations / simplify) aren't
-# naturally ordered by difficulty -- all three are valid at any level. So
-# instead of gating which scenario gets picked, difficulty scales the actual
-# complexity of the expression (operation count, parentheses), which is what
-# previously was a fixed "up to six operations / up to two parens" rule
-# applied identically regardless of difficulty.
-DIFFICULTY_COMPLEXITY = {
-    "easy":   "Use 2-3 operations total. Do NOT use any parentheses.",
-    "medium": "Use 3-4 operations total. You may use up to one set of parentheses.",
-    "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses.",
-}
-
-# Difficulty governs operation/parentheses count above; grade controls the
-# magnitude of the numbers used in the expression.
 def _grade_band(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
-        return "early"
-    if g in {"4th grade", "5th grade", "6th grade"}:
-        return "middle"
-    if g in {"7th grade", "8th grade"}:
-        return "upper"
-    return "advanced"
+    # Delegated so ten copies of this cannot drift apart, and so an
+    # unreadable grade ("Grade 1") lands in "early" rather than
+    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    return grade_levels.grade_band(grade)
 
-GRADE_COMPLEXITY = {
-    "early":    "Use only single-digit numbers (1-9) in the expression.",
-    "middle":   "Numbers may be up to two digits (1-50).",
-    "upper":    "Numbers may be up to three digits (1-200).",
-    "advanced": "No additional restriction.",
+# Scenario 3 ("simplify", e.g. "2x + 3x") is algebraic notation -- combining
+# like terms with a variable -- and used to be pickable via random.randint(1,3)
+# for every grade with no gating at all, so a 1st grader could land on it.
+# Withheld until "upper" (grades 7-8) regardless of difficulty, since
+# pre-algebra notation isn't in reach before then. This means grade 6
+# ("middle" band, though the topic-selection rule elsewhere in this codebase
+# treats grade 6 as pre-algebra-ready) won't see "simplify" from this topic
+# either -- a deliberate simplification rather than adding a fifth grade
+# bucket just for this one scenario.
+# Scenario 2 ("order_of_operations") is withheld from "early" as well, on top
+# of scenario 3. Order of operations is CCSS 5.OA.1 -- a grade-5 concept --
+# and the scenario is *defined* by mixing precedence levels, so it cannot be
+# expressed within the early band's addition-and-subtraction-only rule. It
+# was measurably harmful, not just conceptually wrong: see EARLY_BAND_EXAMPLE.
+def _pick_scenario(grade_band):
+    if grade_band == "early":
+        return 1
+    if grade_band == "middle":
+        return random.randint(1, 2)
+    return random.randint(1, 3)
+
+
+# Every scenario example in expr_prompt above is written for older students --
+# scenario 1's is "36/3+(8*2)-(15-7)+4" -- and a few-shot example beats a
+# textual constraint. Measured on llama3.1:8b against the seeded lesson plans
+# (2026-08-18, grade 1 / easy): 2 of 8 questions came back with parentheses,
+# and a separate run produced "Evaluate (3+2)*4-1.", despite
+# COMPLEXITY_BY_GRADE forbidding both in the same prompt. So the early band
+# gets a worked example in the shape it is actually allowed, and
+# `grade_appropriateness` rejects the ones that still slip through.
+EARLY_BAND_EXAMPLE = """
+EXAMPLE OF A CORRECT QUESTION FOR THIS GRADE LEVEL -- follow this shape, NOT
+the scenario examples above, which are written for much older students:
+{
+  "question_text": "What is 7 + 8 - 4?",
+  "question_topic": "expressions",
+  "scenario": "evaluate",
+  "variables": ["7", "+", "8", "-", "4"]
+}
+The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
+"/", and no parentheses of any kind.
+"""
+
+# Grade-band-first: which OPERATIONS are even available changes by grade,
+# not just how many of them or how big the numbers are. Multiplication/
+# division and parentheses used to be available at every grade the moment
+# difficulty ticked up to "medium", regardless of whether that grade has
+# been taught multiplication yet.
+COMPLEXITY_BY_GRADE = {
+    "early": {
+        "easy":   "Use 2 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-9.",
+        "medium": "Use 2-3 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-20.",
+        "hard":   "Use 2-3 operations total. Multiplication facts up to 5x5 may be included alongside addition/subtraction. Do NOT use division or parentheses. Numbers 1-20.",
+    },
+    "middle": {
+        "easy":   "Use 2-3 operations total. Do NOT use any parentheses. Numbers up to two digits (1-50).",
+        "medium": "Use 3-4 operations total. You may use up to one set of parentheses. Numbers up to two digits (1-50).",
+        "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses. Numbers up to two digits (1-50).",
+    },
+    "upper": {
+        "easy":   "Use 2-3 operations total. Do NOT use any parentheses. Numbers may be up to three digits (1-200).",
+        "medium": "Use 3-4 operations total. You may use up to one set of parentheses. Numbers may be up to three digits (1-200).",
+        "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses. Numbers may be up to three digits (1-200).",
+    },
+    "advanced": {
+        "easy":   "Use 2-3 operations total. Do NOT use any parentheses.",
+        "medium": "Use 3-4 operations total. You may use up to one set of parentheses.",
+        "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses.",
+    },
 }
 
 solution = -1
@@ -150,8 +199,9 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             prompt = expr_prompt
 
 
-        #randomize scenario selection to ensure variety in generated questions.
-        scenario = random.randint(1,3)
+        #randomize scenario selection (within what this grade band may see) to ensure variety.
+        grade_band = _grade_band(grade)
+        scenario = _pick_scenario(grade_band)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
         print(scenario)
@@ -167,13 +217,12 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
         prompt += (
-            f"\nCOMPLEXITY FOR THIS DIFFICULTY: "
-            f"{DIFFICULTY_COMPLEXITY.get(difficulty, DIFFICULTY_COMPLEXITY['medium'])}\n"
+            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
+            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
-        prompt += (
-            f"\nMAGNITUDE FOR THIS GRADE LEVEL: "
-            f"{GRADE_COMPLEXITY[_grade_band(grade)]}\n"
-        )
+        if grade_band == "early":
+            prompt += EARLY_BAND_EXAMPLE
+        prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
         response = generate(
             model="llama3.1:8b",
             prompt=prompt,
@@ -201,6 +250,13 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # Backstop on what the model actually produced, not just on what
+        # the prompt asked for -- see grade_appropriateness.
+        if grade_appropriateness.refuse(question_data.get("question_text"),
+                                        "expressions", grade_band, difficulty,
+                                        attempt + 1):
             continue
 
         # If we reach here â†’ SUCCESS

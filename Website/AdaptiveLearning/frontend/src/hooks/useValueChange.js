@@ -19,12 +19,17 @@ import { useState } from 'react'
  * component — no fetches, no subscriptions, nothing observable outside.
  *
  * @param value     the value to watch, compared with `Object.is`
- * @param onChange  called as `(next, previous)` on a change
+ * @param onChange  called with the new value. Deliberately not handed the
+ *                  previous one: neither call site wants it, and a parameter
+ *                  nobody reads is a hint that comparing against the previous
+ *                  *render* is the right question here -- which for `FlowDot`
+ *                  it was not, and the bug that came of assuming so is
+ *                  documented there.
  */
 export default function useValueChange(value, onChange) {
   const [previous, setPrevious] = useState(value)
   if (!Object.is(value, previous)) {
     setPrevious(value)
-    onChange(value, previous)
+    onChange(value)
   }
 }

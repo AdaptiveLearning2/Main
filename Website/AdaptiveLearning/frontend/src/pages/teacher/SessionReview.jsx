@@ -114,11 +114,10 @@ function SessionReviewBody({ sessionId }) {
       .then(d => {
         if (killed) return
         setData(d)
-        // The previous session's archive is cleared here rather than before the
-        // request, because `loading` is derived: everything below reads it
-        // through an early return, so a stale chart has no frame to appear in.
-        setArchive(null)
-        setArchiveErr(false)
+        // No archive reset here any more: this component remounts per session
+        // id, so there is no previous session's archive to clear. Left in, it
+        // read as protection this no longer needs and the next reader would
+        // have had to work out which mechanism was load-bearing.
         // Only when every channel is empty. That is precisely the expired
         // case -- `expire_signal_rows` takes all three channels for a day at
         // once and leaves the objects -- so a session that still has rows

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import useValueChange from '../../hooks/useValueChange'
 
 /**
  * A channel's liveness as a light, not a number.
@@ -21,28 +20,44 @@ import useValueChange from '../../hooks/useValueChange'
  */
 export default function FlowDot({ channel, label }) {
   const { flowing, stale, seen, last_ts: lastTs } = channel || {}
-  // *Which* timestamp is being pulsed for, rather than a boolean plus the
-  // timestamp beside it. The two-state version had the ending effect depending
-  // on `pulsedFor` without ever reading it -- correct, and load-bearing, and
-  // invisible: an `exhaustive-deps` cleanup would have dropped it as unused and
-  // silently taken the mid-pulse restart with it. One value the effect actually
-  // reads cannot be pruned that way.
-  const [pulseFor, setPulseFor] = useState(null)
-  const pulse = pulseFor !== null
+  // Two states, and they are genuinely different questions:
+  //
+  //   pulsedFor   the newest timestamp we have *ever* lit for. Never cleared.
+  //   pulsingFor  the one currently lit, or null. Cleared by the timer below.
+  //
+  // Collapsing them into one -- and driving it from a generic
+  // previous-value hook -- looked like a simplification and was a bug. The
+  // timer nulls the live one, so after a pulse ends there is nothing left
+  // recording what was already shown: a timestamp that goes transiently
+  // missing and comes back *unchanged* reads as a change, and the dot flashes
+  // "fresh data" on an admin live monitor for data that is not new. A
+  // previous-value hook cannot see that, because the value did change --
+  // twice, back to where it started.
+  //
+  // So the comparison is against what was last *pulsed*, not against what was
+  // last *rendered*, and only `pulsedFor` can answer that.
+  const [pulsedFor, setPulsedFor] = useState(lastTs)
+  const [pulsingFor, setPulsingFor] = useState(null)
+  const pulse = pulsingFor !== null
 
   // Started during render, not in an effect: it is derived entirely from a prop
   // changing, and doing it here means the dot lights on the same commit that
   // delivers the new timestamp.
-  useValueChange(lastTs, next => { if (next) setPulseFor(next) })
+  if (lastTs && lastTs !== pulsedFor) {
+    setPulsedFor(lastTs)
+    setPulsingFor(lastTs)
+  }
 
-  // Only *ending* it belongs in an effect, because a timer owns that. A
-  // timestamp arriving mid-pulse changes `pulseFor`, so the effect re-runs and
-  // the 600ms restarts rather than inheriting the remainder of the previous one.
+  // Only *ending* it belongs in an effect, because a timer owns that. It reads
+  // `pulsingFor` and depends on `pulsingFor`, so a timestamp arriving mid-pulse
+  // restarts the 600ms rather than inheriting the remainder -- and no dependency
+  // here is load-bearing without being read, which is what the earlier
+  // `[pulse, pulsedFor]` pair got wrong.
   useEffect(() => {
-    if (!pulseFor) return
-    const t = setTimeout(() => setPulseFor(null), 600)
+    if (!pulsingFor) return
+    const t = setTimeout(() => setPulsingFor(null), 600)
     return () => clearTimeout(t)
-  }, [pulseFor])
+  }, [pulsingFor])
 
   let tone = 'border-2 border-gray-300 dark:border-gray-600 bg-transparent'
   let title = `${label}: no data has ever arrived for this session`

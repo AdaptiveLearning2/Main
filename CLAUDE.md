@@ -186,6 +186,48 @@ changes the id and no previous subject's charts can be painted under this one's 
 raised by a *user action* stays a flag — `Sessions.jsx` sets it in the class selector's `onChange`,
 which is an event handler and not an effect.
 
+Both shapes have since bitten, and the corrections are the load-bearing half:
+
+- **Derived `loading` needs a remount, not just a derivation.** `loading = loadedFor !== id` reads
+  *false* when you navigate A→B→A: B's request is cancelled on the way out without ever advancing
+  `loadedFor`, so returning to A finds it still saying `'A'`. `SessionReview.jsx` therefore keys the
+  body on the id (`<Body key={sessionId} …>`), which resets every piece of session-scoped state at
+  once — including the `err` that otherwise let a failure on A mask a B that loaded fine.
+  `ChildDetail.jsx` does the same, and this is now the pattern for any page whose whole state
+  belongs to one route param.
+- **The render-time adjustment compares against the previous *render*, and that is not always the
+  question.** `useValueChange` (`hooks/useValueChange.js`) is the extracted form and is right for
+  `Flags.jsx`. It was wrong for `FlowDot.jsx`, which needs the last value it *acted on*: the pulse
+  timer clears the live state, so a timestamp that goes transiently null and comes back unchanged
+  reads as a change and flashes "fresh data" for data that is not new. Keep the acted-on value in
+  its own state that nothing else clears. A hook parameter nobody reads is the tell.
+- **Deriving state does not remove the need to cancel.** Every fetch that can be superseded needs a
+  guard, and the slow ones are where it matters: `Sessions.jsx`'s roster read fans out per student,
+  so a class switch let the previous class's response land last and repaint the list under the new
+  class's name. It uses a generation ref rather than a cleanup flag, because the effect is not the
+  only caller — the retry button is the other, and a retry is exactly when someone changes class
+  rather than waiting.
+
+### Charts are `AccessibleChart`, and nothing else may render one
+
+`components/charts/AccessibleChart.jsx` owns the `role="img"` + `sr-only` table structure for every
+Recharts chart in the app. **The table must be a sibling of the `role="img"` element, never a
+child**: WAI-ARIA's presentational-children rule prunes every descendant role from an `img`, so a
+nested table is invisible to real assistive technology — and Testing Library reads DOM attributes
+rather than the accessibility tree, so it reports it present either way. A hand-assembled call site
+has nothing to fail against, in the browser or in CI, which is why this is a component rather than a
+documented recipe.
+
+`columns` drives the summary sentence *and* the table from one spec. As two literals they disagreed
+twice in one change — a key named `bpm` where the rows carried `heart_rate_bpm`, and raw 0..1 ratios
+described with a `%` unit — and neither surface could contradict the other, because both were wrong
+at once.
+
+`AccessibleChart.test.jsx` enforces it by walking the source: a `.jsx` naming any Recharts chart
+component without going through `AccessibleChart` fails, by file name. Matched on the chart
+components rather than on `ResponsiveContainer`, since a chart given explicit width and height needs
+no container. It cannot see a hand-written `<svg>`; that is the honest limit.
+
 **`react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay
 on.** `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup —
 `motion` from framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused

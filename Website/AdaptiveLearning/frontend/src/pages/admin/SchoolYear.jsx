@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
 import { isValidTimezone, knownTimezones } from '../../lib/timezone'
@@ -21,6 +21,13 @@ const ZONES = knownTimezones()
 
 export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
+  // Above the early returns below, or it is a conditional hook.
+  const zoneOptions = useMemo(() => (
+    <datalist id="school-timezone-options">
+      {ZONES.map(z => <option key={z} value={z} />)}
+    </datalist>
+  ), [])
+
   const [draft, setDraft] = useState(null)
 
   // Every edit goes through this rather than `setDraft` directly, so "Saved."
@@ -159,9 +166,11 @@ export default function AdminSchoolYear() {
           {/* Suggestions, not the check. An engine without
               `Intl.supportedValuesOf` gets an empty list and a field that still
               validates, rather than a crash. */}
-          <datalist id="school-timezone-options">
-            {ZONES.map(z => <option key={z} value={z} />)}
-          </datalist>
+          {/* Memoised: ~420 `<option>` nodes rebuilt on every keystroke in the
+              field above them, for a list that never changes. Cheap enough not
+              to notice by hand and slow enough to time a test out under a
+              parallel run, which is how it was found. */}
+          {zoneOptions}
           {!tzValid && (
             <p className="mt-1 text-xs font-bold text-rose-600 dark:text-rose-400">
               Not a timezone this platform can resolve. Saving it would stop

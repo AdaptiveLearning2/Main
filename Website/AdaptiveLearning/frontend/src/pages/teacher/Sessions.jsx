@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
@@ -69,9 +69,24 @@ export default function Sessions() {
   // event handler rather than an effect. That keeps the roster read off the
   // `set-state-in-effect` backlog without letting one class's sessions sit on
   // screen under another class's name while the new ones load.
+  // Which roster read is the live one. This fetch fans out per student, so it
+  // is the slowest on the page by some margin -- and switching class while one
+  // is in flight let the *previous* class's response land last and repaint the
+  // list under the new class's name, with the dropdown still reading the one
+  // you picked.
+  //
+  // A generation rather than a cleanup flag, because there are two callers: the
+  // effect below and the retry button. A flag owned by the effect leaves the
+  // retry unguarded, and a retry is exactly when someone is most likely to
+  // change class rather than wait.
+  const rosterGen = useRef(0)
+
   const loadSessions = useCallback(() => {
     if (!classId) return
+    const mine = ++rosterGen.current
+    const current = () => mine === rosterGen.current
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
+      if (!current()) return
       setStudents(kids || [])
       const map = {}
       let missed = 0
@@ -86,11 +101,16 @@ export default function Sessions() {
           missed += 1
         }
       }))
+      // Checked again after the fan-out, not only before it: the per-student
+      // reads are where the time goes, so this is the window a class switch
+      // actually lands in.
+      if (!current()) return
       setSessionsByStudent(map)
       setPartial(missed)
       setFailed(false)
       setLoading(false)
     }).catch(e => {
+      if (!current()) return
       console.error('Failed to load the class roster:', e)
       setFailed(true); setLoading(false)
     })

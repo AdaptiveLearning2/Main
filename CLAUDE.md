@@ -1967,8 +1967,21 @@ enough to matter -- picked uniformly across all 10 topics with **no grade parame
 was the most direct way a 1st grader landed on "algebra".
 
 `LLM_topic_decider._allowed_topics(grade)` is now the single source of truth for that rule, keyed
-on the raw grade string rather than a `_grade_band()`-style band -- the rule's own line falls
-between grade 5 and grade 6, finer than any four-band split. `_safe_topic(topic, grade)` checks
+on the grade *number* rather than a `_grade_band()`-style band -- the rule's own line falls
+between grade 5 and grade 6, finer than any four-band split.
+
+**A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
+youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"
+form, and nothing in the schema enforces that. Every grade rule here used to match those exact
+strings and fall through to its *most permissive* branch for anything else — so `"Grade 1"` missed
+every branch of `_allowed_topics` and made a 1st grader eligible for algebra, and missed every
+branch of `_grade_band` and gave them `advanced` content. Both halves matter: fixing the topic gate
+alone still leaves advanced material reaching a child. `grade_levels.grade_number` parses a digit or
+a named label (`Kindergarten`, `Highschool`, `College`), rejects a number outside 0-13 so
+`"2026 cohort"` cannot become grade 2026, and answers `None` when it genuinely cannot tell — which
+every caller treats as the youngest, the same withholding-is-cheap asymmetry `signal_fusion`
+documents. `_grade_band` in all ten generation files now delegates to it rather than carrying a
+tenth copy of the string match. `_safe_topic(topic, grade)` checks
 the LLM's own selection against it (the prompt asks for the right thing but an 8B model doesn't
 reliably comply, same reasoning as the deterministic EEG-bias clamp in
 `LLM_single_prompt_topic_and_difficulty_decider`), and `randomize_selection()` now draws from it
@@ -1980,10 +1993,19 @@ through one of these two functions -- there is no third way a topic reaches `que
 x") and `GRADE_COMPLEXITY[grade_band]` only ever scaled a *number's magnitude* on top of it. That
 meant "easy" always meant "one-step equation with x" for every grade, algebra notation included --
 grade only changed how big the constants in that equation were. Replaced with
-`COMPLEXITY_BY_GRADE[grade_band][difficulty]`, one self-contained instruction per band per tier, in
-all ten generation files. "early" band content is grounded in grades 1-3 arithmetic specifically
-(whole numbers, addition/subtraction primary, no algebraic notation), not just smaller versions of
-the same structure every other grade gets.
+`COMPLEXITY_BY_GRADE[grade_band][difficulty]`, one self-contained instruction per band per tier.
+"early" band content is grounded in grades 1-3 arithmetic specifically (whole numbers,
+addition/subtraction primary, no algebraic notation), not just smaller versions of the same
+structure every other grade gets.
+
+**Seven of the ten topics use that table; `geometry`, `angle_relationships` and `probability`
+deliberately do not, and the difference is not an unfinished migration.** In those three, difficulty
+already selects a *scenario* (`DIFFICULTY_SCENARIOS` → a circle-area question, a triangle-sum
+question), so the question's structure is chosen by picking which question to ask rather than by
+describing it in prose. They keep `GRADE_COMPLEXITY[band]` for magnitude alone. Giving them a
+`COMPLEXITY_BY_GRADE` too would state the difficulty rule twice, in two places that can disagree —
+which is the failure the single table exists to prevent. Grade still gates their scenarios, through
+`_pick_scenario(difficulty, grade_band)`.
 
 Two scenario-level leaks were the concrete bugs behind this, both now gated by `grade_band` rather
 than `difficulty` alone (a "hard"-difficulty 1st grader — a real state, since difficulty and grade

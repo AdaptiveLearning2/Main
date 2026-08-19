@@ -130,20 +130,15 @@ def _lookup(topic_name, grade_band):
     return text, reason
 
 
-def lookup_reason(topic_name, grade_band):
-    """Why this cell did or didn't contribute prompt text, as one of the
-    module constants. For diagnostics -- nothing in generation branches on
-    it, since every non-FOUND reason degrades identically."""
-    return _lookup(topic_name, grade_band)[1]
-
-
 def get_lesson_context(topic_name, grade_band):
     """Curriculum text for a topic/grade_band, or None if there is nothing
     to add -- no row on file, a blank row, an unreadable table, or missing
     Supabase credentials all collapse to the same None. This is prompt
     grounding, not a consent or access gate, so every failure mode fails
     open to "generate without lesson-plan context" rather than blocking
-    generation. Use lookup_reason() to tell those cases apart.
+    generation. The four cases are told apart in the **log** -- `_lookup`
+    prints a distinct line for each -- rather than through a return value,
+    because nothing in generation branches on the difference.
 
     grade_band must be one of the bands LLM_*_generation.py already derives
     via _grade_band() ("early"/"middle"/"upper"/"advanced") -- lesson plans

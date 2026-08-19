@@ -112,15 +112,58 @@ def test_older_bands_keep_their_operators(band):
                              "expressions", band, "hard") is None
 
 
-# --- angle answers: whole numbers through 5th grade ----------------------
+# --- a grade string is read numerically, and an unreadable one is young --
 
+import grade_levels  # noqa: E402
+import LLM_topic_decider as td  # noqa: E402
 import LLM_angle_relationship_generation as ang  # noqa: E402
+
+
+@pytest.mark.parametrize("grade,number", [
+    ("1st grade", 1), ("Grade 1", 1), ("grade 1", 1), ("1", 1),
+    ("5th Grade", 5), ("Grade 6", 6), ("8th grade", 8),
+    ("Highschool", 9), ("High School", 9), ("College", 13),
+    ("Kindergarten", 0),
+    # Unreadable, rather than guessed at.
+    ("", None), (None, None), ("no idea", None),
+    # A stray number that is not a school grade must not become one.
+    ("2026 cohort", None),
+])
+def test_a_grade_is_read_numerically(grade, number):
+    assert grade_levels.grade_number(grade) is number
+
+
+@pytest.mark.parametrize("grade", ["Grade 1", "grade 1", "1", "", None, "no idea"])
+def test_a_grade_the_dropdown_did_not_write_is_still_kept_from_algebra(grade):
+    """`profiles.grade_level` is free text and only the frontend dropdown
+    keeps it to "1st grade" form. "Grade 1" used to miss every branch of
+    `_allowed_topics` and land in the fully-permissive one, making a 1st
+    grader eligible for algebra -- the single thing that gate exists to
+    prevent. An unreadable grade is now treated as the youngest."""
+    allowed = td._allowed_topics(grade)
+    assert "algebra" not in allowed
+    assert "probability" not in allowed
+    assert set(allowed) == {"ordering", "geometry", "expressions"}
+
+
+@pytest.mark.parametrize("grade", ["Grade 1", "1", "", None, "no idea"])
+def test_an_unreadable_grade_gets_early_content_not_advanced(grade):
+    """The sibling half of the same bug: fixing only the topic gate would
+    still have handed a 1st grader `advanced` complexity text in whichever
+    topic was chosen, because `_grade_band` fell through to "advanced"."""
+    assert grade_levels.grade_band(grade) == "early"
+    assert ang._grade_band(grade) == "early"
 
 
 @pytest.mark.parametrize("grade,required", [
     ("1st grade", True), ("4th grade", True), ("5th grade", True),
     ("6th grade", False), ("7th grade", False), ("College", False),
-    ("Highschool", False), ("", False), (None, False),
+    ("Highschool", False),
+    # Read numerically, so the dropdown's exact wording is not load-bearing.
+    ("Grade 1", True), ("grade 4", True), ("Grade 6", False), ("1", True),
+    # An unreadable grade is treated as the youngest, like everything else
+    # keyed on grade_levels -- it used to fall through to "decimals allowed".
+    ("", True), (None, True), ("no idea", True),
 ])
 def test_whole_number_answers_are_required_only_through_5th_grade(grade, required):
     assert ang._requires_whole_number_solution(grade) is required
@@ -141,7 +184,7 @@ def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
     """(5x + 15) + (3x - 20) = 90 gives 11.875 -- the real observed answer,
     reported as 11.88. Whole through 5th grade, ordinary from 6th."""
     solved = ang.normalize_solution(ang._solve_scenario(
-        {"scenario": "algebra_complementary", "variables": ["5x + 15", "3x - 20"]}))
+        "algebra_complementary", ang.preprocess_variables(["5x + 15", "3x - 20"])))
     assert not float(solved).is_integer()
     assert ang._requires_whole_number_solution("5th grade")
     assert not ang._requires_whole_number_solution("6th grade")
@@ -149,7 +192,7 @@ def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
 
 def test_a_whole_number_answer_passes_at_every_grade():
     solved = ang.normalize_solution(ang._solve_scenario(
-        {"scenario": "complementary", "variables": ["35"]}))
+        "complementary", ang.preprocess_variables(["35"])))
     assert float(solved).is_integer()
     assert ang.format_answer(solved) == "55"
 
@@ -157,17 +200,18 @@ def test_a_whole_number_answer_passes_at_every_grade():
 # --- degenerate angle configurations ------------------------------------
 
 def _solved(scenario, variables):
-    q = {"scenario": scenario, "variables": variables}
-    return q, ang.normalize_solution(ang._solve_scenario(q))
+    parsed = ang.preprocess_variables(variables)
+    return (scenario, parsed,
+            ang.normalize_solution(ang._solve_scenario(scenario, parsed)))
 
 
 def test_the_measured_degenerate_triangle_is_refused():
     """"A triangle has angles 75 and 105. What is the third angle?" was
     generated with the answer 0 (2026-08-18). The arithmetic is right and
     there is no such triangle."""
-    q, solution = _solved("triangle_sum", ["75", "105"])
+    scenario_name, parsed, solution = _solved("triangle_sum", ["75", "105"])
     assert solution == 0
-    assert ang._invalid_angle_reason(q, solution) is not None
+    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
 
 
 @pytest.mark.parametrize("scenario,variables", [
@@ -181,8 +225,8 @@ def test_the_measured_degenerate_triangle_is_refused():
 def test_degenerate_configurations_are_refused(scenario, variables):
     """Keyed on each scenario's total rather than written for triangles
     alone -- `complementary` with a given angle of 90 fails identically."""
-    q, solution = _solved(scenario, variables)
-    assert ang._invalid_angle_reason(q, solution) is not None
+    scenario_name, parsed, solution = _solved(scenario, variables)
+    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
 
 
 @pytest.mark.parametrize("scenario,variables", [
@@ -193,26 +237,26 @@ def test_degenerate_configurations_are_refused(scenario, variables):
     ("linear_pair",   ["75"]),
 ])
 def test_valid_configurations_are_not_refused(scenario, variables):
-    q, solution = _solved(scenario, variables)
-    assert ang._invalid_angle_reason(q, solution) is None
+    scenario_name, parsed, solution = _solved(scenario, variables)
+    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is None
 
 
 def test_algebra_complementary_is_judged_on_its_angles_not_on_x():
     """`solution` there is x, which is unbounded -- 0 < x < 90 would be the
     wrong test. The two expressions evaluated at x are the angles."""
-    q, solution = _solved("algebra_complementary", ["x + 20", "4x - 15"])
-    assert ang._invalid_angle_reason(q, solution) is None
+    scenario_name, parsed, solution = _solved("algebra_complementary", ["x + 20", "4x - 15"])
+    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is None
     # x = 0 is a perfectly ordinary value; the angles it produces (100 and
     # -10) are not, and that is what has to be caught.
-    bad, bad_solution = _solved("algebra_complementary", ["2x + 100", "-x - 10"])
+    bad_scenario, bad_parsed, bad_solution = _solved("algebra_complementary", ["2x + 100", "-x - 10"])
     assert bad_solution == 0
-    assert ang._invalid_angle_reason(bad, bad_solution) is not None
+    assert ang._invalid_angle_reason(bad_scenario, bad_parsed, bad_solution) is not None
 
 
 def test_an_unrecognised_scenario_is_retryable_rather_than_fatal():
     """None sends the loop round again; raising would take out a question
     that a regenerate would have fixed."""
-    assert ang._solve_scenario({"scenario": "nope", "variables": ["1"]}) is None
+    assert ang._solve_scenario("nope", ang.preprocess_variables(["1"])) is None
 
 
 def test_a_topic_with_no_rule_is_never_a_violation():
@@ -288,7 +332,7 @@ def test_every_way_of_contributing_nothing_is_named_separately(
 
     text = lpc.get_lesson_context("ordering", "early")
     lpc._cache.clear()
-    reason = lpc.lookup_reason("ordering", "early")
+    reason = lpc._lookup("ordering", "early")[1]
 
     assert reason == expected_reason
     assert (text is not None) is expects_text

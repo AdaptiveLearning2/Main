@@ -17,6 +17,7 @@ from sympy.parsing.sympy_parser import (
 )
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_levels
 import grade_appropriateness
  
 # Enable implicit multiplication (2x â†’ 2*x)
@@ -181,14 +182,10 @@ def _pick_scenario(difficulty, grade_band):
     return random.choice(candidates)
 
 def _grade_band(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
-        return "early"
-    if g in {"4th grade", "5th grade", "6th grade"}:
-        return "middle"
-    if g in {"7th grade", "8th grade"}:
-        return "upper"
-    return "advanced"
+    # Delegated so ten copies of this cannot drift apart, and so an
+    # unreadable grade ("Grade 1") lands in "early" rather than
+    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    return grade_levels.grade_band(grade)
 
 GRADE_COMPLEXITY = {
     "early":    "Use angle measures that are whole numbers between 10 and 80, in multiples of 5 for easy mental math.",
@@ -207,17 +204,15 @@ GRADE_COMPLEXITY = {
 # grader or allow decimals for a 4th grader; there is no band boundary in the
 # right place.
 #
-# An unrecognised grade (Highschool, College, anything else) falls through to
-# False, matching _grade_band()'s own "advanced" default: the constraint is a
-# scaffold for younger students, so the safe direction when the grade is
-# unknown is to leave the mathematics alone rather than to constrain it.
-WHOLE_NUMBER_SOLUTION_GRADES = {
-    "1st grade", "2nd grade", "3rd grade", "4th grade", "5th grade",
-}
-
-
+# Read numerically, so "Grade 1" is grade 1 rather than an unknown that
+# falls through. An *unreadable* grade requires whole numbers, matching
+# grade_levels' rule that an unknown student is treated as the youngest --
+# the earlier "leave the mathematics alone" default contradicted that and
+# would have handed a decimal answer to a grade this cannot identify.
+# Highschool and College still read as 9 and 13, so they are unaffected.
 def _requires_whole_number_solution(grade):
-    return (grade or "").strip().lower() in WHOLE_NUMBER_SOLUTION_GRADES
+    number = grade_levels.grade_number(grade)
+    return number is None or number <= 5
 
 
 # What each scenario's angles must add up to. Every angle in the question --
@@ -231,7 +226,7 @@ _SCENARIO_TOTAL = {
 }
 
 
-def _invalid_angle_reason(question_data, solution):
+def _invalid_angle_reason(scenario, variables, solution):
     """Why this is not a valid angle configuration, or None if it is fine.
 
     Measured 2026-08-18: "A triangle has angles 75 and 105. What is the
@@ -243,16 +238,17 @@ def _invalid_angle_reason(question_data, solution):
 
     Wrong at every grade, unlike the whole-number rule below, so it is
     checked first and unconditionally.
-    """
-    scenario = question_data["scenario"]
 
+    Takes the ALREADY-PARSED `variables` rather than the raw question, so
+    the sympy parse happens once per attempt instead of once here and again
+    in `_solve_scenario`.
+    """
     if scenario == "algebra_complementary":
         # Here `solution` is x, not an angle -- x itself is unbounded, so
         # the check has to be on the two expressions evaluated at x.
         x = sp.symbols('x')
         try:
-            angles = [float(expr.subs(x, solution))
-                      for expr in preprocess_variables(question_data["variables"])]
+            angles = [float(expr.subs(x, solution)) for expr in variables]
         except (TypeError, ValueError):
             return None
         if any(a <= 0 or a >= 90 for a in angles):
@@ -265,7 +261,7 @@ def _invalid_angle_reason(question_data, solution):
         return None
 
     try:
-        given = [float(expr) for expr in preprocess_variables(question_data["variables"])]
+        given = [float(expr) for expr in variables]
     except (TypeError, ValueError):
         # Not numeric -- nothing to check here rather than a reason to refuse.
         return None
@@ -284,7 +280,7 @@ def _invalid_angle_reason(question_data, solution):
     return None
 
 
-def _solve_scenario(question_data):
+def _solve_scenario(scenario, variables):
     """The numeric answer for one parsed question, or None for a scenario
     this file does not recognise.
 
@@ -294,8 +290,7 @@ def _solve_scenario(question_data):
     scenario has been evaluated -- and a question that fails that check has
     to be regenerated rather than patched.
     """
-    variables = preprocess_variables(question_data["variables"])
-    match question_data["scenario"]:
+    match scenario:
         case "complementary":
             return complementary_angle(variables[0])
         case "supplementary":
@@ -382,13 +377,11 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what the
-        # prompt asked for -- see grade_appropriateness for why the prompt
-        # alone isn't trusted here.
-        violation = grade_appropriateness.find_violation(
-            question_data.get("question_text"), "angle_relationships", grade_band)
-        if violation:
-            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
+        # Backstop on what the model actually produced, not just on what
+        # the prompt asked for -- see grade_appropriateness.
+        if grade_appropriateness.refuse(question_data.get("question_text"),
+                                        "angle_relationships", grade_band, difficulty,
+                                        attempt + 1):
             continue
 
         # Solved here rather than after the loop so a question whose ANSWER
@@ -397,22 +390,25 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         # measured 2026-08-18, (5x+15)+(3x-20)=90 gives 11.875 -- which is
         # the same prompt-is-not-enforcement problem as everywhere else in
         # this codebase, so it gets the same treatment.
+        scenario_name = question_data.get("scenario")
         try:
-            solution = _solve_scenario(question_data)
+            # Parsed once and handed to both, rather than each re-parsing
+            # the same strings through sympy on every attempt.
+            variables = preprocess_variables(question_data["variables"])
+            solution = _solve_scenario(scenario_name, variables)
         except Exception as e:
             print(f"[Attempt {attempt+1}] Could not solve: {e}")
             continue
 
         if solution is None:
-            print(f"[Attempt {attempt+1}] Unrecognised scenario:",
-                  question_data.get("scenario"))
+            print(f"[Attempt {attempt+1}] Unrecognised scenario:", scenario_name)
             continue
 
         solution = normalize_solution(solution)
 
         # Checked before the grade rule: a degenerate figure is wrong for
         # every student, not just a young one.
-        invalid = _invalid_angle_reason(question_data, solution)
+        invalid = _invalid_angle_reason(scenario_name, variables, solution)
         if invalid:
             print(f"[Attempt {attempt+1}] Invalid angle question: {invalid}")
             continue

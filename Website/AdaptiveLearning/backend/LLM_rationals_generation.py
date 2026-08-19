@@ -19,6 +19,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_levels
 import grade_appropriateness
 
 
@@ -80,14 +81,10 @@ Rules:
 solution = -1
 
 def _grade_band(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
-        return "early"
-    if g in {"4th grade", "5th grade", "6th grade"}:
-        return "middle"
-    if g in {"7th grade", "8th grade"}:
-        return "upper"
-    return "advanced"
+    # Delegated so ten copies of this cannot drift apart, and so an
+    # unreadable grade ("Grade 1") lands in "early" rather than
+    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    return grade_levels.grade_band(grade)
 
 # Grade-band-first. "rationals" isn't in LLM_topic_decider's grade-1-3
 # allowlist (fractions are typically a grade-3+ concept, fraction
@@ -173,13 +170,11 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        # Backstop on what the model actually produced, not just on what the
-        # prompt asked for -- see grade_appropriateness for why the prompt
-        # alone isn't trusted here.
-        violation = grade_appropriateness.find_violation(
-            question_data.get("question_text"), "rationals", grade_band)
-        if violation:
-            print(f"[Attempt {attempt+1}] Grade-inappropriate: {violation}")
+        # Backstop on what the model actually produced, not just on what
+        # the prompt asked for -- see grade_appropriateness.
+        if grade_appropriateness.refuse(question_data.get("question_text"),
+                                        "rationals", grade_band, difficulty,
+                                        attempt + 1):
             continue
 
         # If we reach here â†’ SUCCESS

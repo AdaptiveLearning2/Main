@@ -25,6 +25,16 @@ Notably NOT checked, and on purpose:
   separator ("3-4 values"), and "." is a full stop. Detecting these means
   guessing at intent, and the magnitude rules are already stated per-cell in
   `COMPLEXITY_BY_GRADE`.
+- **Magnitude ceilings at all** -- "numbers 1-9" for early/easy, "under 20"
+  for early/medium, and so on. Nothing here checks them, so a grade-1
+  question asking for 847 + 312 passes. Unlike the operator rule, this is
+  not one bound per topic: the ceiling varies per band AND per difficulty
+  tier, so a check would have to read `COMPLEXITY_BY_GRADE` back out of
+  prose that is written for a model rather than for a parser. Extracting
+  every integer and comparing it to a ceiling also mis-fires on the
+  numbers that are not operands -- a dataset's item count, a year, "3
+  apples". Named here rather than left implicit, because "the output is
+  checked" should not be read as "the output is fully checked".
 - **Whether the question reflects the lesson-plan text's *content*.** That
   needs a model to judge, which puts an unbounded LLM call on the hot
   question-generation path -- the exact cost the deterministic checks in
@@ -71,12 +81,37 @@ FORBIDDEN_BANDS = {
 #   uses it.
 # - A single letter on either side of "=" is an equation with an unknown.
 #   Bounded to x/y/n so a unit abbreviation cannot trip it.
+#
+# The bare-variable pattern is the one that needs the lookarounds. A
+# coefficient of 1 is written without a digit ("Find x if...", "What is x
+# plus 5?"), so `\d+[xyn]\b` never sees it and neither does the "=" pair
+# when the question has no equals sign. Matching a lone letter is what
+# risks the multiplication sign, so it is bounded on both sides: a digit
+# immediately before ("6 x 4") or after ("x 4") means multiplication, not
+# an unknown.
 _VARIABLE_PATTERNS = [
     (re.compile(r"\d+[xyn]\b"),               "coefficient-variable notation"),
     (re.compile(r"solve for\s+[a-z]\b", re.I), "solve-for-a-variable phrasing"),
     (re.compile(r"\b[xyn]\s*="),               "variable on the left of an equation"),
     (re.compile(r"=\s*[xyn]\b"),               "variable on the right of an equation"),
+    (re.compile(r"(?<!\d\s)(?<!\d)\b[xyn]\b(?!\s*\d)"),
+     "a variable standing alone"),
 ]
+
+
+def refuse(question_text, topic, grade_band, difficulty=None, attempt=None):
+    """True -- having logged why -- if this question must be regenerated.
+
+    The whole check at a call site, because the find-it/log-it/`continue`
+    block was copied into nine generation files and nine copies of a rule
+    drift. Returns a bool so the caller stays one `if ...: continue`.
+    """
+    reason = find_violation(question_text, topic, grade_band, difficulty)
+    if not reason:
+        return False
+    prefix = f"[Attempt {attempt}] " if attempt is not None else ""
+    print(f"{prefix}Grade-inappropriate: {reason}")
+    return True
 
 
 def _operator_violation(question_text, difficulty):

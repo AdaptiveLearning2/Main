@@ -9,6 +9,7 @@ import json
 import random
 from statistics import fmean
 import signal_fusion
+import grade_levels
 from collections import deque
 import concurrent.futures
 
@@ -41,12 +42,18 @@ ALL_TOPICS = [
 # _grade_band()-style bands, because the rule itself draws its line between
 # grade 5 and grade 6, finer than any of the generation files' four bands.
 def _allowed_topics(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
+    # Read numerically via grade_levels rather than by matching the exact
+    # strings the dropdown emits. `profiles.grade_level` is free text, so
+    # "Grade 1" used to miss every branch here and fall through to the
+    # fully-permissive one -- a 1st grader eligible for algebra, which is
+    # the single thing this function exists to prevent. An unreadable grade
+    # is now treated as the youngest rather than the oldest.
+    number = grade_levels.grade_number(grade)
+    if number is None or number <= 3:
         return ["ordering", "geometry", "expressions"]
-    if g in {"4th grade", "5th grade"}:
+    if number <= 5:
         return [t for t in ALL_TOPICS if t not in ("algebra", "probability")]
-    return list(ALL_TOPICS)  # 6th grade and up, and any unrecognized grade
+    return list(ALL_TOPICS)  # 6th grade and up
 
 
 def _safe_topic(topic, grade):

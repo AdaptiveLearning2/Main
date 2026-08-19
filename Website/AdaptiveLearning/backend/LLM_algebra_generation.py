@@ -37,6 +37,7 @@ from sympy.parsing.sympy_parser import (
 ) #treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import grade_levels
 
 # Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -91,14 +92,10 @@ Rules:
 solution = -1
 
 def _grade_band(grade):
-    g = (grade or "").strip().lower()
-    if g in {"1st grade", "2nd grade", "3rd grade"}:
-        return "early"
-    if g in {"4th grade", "5th grade", "6th grade"}:
-        return "middle"
-    if g in {"7th grade", "8th grade"}:
-        return "upper"
-    return "advanced"  # Highschool, College, or unrecognized
+    # Delegated so ten copies of this cannot drift apart, and so an
+    # unreadable grade ("Grade 1") lands in "early" rather than
+    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    return grade_levels.grade_band(grade)
 
 # Grade-band-first, replacing a fixed structure-by-difficulty table that
 # applied the same "one-step equation with x" framing at every grade,

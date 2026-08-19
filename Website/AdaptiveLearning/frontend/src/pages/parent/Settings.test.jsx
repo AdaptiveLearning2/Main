@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
@@ -22,6 +23,9 @@ vi.mock('../../components/consent/ConsentChannels', () => ({
 
 import { apiFetch, mockApi, overrideApi, resetApi, apiError, pending } from '../../test/mocks/apiFetch'
 import ParentSettings from './Settings'
+
+// The children section links to /parent/link, so the page needs a router.
+const draw = () => render(<MemoryRouter><ParentSettings /></MemoryRouter>)
 
 const CHILDREN = [
   { user_id: 'kid-1', name: 'Ada',   email: 'ada@example.com',  linked_at: '2026-02-03T10:00:00Z' },
@@ -46,7 +50,7 @@ describe('the facial opt-out', () => {
     // one reading `face_signals` for every linked child to print their names.
     // The rule is that the opt-out skips the query, not that the values are
     // dropped on the way out -- so this asserts on the request.
-    render(<ParentSettings />)
+    draw()
     await waitFor(() => expect(apiFetch).toHaveBeenCalled())
     const urls = apiFetch.mock.calls.map(c => String(c[0]))
     const childrenCall = urls.find(u => u.includes('/api/parent/children'))
@@ -56,14 +60,14 @@ describe('the facial opt-out', () => {
 
 describe('the account section', () => {
   it('shows the stored name, the email and the joined date', async () => {
-    render(<ParentSettings />)
+    draw()
     expect(await screen.findByDisplayValue('Rae')).toBeInTheDocument()
     expect(screen.getByText('parent@example.com')).toBeInTheDocument()
     expect(screen.getByText(/Joined/)).toBeInTheDocument()
   })
 
   it('saves the display name', async () => {
-    render(<ParentSettings />)
+    draw()
     // Waited for by *value*, not just by presence. Both pages disable the field
     // until the profile lands -- so that a fast typist cannot have their input
     // overwritten by the response arriving behind them -- and `findByLabelText`
@@ -84,7 +88,7 @@ describe('the account section', () => {
 
   it('says so when the save fails, instead of reporting success', async () => {
     overrideApi('/api/profile/me', () => { throw apiError(500) }, 'PUT')
-    render(<ParentSettings />)
+    draw()
     await screen.findByDisplayValue('Rae')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(toastError).toHaveBeenCalled())
@@ -96,7 +100,7 @@ describe('unlinking a child', () => {
   it('asks first, and does nothing until the second click', async () => {
     // A link is what `_verify_can_view_student` reads as entitlement to a
     // child's reports. One stray click should not end it.
-    render(<ParentSettings />)
+    draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
     await userEvent.click(rows[0])
 
@@ -106,7 +110,7 @@ describe('unlinking a child', () => {
   })
 
   it('unlinks on confirmation and drops the child from the page', async () => {
-    render(<ParentSettings />)
+    draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
     await userEvent.click(rows[0])
     await userEvent.click(screen.getByRole('button', { name: /yes, unlink/i }))
@@ -126,7 +130,7 @@ describe('unlinking a child', () => {
     // so drawing it before the request lands would report one that did not
     // happen.
     overrideApi('/api/parent/children/kid-1', () => { throw apiError(500) }, 'DELETE')
-    render(<ParentSettings />)
+    draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
     await userEvent.click(rows[0])
     await userEvent.click(screen.getByRole('button', { name: /yes, unlink/i }))
@@ -136,7 +140,7 @@ describe('unlinking a child', () => {
   })
 
   it('can be backed out of', async () => {
-    render(<ParentSettings />)
+    draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
     await userEvent.click(rows[0])
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
@@ -152,7 +156,7 @@ describe('when the children read fails', () => {
     // helpers carry `retrieved` for.
     overrideApi(p => String(p).includes('/api/parent/children'),
                 () => { throw apiError(500) })
-    render(<ParentSettings />)
+    draw()
     expect(await screen.findByText(/couldn't load your children/i)).toBeInTheDocument()
     expect(screen.queryByText(/no children linked yet/i)).not.toBeInTheDocument()
   })
@@ -161,7 +165,7 @@ describe('when the children read fails', () => {
     let fail = true
     overrideApi(p => String(p).includes('/api/parent/children'),
                 () => { if (fail) throw apiError(500); return CHILDREN })
-    render(<ParentSettings />)
+    draw()
     await screen.findByText(/couldn't load your children/i)
     fail = false
     await userEvent.click(screen.getByRole('button', { name: /try again/i }))
@@ -170,8 +174,26 @@ describe('when the children read fails', () => {
 
   it('shows a skeleton while it waits, not an empty family', async () => {
     overrideApi(p => String(p).includes('/api/parent/children'), pending())
-    render(<ParentSettings />)
+    draw()
     await waitFor(() => expect(apiFetch).toHaveBeenCalled())
     expect(screen.queryByText(/no children linked yet/i)).not.toBeInTheDocument()
   })
+})
+
+it('offers a way to link another child', async () => {
+  // Linking was reachable only from the sidebar nav, which is not where anyone
+  // looks for it: this page lists the children and, until now, offered no way
+  // to change the list.
+  draw()
+  // Named twice -- the list row and their consent panel's heading.
+  await screen.findAllByText('Ada')
+  expect(screen.getByRole('link', { name: /link another child/i }))
+    .toHaveAttribute('href', '/parent/link')
+})
+
+it('offers it from the empty state too, which is where it matters most', async () => {
+  overrideApi(p => String(p).includes('/api/parent/children'), () => [])
+  draw()
+  await screen.findByText(/no children linked yet/i)
+  expect(screen.getByRole('link', { name: /link another child/i })).toBeInTheDocument()
 })

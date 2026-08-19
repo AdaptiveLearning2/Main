@@ -26,7 +26,12 @@ const report = {
 // scoping to the label's parent pins label -> value. Asserting that a number
 // appears somewhere on the panel would pass even if it appeared in the wrong
 // tile, and would encode fixture assumptions rather than component behaviour.
-const metric = (label) => within(screen.getByText(label).parentElement)
+// The tiles, not the screen-reader tables. Those carry the same column names
+// on purpose -- a chart's text alternative has to name its series -- so an
+// unscoped `getByText('Engagement')` now finds a tile and a `<th>` and fails on
+// the ambiguity rather than on anything being wrong.
+const VISIBLE = { ignore: 'script, style, .sr-only, .sr-only *' }
+const metric = (label) => within(screen.getByText(label, VISIBLE).parentElement)
 
 describe('WeeklySignalReport', () => {
   it('renders each average as a percentage in its own tile', () => {
@@ -481,7 +486,7 @@ test('a failed heart read is named in the failure sentence', () => {
 
 test('the emotion mix is rendered as a distribution, not just its argmax', () => {
   render(<WeeklySignalReport report={heartReport} />)
-  expect(screen.getByText(/Emotion Mix/i)).toBeInTheDocument()
+  expect(screen.getByText(/Emotion Mix/i, VISIBLE)).toBeInTheDocument()
 })
 
 test('no emotion mix is drawn when the channel was not read', () => {
@@ -491,7 +496,7 @@ test('no emotion mix is drawn when the channel was not read', () => {
     ...heartReport, emotion_included: false, emotion_distribution: null,
   }} />)
 
-  expect(screen.queryByText(/Emotion Mix/i)).not.toBeInTheDocument()
+  expect(screen.queryByText(/Emotion Mix/i, VISIBLE)).not.toBeInTheDocument()
 })
 
 test('the live snapshot shows heart in bpm when the channel was read', () => {
@@ -576,5 +581,88 @@ describe('per-channel off states', () => {
     render(<WeeklySignalReport report={preSplit} />)
     expect(screen.queryByText(/Avg Heart Rate/)).not.toBeInTheDocument()
     expect(screen.queryByText(/^Heart$/)).not.toBeInTheDocument()
+  })
+})
+
+// ── the charts, for anyone who cannot see them ──────────────────────────────
+//
+// Recharts emits bare `<svg>` with no accessible name and no walkable
+// structure, so the trend and the distribution -- the whole of what a parent or
+// teacher is shown about a child's week beyond the tiles -- announced as
+// nothing at all.
+
+describe('chart accessibility', () => {
+  it('gives the trend a name that says what it shows', () => {
+    render(<WeeklySignalReport report={report} />)
+    const chart = screen.getByRole('img', { name: /daily signal trend/i })
+    expect(chart).toHaveAccessibleName(/focus/i)
+  })
+
+  it('states each series as a range rather than only naming it', () => {
+    // "Focus" alone is a legend, not a description. The range is the part that
+    // carries what the picture actually showed.
+    render(<WeeklySignalReport report={report} />)
+    expect(screen.getByRole('img', { name: /daily signal trend/i }))
+      .toHaveAccessibleName(/Focus 70% to 74%/i)
+  })
+
+  it('leaves a series nobody recorded out of the description', () => {
+    // A gap in the line is not a zero, and the text alternative has to make the
+    // same distinction -- otherwise it claims a flat week the chart never drew.
+    render(<WeeklySignalReport report={report} />)
+    const name = screen.getByRole('img', { name: /daily signal trend/i })
+      .getAttribute('aria-label')
+    expect(name).not.toMatch(/heart rate/i)
+  })
+
+  it('keeps the data table out of the role="img" subtree', () => {
+    // The bug this replaces: the table was nested *inside* the `role="img"`
+    // wrapper. WAI-ARIA's presentational-children rule prunes every descendant
+    // role from an `img` unconditionally, so the table built for screen-reader
+    // users was invisible to them -- and the test below could not tell, because
+    // Testing Library reads DOM attributes rather than modelling the
+    // accessibility tree, so `getByRole('table')` found it either way.
+    //
+    // Structure is therefore what gets asserted, since it is the part the
+    // pruning depends on and the part a test in jsdom can actually see.
+    render(<WeeklySignalReport report={report} />)
+    const chart = screen.getByRole('img', { name: /daily signal trend/i })
+    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    expect(chart).not.toContainElement(table)
+  })
+
+  it('carries the days themselves, not just the summary', () => {
+    // A sighted reader can pick a Tuesday out of a line. Without the table, a
+    // screen-reader user gets a range and no way to ask which day was which.
+    render(<WeeklySignalReport report={report} />)
+    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    expect(within(table).getByRole('rowheader', { name: '07-20' })).toBeInTheDocument()
+    expect(within(table).getByRole('columnheader', { name: 'Focus' })).toBeInTheDocument()
+  })
+
+  it('says "not recorded" rather than leaving a cell blank', () => {
+    // A blank cell is indistinguishable from a table that failed to render.
+    render(<WeeklySignalReport report={report} />)
+    const table = screen.getByRole('table', { name: /daily signal trend/i })
+    expect(within(table).getAllByText('not recorded').length).toBeGreaterThan(0)
+  })
+
+  it('keeps the emotion table out of its role="img" subtree too', () => {
+    render(<WeeklySignalReport report={{
+      ...report, emotion_included: true,
+      emotion_distribution: { neutral: 40, happy: 12 },
+    }} />)
+    const chart = screen.getByRole('img', { name: /emotion mix/i })
+    const table = screen.getByRole('table', { name: /emotion mix/i })
+    expect(chart).not.toContainElement(table)
+  })
+
+  it('names the emotion mix by its slices', () => {
+    render(<WeeklySignalReport report={{
+      ...report, emotion_included: true,
+      emotion_distribution: { neutral: 40, happy: 12 },
+    }} />)
+    expect(screen.getByRole('img', { name: /emotion mix/i }))
+      .toHaveAccessibleName(/neutral 40 samples/i)
   })
 })

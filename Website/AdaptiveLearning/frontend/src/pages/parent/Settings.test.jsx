@@ -64,7 +64,15 @@ describe('the account section', () => {
 
   it('saves the display name', async () => {
     render(<ParentSettings />)
-    const field = await screen.findByLabelText(/display name/i)
+    // Waited for by *value*, not just by presence. Both pages disable the field
+    // until the profile lands -- so that a fast typist cannot have their input
+    // overwritten by the response arriving behind them -- and `findByLabelText`
+    // resolves the moment the input exists, which is before the fetch settles.
+    // `userEvent.clear()` throws on a disabled element, so this raced: it
+    // passed locally every time and failed on CI, where the microtask lands a
+    // tick later.
+    await screen.findByDisplayValue('Rae')
+    const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
     await userEvent.type(field, 'Rae Okafor')
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }))

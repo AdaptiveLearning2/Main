@@ -130,12 +130,20 @@ it('is the only place that renders a Recharts chart', () => {
 
   const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
   const offenders = jsxFiles(root)
-    .filter(f => !f.endsWith('AccessibleChart.jsx'))
+    // Resolved path equality, not `endsWith`: a file named
+    // `MyAccessibleChart.jsx` would otherwise exempt itself from the rule by
+    // its name alone.
+    .filter(f => f !== resolve(root, 'components', 'charts', 'AccessibleChart.jsx'))
     .filter(f => {
       const src = readFileSync(f, 'utf8')
       // The chart tree itself is passed in as children, so a page naming
       // `<LineChart>` is fine *provided* it goes through the component.
-      return CHART_IMPORTS.test(src) && !src.includes('AccessibleChart')
+      // The exemption is an *import* of the component, not the string
+      // appearing anywhere: `// TODO: move this to AccessibleChart` in a
+      // comment would otherwise excuse the file it is written in, which is
+      // exactly the file most likely to carry that comment.
+      const imported = /^\s*import\s+AccessibleChart\s+from\s+['"][^'"]*AccessibleChart['"]/m
+      return CHART_IMPORTS.test(src) && !imported.test(src)
     })
     .map(f => f.slice(root.length + 1).split(sep).join('/'))
 

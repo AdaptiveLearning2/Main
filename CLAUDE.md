@@ -1907,9 +1907,12 @@ can walk, so a chart rendered directly announces as nothing at all.
 
 **The `sr-only` data table is a *sibling* of the `role="img"` wrapper, never a
 child.** WAI-ARIA's presentational-children rule prunes every descendant role
-from an `img`, so a nested table is invisible to real assistive technology — and
-**invisible to a jsdom test too**, because Testing Library reads DOM attributes
-rather than modelling the accessibility tree. A hand-assembled call site has
+from an `img`, so a nested table is invisible to real assistive technology — while
+being **perfectly visible to a jsdom test**, because Testing Library reads DOM
+attributes rather than modelling the accessibility tree. That is the trap, and
+it is the opposite way round from how it first reads: the table is not what the
+test cannot see, it is the *pruning*. `getByRole('table')` finds the element
+whether or not a real reader ever would, so a hand-assembled call site has
 nothing to fail against, in the browser or in CI. That is why this is a
 component rather than a documented recipe, and why
 `AccessibleChart.test.jsx` walks the source and fails on any chart component
@@ -1924,10 +1927,20 @@ as "Focus 0% to 1%". Neither is visible on screen and no test could catch them,
 because both surfaces were wrong in the same way at once.
 
 **Scaling belongs in the spec, per page, because the pages differ.**
-`SignalPanel` scales into its chart data (`toPct`) and so needs none;
 `SessionReview` and `Live` plot raw ratios against `domain={[0, 1]}` and need
-`scale: asPercent` on those columns. Check what the chart's own axis expects
-before copying a spec across.
+`scale: asPercent` on those columns. `SignalPanel` scales **the fields it names**
+into its chart data — `toPct(d.focus)`, `toPct(d.stress)` — and spreads every
+other field across untouched, so a column for one of those others needs a
+`scale` like anywhere else. "This page scales on the way in" is the wrong unit
+of thought and it has already cost one bug: an `engagement` column was added
+without a `scale` on exactly that reasoning and announced "0% to 1%".
+
+**And a column must name a series the chart actually draws.** That same
+`engagement` had no `<Line>` at all, so nothing on screen could contradict it —
+the error existed only on the accessible surface, which is the failure mode to
+expect here and to check for on purpose. A screen-reader user given a series no
+sighted reader can see has a different report, not an equivalent one. Check what
+the chart's own axis expects, and what it plots, before copying a spec across.
 
 The table is **sampled to 60 rows** and says so in its caption. A 4Hz channel
 over an hour is ~14,000 rows, built on every render for a table nobody sighted

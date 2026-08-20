@@ -642,7 +642,20 @@ describe('chart accessibility', () => {
 
   it('says "not recorded" rather than leaving a cell blank', () => {
     // A blank cell is indistinguishable from a table that failed to render.
-    render(<WeeklySignalReport report={report} />)
+    //
+    // Needs a column with a genuine gap, which now has to be arranged rather
+    // than inherited from the fixture: the trend's columns are the series the
+    // chart actually draws, and the base report's two are present on every day.
+    // Heart is the one that legitimately comes and goes — a window can be
+    // refused while the cognitive channel keeps recording.
+    render(<WeeklySignalReport report={{
+      ...report,
+      heart_included: true,
+      daily: [
+        { ...report.daily[0], heart_rate_bpm: 68 },
+        { ...report.daily[1], heart_rate_bpm: null },
+      ],
+    }} />)
     const table = screen.getByRole('table', { name: /daily signal trend/i })
     expect(within(table).getAllByText('not recorded').length).toBeGreaterThan(0)
   })
@@ -664,5 +677,52 @@ describe('chart accessibility', () => {
     }} />)
     expect(screen.getByRole('img', { name: /emotion mix/i }))
       .toHaveAccessibleName(/neutral 40 samples/i)
+  })
+})
+
+describe('the trend description matches the trend', () => {
+  // The class of bug this whole component exists to prevent, and the one it
+  // shipped with: an error that is *only* visible on the accessible surface,
+  // where no sighted reviewer will ever meet it.
+
+  const RATIOS = {
+    ...report,
+    daily: [
+      { date: '2026-07-20', focus: 0.7,  stress: 0.3, engagement: 0.64, cognitive_retrieved: true },
+      { date: '2026-07-21', focus: 0.74, stress: 0.32, engagement: 0.68, cognitive_retrieved: true },
+    ],
+  }
+
+  const trendName = () =>
+    screen.getByRole('img', { name: /daily signal trend/i }).getAttribute('aria-label')
+
+  it('reports percentages as percentages, not as the 0..1 they arrive as', () => {
+    // `chartData` scales `focus` and `stress` and spreads everything else
+    // through unchanged, so a column added without a `scale` announces
+    // "0% to 1%" while the visible lines beside it read 70% and 74%.
+    render(<WeeklySignalReport report={RATIOS} />)
+    // Both drawn series asserted positively. A negative like
+    // `not.toMatch(/0% to 1%/)` looks like it covers this and does not: an
+    // unscaled 0.64–0.68 rounds to "1%" at both ends and collapses to a single
+    // "Engagement 1%", which that pattern never sees.
+    expect(trendName()).toMatch(/Focus 70% to 74%/)
+    expect(trendName()).toMatch(/Stress 30% to 32%/)
+  })
+
+  it('does not describe a series the chart does not draw', () => {
+    // `engagement` has no `<Line>` on this chart. Describing it gives a
+    // screen-reader user a series no sighted reader can see, which is a
+    // different report rather than an equivalent one -- and it is exactly
+    // where the scaling error hid, because nothing on screen contradicted it.
+    render(<WeeklySignalReport report={RATIOS} />)
+    expect(trendName()).not.toMatch(/engagement/i)
+    expect(screen.getByRole('table', { name: /daily signal trend/i }))
+      .not.toHaveTextContent(/Engagement/i)
+  })
+
+  it('leaves heart out of the description when the line is not drawn', () => {
+    // The `<Line>` is conditional on consent, so the description has to be.
+    render(<WeeklySignalReport report={{ ...RATIOS, heart_included: false }} />)
+    expect(trendName()).not.toMatch(/heart rate/i)
   })
 })

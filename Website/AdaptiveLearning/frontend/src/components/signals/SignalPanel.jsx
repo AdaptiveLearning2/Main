@@ -353,14 +353,30 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
 
-  // No `scale` here, unlike SessionReview and Live: `chartData` is already
-  // scaled to percentages on the way in (`toPct` above), because this chart
-  // plots percentages. The spec describes the rows it is given.
+  // **The columns are what the chart draws, and nothing else.** This is the
+  // text alternative for *this picture*, so a series the picture omits does not
+  // belong in it — a screen-reader user reading a series no sighted reader can
+  // see is not equivalence, it is a different report.
+  //
+  // `engagement` was here, and was both undrawn and wrong. `chartData` scales
+  // `focus` and `stress` through `toPct` and carries every other field across
+  // by spread, so engagement stayed a 0..1 ratio and announced as "Engagement
+  // 0% to 1%". The comment that stood here claimed `chartData` is "already
+  // scaled to percentages" — true of the two fields above it, false of the one
+  // it was being used to justify. Nothing on screen could contradict it,
+  // because engagement is not plotted: the error existed *only* on the surface
+  // this component was built to fix, which is the failure mode to expect here
+  // and to check for deliberately.
+  //
+  // Heart rides on `heartShown` for the same reason: the line is conditional,
+  // so the description of it has to be.
+  //
+  // No `scale` on the two that remain — unlike SessionReview and Live, these
+  // really are scaled on the way in, and each is named in the map above.
   const TREND_COLUMNS = [
-    { key: 'focus',          label: 'Focus',      unit: '%' },
-    { key: 'stress',         label: 'Stress',     unit: '%' },
-    { key: 'engagement',     label: 'Engagement', unit: '%' },
-    { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
+    { key: 'focus',  label: 'Focus',  unit: '%' },
+    { key: 'stress', label: 'Stress', unit: '%' },
+    ...(heartShown ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
   ]
 
   return (

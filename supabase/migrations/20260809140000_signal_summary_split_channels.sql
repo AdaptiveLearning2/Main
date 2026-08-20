@@ -1,26 +1,20 @@
 -- Split p_include_face into p_include_heart and p_include_emotion, and teach
--- the summaries about heart_signals.
+-- the summaries about heart_signals. Headband and camera are consented
+-- separately, so one boolean can no longer express what the caller may read.
 --
--- One flag covered one channel when there was only one optional channel. There
--- are now two, consented separately -- a student may permit the headband and
--- refuse the camera, or the reverse -- so a single boolean cannot express what
--- the caller is allowed to read.
+-- p_include_emotion gates every read of face_signals, not just the emotion
+-- column: attention and gaze come off the same camera under the same consent
+-- flag, so the sensor is the real boundary.
 --
--- `p_include_emotion` gates every read of `face_signals`, not only the emotion
--- column. Attention and gaze come off the same camera under the same consent
--- flag, so the sensor is the boundary; the name follows the product's language
--- for the channel rather than the column list.
---
--- Both flags lead their predicates, as p_include_face did. False therefore
--- excludes every row before any value reaches an aggregate, which is what makes
--- this an opt-out from *reading* rather than a null applied on the way out --
--- the distinction the reporting rules in CLAUDE.md insist on.
+-- Both flags lead their predicates so a false value excludes rows before
+-- they reach an aggregate, rather than nulling a value afterward -- an
+-- opt-out has to skip the read, not just hide the result.
 
--- The old signature must go explicitly. CREATE OR REPLACE cannot change a
--- parameter list, so without this the 3-argument version survives as an
--- overload: still granted, still callable, and unaware of the flag that now
--- decides whether heart rows are read. Worse, a named-argument call matching
--- both is rejected as ambiguous rather than picking one.
+-- The old signature must be dropped explicitly. CREATE OR REPLACE can't
+-- change a parameter list, so without this the old version survives as an
+-- overload -- still granted, still callable, unaware of the new flag, and a
+-- named-argument call matching both signatures would be rejected as
+-- ambiguous.
 DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer, boolean);
 DROP FUNCTION IF EXISTS "public"."student_signal_summary_many"("uuid"[], integer, boolean);
 
@@ -51,11 +45,9 @@ AS $$
     SELECT now() - (GREATEST(p_days, 1) || ' days')::interval AS since
   ),
   cog AS (
-    -- count(c.focus), not count(*): a row with a NULL focus contributes
-    -- nothing to avg(), and the pipeline deliberately writes rows with NULL
-    -- measurements when electrode contact is bad, keeping the session timeline
-    -- intact. Counting those would report a nonzero sample count beside a NULL
-    -- average.
+    -- count(c.focus), not count(*): a row with a null focus (bad electrode
+    -- contact) contributes nothing to avg(), so counting it too would report
+    -- a nonzero sample count beside a null average.
     SELECT avg(c.focus)      AS focus,
            avg(c.stress)     AS stress,
            avg(c.engagement) AS engagement,
@@ -66,20 +58,18 @@ AS $$
   fac AS (
     SELECT avg(f.attention)   AS attention,
            count(f.attention) AS n,
-           -- FILTERed explicitly rather than relying on how the ordered-set
-           -- aggregate treats NULLs: emotion is nullable, and "no emotion was
-           -- read" must not be able to win the vote and render as a mood.
+           -- Explicit FILTER so a null emotion (nothing read) can't win the
+           -- mode() vote and render as an actual mood.
            mode() WITHIN GROUP (ORDER BY f.emotion)
              FILTER (WHERE f.emotion IS NOT NULL) AS emotion
     FROM face_signals f, bounds b
     WHERE p_include_emotion AND f.user_id = p_student_id AND f.ts >= b.since
   ),
   hrt AS (
-    -- Only trusted samples reach the average. An untrusted one carries a heart
-    -- rate; it is just not one worth reporting, and averaging it in would let a
-    -- known-bad reading move a number a parent reads. `trusted IS TRUE` rather
-    -- than `trusted`, so a NULL -- written before the producer set the column --
-    -- is excluded rather than treated as false-y by accident.
+    -- Only trusted samples reach the average -- an untrusted one still carries
+    -- a heart rate, it's just not worth reporting. `trusted IS TRUE` excludes
+    -- null (unset) as well as false, rather than treating null as falsy by
+    -- accident.
     SELECT avg(h.heart_rate_bpm)   AS bpm,
            avg(h.rmssd_ms)         AS rmssd,
            count(h.heart_rate_bpm) AS n
@@ -99,10 +89,9 @@ AS $$
 $$;
 
 
--- Deliberately without dominant_emotion, as before: this one feeds the parent
--- dashboard, which has no emotion tile, and a mode() per child on every load
--- costs something for nothing. Add it here only alongside somewhere that
--- renders it.
+-- No dominant_emotion here: this feeds the parent dashboard, which has no
+-- emotion tile, so computing mode() per child on every load would cost
+-- something for nothing.
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
   "p_days" integer DEFAULT 7,
@@ -159,11 +148,9 @@ AS $$
 $$;
 
 
--- New signatures carry fresh ACLs, so the revokes are repeated rather than
--- inherited. Postgres grants EXECUTE to PUBLIC on every new function, and
--- Supabase additionally grants it to anon and authenticated *by name* -- an
--- explicit grant to a named role survives a revoke aimed at PUBLIC, so all
--- three are needed.
+-- New signatures carry fresh ACLs, so the revokes have to be repeated. Both
+-- Postgres's PUBLIC grant and Supabase's named anon/authenticated grants need
+-- revoking -- a named grant survives a PUBLIC-only revoke.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary"("uuid", integer, boolean, boolean) FROM "authenticated";

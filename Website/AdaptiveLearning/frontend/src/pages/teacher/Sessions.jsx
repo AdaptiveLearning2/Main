@@ -27,21 +27,13 @@ export default function Sessions() {
   const [search, setSearch] = useState('')
 
   const [failed, setFailed] = useState(false)
-  // A student whose own session list failed, as opposed to one with no
-  // sessions. Counted rather than merged into `failed`: the rest of the class
-  // loaded fine and is worth showing.
+  // Count of students whose own session list failed to load, kept separate
+  // from `failed` since the rest of the class still loaded fine.
   const [partial, setPartial] = useState(0)
 
-  // Named, like the seven other pages this change converted. They were left
-  // inline here, and the cost was not tidiness: `LoadError` renders its button
-  // only when it is handed an `onRetry`, so this was the one converted page
-  // whose error state had no way out of it but knowing to reload the browser --
-  // which is the thing the whole change says it is fixing.
   const loadClasses = useCallback(() => {
-    // No `setLoading(true)` here, unlike the roster read below. It starts true,
-    // and on a retry the error stays on screen until the request settles rather
-    // than flashing a skeleton -- which is also what keeps this effect off the
-    // `set-state-in-effect` lint backlog the project is trying not to grow.
+    // No setLoading(true) here: loading already starts true, and on retry
+    // the error stays on screen instead of flashing a skeleton.
     apiFetch('/api/classes').then(rows => {
       setClasses(rows || [])
       setFailed(false)
@@ -53,11 +45,8 @@ export default function Sessions() {
     })
   }, [])
 
-  // No `setLoading(true)` here either, for the reason given above -- and the
-  // skeleton a class *switch* needs is raised by the selector below, which is an
-  // event handler rather than an effect. That keeps the roster read off the
-  // `set-state-in-effect` backlog without letting one class's sessions sit on
-  // screen under another class's name while the new ones load.
+  // No setLoading(true) here either -- the class selector's onChange raises
+  // the skeleton on switch, so one class's sessions don't linger under another's name.
   const loadSessions = useCallback(() => {
     if (!classId) return
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
@@ -68,9 +57,7 @@ export default function Sessions() {
         try {
           map[k.user_id] = await apiFetch(`/api/sessions/student/${k.user_id}`)
         } catch {
-          // `[]` here reads downstream as "this student ran no sessions",
-          // which is a claim about a child made from a failed request.
-          // Recorded as unknown instead, and counted for the note below.
+          // null, not []: an empty array would read as "ran no sessions", which is untrue for a failed request.
           map[k.user_id] = null
           missed += 1
         }
@@ -88,24 +75,14 @@ export default function Sessions() {
   useEffect(() => { loadClasses() }, [loadClasses])
   useEffect(() => { loadSessions() }, [loadSessions])
 
-  // Whichever read is the one that failed. `classId` is only set once the class
-  // list has arrived, so an empty one means the failure was the outer request.
+  // classId is only set once the class list has arrived, so an empty one means loadClasses failed.
   const retry = classId ? loadSessions : loadClasses
 
   const allRows = students.flatMap(s =>
     (sessionsByStudent[s.user_id] || []).map(sess => ({ ...sess, _student: s }))
   ).sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
 
-  // Every student's list failed, which is a *failed load* rather than a partial
-  // one -- there is nothing left for it to be partial about.
-  //
-  // The roster call succeeding while every per-student call fails is not exotic:
-  // it is what a degraded `/api/sessions/student/*` looks like for the whole
-  // class rather than for one child. `failed` stayed false, `allRows` was empty,
-  // and the page drew "N students' sessions couldn't be loaded" directly above
-  // "No sessions yet -- when students start practicing, sessions will show
-  // here" -- the confident wrong empty state this change exists to remove,
-  // reached by the one path it had not covered.
+  // If every student's list failed, treat it as a full failure rather than a partial one.
   const allFailed = students.length > 0 && partial === students.length
 
   const filteredRows = allRows.filter(s =>
@@ -138,8 +115,7 @@ export default function Sessions() {
         )}
       </div>
         
-      {/* Some students' session lists failed while the rest loaded. Said out
-          loud, because the table below is missing rows and looks complete. */}
+      {/* Says so explicitly, since the table below would otherwise look complete with rows missing. */}
       {!loading && !failed && !allFailed && partial > 0 && (
         <div className="mb-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -179,10 +155,7 @@ export default function Sessions() {
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null
             return (
               <Link key={s.id} to={`/teacher/sessions/${s.id}`}
-                // The review's "Back" was hardcoded to Live Monitoring, so
-                // opening a session from this history and coming back landed
-                // on a different page with the teacher's place in the list
-                // gone.
+                // So the session review's "Back" returns here instead of Live Monitoring.
                 state={{ from: '/teacher/sessions' }}
                 className="grid grid-cols-12 items-center px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 hover:bg-slate-50 dark:hover:bg-gray-800 transition group">
                 <div className="col-span-3 flex items-center gap-3">

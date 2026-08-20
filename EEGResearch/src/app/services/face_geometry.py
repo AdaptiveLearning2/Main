@@ -1,67 +1,51 @@
 """Head pose and gaze direction from face landmarks.
 
-This is the measurable half. It turns a set of named 2D landmarks into a head
-rotation and an eye-gaze offset, and it stops there -- **it does not score
-attention**. That separation is deliberate: the
-geometry has a right answer and can be checked against one, while the inference
-from "looking 20 degrees left" to "not attending" is a judgement about a child,
-least valid for exactly this product's users. Keeping them apart means the
-judgement can be revised without re-deriving anything, and that no percentage
-reaches a parent before it has been measured against a reference.
+This is the measurable half. It turns named 2D landmarks into a head rotation
+and an eye-gaze offset, and stops there -- **it does not score attention**.
+The geometry has a right answer that can be checked; the inference from
+"looking 20 degrees left" to "not attending" is a judgement about a child, and
+that judgement should be revisable without re-deriving the geometry, and
+should never reach a parent as a percentage before being measured against a
+reference.
 
-**Pure numpy, and no landmark model.** `face_roi.FaceLocator` needs OpenCV,
-which is an optional extra deliberately absent from CI, so anything importing it
-cannot be tested there. The arithmetic here is the part that can be wrong in a
-way a test would catch, so it is kept free of that dependency: a caller supplies
-landmarks in the contract below, from whatever detector it has. The detector is
-a separate change (MediaPipe Face Mesh is the candidate -- Apache 2.0, models
-downloadable without an agreement, which is the constraint that blocked
-RhythmMamba, since the sidecar installs on a student's laptop).
+**Pure numpy, no landmark model.** `face_roi.FaceLocator` needs OpenCV, which
+is absent from CI, so anything importing it can't be tested there. This
+arithmetic stays free of that dependency: a caller supplies landmarks in the
+contract below, from whatever detector it has.
 
-Why not `cv2.solvePnP`
------------------------
-solvePnP needs a camera matrix, and we do not have one. A student's webcam
-intrinsics are unknown and vary by device, so the focal length would have to be
-guessed -- and a wrong focal length does not produce an obvious failure, it
-produces a systematically wrong pose that still looks like a face turning.
+Why not `cv2.solvePnP`: it needs a camera matrix we don't have. A student's
+webcam intrinsics vary by device, so the focal length would have to be
+guessed, and a wrong focal length doesn't fail obviously -- it produces a
+systematically wrong pose that still looks like a face turning. An
+orthographic (weak-perspective) fit needs no intrinsics: it recovers rotation
+and scale from the landmark correspondences alone, at the cost of accuracy at
+close range and large angles. For a child at arm's length from a laptop,
+that's the better trade. solvePnP becomes the better answer if intrinsics
+ever become available.
 
-An orthographic (weak-perspective) fit needs no intrinsics at all: it recovers
-rotation and scale from the landmark correspondences alone. What it gives up is
-perspective, so it degrades at close range and large angles, where a real
-projection would foreshorten more than a linear one predicts. For a child at a
-desk, roughly arm's length from a laptop, that is the better trade -- a bounded
-approximation beats an unbounded guess. If intrinsics ever become available
-(a calibration step, or a known device), solvePnP becomes the better answer.
+Sign conventions: image coordinates are **x right, y down**, matching every
+frame array in this codebase. The canonical model faces the camera with +z
+toward the lens. The frame is **not mirrored**, so a subject facing the lens
+has their own left on the image right -- which is why `CANONICAL_FACE` puts
+the subject's left at positive x (see the note there; the fit solves for a
+rotation, and a rotation can't reflect, so the opposite handedness can't be
+fitted at all).
 
-Sign conventions
-----------------
-Image coordinates: **x right, y down**, as every frame array in this codebase
-is indexed. The canonical model is a face looking straight at the camera, with
-+z out of the face toward the lens. The frame is **not mirrored**, so a subject
-facing the lens has their own left on the image right -- which is why
-`CANONICAL_FACE` puts the subject's left at positive x. See the note there; a
-model of the opposite handedness cannot be fitted at all, because the fit
-solves for a rotation and a rotation cannot reflect.
+- **yaw** > 0: face turns toward the right of the image (the subject's own left)
+- **pitch** > 0: face points upward (chin away from chest)
+- **roll** > 0: head tips so the subject's right eye rises in the image
 
-- **yaw** > 0: the subject's face turns toward the right-hand side of the image
-  -- equivalently, they turn toward their own left
-- **pitch** > 0: the face points upward (chin away from chest)
-- **roll** > 0: the head tips so the subject's right eye rises in the image
+Round-trip tests (apply a known rotation, project, recover it) are weaker
+than they look: they're self-consistent under a mirrored model too, since
+they pin the decomposition against itself rather than against a camera.
+`test_the_model_handedness_matches_a_real_frame` and its neighbours instead
+construct a frame from the image convention, which is what actually pins the
+sign conventions above.
 
-Round-trip tests apply a known rotation to the canonical model, project, and
-recover it. **That is weaker than it looks and two of these were wrong anyway.**
-A round trip is self-consistent under a mirrored model and under an inverted
-axis description alike: it pins the decomposition against itself, not against a
-camera. The handedness was inverted until 2026-08-12 and every test passed; the
-pitch line above described the opposite of what the code does, and no test
-mentioned pitch's physical direction at all. What pins these now is
-`test_the_model_handedness_matches_a_real_frame` and its neighbours, which
-construct a frame from the image convention rather than from this model.
-
-**Yaw is measurable only within +/-90 degrees.** Beyond that the decomposition
-returns the other branch of a two-fold ambiguity that no rotation matrix can
-resolve on its own, so `head_pose` refuses with `implausible_pose` rather than
-reporting a mirrored angle. A face turned that far has most of these landmarks
+**Yaw is measurable only within +/-90 degrees.** Beyond that the
+decomposition returns the other branch of a two-fold ambiguity no rotation
+matrix can resolve, so `head_pose` refuses with `implausible_pose` rather
+than report a mirrored angle -- a face turned that far has most landmarks
 occluded anyway. See the check in `head_pose`.
 """
 
@@ -73,42 +57,33 @@ from dataclasses import dataclass
 import numpy as np
 
 # The landmarks this module needs, by name. A caller maps its detector's
-# indices onto these; nothing here knows about MediaPipe's 468 points or any
-# other model's numbering, which is what keeps the detector swappable.
+# indices onto these, which keeps the detector swappable -- nothing here knows
+# about MediaPipe's 468 points or any other model's numbering.
 #
-# Eight points, chosen to be the ones every landmark model exposes and to span
-# the face in all three axes -- a set clustered on one plane gives a rotation
-# that is well determined about one axis and nearly free about the others.
+# Eight points, chosen because every landmark model exposes them and they span
+# the face in all three axes -- points clustered on one plane would leave
+# rotation about one axis nearly unconstrained.
 POSE_LANDMARKS = (
     "left_eye_outer", "left_eye_inner", "right_eye_inner", "right_eye_outer",
     "nose_tip", "mouth_left", "mouth_right", "chin",
 )
 
 # A canonical face, facing the camera, in arbitrary units (roughly millimetres
-# on an adult). Only the *shape* matters: scale is solved for, so a child's
+# on an adult). Only the *shape* matters -- scale is solved for, so a child's
 # smaller face fits the same model.
 #
 # **Left and right are the subject's, and the subject's left sits at POSITIVE
-# x.** That is not a free choice and it was wrong here until 2026-08-12. The fit
-# solves for a rotation, and a rotation cannot produce a reflection: if the
-# model's handedness disagrees with the frame's, no pose exists that maps one to
-# the other and every frame is refused. In a non-mirrored frame -- which is what
-# OpenCV hands over -- a subject facing the lens has their own left on the image
-# right, i.e. at larger x, so the model must put it at larger x too.
-#
-# The earlier version had `left_eye_outer` at -45, which contradicted this
-# file's own "x right, y down" convention, and the symptom was total: a person
-# sitting perfectly square on produced `implausible_pose` on 120 frames out of
-# 120. The round-trip tests did not catch it because they rotate this model and
-# recover the rotation, which is self-consistent under either handedness --
-# see `test_the_model_handedness_matches_a_real_frame`, which pins it against
-# the image convention instead.
+# x.** That's required, not a free choice: the fit solves for a rotation, and a
+# rotation can't reflect, so if the model's handedness disagreed with the
+# frame's, no pose would exist and every frame would be refused. In a
+# non-mirrored frame (what OpenCV hands over), a subject facing the lens has
+# their own left on the image right, at larger x, so the model must too.
 #
 # These are the standard correspondences used with the 3D morphable-model mean
-# face; they are not measured from this product's users, and that is a known
-# approximation -- an adult mean face fitted to a child's proportions biases
-# pose slightly. It is bounded and systematic rather than noisy, and correcting
-# it needs the same reference recording the attention score needs.
+# face. They are not measured from this product's users -- an adult mean face
+# fitted to a child's proportions biases pose slightly, a bounded and
+# systematic error rather than noise. Correcting it needs a reference
+# recording of this product's users.
 CANONICAL_FACE = {
     "left_eye_outer":  (45.0, -34.0, -12.0),
     "left_eye_inner":  (15.0, -34.0,  -6.0),
@@ -121,24 +96,21 @@ CANONICAL_FACE = {
 }
 
 # Below this many usable named points the fit is under-determined. Four is the
-# arithmetic minimum for a 2x3 linear map; six is required here because four
-# coplanar points -- which the eye corners very nearly are -- leave the rotation
-# about the line through them almost unconstrained while still producing a
-# confident-looking answer. That is the same failure shape as a confident wrong
-# heart rate, and it is cheaper to refuse.
+# arithmetic minimum for a 2x3 linear map; six is required because four
+# coplanar points (which the eye corners very nearly are) leave rotation about
+# the line through them almost unconstrained while still looking confident --
+# cheaper to refuse than to risk that.
 MIN_POSE_POINTS = 6
 
 # How near to degenerate the observed points may be before the fit is refused.
-# The ratio of the smallest to largest singular value of the centred canonical
-# subset: near zero means the chosen points are collinear or coplanar in the
-# projection, so at least one axis of rotation is not observable.
+# Ratio of smallest to largest singular value of the centred canonical subset:
+# near zero means the chosen points are collinear or coplanar in the
+# projection, so at least one axis of rotation isn't observable.
 MIN_CONDITION = 0.02
 
 # Beyond this many degrees of pitch or roll, the Euler recovery has picked the
-# wrong branch of a two-fold ambiguity rather than measured a real head — a neck
-# does not bend that far. See the check in `head_pose` for why an assumption of
-# this kind cannot be avoided, only declared. Radians, to compare against the
-# atan2 results directly.
+# wrong branch of a two-fold ambiguity rather than measured a real head -- a
+# neck doesn't bend that far. Radians, to compare against atan2 directly.
 MAX_PLAUSIBLE_TILT = math.radians(90.0)
 
 
@@ -150,7 +122,7 @@ class HeadPose:
     roll: float | None
     # Fraction of requested landmarks that were usable. Reported rather than
     # folded into a threshold, so a caller can tell "measured from six points"
-    # from "measured from eight" -- they are not the same measurement.
+    # from "measured from eight" -- not the same measurement.
     landmarks_used: int = 0
     rejected_by: str | None = None
 
@@ -163,10 +135,10 @@ class HeadPose:
 class Gaze:
     """Eye direction as an offset within the eye opening, -1..1 per axis.
 
-    Not an angle. Converting to one needs eye-ball radius and camera geometry,
-    neither of which is known here, and the offset is what a downstream score
-    would use anyway. `x` > 0 is toward the right of the image, `y` > 0 down --
-    the same convention as the pose above.
+    Not an angle -- converting to one needs eyeball radius and camera
+    geometry, neither known here, and the offset is what a downstream score
+    would use anyway. `x` > 0 is toward the right of the image, `y` > 0 down,
+    matching the pose convention above.
     """
     x: float | None
     y: float | None
@@ -183,14 +155,14 @@ def _rotation_from_correspondences(canonical: np.ndarray,
     """Rotation matrix from 3D model points to their orthographic projection.
 
     Weak perspective: observed ≈ s · R[:2] · canonical + t. Centring removes t,
-    least squares gives the 2x3 map s·R[:2], and the third row of R is the cross
-    product of the first two -- it is not observable from a projection and does
-    not need to be, since it is determined by the other two being orthonormal.
+    least squares gives the 2x3 map s·R[:2], and the third row of R is the
+    cross product of the first two -- not observable from a projection, but
+    determined anyway since the other two rows are orthonormal.
 
-    Returns None when the observed points are too near degenerate to determine
-    it. The check is on the *canonical* subset's conditioning rather than the
-    observed one, because a face turned far enough to flatten in the image is
-    still a valid measurement; a badly chosen set of points is not.
+    Returns None when the observed points are too near degenerate. Checked
+    against the *canonical* subset's conditioning, not the observed one: a
+    face turned far enough to flatten in the image is still a valid
+    measurement, but a badly chosen set of points is not.
     """
     canonical = canonical - canonical.mean(axis=0)
     observed = observed - observed.mean(axis=0)
@@ -199,9 +171,9 @@ def _rotation_from_correspondences(canonical: np.ndarray,
     if singular[0] <= 0 or singular[-1] / singular[0] < MIN_CONDITION:
         return None
 
-    # Least-squares 2x3 map. lstsq rather than an explicit pseudo-inverse: the
-    # normal equations square the condition number, which is exactly the wrong
-    # thing to do to a nearly-degenerate system we are already worried about.
+    # lstsq rather than an explicit pseudo-inverse: the normal equations square
+    # the condition number, which is the wrong thing to do to a system already
+    # nearly degenerate.
     mapping, *_ = np.linalg.lstsq(canonical, observed, rcond=None)
     mapping = mapping.T                                    # (2, 3)
 
@@ -212,9 +184,9 @@ def _rotation_from_correspondences(canonical: np.ndarray,
     r0 = r0 / n0
 
     # Gram-Schmidt rather than normalising row 1 independently: the two rows
-    # come from a least-squares fit and are not exactly orthogonal, and a
-    # rotation matrix whose rows are not orthonormal yields Euler angles that
-    # are quietly wrong rather than obviously so.
+    # come from a least-squares fit and aren't exactly orthogonal, and
+    # non-orthonormal rows yield Euler angles that are quietly wrong rather
+    # than obviously so.
     r1 = mapping[1] - np.dot(mapping[1], r0) * r0
     n1 = np.linalg.norm(r1)
     if n1 == 0:
@@ -228,9 +200,9 @@ def head_pose(landmarks: dict[str, tuple[float, float]]) -> HeadPose:
     """Yaw, pitch and roll in degrees from named 2D landmarks.
 
     `landmarks` maps names in `POSE_LANDMARKS` to image coordinates. Missing
-    names are skipped rather than treated as zero -- a landmark the detector did
-    not find is absent, and placing it at the origin would drag the fit toward
-    the top-left corner while still returning a confident-looking pose.
+    names are skipped rather than treated as zero -- placing a missing
+    landmark at the origin would drag the fit toward the top-left corner
+    while still returning a confident-looking pose.
     """
     names = [n for n in POSE_LANDMARKS
              if n in landmarks and landmarks[n] is not None]
@@ -246,41 +218,34 @@ def head_pose(landmarks: dict[str, tuple[float, float]]) -> HeadPose:
     if rotation is None:
         return HeadPose(None, None, None, len(names), "degenerate")
 
-    # ZYX Euler extraction, for R = Rz(roll) · Ry(yaw) · Rx(pitch). Writing that
-    # product out gives R[2,0] = -sin(yaw), R[2,1] = cos(yaw)·sin(pitch),
+    # ZYX Euler extraction, for R = Rz(roll) · Ry(yaw) · Rx(pitch). Writing
+    # that product out gives R[2,0] = -sin(yaw), R[2,1] = cos(yaw)·sin(pitch),
     # R[2,2] = cos(yaw)·cos(pitch), R[0,0] = cos(roll)·cos(yaw) and
-    # R[1,0] = sin(roll)·cos(yaw) -- which is where each element below comes
-    # from. Derived rather than recalled: the first version of this used the
-    # right magnitudes with three inverted signs, and every one of them was
-    # caught by the round-trip tests and by nothing else.
+    # R[1,0] = sin(roll)·cos(yaw), which is where each element below comes
+    # from.
     cos_yaw = math.hypot(rotation[2, 1], rotation[2, 2])
     if cos_yaw < 0.0001:
-        # Gimbal lock at yaw = ±90°: with the face fully in profile, pitch and
-        # roll are the same rotation and cannot be separated. Refusing beats
-        # splitting one angle arbitrarily between two columns a reader would
-        # compare.
+        # Gimbal lock at yaw = ±90°: face fully in profile, so pitch and roll
+        # are the same rotation and can't be separated. Refuse rather than
+        # split one angle arbitrarily between two columns a reader would compare.
         return HeadPose(None, None, None, len(names), "gimbal_lock")
 
     yaw = math.atan2(-rotation[2, 0], cos_yaw)
     pitch = math.atan2(rotation[2, 1], rotation[2, 2])
     roll = math.atan2(rotation[1, 0], rotation[0, 0])
 
-    # The two-fold ambiguity, which no rotation matrix can resolve on its own:
-    # (yaw, pitch, roll) and (180°−yaw, pitch+180°, roll+180°) are the *same*
-    # rotation. `cos_yaw` is a hypot and therefore never negative, so the yaw
-    # above is always in (−90°, 90°) — and a face genuinely turned further than
-    # that comes back on the wrong branch, silently. Measured: a true yaw of
-    # 120° reports 60°, and a true (91°, 15°, 10°) reports (89°, −165°, −170°),
-    # so a 2° change in the truth swings pitch and roll by 180° with nothing
-    # marked wrong.
+    # Two-fold ambiguity no rotation matrix can resolve on its own:
+    # (yaw, pitch, roll) and (180°−yaw, pitch+180°, roll+180°) are the same
+    # rotation. `cos_yaw` is a hypot, never negative, so yaw above always lands
+    # in (−90°, 90°) -- a face genuinely turned further comes back on the wrong
+    # branch silently. Measured: a true yaw of 120° reports 60°, and a true
+    # (91°, 15°, 10°) reports (89°, −165°, −170°).
     #
-    # Some external assumption is unavoidable here; what matters is saying so.
-    # A neck does not pitch or roll past a right angle, so |pitch| or |roll|
-    # beyond 90° means the other branch was the real one. Refused rather than
-    # corrected: the arithmetic could be flipped back, but a face turned more
-    # than 90° has most of these landmarks occluded, so the *input* to the fit
-    # is unreliable whichever branch is chosen — and this codebase would rather
-    # lose the window than publish a confident wrong angle.
+    # A neck doesn't pitch or roll past a right angle, so |pitch| or |roll|
+    # beyond 90° means the other branch was real. Refused rather than
+    # corrected: a face turned that far has most landmarks occluded, so the
+    # fit's input is unreliable whichever branch is chosen -- better to lose
+    # the window than publish a confident wrong angle.
     if abs(pitch) > MAX_PLAUSIBLE_TILT or abs(roll) > MAX_PLAUSIBLE_TILT:
         return HeadPose(None, None, None, len(names), "implausible_pose")
 
@@ -303,7 +268,7 @@ def _eye_offset(outer, inner, upper, lower, iris) -> tuple[float, float] | None:
     half_width = abs(arr[1][0] - arr[0][0]) / 2.0
     half_height = abs(arr[3][1] - arr[2][1]) / 2.0
     # A closed or nearly closed eye has no opening to measure a position
-    # within, and dividing by it produces a large offset from a blink.
+    # within, and dividing by a near-zero one would produce a huge offset.
     if half_width <= 0 or half_height <= 0:
         return None
 
@@ -314,10 +279,10 @@ def _eye_offset(outer, inner, upper, lower, iris) -> tuple[float, float] | None:
 def gaze(landmarks: dict[str, tuple[float, float]]) -> Gaze:
     """Mean iris offset across whichever eyes are measurable.
 
-    Both eyes when both are available, one when only one is -- a hand, a hair
-    or a head turn regularly hides one, and refusing the whole reading for that
-    would discard a measurable eye. `eyes_used` says which case it was, because
-    a one-eyed estimate is noisier and a caller may want to weight it.
+    Both eyes when available, one when only one is -- a hand, hair or head
+    turn regularly hides one eye, and refusing the whole reading would
+    discard a perfectly measurable one. `eyes_used` says which case applied,
+    since a one-eyed estimate is noisier.
 
     Expects `{left,right}_eye_{outer,inner,upper,lower}` and `{left,right}_iris`.
     """
@@ -338,9 +303,8 @@ def gaze(landmarks: dict[str, tuple[float, float]]) -> Gaze:
 
     mean = np.mean(np.array(offsets, dtype=float), axis=0)
     # Clamped, not rejected: an iris tracked slightly outside the corner
-    # landmarks is a normal detector wobble at the extremes of a real look, not
-    # a failure, and letting it run past 1 would make a hard look sideways
-    # arbitrarily large.
+    # landmarks is normal detector wobble at the extremes of a real look, not
+    # a failure.
     return Gaze(round(float(np.clip(mean[0], -1.0, 1.0)), 3),
                 round(float(np.clip(mean[1], -1.0, 1.0)), 3),
                 len(offsets))

@@ -37,10 +37,10 @@ def connection_state_name(code: int | None) -> str:
 
 
 def enrich_ingestion_dict(settings: Settings, meta: dict[str, Any], source: str | None = None) -> dict[str, Any]:
-    """Normalize ingestion metadata for the API (includes human-readable connection state).
+    """Normalize ingestion metadata for the API, adding a human-readable connection state.
 
-    `source` overrides settings.eeg_source when reporting a specific device's own kind
-    (multi-device registry) rather than the global default.
+    `source` overrides settings.eeg_source to report one device's own kind in a
+    multi-device registry, instead of the global default.
     """
     meta_no_bands = {k: v for k, v in meta.items() if k not in {"delta", "theta", "alpha", "beta", "gamma"}}
     out: dict[str, Any] = {
@@ -93,10 +93,9 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "is_good",
         "band_channels_used",
         "notch_filtered",
-        # Headband model, preset and optical capability. The whitelist is why
-        # these have to be named here at all: a field the bridge emits but this
-        # tuple omits is dropped silently, so it reaches no API surface and
-        # looks from outside exactly like a bridge that never sent it.
+        # Headband model, preset and optical capability. Only fields named in
+        # this tuple are kept; anything the bridge sends but this list omits is
+        # dropped silently.
         "muse_model",
         "requested_preset",
         "active_preset",
@@ -125,10 +124,9 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
             except (TypeError, ValueError):
                 continue
         elif key == "eeg_channel_count":
-            # null is a real value here, not a parse failure: the bridge sends
-            # it when the headband's configuration has not arrived, precisely so
-            # that 0 is not overloaded to mean "unknown". Preserve the
-            # distinction rather than coercing it to an int and losing it.
+            # null is a real value here, not a parse failure -- the bridge sends
+            # it before the headband's configuration arrives, so 0 must not be
+            # made to mean "unknown" too.
             v = payload[key]
             if v is None:
                 target[key] = None
@@ -138,9 +136,9 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
             except (TypeError, ValueError):
                 continue
         elif key == "battery_percent":
-            # Same null-is-real rule as eeg_channel_count above, and it matters
-            # more here: 0 is a valid charge and would render as an empty
-            # battery for a headband that simply has not reported yet.
+            # Same null-is-real rule as eeg_channel_count. Matters more here: 0
+            # is a valid charge and would render as empty for a headband that
+            # simply hasn't reported yet.
             v = payload[key]
             if v is None:
                 target[key] = None
@@ -155,8 +153,8 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
             except (TypeError, ValueError):
                 continue
         elif key == "optics_age_ms":
-            # null before the first optical packet, so "never arrived" stays
-            # distinct from "arrived this instant" -- which 0 would not.
+            # null before the first optical packet, so "never arrived" is kept
+            # distinct from "arrived this instant" (which 0 would mean).
             v = payload[key]
             if v is None:
                 target[key] = None
@@ -166,16 +164,16 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
             except (TypeError, ValueError):
                 continue
         elif key in {"is_ppg_good", "is_heart_good"}:
-            # Tri-state. null means the headband has not reported on this yet,
-            # which is not the same as reporting a bad signal -- only the latter
-            # is grounds for preferring another source.
+            # Tri-state: null means not reported yet, distinct from a reported
+            # bad signal. Only a reported bad signal justifies preferring
+            # another source.
             v = payload[key]
             target[key] = None if v is None else bool(v)
         elif key in {"last_optics", "last_ppg", "hsi", "is_good"}:
-            # Float arrays, or null when the headband hasn't reported that
-            # packet type yet: hsi/is_good are per-electrode contact quality
-            # (4 values), last_optics/last_ppg the most recent optical sample
-            # (up to 16 and 3 respectively, however many channels arrived).
+            # Float arrays, null when the headband hasn't reported that packet
+            # type yet. hsi/is_good are per-electrode contact quality (4
+            # values); last_optics/last_ppg are the latest optical sample (up
+            # to 16 and 3 values respectively).
             v = payload[key]
             if v is None:
                 target[key] = None
@@ -216,37 +214,30 @@ class SimulatedMuseIngestionAdapter:
     """Local adapter: emits simulated Muse-like EEG values.
 
     Drives a slowly drifting hidden focus/calm state (a bounded random walk)
-    rather than independent per-sample noise, so scores tell a plausible
-    continuous story instead of jittering around a fixed midpoint. Band
-    powers are derived from that same hidden state using SignalProcessor's
-    own calibrated log-ratio bounds, so the spectral-ratio path is exercised
-    the same way it would be with a real headset.
+    instead of independent per-sample noise, so scores read as a plausible
+    continuous story rather than jitter. Band powers derive from that same
+    state via SignalProcessor's calibrated log-ratio bounds, exercising the
+    same spectral-ratio path a real headset would.
 
-    Band powers are emitted in BELS, matching libMuse's ABSOLUTE band packets
-    and what SignalProcessor expects -- see get_ingestion_meta. This adapter
-    is a producer of those fields, so any change to how the processor
-    interprets them has to change this too.
+    Band powers are emitted in BELS, matching libMuse's ABSOLUTE packets and
+    what SignalProcessor expects (see get_ingestion_meta) -- keep the two in
+    sync if either changes.
 
-    Note: SignalProcessor's focus ratio (beta / (alpha+theta)) and calm ratio
-    (alpha / (beta+gamma)) share alpha and beta, so pushing focus toward its
-    high end structurally requires beta > alpha, while pushing calm toward
-    its high end requires the opposite. That means simultaneously satisfying
-    both the "focused" label's focus>=70% AND calm>=50% thresholds is
-    difficult by construction (a property of the real formula, not a
-    simulator defect) -- "stressed" and high-focus states are independently
-    reachable, but "focused" may rarely or never fire from bands alone.
+    SignalProcessor's focus ratio (beta / (alpha+theta)) and calm ratio
+    (alpha / (beta+gamma)) share alpha and beta, so high focus needs
+    beta > alpha while high calm needs the opposite. That makes the
+    "focused" label's focus>=70% AND calm>=50% hard to satisfy at once by
+    construction -- a property of the real formula, not a simulator bug.
     """
 
-    # Bounded random-walk step per sample; keeps the hidden state continuous
-    # tick-to-tick instead of resetting on every read.
+    # Keeps the hidden state continuous tick-to-tick instead of resetting.
     _DRIFT_STEP = 0.03
     # Keep simulator ranges aligned with SignalProcessor calibration.
     _BASE_LEVEL = 690.0
     _LEVEL_SPAN = 130.0
     _CHANNEL_NOISE = 12.0
-    # Scales how much the beta/(alpha+theta) ratio swings with focus_state.
-    # Kept well below 1.0 so beta doesn't overwhelm alpha's contribution to
-    # the calm ratio at high focus (see class docstring).
+    # Scales how much beta/(alpha+theta) swings with focus_state. Kept below
+    # 1.0 so beta doesn't overwhelm alpha's contribution to calm at high focus.
     _FOCUS_BAND_GAIN = 0.4
 
     def __init__(self) -> None:
@@ -265,7 +256,7 @@ class SimulatedMuseIngestionAdapter:
     @staticmethod
     def _drift(value: float, step: float) -> float:
         # Reflect off the [0, 1] boundaries instead of clamping, so the walk
-        # doesn't disproportionately "stick" near an edge over a long session.
+        # doesn't stick near an edge over a long session.
         value += random.uniform(-step, step)
         if value < 0.0:
             value = -value
@@ -290,23 +281,19 @@ class SimulatedMuseIngestionAdapter:
         )
 
     def get_ingestion_meta(self) -> dict[str, Any]:
-        # Band powers are emitted in BELS (base-10 logarithms), matching what
-        # libMuse's ABSOLUTE band packets actually carry and what
-        # SignalProcessor now expects. Live Muse S captures put these roughly
-        # in -0.1 .. 0.85 B, so the values below stay in that range.
+        # Band powers are emitted in BELS (base-10 logs), matching libMuse's
+        # ABSOLUTE packets and what SignalProcessor expects. Live Muse S
+        # captures sit roughly in -0.1 .. 0.85 B, so values below match that.
         #
-        # Emitting linear magnitudes here (alpha ~40-60) while the processor
-        # exponentiates them produces 10**40-scale powers: the log-ratios come
-        # out around +-31 against bounds spanning ~1.6, so both spectral terms
-        # clamp and only the 25% amplitude term still moves. It also makes
-        # theta and gamma numerically negligible, which collapses focus to
-        # ln(beta/alpha) and calm to ln(alpha/beta) -- exact negations, so the
-        # two scores carry identical information and AdaptationEngine can no
-        # longer separate states.
+        # Emitting linear magnitudes instead (alpha ~40-60) would blow up the
+        # log-ratios once the processor exponentiates them, clamping both
+        # spectral terms and making theta/gamma negligible -- which collapses
+        # focus and calm into exact negations of each other, so
+        # AdaptationEngine could no longer tell states apart.
         #
-        # alpha/theta/gamma are picked first; beta is then solved IN LOG SPACE
-        # to hit the target focus log-ratio exactly, so focus_score responds
-        # cleanly to focus_state while calm tapers as simulated focus rises.
+        # alpha/theta/gamma are picked first; beta is solved IN LOG SPACE to
+        # hit the target focus log-ratio exactly, so focus_score tracks
+        # focus_state while calm tapers as focus rises.
         alpha = 0.10 + self._calm_state * 0.45
         theta = 0.10
         gamma = 0.05
@@ -322,11 +309,9 @@ class SimulatedMuseIngestionAdapter:
         )
         return {
             "bridge_mode": "python_sim",
-            # These intentionally stay false/empty regardless of self.connected:
-            # they represent a *real* Muse BLE pairing (interaxon bridge connection
-            # state), which the frontend's headband-pairing wizard checks directly
-            # (see muse_connected / muse_devices in Adaptive.jsx) to confirm actual
-            # hardware paired -- the simulator has no real device to report.
+            # Stay false/empty regardless of self.connected: these represent a
+            # real Muse BLE pairing, which the frontend's pairing wizard checks
+            # to confirm actual hardware -- the simulator has no device to report.
             "muse_connected": False,
             "muse_discovered": False,
             "bluetooth_enabled": True,
@@ -334,22 +319,20 @@ class SimulatedMuseIngestionAdapter:
             "muse_devices": [],
             "active_muse_name": "",
             "firmware_version": "sim-1.0",
-            # None, never a plausible-looking number. The simulator has no
-            # battery, and a made-up percentage is a reading a student would be
-            # asked to act on -- same call as EEG_SOURCE=sim emitting no heart
-            # block rather than a simulated pulse.
+            # None, never a plausible-looking number -- the simulator has no
+            # battery, and a made-up percentage is a reading a student could
+            # act on.
             "battery_percent": None,
-            # Also Bels. delta is not used by either log-ratio, but it is
-            # persisted to cognitive_signals alongside the others, so it has to
-            # be on the same scale or stored sim rows are internally inconsistent.
+            # Also Bels. delta isn't used by either log-ratio but is persisted
+            # to cognitive_signals alongside the others, so it needs the same
+            # scale or stored sim rows are inconsistent.
             "delta": 0.40,
             "theta": round(theta, 3),
             "alpha": round(alpha, 3),
             "beta": round(beta, 3),
             "gamma": round(gamma, 3),
-            # Simulated electrode contact: report a good fit on all four
-            # channels so the simulator exercises the same signal-quality path
-            # as real hardware instead of looking like a headband that isn't on.
+            # Good contact on all four channels, so the simulator exercises the
+            # same signal-quality path as real hardware.
             "hsi": [1.0, 1.0, 1.0, 1.0],
             "is_good": [1.0, 1.0, 1.0, 1.0],
             "band_channels_used": 4,
@@ -364,75 +347,65 @@ class SimulatedMuseIngestionAdapter:
 class OpticsWindow:
     """A slice of optical history, and what is known about its time base.
 
-    A record rather than a tuple because every field here is a gate the caller
-    has to apply: three of the four exist so a window that cannot be measured
-    is refused by name instead of silently producing a number.
+    A record rather than a tuple: most fields are gates the caller must check,
+    so a window that can't be measured is refused by name instead of silently
+    producing a number.
     """
 
-    # (samples, channels), placed on a uniform grid by sample index. Empty when
-    # there is nothing usable -- never partially filled.
+    # (samples, channels) on a uniform grid by sample index. Empty when there's
+    # nothing usable -- never partially filled.
     channels: np.ndarray
-    # Samples per second, measured across the window. None when it could not be
-    # measured, which is not the same as slow; the caller must not substitute a
-    # nominal rate, since that assumption is what this measurement removes.
+    # Samples per second measured across the window. None when it couldn't be
+    # measured -- the caller must not substitute a nominal rate.
     #
-    # This is the rate the *headband* is running at, taken from `seq`. It is the
-    # right number for the grid and the wrong one for judging the window, since
-    # it is unchanged by losing 90% of the samples -- see `received_rate_hz`.
+    # This is the *headband's* rate, taken from `seq`. It's unchanged by
+    # losing 90% of the samples -- see `received_rate_hz` for what arrived.
     fs: float | None
-    # Samples per second that actually **arrived**. `fs` measures the link's
-    # nominal rate and this measures what survived it; they differ by exactly
-    # the loss, and only this one falls when samples go missing.
+    # Samples per second that actually arrived. `fs` is the link's nominal
+    # rate; this is what survived it, and only this one falls when samples go
+    # missing.
     #
-    # Separate field because the gap between them is invisible in everything
-    # else the window reports. A window can hold a full 25 seconds, have its
-    # largest gap inside tolerance, and still be almost entirely `np.interp`
-    # output.
+    # A window can hold a full 25 seconds, have its largest gap inside
+    # tolerance, and still be almost entirely `np.interp` output -- this is
+    # the only field that shows that.
     received_rate_hz: float | None
     # Fraction of the grid that is measurement rather than interpolation.
     #
-    # **Diagnostic only, and deliberately not a gate.** It looks like the
-    # natural thing to threshold and is the wrong quantity: what breaks the
-    # estimate is falling below Nyquist for the pulse band, which is an
-    # absolute rate, not a ratio. Measured on the resting fixture (69.4 bpm
-    # intact), completeness 0.17 reads 69.5 because the link is fast enough that
-    # a sixth of it still clears 10 Hz -- a completeness bar tight enough to
-    # catch a slow link would throw that away for nothing. Carried onto the row
-    # because it is what explains a refusal, or a partly reconstructed window,
-    # after the fact.
+    # Diagnostic only, deliberately not a gate: what breaks the pulse estimate
+    # is falling below Nyquist, an absolute rate, not a ratio. On the resting
+    # fixture, completeness 0.17 still reads a correct 69.5 bpm because the
+    # link is fast enough that a sixth of it clears 10 Hz.
     completeness: float | None
     # Seconds of history actually held, from the bridge's own stamps.
     span_seconds: float
     # Longest interval between consecutive samples. Interpolation fills the
-    # small ones; this is what says whether any of them were too big to fill.
+    # small ones; this says whether any were too big to fill.
     largest_gap_seconds: float | None
-    # How many optical channels the headband is emitting. Preset-dependent
-    # (4, 8 or 16), so carried rather than assumed.
+    # How many optical channels the headband is emitting (4, 8 or 16,
+    # preset-dependent), so carried rather than assumed.
     channel_count: int
-    # Set when the window was discarded for a reason of its own rather than
-    # never having existed. Without it a corrupt sample index is reported as
-    # `no_samples`, which is what a headband that never emitted also reports --
-    # and those want opposite responses.
+    # Set when the window was discarded for a specific reason rather than
+    # never having existed -- otherwise a corrupt sample index reads the same
+    # as `no_samples`, and the two want opposite responses.
     unusable_reason: str | None = None
 
 
 class TcpMuseBridgeAdapter:
     """Reads normalized samples from a native bridge over localhost TCP."""
 
-    # Bound the queue so a stalled consumer can't grow it without limit.
-    # Mirrors the native bridge's own drop-oldest policy at the same size
+    # Bounds the queue so a stalled consumer can't grow it without limit.
+    # Mirrors the native bridge's own drop-oldest policy and size
     # (eeg_queue_ cap in muse_bridge_service.cpp).
     EEG_QUEUE_MAXSIZE = 2048
 
-    # Optical samples are buffered as a *window*, not kept as a latest value.
-    # Heart rate is derived by autocorrelation over ~25s of a ~64Hz signal, so
-    # a consumer reading the newest sample at the 4Hz tick rate samples that
-    # signal 16x too slowly and no amount of buffering downstream recovers it.
+    # Optical samples are buffered as a window, not kept as a latest value.
+    # Heart rate needs autocorrelation over ~25s of a ~64Hz signal, so reading
+    # only the newest sample at the 4Hz tick rate would undersample it 16x.
     #
-    # ~64 samples/s, so this holds ~64s -- comfortably more than the 25s window
-    # the derivation asks for, and enough that a tick arriving late still finds
-    # a full one. Drop-oldest, matching the EEG queue: an optical sample older
-    # than the window is of no use to anybody.
+    # ~64 samples/s, so this holds ~64s -- comfortably more than the 25s
+    # window needed, with room for a late tick to still find a full one.
+    # Drop-oldest, matching the EEG queue: a sample older than the window is
+    # useless to anybody.
     OPTICS_BUFFER_MAXLEN = 4096
 
     def __init__(self, host: str, port: int, timeout_seconds: int) -> None:
@@ -458,7 +431,7 @@ class TcpMuseBridgeAdapter:
             "beta": 0.0,
             "gamma": 0.0,
             # None until the headband reports HSI_PRECISION / IS_GOOD, so
-            # "not reported yet" stays distinguishable from a real reading.
+            # "not reported yet" is distinguishable from a real reading.
             "hsi": None,
             "is_good": None,
             "band_channels_used": 0,
@@ -467,9 +440,9 @@ class TcpMuseBridgeAdapter:
         self._ingestion_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._eeg_queue: queue.Queue[EegSample] = queue.Queue(maxsize=self.EEG_QUEUE_MAXSIZE)
-        # (seq, mono_ts_ms, channel values). Its own lock: the window read is a
-        # copy of up to a few thousand rows and holding _ingestion_lock for it
-        # would block the reader thread's per-line metadata update.
+        # (seq, mono_ts_ms, channel values). Its own lock, separate from
+        # _ingestion_lock, so copying out a window of up to a few thousand
+        # rows doesn't block the reader thread's per-line metadata update.
         self._optics: deque[tuple[int, float, tuple[float, ...]]] = deque(
             maxlen=self.OPTICS_BUFFER_MAXLEN
         )
@@ -479,8 +452,8 @@ class TcpMuseBridgeAdapter:
 
     def _enqueue_sample(self, sample: EegSample) -> None:
         """Push onto the bounded queue, dropping the oldest sample instead of
-        blocking a full queue -- same drop-oldest policy as the native bridge,
-        just enforced here instead of assuming the consumer always keeps up."""
+        blocking on a full queue -- same drop-oldest policy as the native
+        bridge."""
         while True:
             try:
                 self._eeg_queue.put_nowait(sample)
@@ -505,11 +478,10 @@ class TcpMuseBridgeAdapter:
             except json.JSONDecodeError:
                 continue
             if payload.get("kind") == "optics":
-                # Handled and dropped before the metadata update below, not
-                # after. An optics line carries no status fields at all, so the
-                # only thing that update takes from one is `kind` -- which would
-                # then flap between "optics", "eeg" and "status" 64 times a
-                # second on a field the API reports as the device's kind.
+                # Handled before the metadata update below, not after. An
+                # optics line carries no status fields, so running it through
+                # that update would flap `kind` between "optics", "eeg" and
+                # "status" 64 times a second.
                 self._store_optics(payload)
                 continue
             try:
@@ -530,7 +502,8 @@ class TcpMuseBridgeAdapter:
         """One `kind: optics` line onto the window buffer.
 
         Malformed lines are dropped rather than raised on, like malformed EEG
-        ones: this runs on the reader thread, where a raise costs the stream.
+        ones -- this runs on the reader thread, where a raise costs the
+        stream.
         """
         try:
             seq = int(payload["seq"])
@@ -543,59 +516,55 @@ class TcpMuseBridgeAdapter:
         try:
             values = tuple(float(v) for v in raw)
         except (TypeError, ValueError):
-            # The bridge writes JSON null for a non-finite reading rather than
-            # `nan`, which no parser accepts. The whole sample goes: the
-            # derivation reads the channels of one sample together, and a
-            # sample missing a channel cannot be placed on the grid.
+            # The bridge writes JSON null for a non-finite reading (nan isn't
+            # valid JSON). Drop the whole sample: a sample missing a channel
+            # can't be placed on the grid.
             return
         if not all(math.isfinite(v) for v in values):
             return
         with self._optics_lock:
             if self._optics and seq <= self._optics[-1][0]:
                 # seq is a per-bridge-run counter, so going backwards means a
-                # new bridge process rather than a reordered sample. Keeping
-                # the older rows would splice two recordings onto one
-                # reconstructed clock, inventing a gap of arbitrary size.
+                # new bridge process, not a reordered sample. Keeping the
+                # older rows would splice two recordings onto one clock.
                 self._optics.clear()
             self._optics.append((seq, ts_ms, values))
 
     def optics_window(self, seconds: float) -> OpticsWindow:
         """The most recent `seconds` of optical samples, on a uniform grid.
 
-        The headband equivalent of the camera adapter's `rgb_window`, and it
-        reconstructs its time base the opposite way round, because the two
-        clocks fail differently.
+        The headband equivalent of the camera adapter's `rgb_window`, but it
+        reconstructs its time base the opposite way, because the two clocks
+        fail differently.
 
-        `mono_ts_ms` is *not* a per-sample clock: it records when a BLE batch
+        `mono_ts_ms` is not a per-sample clock -- it records when a BLE batch
         was delivered, so ~9% of samples share a stamp with their predecessor
-        and the rest arrive in bursts (pinned in tests/test_optics_fixture.py).
-        A window placed on those stamps would be measuring Bluetooth
-        scheduling. `seq` is the real sample index -- the bridge increments it
-        once per optical sample -- so samples are placed by seq, and the
-        stamps are used only to establish the *average* rate across the whole
-        window, where the batching averages out. That is also why the rate here
-        is span-based where the camera's is a median of intervals: the median
-        of a batched stream is 0.
+        and the rest arrive in bursts. A window placed on those stamps would
+        measure Bluetooth scheduling instead. `seq` is the real sample index,
+        incremented once per optical sample, so samples are placed by seq and
+        the stamps are only used to get the average rate across the window
+        (where the batching averages out). That's also why the rate here is
+        span-based rather than a median of intervals like the camera's: the
+        median of a batched stream is 0.
 
-        Gaps in seq are interpolated, which is the same trade the camera path
-        makes in `resample_uniform` -- and bounded the same way, by the caller
-        rejecting a window whose `largest_gap_s` is too long to fill honestly.
+        Gaps in seq are interpolated, the same trade `resample_uniform` makes
+        for the camera path, bounded the same way: the caller rejects a
+        window whose `largest_gap_s` is too long to fill honestly.
         """
         with self._optics_lock:
             if not self._optics:
                 return OpticsWindow(np.empty((0, 0)), None, None, None, 0.0, None, 0)
             newest_ts = self._optics[-1][1]
-            # No emptiness check: `_store_optics` drops a line with no channel
-            # values, so every buffered tuple has at least one. A guard here
-            # would read as load-bearing while being unreachable.
+            # No emptiness check needed: `_store_optics` drops any line with
+            # no channel values, so every buffered tuple has at least one.
             width = len(self._optics[-1][2])
             cutoff = -float("inf") if seconds == float("inf") else newest_ts - seconds * 1000.0
             rows: list[tuple[int, float, tuple[float, ...]]] = []
             for row in reversed(self._optics):
-                # Both conditions end the walk rather than skip the row. A
-                # channel count that changed mid-buffer is a preset change, and
-                # the samples either side of it are different measurements;
-                # taking the trailing run keeps the window on one of them.
+                # Both conditions stop the walk rather than skip the row. A
+                # channel count that changed mid-buffer means a preset change,
+                # so the samples on either side are different measurements --
+                # keep only the trailing run.
                 if row[1] < cutoff or len(row[2]) != width:
                     break
                 rows.append(row)
@@ -609,27 +578,24 @@ class TcpMuseBridgeAdapter:
         values = np.array([r[2] for r in rows], dtype=float)
 
         span_s = float(ts_s[-1] - ts_s[0])
-        # Elapsed *samples*, from seq, not `len(rows) - 1`. With samples
-        # dropped anywhere in the window the two differ, and the second one
-        # then reports a rate lower than the headband is running at -- which
-        # scales every derived bpm down by exactly the loss rate, confidently.
+        # Elapsed *samples*, from seq, not `len(rows) - 1`. If samples were
+        # dropped anywhere in the window the two differ, and counting rows
+        # would report a rate lower than the headband is actually running at,
+        # scaling every derived bpm down by the loss.
         seq_span = float(seqs[-1] - seqs[0])
-        # Only `span_s` is checked. It genuinely can be zero -- a whole window
-        # of samples delivered in one BLE batch shares one stamp, which is the
-        # very batching that rules these stamps out as a clock. `seq_span`
-        # cannot: `_store_optics` clears on a non-increasing seq, so with two
-        # or more rows it is at least 1, and testing it would suggest otherwise.
+        # Only `span_s` is checked for zero. It genuinely can be zero when a
+        # whole window arrives in one BLE batch sharing a stamp. `seq_span`
+        # can't: `_store_optics` clears on a non-increasing seq, so with two
+        # or more rows it's always at least 1.
         fs = (seq_span / span_s) if span_s > 0 else None
         # What actually arrived, over the same span. `fs` is unchanged by loss
-        # -- it is read off `seq`, which counts what the headband *sent* -- so
-        # on its own it cannot tell a full window from one that is mostly
-        # interpolation. Measured on the resting fixture: decimating to one
-        # sample in 32 leaves `fs` at 64.2 Hz and `window_coverage` at 0.995
-        # while the reported rate walks from 69 bpm to 55.8, and to 44.0 at one
-        # in 64 -- both at **confidence 1.00**, because interpolation
-        # manufactures exactly the smooth periodicity the autocorrelation
-        # rewards. That is a confident wrong answer, the worst shape available
-        # here, and this is the number that sees it.
+        # since it's read off `seq` (what the headband sent), so it alone
+        # can't tell a full window from one that's mostly interpolation.
+        # Measured on the resting fixture: decimating to one sample in 32
+        # leaves `fs` at 64.2 Hz while the reported rate walks from 69 bpm to
+        # 55.8 (one in 64: 44.0) -- both at confidence 1.00, since
+        # interpolation manufactures the smooth periodicity autocorrelation
+        # rewards. `received_rate` is what catches that.
         received_rate = ((len(rows) - 1) / span_s) if span_s > 0 else None
         if fs is None or received_rate is None:
             return OpticsWindow(np.empty((0, width)), None, None, None, span_s, None, width)
@@ -642,12 +608,10 @@ class TcpMuseBridgeAdapter:
         if grid_len == len(rows):
             channels = values
         elif grid_len > self.OPTICS_BUFFER_MAXLEN * 4:
-            # A seq jump this large is corruption, not loss: allocating a grid
-            # sized from a bad number is the one outcome worth refusing
-            # outright. Named, because empty channels alone would reach the
-            # caller as `no_samples` -- identical to a headband that never
-            # emitted, which is the opposite situation and wants the opposite
-            # response.
+            # A seq jump this large is corruption, not loss -- refuse outright
+            # rather than allocate a grid sized from a bad number. Named
+            # explicitly, since empty channels alone would read as
+            # `no_samples`, identical to a headband that never emitted.
             channels = np.empty((0, width))
             unusable = "corrupt_sample_index"
         else:
@@ -675,8 +639,8 @@ class TcpMuseBridgeAdapter:
         return True
 
     def connect(self) -> None:
-        """Connect to the native bridge. If bridge is not up yet, returns without raising —
-        read_sample() will retry on every poll cycle until it becomes available."""
+        """Connect to the native bridge. If it isn't up yet, returns without
+        raising -- read_sample() retries on every poll cycle until it is."""
         if self._socket:
             return
         if not self._try_connect():
@@ -717,16 +681,15 @@ class TcpMuseBridgeAdapter:
             except queue.Empty:
                 break
         with self._optics_lock:
-            # Dropped for the same reason the EEG queue is: whatever spans a
-            # disconnect is two recordings, and the optical window is placed on
-            # a reconstructed clock that cannot represent the join.
+            # Cleared for the same reason as the EEG queue: whatever spans a
+            # disconnect is two recordings, and the reconstructed clock can't
+            # represent the join.
             self._optics.clear()
         self._reader_stop.clear()
 
     def drain_samples(self, max_batch: int) -> list[EegSample]:
         """Return every queued sample, up to max_batch. Blocks only when the
-        queue is empty (same wait/reconnect behaviour read_sample used to have
-        on its own get() call), then drains the rest without blocking."""
+        queue is empty, then drains the rest without blocking."""
         # If not connected, try to connect now (bridge may have started since last attempt).
         if not self._reader_thread:
             if not self._try_connect():
@@ -739,7 +702,7 @@ class TcpMuseBridgeAdapter:
         try:
             first = self._eeg_queue.get(timeout=timeout_s)
         except queue.Empty as e:
-            # Reader thread died (bridge disconnected) — reset so next call retries.
+            # Reader thread died (bridge disconnected) -- reset so the next call retries.
             if self._reader_thread and not self._reader_thread.is_alive():
                 self.disconnect()
             raise RuntimeError(f"No EEG sample received from bridge within {timeout_s:.1f}s") from e
@@ -767,9 +730,9 @@ def build_ingestion_adapter(
     port: int | None = None,
     camera_index: int | None = None,
 ):
-    """Build an ingestion adapter. `kind`/`host`/`port` override the global settings
-    for a specific device in a multi-device registry; omitted, this falls back to the
-    existing single-device EEG_SOURCE / MUSE_BRIDGE_HOST / MUSE_BRIDGE_PORT behavior.
+    """Build an ingestion adapter. `kind`/`host`/`port` override the global
+    settings for one device in a multi-device registry; if omitted, falls back
+    to the single-device EEG_SOURCE / MUSE_BRIDGE_HOST / MUSE_BRIDGE_PORT settings.
     """
     source = (kind or settings.eeg_source).lower().strip()
     if source == "muse":
@@ -781,11 +744,9 @@ def build_ingestion_adapter(
     if source == "sim":
         return SimulatedMuseIngestionAdapter()
     if source == "face":
-        # Imported here, not at module scope, so the sidecar boots on a machine
-        # without the `face` extra installed. Everything above this line must
-        # keep working when cv2 is absent -- that is the property the whole
-        # optional-dependency arrangement exists to preserve, and a top-level
-        # import would silently destroy it.
+        # Imported here, not at module scope, so the sidecar still boots on a
+        # machine without the `face` extra installed. Everything above this
+        # line must keep working when cv2 is absent.
         from src.app.services.face_ingestion import build_face_adapter
 
         return build_face_adapter(

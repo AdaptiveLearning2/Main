@@ -1,39 +1,33 @@
 import { useEffect, useState } from 'react'
 
 /**
- * A channel's liveness as a light, not a number.
+ * Shows a channel's liveness as a light, not a number.
  *
- * Four states, and they are not a scale -- "never reported" is not a worse
- * version of "stale", it is a different fact (a session that never had this
- * sensor, versus one whose sensor stopped). Rendering them on one dimension is
- * what makes a blank tile mean two things at once, which the reporting rules
- * elsewhere in this app exist to prevent.
+ * Four states, not a scale: "never reported" (no sensor) and "stale" (sensor
+ * stopped) are different facts, not different severities of the same thing.
  *
  *   flowing  green, pulsing on each new sample
  *   stale    amber, steady
  *   seen     slate, steady        (reported once, not recently, not yet stale)
  *   never    hollow outline
  *
- * The pulse fires on a *changed* timestamp rather than on every poll, so a
- * sensor that stopped goes visibly still instead of blinking at the poll rate
- * -- which would read as healthy.
+ * The pulse fires only when the timestamp changes, not on every poll, so a
+ * stopped sensor goes still instead of blinking as if it were healthy.
  */
 export default function FlowDot({ channel, label }) {
   const { flowing, stale, seen, last_ts: lastTs } = channel || {}
   const [pulse, setPulse] = useState(false)
   const [pulsedFor, setPulsedFor] = useState(lastTs)
 
-  // Starting the pulse is a render-time adjustment, not an effect: it is
-  // derived entirely from a prop changing, and doing it here means the dot
-  // lights on the same commit that delivers the new timestamp.
+  // Start the pulse during render, not in an effect, so the dot lights on
+  // the same commit that delivers the new timestamp.
   if (lastTs && lastTs !== pulsedFor) {
     setPulsedFor(lastTs)
     setPulse(true)
   }
 
-  // Only *ending* it belongs in an effect, because a timer owns that. Keyed on
-  // `pulsedFor` as well as `pulse`, so a timestamp arriving mid-pulse restarts
-  // the 600ms rather than inheriting the remainder of the previous one.
+  // Ending the pulse needs a timer, so that part is an effect. Keyed on
+  // `pulsedFor` too, so a new timestamp mid-pulse restarts the full 600ms.
   useEffect(() => {
     if (!pulse) return
     const t = setTimeout(() => setPulse(false), 600)

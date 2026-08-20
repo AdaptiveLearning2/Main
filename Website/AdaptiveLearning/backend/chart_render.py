@@ -1,26 +1,23 @@
-"""Session charts as standalone SVG, for the end-of-year archive (Phase 8).
+"""Session charts as standalone SVG, for the end-of-year archive.
 
-Promoted from `FacialRecg/.../generate_session_report.py`, which already renders
-pie charts by hand with nothing but the stdlib. Kept that way deliberately: a
-headless Node render of the real Recharts components would be pixel-faithful and
-would put a Node runtime in a Python backend's deploy, and matplotlib is a heavy
-dependency that draws nothing like this app. The in-repo renderer means the
-archived image and the offline analysis report agree by construction.
+Renders by hand with nothing but the stdlib, deliberately: a headless Node
+render of the real Recharts components would be pixel-faithful but would put
+a Node runtime in a Python backend's deploy, and matplotlib is a heavy
+dependency that draws nothing like this app.
 
 **These are re-renders from the same payload, not captures of the live
 component.** Colours and series have to be kept in step with the frontend by
-hand, so they live in one place here and `test_chart_render.py` reads the JSX
-and fails when the two drift. That test is the only thing standing between an
+hand, so they live in one place here, and `test_chart_render.py` reads the
+JSX and fails when the two drift -- the only thing standing between an
 archive and a chart that means something different from what the parent saw.
 
-Two differences from the reference renderer, both because the output is a file
-rather than a fragment of a page:
+Two differences from the reference renderer, both because the output is a
+file rather than a fragment of a page:
 
 - A standalone `<svg xmlns=...>` document, not a `<section>` wrapped around one.
-- Every style inline. The reference leans on CSS classes defined in the report's
-  `<style>` block; an object in a bucket has no stylesheet to inherit from, and
-  a chart that renders unstyled in one viewer and styled in another is worse
-  than one that looks the same everywhere.
+- Every style inline. An object in a bucket has no stylesheet to inherit from,
+  and a chart that renders unstyled in one viewer and styled in another is
+  worse than one that looks the same everywhere.
 """
 
 from __future__ import annotations
@@ -30,13 +27,11 @@ import math
 
 # ── palette ────────────────────────────────────────────────────────────────
 #
-# Mirrors `frontend/src/pages/teacher/SessionReview.jsx`, and `SignalPanel.jsx`
-# agrees with it -- `test_the_two_chart_surfaces_agree_on_shared_series` fails if
-# either drifts, or if one colour comes to mean two series. Fixed per label rather
-# than assigned by position: an index-based palette recolours every emotion
-# whenever the set present changes, so the same week viewed twice would look
-# like different data -- and an archive is exactly the thing someone compares
-# across time.
+# Mirrors `frontend/src/pages/teacher/SessionReview.jsx`; a test fails if
+# either drifts, or if one colour comes to mean two series. Fixed per label
+# rather than assigned by position: an index-based palette would recolour
+# every emotion whenever the set present changes, so the same week viewed
+# twice would look like different data.
 
 EMOTION_COLOURS = {
     "neutral": "#94a3b8", "happy": "#10b981", "surprise": "#38bdf8",
@@ -78,7 +73,7 @@ def _finite(value):
     """A float, or None for anything that cannot be plotted.
 
     `float("nan")` and `inf` both survive a naive float() and then draw as a
-    path command no renderer agrees on -- some clip, some blank the chart.
+    path command renderers disagree on -- some clip, some blank the chart.
     """
     try:
         value = float(value)
@@ -102,9 +97,9 @@ def _svg(body: str, title: str) -> str:
 def _empty(title: str, reason: str) -> str:
     """A chart with nothing to draw still says which nothing it is.
 
-    "No data" and "this channel was switched off" are different facts, and the
-    archive is read years later by someone who cannot ask. The caller supplies
-    the sentence; this only renders it.
+    "No data" and "this channel was switched off" are different facts, and
+    the archive may be read years later by someone who can't ask. The caller
+    supplies the sentence; this only renders it.
     """
     return _svg(
         f'<text x="{_WIDTH / 2}" y="{_HEIGHT / 2}" text-anchor="middle" '
@@ -117,9 +112,9 @@ def _empty(title: str, reason: str) -> str:
 def pie_svg(counts: dict, title: str, colours: dict) -> str:
     """A donut of labelled counts.
 
-    Carries over the reference renderer's one real bug fix: an arc of exactly
-    360 degrees has identical start and end points, so the path degenerates and
-    a single-slice pie renders *blank*. A full circle is drawn as a circle.
+    An arc of exactly 360 degrees has identical start and end points, so the
+    path degenerates and a single-slice pie would render *blank*. Drawn as a
+    circle instead.
     """
     data = [(str(k), int(v)) for k, v in (counts or {}).items()
             if _finite(v) and int(v) > 0]
@@ -127,8 +122,8 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
     if total <= 0:
         return _empty(title, "No scored data available.")
 
-    # Largest first, so the archive's slice order does not depend on dict
-    # iteration order and two renders of one session are byte-identical.
+    # Largest first, so slice order doesn't depend on dict iteration order --
+    # two renders of one session stay byte-identical.
     data.sort(key=lambda kv: (-kv[1], kv[0]))
 
     cx, cy, r = 150, 168, 92
@@ -174,13 +169,12 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
 def line_svg(points: dict, title: str, unit: str = "") -> str:
     """One or more series over time.
 
-    `points` maps a series name to a list of (x, y). x is anything orderable and
-    numeric -- epoch milliseconds in practice; y is the value or None.
+    `points` maps a series name to a list of (x, y). x is anything orderable
+    and numeric -- epoch milliseconds in practice; y is the value or None.
 
-    **Nulls break the line rather than bridging it.** A gap is a stretch where
-    nothing was recorded, and joining across it draws a measurement that was
-    never taken -- the chart-shaped version of the rule that a reporting surface
-    must not render absence as a value.
+    **Nulls break the line rather than bridging it.** A gap is a stretch
+    where nothing was recorded, and joining across it would draw a
+    measurement that was never taken.
     """
     series = {}
     for name, raw in (points or {}).items():
@@ -195,9 +189,8 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
     ys = [y for pts in series.values() for _, y in pts if y is not None]
     x_lo, x_hi = min(xs), max(xs)
     y_lo, y_hi = min(ys), max(ys)
-    # A flat series has zero range, which would divide by zero and then draw
-    # every point on one edge. Pad it so the line sits mid-plot and reads as
-    # flat rather than as pinned to the axis.
+    # A flat series has zero range, which would divide by zero and draw every
+    # point on one edge. Pad it so the line sits mid-plot instead.
     if y_hi - y_lo < 1e-9:
         y_lo, y_hi = y_lo - 1, y_hi + 1
     x_span = (x_hi - x_lo) or 1
@@ -229,10 +222,9 @@ def line_svg(points: dict, title: str, unit: str = "") -> str:
         def flush(run, colour=colour):
             """Emit one unbroken run. Shared by the gap branch and the tail.
 
-            A lone point becomes a dot, because a polyline of one point draws
-            nothing -- which would render a reading that survived between two
-            gaps as no reading at all. Handling that only at the end of the loop
-            dropped every isolated point *before* a gap, silently.
+            A lone point becomes a dot: a polyline of one point draws
+            nothing, which would silently render a reading between two gaps
+            as no reading at all.
             """
             if len(run) > 1:
                 out.append(f'<polyline points="{" ".join(run)}" fill="none" '

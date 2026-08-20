@@ -1,29 +1,21 @@
 """Headless camera capture: frames in, colour samples out, nothing stored.
 
-The adapter duck-types the same shape as the EEG ones — `connect`,
-`disconnect`, `drain_samples`, `get_ingestion_meta` — because `stream_manager`
-probes with `hasattr` and has no base class to inherit.
+Duck-types the EEG adapters' shape (`connect`, `disconnect`, `drain_samples`,
+`get_ingestion_meta`) since `stream_manager` probes with `hasattr` and there's
+no base class.
 
-Three constraints shape the whole design, and each is a defect in the original
-CLI this is ported from:
+Three rules shape the design:
 
-**The capture thread never blocks on I/O.** In the original, the backend POST
-ran synchronously inside the capture loop, so a 10 s HTTP timeout stalled frame
-grabbing — which does not merely lose frames, it corrupts the time series,
-because POS and the rate derivation both assume a roughly uniform sample
-interval. Here the capture thread only ever appends to a bounded queue.
-
-**Nothing accumulates.** The original re-scanned every snapshot taken so far on
-every tick to rebuild summaries, which is O(n²) in session length. Nothing here
-keeps a growing structure: the RGB buffer is a fixed-length deque and the queue
-is bounded, so an eight-hour session costs the same per frame as the first
-minute.
-
-**No image is retained.** Frames are read, reduced to three numbers, and
-dropped in the same iteration. There is no path from this module to disk, to a
-payload, or to a second frame's memory. That is the product constraint the
-facial pipeline exists under, and honouring it here means no later layer *can*
-violate it by accident.
+- **The capture thread never blocks on I/O.** It only ever appends to a
+  bounded queue. A blocking call here would stall frame grabbing, which
+  corrupts the time series since POS and the rate derivation assume roughly
+  uniform sample intervals.
+- **Nothing accumulates.** The RGB buffer is a fixed-length deque and the
+  queue is bounded, so a long session costs the same per frame as the first
+  minute.
+- **No image is retained.** Frames are read, reduced to three numbers, and
+  dropped in the same iteration. Nothing here can leak a frame to disk or a
+  payload.
 """
 
 from __future__ import annotations
@@ -44,59 +36,46 @@ from src.app.services.pos_rppg import WINDOW_SECONDS
 
 logger = logging.getLogger(__name__)
 
-# Bounded so a stalled consumer costs a fixed amount of memory and drops the
-# oldest samples rather than growing until the process dies. Two minutes at
-# 30 fps is far more than any consumer should be behind.
+# Bounded so a stalled consumer costs a fixed amount of memory and old samples
+# get dropped instead of the queue growing forever. Two minutes at 30 fps is
+# far more than any consumer should be behind.
 QUEUE_MAX = 3600
 
 # How long the capture thread waits after a read that produced nothing.
-#
-# The loop is otherwise paced by `read()` blocking on the sensor. When there is
-# no sensor -- unplugged mid-session, or a permission revoked -- the read
-# returns immediately and there is nothing left to limit the rate, so without
-# this the thread spins a core writing the same log line. Short enough that a
-# camera coming back is picked up within a frame or two of a normal cadence.
+# Normally the loop is paced by `read()` blocking on the sensor. If the sensor
+# is gone (unplugged, permission revoked), read() returns instantly and
+# nothing limits the rate, so without this the thread spins a core. Short
+# enough that a camera coming back is picked up almost immediately.
 ERROR_BACKOFF_SECONDS = 0.1
 
-# Frames per second the buffer's hard size is provisioned for.
-#
-# Not a rate anything is expected to run at -- a ceiling. The buffer's real
-# bound is `buffer_seconds` of elapsed time; this only stops a pathological
-# source from growing it without limit, so it is set well above any plausible
-# burst (measured: ~6 ms between paired frames, so ~160 Hz instantaneous) and
-# deliberately not tied to the configured frame rate.
+# Ceiling on the buffer's fixed size, not an expected rate. The real bound is
+# `buffer_seconds` of elapsed time; this only stops a runaway source from
+# growing the buffer without limit. Set well above any real burst (measured
+# ~160 Hz instantaneous between paired frames).
 MAX_BURST_FPS = 240.0
 
-# Seconds of frames discarded after the camera opens, before anything is
-# buffered.
+# Seconds of frames discarded after the camera opens, before buffering starts.
 #
-# A camera's auto-exposure converges over the first few seconds and it does so
-# enormously relative to the signal: measured here, mean green climbed 17% over
-# ~5 s, against a pulse that is under 1%. The same recording scored confidence
-# 0.05 with that ramp inside the window and 0.81 on a clean stretch after it --
-# the difference between the feature working and not.
+# Auto-exposure converges over the first few seconds, and the ramp is huge
+# relative to the pulse signal: measured mean green climbing 17% over ~5s
+# against a pulse under 1%. Same recording scored confidence 0.05 with the
+# ramp in the window vs 0.81 after it.
 #
-# The ramp cannot be prevented. `CAP_PROP_AUTO_EXPOSURE` reads back -1.0 on this
-# Windows backend no matter what it is set to, so the exposure request is a
-# request and nothing more. Discarding the frames is the only control available.
+# The ramp can't be prevented in software: `CAP_PROP_AUTO_EXPOSURE` reads back
+# -1.0 on this Windows backend no matter what it's set to. Discarding frames
+# is the only available fix.
 #
-# 8 s rather than 5 for margin, and it delays the first reading by that much on
-# top of the window fill -- which is why `warmup_remaining_s` is in the meta. A
-# session in warm-up must be distinguishable from a camera that cannot see.
+# 8s for margin. This delays the first reading, so `warmup_remaining_s` is
+# reported in the meta so warm-up isn't mistaken for a camera that can't see.
 WARMUP_SECONDS = 8.0
 
-# The clock the samples are stamped with.
-#
-# `perf_counter`, not `monotonic`, and on Windows that is the whole ballgame:
-# `time.monotonic()` there has a resolution of **15.625 ms**, so at any frame
-# rate worth having it does not measure the interval, it quantises it -- every
-# interval rounds to a multiple of the clock (e.g. 31 ms and 47 ms are 2 and 3
-# ticks of it), which can look like a beat between the loop and the camera when
-# it is really just quantisation.
-#
-# `perf_counter` resolves 100 ns, is monotonic by contract, and costs the same.
-# It is only unsuitable for wall-clock questions, which nothing here asks --
-# the capture's absolute start is recorded separately for exactly that reason.
+# The clock samples are stamped with: `perf_counter`, not `monotonic`.
+# On Windows, `time.monotonic()` has 15.625ms resolution, so it quantises
+# frame intervals instead of measuring them (e.g. 31ms and 47ms just become 2
+# and 3 ticks), which can look like jitter between the loop and the camera
+# when it's really just clock rounding. `perf_counter` resolves 100ns and
+# costs the same. It's unsuitable for wall-clock time, but nothing here needs
+# that (the capture's absolute start is recorded separately).
 now_seconds = time.perf_counter
 
 # How much colour history to keep for POS. It needs one window (1.6 s); the rate
@@ -114,32 +93,28 @@ MISSING_FACE_TOLERANCE = 30
 # is a measurably different picture.
 LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
 
-# How often the emotion classifier runs, in seconds. Far below the frame rate on
-# purpose: expression changes on a timescale of seconds, so classifying every
-# frame would spend roughly thirty times the CPU to produce the same answer --
-# on a device that is also running a browser, a maths lesson and the EEG stack.
+# How often the emotion classifier runs. Well below the frame rate on
+# purpose: expression changes over seconds, so classifying every frame would
+# burn far more CPU for the same answer, on a laptop already running a
+# browser, a maths lesson and the EEG stack.
 EMOTION_INTERVAL_S = 0.25
 
-# How often the face-mesh landmarker runs. Slower than emotion, and for a
-# different reason: this is a second detector on the same frames, and it does
-# its own face detection rather than reusing the Haar box (a box has no
-# landmarks in it). Two detectors on a student's laptop is the cost worth
-# minding, so gaze runs at 5 Hz -- fast enough that a glance away spans several
-# samples, slow enough to stay a fraction of one core.
+# How often the face-mesh landmarker runs. Slower than emotion because it's a
+# second detector doing its own face detection on the full frame (it can't
+# reuse the Haar box, which has no landmarks). 5 Hz is fast enough to catch a
+# glance away across several samples while staying a fraction of one core.
 #
-# Not derived from EMOTION_INTERVAL_S. They answer to different physics --
-# expression changes over seconds, a saccade takes tens of milliseconds and
-# neither rate can resolve one -- and tying them together would silently
-# retune gaze whenever someone tuned emotion.
+# Not derived from EMOTION_INTERVAL_S: expression and gaze change on
+# different timescales, so tying the two together would silently retune one
+# whenever someone tuned the other.
 GAZE_INTERVAL_S = 0.2
 
 
 class FrameSource(Protocol):
     """Anything that yields frames. A webcam in production, a list in tests.
 
-    Injected rather than constructed internally so the adapter's threading,
-    buffering, quality gating and teardown are all testable without OpenCV --
-    which is absent from CI by design.
+    Injected so the adapter's threading, buffering, quality gating and
+    teardown are testable without OpenCV, which CI doesn't have.
     """
 
     def read(self) -> np.ndarray | None:
@@ -169,13 +144,11 @@ class _Counters:
     consecutive_missing: int = 0
     # Why the last frame produced nothing: "camera" (no frame at all),
     # "no_face" (nothing detected) or "quality" (face found, too little usable
-    # skin). Three different problems -- a disconnected webcam, a student who
-    # left, and bad lighting -- and collapsing them into one string is the same
-    # conflation this module argues against elsewhere.
+    # skin). Kept distinct since a disconnected webcam, a student leaving, and
+    # bad lighting are different problems.
     missing_reason: str | None = None
     last_error: str | None = None
-    # Counters rather than lists. A list of per-frame records would be the same
-    # unbounded-growth mistake the docstring above exists to prevent.
+    # Counters, not lists of per-frame records, to avoid unbounded growth.
 
 
 class FaceCaptureAdapter:
@@ -199,43 +172,27 @@ class FaceCaptureAdapter:
         error_backoff: float = ERROR_BACKOFF_SECONDS,
         warmup_seconds: float = WARMUP_SECONDS,
     ) -> None:
-        # buffer_seconds and queue_max are injectable so the bounded-growth and
-        # queue-full behaviours can be tested at a scale that runs in
-        # milliseconds. Defaults are the production values; a test that had to
-        # fill 40 s of buffer at 30 fps to prove a bound would take 40 s, so in
-        # practice the bound would go untested.
+        # buffer_seconds and queue_max are injectable so tests can hit the
+        # bounded-growth and queue-full behaviour quickly, instead of needing
+        # to fill a real 40s buffer.
         if buffer_seconds < WINDOW_SECONDS:
-            # Guarded rather than left to produce nothing. A buffer shorter than
-            # one POS window can never yield a pulse, and the symptom would be a
-            # camera that connects, reports healthy, counts frames, and silently
-            # never produces a reading -- indistinguishable from a student who
-            # is simply not there.
+            # A buffer shorter than one POS window can never yield a pulse.
+            # Refuse at construction rather than let it silently connect,
+            # report healthy, and never produce a reading.
             raise ValueError(
                 f"buffer_seconds={buffer_seconds} is shorter than one POS window "
                 f"({WINDOW_SECONDS}s); no pulse could ever be produced"
             )
         if heart_enabled:
-            # Not refused -- a future experiment on better hardware needs to be
-            # able to switch this on -- but never switched on quietly.
-            #
-            # Validated against a simultaneous ECG on 2026-08-08 and failed:
-            # 47.7 bpm reported at confidence 0.74 against a watch-measured 88,
-            # on five minutes with the face found in 8988 of 8988 frames. The
-            # pulse was absent from the recording rather than mis-derived -- the
-            # autocorrelation peak was 0.02 where a real pulse gives 0.3-0.7 --
-            # and the raw R, G and B channels showed the same, so POS was not at
-            # fault.
-            #
-            # Worse, the confidence gate cannot catch it. Its three terms were
-            # built for the headband's four contact channels: `agreement` is
-            # 1.00 by construction against POS's single waveform, `margin` is
-            # highest exactly when there is no rival structure to beat, and the
-            # measured snr of 0.314 sits inside the range the code documents as
-            # "a clear pulse". Enabling this does not ship a noisy number, it
-            # ships a confident wrong one -- which is the failure the derived-BPM
-            # rule in CLAUDE.md exists to prevent.
-            #
-            # tests/fixtures/FACE_RPPG_ECG.md has the full evidence.
+            # Not refused outright (a future experiment might need it), but
+            # never enabled silently. Validated against a simultaneous ECG:
+            # 47.7 bpm at confidence 0.74 against a true 88, with the face
+            # found in every frame. The pulse just isn't in the recording --
+            # autocorrelation peak 0.02 vs 0.3-0.7 for a real pulse -- and the
+            # confidence gate can't catch it, since its terms were built for
+            # four contact channels and read as "clear pulse" on a single
+            # noisy waveform. So this ships a confident wrong number, not a
+            # noisy one. See tests/fixtures/FACE_RPPG_ECG.md.
             logger.warning(
                 "FACE_HEART_ENABLED is on: camera heart rate failed ECG "
                 "validation (47.7 bpm reported at confidence 0.74 against 88) "
@@ -245,15 +202,12 @@ class FaceCaptureAdapter:
             )
 
         if not heart_enabled and not emotion_enabled and not gaze_enabled:
-            # Opening a camera to compute nothing is never what was meant, and
-            # the failure would be silent: frames read, nothing produced,
-            # indistinguishable from a student out of shot. Emotion off with a
-            # healthy headband means the camera should not be open at all --
-            # this makes that state unrepresentable rather than merely intended.
+            # Opening a camera to compute nothing would fail silently: frames
+            # read, nothing produced, indistinguishable from a student out of
+            # shot. Refuse at construction instead.
             #
-            # `gaze_enabled` counts too: a gaze-only camera (emotion off, no
-            # 35 MB FER+ model to install) is a coherent deployment and must
-            # not be refused at construction.
+            # gaze_enabled counts too -- a gaze-only camera (emotion off, no
+            # FER+ model needed) is a valid deployment on its own.
             raise ValueError(
                 "refusing to open a camera with heart, emotion and gaze all disabled"
             )
@@ -267,11 +221,11 @@ class FaceCaptureAdapter:
         self.fps = fps
         self.heart_enabled = heart_enabled
         self.emotion_enabled = emotion_enabled
-        # A factory, like the frame source and locator, and for the same reason:
-        # constructing the classifier loads and verifies a 35 MB model, so doing
-        # it here would mean a device registry could not *name* a camera on a
-        # machine that has not provisioned one. Built at connect(), where the
-        # error names the real problem.
+        # A factory, like the frame source and locator: constructing the
+        # classifier loads and verifies a 35 MB model, so building it here
+        # would stop a device registry from naming a camera on a machine
+        # without the model. Built at connect() instead, where a failure
+        # names the real problem.
         self._make_emotion = emotion_classifier_factory
         self._emotion: Any = None
         self._emotion_interval = emotion_interval_s
@@ -281,20 +235,18 @@ class FaceCaptureAdapter:
         self._last_emotion_at = 0.0
         self._latest_emotion: Any = None
 
-        # Same factory treatment as the classifier, and more necessary: the
-        # landmarker loads a model file that may not be on the machine at all,
-        # so constructing it here would stop a registry naming a camera.
+        # Same factory treatment as the classifier: the landmarker loads a
+        # model file that may not exist on the machine at all.
         self.gaze_enabled = gaze_enabled
         self._make_landmarker = landmarker_factory
         self._landmarker: Any = None
         self._gaze_interval = gaze_interval_s
         self._last_gaze_at = 0.0
         self._latest_gaze: Any = None
-        # Head pose rides on the same landmark set and the same cadence -- one
-        # detector call feeds both -- but is stored separately because the two
-        # refuse independently: near profile the pose fit refuses while the eyes
-        # are still readable, and a closed eye refuses gaze while the pose is
-        # fine.
+        # Head pose comes from the same landmark call as gaze but is stored
+        # separately since the two refuse independently: near profile, pose
+        # refuses while the eyes stay readable; a closed eye refuses gaze
+        # while pose is fine.
         self._latest_pose: Any = None
 
         self._source: FrameSource | None = None
@@ -303,30 +255,19 @@ class FaceCaptureAdapter:
         self._stop = threading.Event()
 
         self._queue: queue.Queue[FaceSample] = queue.Queue(maxsize=queue_max)
-        # (capture_ts, r, g, b, usable_fraction). The timestamp is kept because the configured
-        # fps is a request, not a measurement: a webcam asked for 30 routinely
-        # delivers 22 under load or poor light. Deriving the time base from the
-        # nominal rate would scale every bpm by nominal/actual -- 30/22 is +36%,
-        # a confidently wrong heart rate with nothing to indicate it.
-        # usable_fraction rides along so quality gating is per *window* rather
-        # than per tick. Deriving it from the samples drained since the last tick
-        # made it intermittent: a tick that drained nothing left quality unknown
-        # while the 25 s colour buffer was still full and scored, so the gate
-        # silently did not run. Ticks faster than the frame rate hit that
-        # routinely.
-        # Bounded by *time*, in `_trim_buffer`, with the count cap below acting
-        # only as a memory backstop.
-        #
-        # `maxlen = buffer_seconds * fps` was the last place nominal fps entered
-        # the arithmetic, and unpacing the capture loop is what made it wrong.
-        # OpenCV hands over buffered frames back to back at ~6 ms apart, so a
-        # sustained burst above ~48 Hz fills 1200 slots with less than the 25 s
-        # the rate window asks for. Coverage would then never reach 0.80 and the
-        # heart channel would sit in `warming_up` forever -- a silent stall,
-        # which is the exact failure this pipeline keeps being designed against.
-        #
-        # The cap is generous rather than tight: it exists so a runaway source
-        # cannot grow the buffer without limit, not to decide the window length.
+        # (capture_ts, r, g, b, usable_fraction). The timestamp is kept
+        # because configured fps is a request, not a measurement -- a webcam
+        # asked for 30 can deliver 22 under load, and scaling by the nominal
+        # rate would produce a confidently wrong bpm.
+        # usable_fraction rides along so quality gating covers a whole
+        # window rather than one tick, since a tick that drained nothing
+        # would otherwise leave quality unknown even with a full buffer.
+        # Bounded by *time* in `_trim_buffer`; the maxlen below is only a
+        # memory backstop, not the real bound (deriving it from nominal fps
+        # would cap the buffer under the window length once actual frame
+        # rate ran ahead of nominal, stalling the heart channel forever in
+        # `warming_up`). Kept generous so a runaway source can't grow the
+        # buffer without limit.
         self._buffer_seconds = buffer_seconds
         self._buffer: deque[tuple[float, float, float, float, float]] = deque(
             maxlen=max(1, int(buffer_seconds * MAX_BURST_FPS))
@@ -339,10 +280,10 @@ class FaceCaptureAdapter:
     def connect(self) -> None:
         """Open the camera and start capturing.
 
-        Raises if the camera cannot be opened. Unlike the Muse bridge adapter,
-        which retries because a headband may legitimately be switched on later,
-        a camera that will not open is a configuration or permission problem
-        and silently retrying would hide it.
+        Raises if the camera can't be opened, unlike the Muse adapter (which
+        retries, since a headband can legitimately be turned on later) -- a
+        camera that won't open is a config or permission problem, and
+        retrying would hide it.
         """
         if self._thread is not None:
             return
@@ -351,29 +292,16 @@ class FaceCaptureAdapter:
         if self.emotion_enabled and self._emotion is None:
             self._emotion = self._make_emotion()
         if self.gaze_enabled and self._landmarker is None:
-            # Tolerated, unlike the classifier above it, and the asymmetry is
-            # deliberate. Building the landmarker loads a model file that may
-            # simply not be on the machine -- `start.ps1 -Gaze` provisions it,
-            # and a hand-edited `.env` does not. Letting that raise here would
-            # take the **whole camera device** down, heart and emotion with it,
-            # for the sake of a channel that is off by default and that nothing
-            # yet renders. Emotion is the camera's primary measurement and can
-            # justify refusing to start; gaze cannot.
-            #
-            # Not silently, though: the channel stays enabled and reports a
-            # named refusal, so the payload says "gaze on, unavailable, here is
-            # why" rather than "gaze off", which is a claim about configuration
-            # that would be false.
-            #
-            # Broad on purpose, and broader than "the model file is missing":
-            # a missing MediaPipe (its own extra, not in `.[face]`), an API
-            # that moved under it -- `mp.solutions` was deleted in 1.0.0 --
-            # or a corrupt bundle all reach here, and none of them is a reason
-            # to take heart and emotion down. `logger.exception`, matching every
-            # other handler in this file, because this is the *only* diagnostic
-            # for a class of failure with no CI backstop: building a landmarker
-            # needs MediaPipe, which CI does not have, so a traceback here is
-            # the whole evidence trail.
+            # Tolerated, unlike the classifier above -- deliberately.
+            # Building the landmarker can fail because the model file isn't
+            # provisioned (`start.ps1 -Gaze` fetches it; a hand-edited `.env`
+            # doesn't), MediaPipe is missing, its API moved, or the bundle is
+            # corrupt. None of that is a reason to take heart and emotion
+            # down with it, since gaze is off by default and nothing renders
+            # it yet. So the channel stays enabled and reports a named
+            # refusal rather than silently going off. `logger.exception`
+            # because CI has no camera dependencies to test this path, so a
+            # traceback here is the only diagnostic available.
             try:
                 self._landmarker = self._make_landmarker()
             except Exception as exc:                  # noqa: BLE001
@@ -390,10 +318,9 @@ class FaceCaptureAdapter:
     def disconnect(self) -> None:
         """Stop capturing and release the camera.
 
-        Joined rather than left to daemon teardown. A daemon thread that logs
-        during interpreter shutdown, while the stdout lock is held, is a fatal
-        `_enter_buffered_busy` abort that reads as unrelated flake -- the same
-        failure `eeg_poller.stop_all()` exists to prevent.
+        Joined rather than left to daemon teardown -- a daemon thread that
+        logs during interpreter shutdown while the stdout lock is held is a
+        fatal abort that reads as unrelated flake.
         """
         self._stop.set()
         if self._thread is not None:
@@ -407,9 +334,9 @@ class FaceCaptureAdapter:
         self._locator = None
         self._latest_emotion = None
         self._last_emotion_at = 0.0
-        # The landmarker itself is kept: it holds a loaded model, and MediaPipe
-        # takes seconds to build one. The *reading* is dropped, because a gaze
-        # from before the camera was released is not a gaze now.
+        # The landmarker itself is kept (it holds a loaded model, and
+        # MediaPipe takes seconds to build one) but the reading is cleared,
+        # since a gaze from before release isn't a gaze now.
         self._latest_gaze = None
         self._latest_pose = None
         self._last_gaze_at = 0.0
@@ -426,27 +353,18 @@ class FaceCaptureAdapter:
     def _capture_loop(self) -> None:
         """Read frames as fast as the camera hands them over, and no faster.
 
-        There is deliberately no pacing here. Sleeping the remainder of a
-        nominal frame interval is the obvious shape for a capture loop and it
-        actively harms this one: `read()` already blocks until the sensor has a
-        frame, so the camera is the clock, and adding a second clock on top only
-        creates a beat between them.
-
-        Measured. Paced to 30 fps against a camera running natively at ~32, the
-        intervals came out bimodal -- 78% at 31 ms and 21% at 47 ms -- because
-        each time the sleep overshot the next exposure a whole frame was missed.
-        That is a fifth of the signal discarded to enforce a rate the camera was
-        already exceeding.
-
-        Resampling downstream makes the uneven result survivable, which is why
-        this was not a correctness bug. It was still 21% fewer samples than the
-        hardware offered, and a stop event checked once per frame is prompt
-        enough for disconnect() without a timed wait to make it so.
+        No pacing here on purpose. `read()` already blocks until the sensor
+        has a frame, so the camera is the clock -- adding a sleep-based clock
+        on top just creates a beat between the two. Measured: pacing to 30fps
+        against a camera running at ~32 produced bimodal intervals (78% at
+        31ms, 21% at 47ms), discarding a fifth of the signal to enforce a
+        rate the camera was already exceeding. Downstream resampling handles
+        the uneven result fine.
         """
-        # Discard the exposure ramp before anything reaches the buffer. In the
-        # loop rather than in connect() so the caller is not blocked for 8 s,
-        # and before `_capture_once` so no discarded frame is counted, stamped
-        # or classified.
+        # Discard the exposure ramp before anything reaches the buffer. Done
+        # in the loop, not connect(), so the caller isn't blocked for 8s, and
+        # before `_capture_once` so a discarded frame is never counted,
+        # stamped or classified.
         warmup_until = now_seconds() + self._warmup_seconds
         with self._lock:
             self._warmup_started_at = now_seconds()
@@ -455,8 +373,8 @@ class FaceCaptureAdapter:
                 if self._source is not None:
                     self._source.read()
             except Exception:                             # noqa: BLE001
-                # A source failing during warm-up is the normal loop's problem,
-                # not the warm-up's. Leave it to report the error properly.
+                # A source failing during warm-up isn't warm-up's problem --
+                # let the normal loop handle and report it.
                 break
             with self._lock:
                 self._counters.warmup_frames_discarded += 1
@@ -467,33 +385,28 @@ class FaceCaptureAdapter:
             try:
                 got_frame = self._capture_once()
             except Exception as exc:                      # noqa: BLE001
-                # Caught at the thread boundary rather than by installing a
-                # process-wide threading.excepthook, which is what the original
-                # did -- that silences every other thread's errors in the same
-                # process, including ones that have nothing to do with the
-                # camera.
+                # Caught at the thread boundary, not via a process-wide
+                # excepthook, so other threads' errors aren't silenced too.
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
                 logger.exception("face capture iteration failed")
-                # The one case that does need a wait. A source failing
-                # immediately -- an unplugged camera returning None with no
-                # blocking read behind it -- would otherwise spin this thread at
-                # full speed logging the same error. Waiting on the stop event
-                # rather than sleeping keeps disconnect() prompt.
+                # Wait rather than spin: a source failing immediately (an
+                # unplugged camera returning None with no blocking read)
+                # would otherwise spin this thread at full speed. Waiting on
+                # the stop event instead of sleeping keeps disconnect() prompt.
                 self._stop.wait(self._error_backoff)
                 continue
 
             if not got_frame:
-                # A source that yields nothing is not blocking on hardware, so
-                # nothing else in the loop limits the rate. Same backoff, same
-                # reason -- an unplugged camera must not spin a core.
+                # Same reasoning: a source yielding nothing isn't blocking on
+                # hardware, so nothing else limits the rate.
                 self._stop.wait(self._error_backoff)
 
     def _capture_once(self) -> bool:
         """One frame. Returns whether the camera handed one over at all.
 
-        The return value is about the *source*, not about the face: a frame with
-        no face in it still means the camera is alive and pacing the loop.
+        This is about the *source*, not the face: a frame with no face still
+        means the camera is alive and pacing the loop.
         """
         frame = self._source.read() if self._source else None
         if frame is None:
@@ -506,20 +419,18 @@ class FaceCaptureAdapter:
             self._counters.frames_read += 1
 
         now = now_seconds()
-        # Before the Haar box, and deliberately. The landmarker runs its own
-        # detection on the full frame, so a Haar miss says nothing about whether
-        # a mesh is available -- and returning early on one would make the gaze
-        # channel silently depend on a detector it does not use. The file
-        # already carries that lesson one channel over: an unguarded emotion
-        # crop used to abort the iteration and take the colour sample with it.
+        # Sampled before the Haar box on purpose: the landmarker runs its own
+        # detection on the full frame, so a Haar miss says nothing about
+        # whether a mesh is available. Returning early on a Haar miss would
+        # make gaze silently depend on a detector it doesn't use.
         if (self.gaze_enabled
                 and now - self._last_gaze_at >= self._gaze_interval):
             self._last_gaze_at = now
             self._sample_gaze(frame)
 
-        # Luma-weighted, not a flat mean. Haar cascades are trained on
-        # ITU-R BT.601 luma, and a flat RGB average is a different image --
-        # notably brighter in the red channel, which is most of a face.
+        # Luma-weighted, not a flat mean: Haar cascades are trained on
+        # ITU-R BT.601 luma, and a flat RGB average is a noticeably different
+        # (redder) image for skin tones.
         gray = frame.astype(np.float32) @ LUMA_WEIGHTS
         box = self._locator.locate(gray)
         if box is None:
@@ -537,11 +448,10 @@ class FaceCaptureAdapter:
                 crop = to_gray64(frame, box)
                 result = self._emotion.classify(crop)
             except Exception as exc:                      # noqa: BLE001
-                # Guarded separately from classify(), which has its own handler.
-                # to_gray64 did not, so a geometry it could not handle aborted
-                # the whole iteration and took the colour sample with it -- one
-                # channel's failure silently stopping the other, when the two
-                # are meant to be independent.
+                # Guarded separately from classify() (which has its own
+                # handler) so a crop failure can't abort the iteration and
+                # take the colour sample down with it -- the two channels
+                # must stay independent.
                 logger.exception("emotion crop failed")
                 with self._lock:
                     self._counters.last_error = f"{type(exc).__name__}: {exc}"
@@ -550,17 +460,16 @@ class FaceCaptureAdapter:
                     self._latest_emotion = result
 
         if not self.heart_enabled:
-            # Emotion-only. The face was found and classified; there is no
-            # colour sample to make, and the buffer stays empty so nothing
-            # downstream mistakes an idle heart channel for a stalled one.
+            # Emotion-only: no colour sample to take, and the buffer stays
+            # empty so nothing downstream mistakes an idle heart channel for
+            # a stalled one.
             with self._lock:
                 self._counters.faces_found += 1
                 self._counters.consecutive_missing = 0
             return True
 
         sample = mean_rgb(frame, box)
-        # `frame` goes out of scope here and is never referenced again. Every
-        # path below deals only in the three numbers.
+        # `frame` is never referenced again below -- only the three numbers.
         with self._lock:
             self._counters.faces_found += 1
             if not sample.ok:
@@ -576,10 +485,9 @@ class FaceCaptureAdapter:
         try:
             self._queue.put_nowait(item)
         except queue.Full:
-            # Drop the newest rather than block. Blocking here would stall
-            # capture, which is the defect this whole structure exists to avoid,
-            # and a consumer 2 minutes behind has bigger problems than one lost
-            # frame.
+            # Drop rather than block -- blocking here would stall capture,
+            # and a consumer 2 minutes behind has bigger problems than one
+            # lost frame.
             with self._lock:
                 self._counters.dropped_full_queue += 1
             return True
@@ -592,10 +500,9 @@ class FaceCaptureAdapter:
     def drain_samples(self, max_batch: int) -> list[FaceSample]:
         """Every queued sample, up to max_batch. Never blocks.
 
-        Deliberately unlike the Muse adapter, which blocks briefly and raises on
-        timeout. A camera that has produced nothing yet is the normal state for
-        the first second of a session and during any moment the student looks
-        away; it is not an error, and raising would turn an ordinary gap into a
+        Unlike the Muse adapter, which blocks briefly and raises on timeout:
+        a camera with nothing queued (session start, student looked away) is
+        normal, not an error, and raising would turn an ordinary gap into a
         stream restart.
         """
         out: list[FaceSample] = []
@@ -609,12 +516,11 @@ class FaceCaptureAdapter:
     def _trim_buffer(self) -> None:
         """Drop samples older than `buffer_seconds`. Caller holds the lock.
 
-        If the count cap is doing the bounding instead, that is recorded. It
-        should never happen -- the cap is provisioned for 240 fps -- but if it
-        does, the buffer holds less time than it was asked for, coverage never
-        reaches its threshold and the heart channel stalls in `warming_up`
-        with nothing to say why. A counter is the difference between a stall
-        that can be diagnosed and one that cannot.
+        If the count cap ends up doing the bounding instead of the time cap,
+        that's recorded. Shouldn't happen (the cap is provisioned for
+        240fps), but if it does the buffer holds less time than asked and
+        the heart channel silently stalls in `warming_up` -- the counter
+        makes that diagnosable instead of a mystery.
         """
         cutoff = self._buffer[-1][0] - self._buffer_seconds
         while len(self._buffer) > 1 and self._buffer[0][0] < cutoff:
@@ -625,32 +531,28 @@ class FaceCaptureAdapter:
     def _sample_gaze(self, frame: np.ndarray) -> None:
         """One gaze reading from a full frame. Never raises.
 
-        Wrapped like the emotion crop and for the reason that wrapping was added
-        there: a failure in one channel must not stop the others. This one runs
-        *before* the colour sample, so an exception escaping here would cost the
-        heart channel every frame rather than merely blanking gaze.
+        Wrapped like the emotion crop, for the same reason: a failure in one
+        channel must not stop the others. This runs *before* the colour
+        sample, so an escaping exception would cost the heart channel every
+        frame, not just blank gaze.
 
-        A refusal is stored, not discarded. `Gaze` carries `rejected_by`, and
-        the record layer needs it to tell a closed eye from a channel that has
-        produced nothing yet -- dropping it would collapse those to one state.
+        A refusal is stored, not discarded -- `Gaze.rejected_by` is what lets
+        the record layer tell a closed eye apart from a channel that hasn't
+        produced anything yet.
 
-        **A failure is stored too, as its own refusal.** Returning without
-        storing leaves `_latest_gaze` at None, which the record layer reports as
-        `no_reading` -- the warming-up state. A landmarker that raises on every
-        frame (a corrupt model, a MediaPipe that will not initialise) would then
-        spend the whole session claiming to be warming up, which is precisely
-        the broken-versus-not-started confusion this codebase refuses. `raw`
-        carries `last_error` for the detail; this carries the state.
+        A failure is stored too, as its own refusal. Leaving `_latest_gaze`
+        at None would report as `no_reading` (the warming-up state), so a
+        landmarker that raises on every frame would spend the whole session
+        claiming to be warming up instead of reporting broken.
         """
         from src.app.services.face_geometry import (  # noqa: PLC0415
             Gaze, HeadPose, gaze, head_pose,
         )
 
         if self._landmarker is None:
-            # connect() could not build one. A named refusal rather than
-            # silence, or the channel reports `no_reading` for the whole
-            # session -- the warming-up state, which is what a missing model is
-            # least like.
+            # connect() couldn't build one. Named refusal instead of silence,
+            # or the channel would report `no_reading` (warming-up) for the
+            # whole session, which a missing model is not.
             with self._lock:
                 self._latest_gaze = Gaze(None, None, 0, "landmarker_unavailable")
                 self._latest_pose = HeadPose(None, None, None, 0,
@@ -661,17 +563,15 @@ class FaceCaptureAdapter:
         try:
             height, width = frame.shape[0], frame.shape[1]
             named = self._landmarker.locate(frame, width, height)
-            # One detector call, two derivations. Both are pure numpy over the
-            # named points, so the second costs nothing next to the mesh itself.
+            # One detector call, two derivations (both cheap pure numpy over
+            # the named points).
             reading = gaze(named)
             pose = head_pose(named)
         except Exception as exc:                          # noqa: BLE001
             logger.exception("landmark sampling failed")
-            # Only what did not survive. `gaze()` and `head_pose()` are both
-            # pure numpy and return named refusals rather than raising, so
-            # reaching here at all means a code defect -- but marking both dead
-            # when one had already returned would discard a good reading and
-            # blame it on the other's bug.
+            # Only overwrite what didn't survive -- gaze() and head_pose()
+            # normally return named refusals rather than raising, so if one
+            # already succeeded, don't discard it for the other's failure.
             if not isinstance(reading, Gaze):
                 reading = Gaze(None, None, 0, "landmarker_failed")
             if not isinstance(pose, HeadPose):
@@ -700,44 +600,31 @@ class FaceCaptureAdapter:
         sampled at, its mean quality, and the timestamp of every sample.
 
         Returns (rgb, measured_fps, mean_usable_fraction, timestamps).
-        `measured_fps` is None when there are too few samples to measure one; a
-        caller must treat that as no window rather than falling back to the
-        nominal rate, which is the assumption this return value exists to
-        remove. Quality comes from the same window as the colour, so the gate
-        applies to what is being scored rather than to whatever happened to
-        arrive this tick.
+        `measured_fps` is None when there are too few samples to measure one;
+        callers must treat that as no window rather than falling back to a
+        nominal rate. Quality comes from the same window as the colour, so
+        the gate applies to what's actually being scored.
 
-        `measured_fps` is the **median** interval's rate, not samples-over-span.
+        `measured_fps` uses the **median** interval, not samples-over-span.
+        Measured on a real webcam asked for 30fps: intervals were bimodal
+        (78% at 31ms, 21% at 47ms, occasional stalls past 100ms). Span-based
+        gave 28.6 Hz; median gave 32.3 Hz, the camera's true rate -- a mean
+        gets dragged down by stalls.
 
-        Both were computed on a real webcam and they disagree. Asked for 30 fps
-        it delivered intervals that were bimodal -- 78% at 31 ms, 21% at 47 ms,
-        with occasional stalls past 100 ms. Span-based said 28.6 Hz; the median
-        said 32.3 Hz, which is the rate the camera was genuinely running at.
-        A mean is dragged by the tail of stalls and reports a rate no interval
-        in the recording actually had.
+        (Opposite call to the headband's optical packets, where the median
+        was wrong because ~9% of timestamps were exact duplicates from SDK
+        batching. Here every stamp is a distinct `perf_counter()` read at
+        capture time, so median is the right statistic.)
 
-        (This is the opposite of the call made for the headband's optical
-        packets, where the median was wrong because ~9% of timestamps were
-        exact duplicates from the SDK's batching. Here every stamp is a distinct
-        `now_seconds()` read at the moment of capture, so the median is the
-        robust statistic it is normally assumed to be. The difference is in the
-        clock, not the preference -- which is also why that clock is
-        `perf_counter` and not `monotonic`; see the note on it above.)
-
-        Copies rather than views: the buffer is mutated by the capture thread.
-        `islice` over the tail rather than `list(...)[-n:]`, which materialised
-        the whole deque under the capture thread's lock on every tick to keep
-        the last 60% of it.
+        Copies, not views, since the buffer is mutated by the capture thread.
+        Uses `islice` over the tail rather than `list(...)[-n:]`, which would
+        materialize the whole deque under the lock on every tick.
         """
-        # Sliced by the clock, not by a count against the nominal rate.
-        #
-        # `int(seconds * self.fps)` was the last place the configured rate
-        # entered the arithmetic, and it was wrong in the same direction as
-        # everything else that used it: at a measured 32.26 Hz, 750 samples is
-        # 23.25 s rather than the 25 s asked for, so a camera holding a full
-        # buffer reported 93% coverage. Walking back from the newest sample
-        # until the cutoff costs exactly the window's length and asks the
-        # question the caller actually asked.
+        # Sliced by the clock, not by a count against the nominal rate --
+        # `int(seconds * self.fps)` undercounts whenever the real rate runs
+        # ahead of nominal (e.g. 750 samples at a measured 32.26 Hz is 23.25s,
+        # not the 25s asked for), which would report a full buffer as only
+        # 93% covered.
         with self._lock:
             if seconds == float("inf") or not self._buffer:
                 data = list(self._buffer)
@@ -765,8 +652,8 @@ class FaceCaptureAdapter:
     def has_full_window(self) -> bool:
         """Whether enough colour history exists for POS to produce anything.
 
-        In seconds held, not samples counted. POS needs a window of elapsed
-        time; how many frames landed inside it is the camera's business.
+        Measured in seconds held, not samples counted -- POS needs a window
+        of elapsed time, not a frame count.
         """
         with self._lock:
             if len(self._buffer) < 2:
@@ -789,9 +676,9 @@ class FaceCaptureAdapter:
         """The most recent head pose, or None if gaze is off or nothing has
         been measured yet.
 
-        A `HeadPose` whose `yaw` is None is a *refusal* -- `implausible_pose`
-        past +/-90 degrees, or too few landmarks -- and is returned as such, for
-        the same reason `latest_gaze` returns its refusals.
+        A `HeadPose` whose `yaw` is None is a *refusal* (`implausible_pose`
+        past +/-90 degrees, or too few landmarks) and is returned as such,
+        like `latest_gaze`'s refusals.
         """
         with self._lock:
             return self._latest_pose
@@ -800,10 +687,9 @@ class FaceCaptureAdapter:
         """The most recent gaze reading, or None if gaze is off or nothing has
         been measured yet.
 
-        A `Gaze` whose `x` is None is a *refusal* and is returned as such -- the
-        caller needs `rejected_by` to tell a closed eye from a channel that has
-        not produced anything, and collapsing both to None here would take that
-        away.
+        A `Gaze` whose `x` is None is a *refusal* and is returned as such --
+        callers need `rejected_by` to tell a closed eye apart from a channel
+        that hasn't produced anything.
         """
         with self._lock:
             return self._latest_gaze
@@ -812,11 +698,8 @@ class FaceCaptureAdapter:
         """Camera state for the API.
 
         `face_quality` is named for what it is -- the fraction of pixels that
-        survived the luminance mask -- and is deliberately *not* called
-        confidence. In the original, the SQI was surfaced under
-        `quality.confidence` while downstream code read `features.confidence` as
-        a generic confidence in the reading, so a well-lit face and a trusted
-        heart rate became the same field.
+        survived the luminance mask -- deliberately not called "confidence",
+        to avoid conflating a well-lit face with a trusted heart rate.
         """
         with self._lock:
             c = self._counters
@@ -828,24 +711,22 @@ class FaceCaptureAdapter:
                 "face_found_ratio": (c.faces_found / c.frames_read) if c.frames_read else None,
                 "samples_emitted": c.samples_emitted,
                 "samples_dropped": c.dropped_full_queue,
-                # Non-zero means the colour buffer is being bounded by its size
-                # cap rather than by time, so it holds less history than asked
-                # for. Surfaced because the symptom otherwise is a heart channel
-                # that never leaves warming_up, with no cause visible.
+                # Non-zero means the colour buffer is bounded by its size cap
+                # rather than time, so it holds less history than asked for.
+                # Surfaced since the symptom is otherwise an unexplained
+                # heart channel stuck in warming_up.
                 "buffer_capped": c.buffer_capped,
-                # Measured span, not count over nominal fps. The old form
-                # reported 29.3 s for a 22 fps camera holding a full 40 s, and
-                # this is the field someone reads while working out why the
-                # heart channel is stalled -- it would have misled them at
-                # exactly that moment, sitting next to a `buffer_capped` added
-                # to make that same diagnosis possible.
+                # Measured span, not count over nominal fps -- the latter
+                # would misreport actual buffered time whenever real fps
+                # diverges from nominal, which is exactly what's being
+                # diagnosed here.
                 "buffered_seconds": (
                     self._buffer[-1][0] - self._buffer[0][0]
                     if len(self._buffer) > 1 else 0.0
                 ),
-                # Warm-up is not a fault and must not read as one. Without
-                # this, the first 8 s of every session look identical to a
-                # camera that cannot see a face.
+                # Warm-up isn't a fault and must not read as one -- otherwise
+                # the first 8s of every session look like a camera that can't
+                # see a face.
                 "warmup_remaining_s": round(max(0.0, (
                     (self._warmup_started_at + self._warmup_seconds) - now_seconds()
                     if self._warmup_started_at is not None and not c.warmup_done
@@ -872,15 +753,14 @@ class FaceCaptureAdapter:
 class OpenCvFrameSource:
     """A webcam, behind the FrameSource protocol.
 
-    OpenCV is imported here rather than at module scope so `face_ingestion` can
-    be imported -- and everything above it tested -- on a machine with no camera
-    dependencies. That is the state of CI and of any deployment that never
-    enables the camera.
+    OpenCV is imported here, not at module scope, so `face_ingestion` can be
+    imported and tested on a machine with no camera dependencies -- which is
+    the state of CI and any deployment that never enables the camera.
 
-    Converts BGR to RGB at this boundary. OpenCV hands out BGR and every layer
-    above assumes RGB; converting once here means POS's projection matrix can
-    never silently be fed reversed channels, which would not error, just quietly
-    halve the pulse.
+    Converts BGR to RGB at this boundary, since OpenCV hands out BGR and
+    every layer above assumes RGB. Converting once here means POS's
+    projection matrix can never silently get reversed channels, which
+    wouldn't error, just quietly halve the pulse.
     """
 
     def __init__(self, camera_index: int = 0, width: int = 640, height: int = 480,
@@ -893,40 +773,30 @@ class OpenCvFrameSource:
             raise RuntimeError(f"could not open camera index {camera_index}")
 
         # Ask for a fixed exposure and white balance. Auto-exposure is the
-        # single worst thing for rPPG: it reacts to the scene on roughly the
-        # timescale of a heartbeat, so the camera's own gain control writes a
-        # signal into the pulse band that looks exactly like what we are trying
-        # to measure.
+        # worst thing for rPPG: it reacts on roughly the timescale of a
+        # heartbeat, writing a signal into the pulse band that looks like
+        # what's being measured.
         #
-        # `set()`'s return value does not mean the property took. Measured on
-        # this Windows backend, `CAP_PROP_AUTO_EXPOSURE` returns True for every
-        # value it is handed and then reads back -1.0 regardless -- so the
-        # previous version of this dict logged a successful exposure lock that
-        # had not happened, which is worse than logging a failure. Each entry
-        # below reports what the driver *reads back*, so a lock that silently
-        # did nothing shows up as one.
-        #
-        # This is why WARMUP_SECONDS exists. The exposure ramp cannot be
-        # prevented on this hardware, only waited out.
+        # `set()` returning True doesn't mean the property took. Measured on
+        # this Windows backend, `CAP_PROP_AUTO_EXPOSURE` returns True for
+        # every value and then reads back -1.0 regardless. Each entry below
+        # instead reports what the driver *reads back*, so a lock that
+        # silently did nothing shows up as one. This is why WARMUP_SECONDS
+        # exists -- the exposure ramp can't be prevented here, only waited out.
         self.locked = {
             # One frame of buffer, so read() returns the frame being exposed
-            # now rather than the oldest one queued.
+            # now, not the oldest one queued.
             #
-            # This is a time-base fix, not a latency one. With a deeper queue,
-            # read() drains several frames back to back and each is stamped at
-            # the moment it was *read*, not the moment it was exposed --
-            # measured here as intervals alternating between ~6 ms and ~41 ms
-            # for a camera running evenly at ~24 Hz. Those stamps are not a
-            # description of when the light arrived, and rPPG has nothing but
-            # the timing of the light.
+            # This fixes the time base, not latency. A deeper queue drains
+            # several frames back to back, each stamped at *read* time, not
+            # *exposure* time -- measured as intervals alternating ~6ms/~41ms
+            # for a camera running evenly at ~24 Hz. rPPG only has the timing
+            # of the light, so those stamps would be wrong.
             #
-            # Requested, not guaranteed. `set()` reports success on this Windows
-            # backend and the pairing survives it -- 28% of intervals are still
-            # under 15 ms against a 40 ms median. It removed the worst outlier
-            # and costs nothing, so it stays, but the honest position is that
-            # frame stamps here are read-times and the driver decides how close
-            # to exposure that is. Resampling absorbs the result; if the ECG
-            # comparison comes back poor, this is the first thing to suspect.
+            # Requested, not guaranteed: 28% of intervals are still under
+            # 15ms against a 40ms median even with this set. It removes the
+            # worst outlier for free, but frame stamps are still read-times,
+            # not exposure-times. Resampling absorbs the rest.
             "buffer_size": self._applied(cv2.CAP_PROP_BUFFERSIZE, 1),
             "auto_exposure": self._applied(cv2.CAP_PROP_AUTO_EXPOSURE, 1),
             "auto_wb": self._applied(cv2.CAP_PROP_AUTO_WB, 0),
@@ -943,14 +813,12 @@ class OpenCvFrameSource:
     def _applied(self, prop: int, wanted: float) -> bool:
         """Whether the driver actually took a property, by reading it back.
 
-        `set()` returning True means the call was accepted, not that anything
-        changed. Measured on this Windows backend, `CAP_PROP_AUTO_EXPOSURE`
-        returns True for every value it is handed and then reads back -1.0
-        regardless -- so trusting the return value logged a successful exposure
-        lock that had never happened, which is worse than logging a failure.
+        `set()` returning True only means the call was accepted, not that
+        anything changed -- `CAP_PROP_AUTO_EXPOSURE` on this Windows backend
+        returns True for every value and reads back -1.0 regardless.
 
-        A driver that does not implement a property typically reports -1; one
-        that does reports the value back. Compared with a tolerance because
+        A driver that doesn't implement a property typically reports -1; one
+        that does reports the value back. Compared with a tolerance since
         these are floats round-tripped through a driver.
         """
         self._cap.set(prop, wanted)
@@ -977,8 +845,8 @@ def build_face_adapter(
     landmark_model_path: Any = None,
 ) -> FaceCaptureAdapter:
     """A camera-backed adapter. Nothing is opened, loaded or verified until
-    connect() is called -- so a registry can name a camera on a machine that has
-    neither the extra nor the model."""
+    connect() is called, so a registry can name a camera on a machine that
+    has neither the extra nor the model."""
     def make_locator():
         from src.app.services.face_roi import FaceLocator   # noqa: PLC0415
 

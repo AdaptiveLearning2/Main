@@ -1,50 +1,33 @@
 -- `admin` becomes a fourth `profiles.role`, and sign-up loses the ability to
--- choose a role that is not one of the three a person picks for themselves.
+-- choose a role that isn't one of the three a person picks for themselves.
 --
--- The two halves are one change. Widening the CHECK on its own would be a
+-- The two halves are one change. Widening the CHECK alone would allow
 -- self-service admin signup: `handle_new_user` copies
--- `raw_user_meta_data->>'role'` straight into the column, and that metadata is
--- whatever the registration form sent -- so `signUp({data:{role:'admin'}})`
--- from a browser console would have produced an administrator. The whitelist
--- below is what makes the wider CHECK safe, and neither should be applied
--- without the other.
+-- `raw_user_meta_data->>'role'` straight into the column, which is whatever
+-- the registration form sent -- so `signUp({data:{role:'admin'}})` from a
+-- browser console would have produced an administrator. The whitelist below
+-- is what makes the wider CHECK safe.
 --
--- Admin can be a role at all only because 20260824010000 revoked UPDATE and
--- INSERT on this column from `anon` and `authenticated`. Before that it was a
--- client-writable field and would have been the worst possible place to record
--- who administers the platform.
-
--- ── the role ────────────────────────────────────────────────────────────────
+-- Admin can be a role at all only because the previous migration revoked
+-- UPDATE and INSERT on this column from `anon` and `authenticated`. Before
+-- that it was client-writable and would have been the worst possible place
+-- to record who administers the platform.
 
 ALTER TABLE "public"."profiles" DROP CONSTRAINT IF EXISTS "profiles_role_check";
 ALTER TABLE "public"."profiles" ADD CONSTRAINT "profiles_role_check"
     CHECK ("role" = ANY (ARRAY['student'::text, 'teacher'::text,
                                'parent'::text, 'admin'::text]));
 
--- ── sign-up may no longer name the role it likes ────────────────────────────
+-- Sign-up may no longer name the role it likes. Three values, listed rather
+-- than excluded -- a blacklist of just 'admin' would admit every future
+-- privileged role by default.
 --
--- Three values, listed rather than excluded. A blacklist of 'admin' would admit
--- every *future* privileged role by default, and the next one would be added by
--- someone who never reads this file.
+-- An unrecognised value becomes 'student' rather than raising: this runs
+-- inside the auth transaction, so raising would fail the whole sign-up over
+-- a malformed role. 'student' is the value that grants nothing.
 --
--- An unrecognised value becomes 'student' rather than raising. This runs inside
--- the auth transaction, so raising here fails the whole sign-up -- and a
--- malformed role is not a reason to refuse someone an account. 'student' is the
--- value that grants nothing, which is the right direction to fail in.
---
--- `SET search_path` added while here: this is SECURITY DEFINER and was unpinned,
--- which CLAUDE.md calls out as the classic escalation vector.
---
--- **This function may not be wired to anything.** 20260804000000 records that no
--- migration creates a trigger on auth.users and that a user created through the
--- admin API got no profiles row -- so production either has a hand-made trigger
--- that the migrations do not describe, or profiles rows arrive some other way.
--- Replacing the function is still right: if a trigger exists this closes the
--- hole, and if one is added later it is closed in advance. It is not a
--- substitute for answering the drift question:
---
---   SELECT tgname, tgrelid::regclass, tgenabled FROM pg_trigger
---   WHERE NOT tgisinternal AND tgrelid = 'auth.users'::regclass;
+-- `SET search_path` added while here, since this is SECURITY DEFINER and was
+-- unpinned -- a classic escalation vector.
 
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
@@ -68,10 +51,9 @@ begin
 end;
 $$;
 
--- CREATE OR REPLACE keeps the existing ACL, so 20260804000000's revokes survive.
--- Restated anyway: this function's grants are the one set in this schema that
--- were permissive by accident, and a reader should be able to see the current
--- state without diffing two migrations.
+-- CREATE OR REPLACE keeps the existing ACL, so the earlier revokes survive.
+-- Restated anyway, so a reader can see the current state without diffing two
+-- migrations.
 REVOKE ALL ON FUNCTION "public"."handle_new_user"() FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."handle_new_user"() FROM "anon";
 REVOKE ALL ON FUNCTION "public"."handle_new_user"() FROM "authenticated";

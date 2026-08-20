@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { apiFetch, apiError, mockApi, overrideApi, pending, resetApi } from './apiFetch'
 
-// Every page test downstream reads its data through this router, so a fault in
-// it would surface as a fault in whatever page happened to be under test.
+// Every page test reads its data through this router, so a bug here would
+// surface as a bug in whatever page happens to be under test.
 
 beforeEach(() => { resetApi() })
 
@@ -24,11 +24,8 @@ describe('routing', () => {
   })
 
   it('prefers the method-scoped route however the keys are ordered', async () => {
-    // The mirror of the case above, written the other way round. Plain
-    // first-match-wins made this depend on object key order: the methodless
-    // read answered the write, and the fix would have been to swap two lines --
-    // not a rule anyone would infer, and it fails by returning a plausible
-    // payload for the wrong verb rather than by erroring.
+    // Same routes as above, keys in the opposite order — must not depend on
+    // write order.
     mockApi({
       'PUT /api/profile/me': { name: 'written' },
       '/api/profile/me': { name: 'read' },
@@ -63,10 +60,8 @@ describe('routing', () => {
 
 describe('an unrouted path', () => {
   it('throws rather than resolving undefined', async () => {
-    // The whole reason this is a router. A silent `undefined` arrives at a page
-    // as a successful read of nothing -- which is the state most of this suite
-    // exists to tell apart from a failure, so a gap in a test's own setup would
-    // masquerade as the bug it was written to catch.
+    // A silent `undefined` would look like a successful empty read, masking
+    // a gap in test setup as the bug it was meant to catch.
     mockApi({ '/api/known': 1 })
     await expect(apiFetch('/api/unknown')).rejects.toThrow(/no route for GET \/api\/unknown/i)
   })
@@ -87,8 +82,7 @@ describe('overrides', () => {
   })
 
   it('leave the other routes alone', async () => {
-    // The point of layering: a test that needs one endpoint to fail should not
-    // have to restate every endpoint the page also calls.
+    // Overriding one endpoint should not require restating the rest.
     mockApi({ '/api/a': 'a', '/api/b': 'b' })
     overrideApi('/api/a', () => { throw apiError(503) })
 
@@ -106,8 +100,8 @@ describe('overrides', () => {
 
 describe('helpers', () => {
   it('apiError carries the status the real client attaches', async () => {
-    // Callers that tell "this doesn't exist" apart from "the request failed"
-    // branch on `.status`; a bare Error only ever exercises the second path.
+    // Callers branch on `.status` to tell "not found" from "request failed";
+    // a bare Error would only exercise the second path.
     mockApi({ '/api/missing': () => { throw apiError(404, 'no such class') } })
 
     await expect(apiFetch('/api/missing'))
@@ -134,9 +128,8 @@ it('records calls, so the router does not replace asserting on them', async () =
 })
 
 it('resetApi clears calls and routes but keeps the router working', async () => {
-  // `mockReset()` would drop the implementation along with the calls, leaving a
-  // mock that resolves undefined for everything -- the failure this file's
-  // first assertion exists to prevent, arriving through the teardown instead.
+  // `mockReset()` would drop the implementation too, leaving a mock that
+  // resolves undefined for everything.
   mockApi({ '/api/x': 1 })
   await apiFetch('/api/x')
   resetApi()

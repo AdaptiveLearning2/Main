@@ -161,15 +161,11 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [5],
 }
 
-# Scenario 5 (algebra_complementary) requires setting up and solving an
-# equation for x -- it was gated to "hard" difficulty only, but nothing kept
-# a grade-1 student marked "hard" from landing on it: difficulty and grade
-# are independent inputs, so a struggling-topic or randomized "hard" pick
-# could reach it regardless of grade. Withheld from "early"/"middle" bands
-# (grades 1-6) here, with a fallback to the medium tier's non-algebraic
-# scenarios; "angle_relationships" isn't in LLM_topic_decider's grade-1-3
-# allowlist either, so "early" reaching this function at all is already
-# defense-in-depth.
+# Scenario 5 (algebra_complementary) needs setting up and solving an
+# equation for x, so it's withheld from "early"/"middle" grades (1-6) here
+# regardless of difficulty -- difficulty alone isn't a safe gate, since a
+# struggling-topic or randomized "hard" pick could still reach it at any
+# grade. Falls back to the medium tier's non-algebraic scenarios instead.
 def _pick_scenario(difficulty, grade_band):
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
     if grade_band in ("early", "middle"):
@@ -177,9 +173,8 @@ def _pick_scenario(difficulty, grade_band):
     return random.choice(candidates)
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared with the other generation files so they can't drift apart.
+    # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
 GRADE_COMPLEXITY = {
@@ -189,22 +184,17 @@ GRADE_COMPLEXITY = {
     "advanced": "No additional restriction on angle measures.",
 }
 
-# Through 5th grade the ANSWER must come out to a whole number of degrees;
-# from 6th, a decimal answer is ordinary mathematics rather than a defect.
+# Through 5th grade, answers must be whole degrees; from 6th grade, a
+# decimal answer is ordinary mathematics, not a defect.
 #
-# Keyed on the raw grade string, NOT on _grade_band(), because the line falls
-# between grade 5 and grade 6 while the "middle" band spans 4, 5 AND 6 -- the
-# same reason LLM_topic_decider._allowed_topics is grade-keyed rather than
-# band-keyed. Using the band here would either impose whole numbers on a 6th
-# grader or allow decimals for a 4th grader; there is no band boundary in the
-# right place.
+# Keyed on the raw grade number, not _grade_band(), because the cutoff falls
+# between grade 5 and grade 6 while the "middle" band spans 4-6. A band-based
+# check would either force whole numbers on a 6th grader or allow decimals
+# for a 4th grader.
 #
-# Read numerically, so "Grade 1" is grade 1 rather than an unknown that
-# falls through. An *unreadable* grade requires whole numbers, matching
-# grade_levels' rule that an unknown student is treated as the youngest --
-# the earlier "leave the mathematics alone" default contradicted that and
-# would have handed a decimal answer to a grade this cannot identify.
-# Highschool and College still read as 9 and 13, so they are unaffected.
+# An unreadable grade defaults to requiring whole numbers, matching
+# grade_levels' rule that an unknown student is treated as the youngest.
+# Highschool and College still parse as grade 9 and 13, so they're unaffected.
 def _requires_whole_number_solution(grade):
     number = grade_levels.grade_number(grade)
     return number is None or number <= 5
@@ -222,25 +212,23 @@ _SCENARIO_TOTAL = {
 
 
 def _invalid_angle_reason(scenario, variables, solution):
-    """Why this is not a valid angle configuration, or None if it is fine.
+    """Why this angle configuration is invalid, or None if it's fine.
 
-    Measured 2026-08-18: "A triangle has angles 75 and 105. What is the
-    third angle?" was generated with the answer 0. The arithmetic is right
-    and the question is not a question -- 75 and 105 already use the whole
-    180, so no such triangle exists. `complementary` has the identical
-    failure at a given angle of 90, which is why this is keyed on the
-    scenario's total rather than written for triangles alone.
+    Measured 2026-08-18: a triangle question with angles 75 and 105 was
+    generated with the answer 0 -- correct arithmetic, but not a real
+    triangle, since 75 and 105 already use up the full 180 degrees.
+    `complementary` has the same failure at 90. Keyed on each scenario's
+    total (see _SCENARIO_TOTAL) so both are caught by one check.
 
-    Wrong at every grade, unlike the whole-number rule below, so it is
-    checked first and unconditionally.
+    This is wrong at every grade, so it's checked unconditionally, before
+    the whole-number rule below.
 
-    Takes the ALREADY-PARSED `variables` rather than the raw question, so
-    the sympy parse happens once per attempt instead of once here and again
-    in `_solve_scenario`.
+    Takes the already-parsed `variables` so sympy only parses once per
+    attempt, instead of again inside `_solve_scenario`.
     """
     if scenario == "algebra_complementary":
-        # Here `solution` is x, not an angle -- x itself is unbounded, so
-        # the check has to be on the two expressions evaluated at x.
+        # `solution` here is x, not an angle, and x itself has no bound --
+        # check the two angle expressions evaluated at x instead.
         x = sp.symbols('x')
         try:
             angles = [float(expr.subs(x, solution)) for expr in variables]
@@ -276,14 +264,13 @@ def _invalid_angle_reason(scenario, variables, solution):
 
 
 def _solve_scenario(scenario, variables):
-    """The numeric answer for one parsed question, or None for a scenario
-    this file does not recognise.
+    """The numeric answer for one parsed question, or None for an
+    unrecognised scenario.
 
-    Split out of the body below so the solve can happen INSIDE the retry
-    loop: whether the answer is a whole number is a property of the solved
-    value, not of the question text, so it cannot be checked until the
-    scenario has been evaluated -- and a question that fails that check has
-    to be regenerated rather than patched.
+    Split out so the solve happens inside the retry loop: whether the
+    answer is a whole number can only be checked once the scenario has
+    actually been solved, and a question that fails that check needs to be
+    regenerated, not patched after the fact.
     """
     match scenario:
         case "complementary":
@@ -374,12 +361,10 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
                                         attempt + 1):
             continue
 
-        # Solved here rather than after the loop so a question whose ANSWER
-        # is wrong for the grade can be regenerated. The prompt asks for
-        # whole-number answers at these grades and is not reliably obeyed --
-        # measured 2026-08-18, (5x+15)+(3x-20)=90 gives 11.875 -- which is
-        # the same prompt-is-not-enforcement problem as everywhere else in
-        # this codebase, so it gets the same treatment.
+        # Solved here, inside the loop, so a question with a grade-inappropriate
+        # answer can be regenerated. The prompt asks for whole-number answers
+        # but isn't reliably obeyed -- measured 2026-08-18:
+        # (5x+15)+(3x-20)=90 came back as 11.875 -- so it's checked in code.
         scenario_name = question_data.get("scenario")
         try:
             # Parsed once and handed to both, rather than each re-parsing

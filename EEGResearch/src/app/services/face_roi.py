@@ -1,20 +1,15 @@
 """Choosing where on a face to measure colour, and measuring it.
 
-POS turns a sequence of mean RGB values into a pulse. This module produces those
-values. It is a larger share of the work than the algorithm is, and more of the
-accuracy: a clean mean over well-chosen skin is worth more than any refinement
-of the projection.
+POS turns a sequence of mean RGB values into a pulse; this module produces those
+values. A clean mean over well-chosen skin matters more to accuracy than any
+refinement of the POS projection itself.
 
-Split deliberately in two. Everything that reasons about *regions and pixels* is
-plain numpy and is tested without a camera. Only `FaceLocator`, which finds the
-face, needs OpenCV, and it imports it lazily so the sidecar still boots on a
-machine with no camera dependencies installed — which is the state of CI, and of
-any deployment that never enables the camera.
+Split in two: region/pixel math is plain numpy, tested without a camera.
+`FaceLocator` needs OpenCV and imports it lazily, so the sidecar still boots
+where camera dependencies aren't installed (CI, or any camera-off deployment).
 
-**No frame, crop, or derived image leaves this module.** Callers pass a frame in
-and receive numbers out. Nothing here writes to disk or retains an image between
-calls; that is the product constraint the whole facial pipeline is built around,
-and it is cheapest to honour at the point where pixels are first touched.
+No frame, crop, or derived image ever leaves this module -- callers pass a frame
+in and get numbers out, nothing is written to disk or retained between calls.
 """
 
 from __future__ import annotations
@@ -27,11 +22,10 @@ import numpy as np
 
 # Fraction of a detected face box used for each measurement region.
 #
-# Forehead and cheeks, and not the whole face, for a specific reason each: the
-# eyes blink, which injects a step at an unpredictable rate straight into the
-# pulse band; the mouth moves with speech and expression; the jaw and hairline
-# bring in hair and shadow whose colour has no pulse at all and only dilutes the
-# mean. What is left is the best-perfused skin that also moves least.
+# Forehead and cheeks, not the whole face: eyes blink (an unpredictable step
+# straight into the pulse band), the mouth moves with speech, and the jaw/
+# hairline bring in hair and shadow that dilute the mean with no pulse signal.
+# What's left is the best-perfused skin that also moves least.
 #
 # Boxes are (x0, y0, x1, y1) as fractions of the face box.
 FOREHEAD = (0.30, 0.10, 0.70, 0.28)
@@ -41,11 +35,10 @@ REGIONS = (FOREHEAD, LEFT_CHEEK, RIGHT_CHEEK)
 
 # Pixels outside this luminance band are dropped before averaging.
 #
-# The low end removes hair, shadow, spectacle frames and beard; the high end
-# removes specular highlights, which are reflections of the light source rather
-# than of skin and therefore carry the illumination's variation and none of the
-# blood's. A blown-out pixel is also clipped by the sensor, so its variation is
-# not merely useless but actively wrong.
+# Low end removes hair, shadow, glasses, beard. High end removes specular
+# highlights -- reflections of the light source, not skin, so they carry the
+# illumination's variation and none of the blood's. A blown-out pixel is also
+# sensor-clipped, so its variation is actively wrong, not just useless.
 MIN_LUMA = 40.0
 MAX_LUMA = 240.0
 
@@ -59,10 +52,9 @@ MIN_USABLE_FRACTION = 0.25
 class RoiSample:
     """One frame's colour measurement."""
     rgb: tuple[float, float, float] | None
-    # Fraction of pixels in the regions that passed the luminance mask. Carried
-    # rather than folded into a boolean so a caller can distinguish "the face
-    # left the frame" from "the lighting got worse", and so a quality trend is
-    # visible before it crosses a threshold.
+    # Fraction of pixels that passed the luminance mask. Kept as a number, not a
+    # boolean, so a caller can tell "the face left the frame" from "the lighting
+    # got worse" and see a quality trend before it crosses a threshold.
     usable_fraction: float
 
     @property
@@ -86,14 +78,12 @@ def region_boxes(face: tuple[int, int, int, int]) -> list[tuple[int, int, int, i
 def mean_rgb(frame: np.ndarray, face: tuple[int, int, int, int]) -> RoiSample:
     """Mean RGB over the measurement regions of one frame.
 
-    `frame` is (h, w, 3) in **RGB** order. OpenCV hands out BGR; convert at the
-    capture boundary rather than here, so this module has one colour convention
-    and POS's projection matrix cannot silently be fed reversed channels.
+    `frame` is (h, w, 3) in RGB order. OpenCV hands out BGR; convert at the capture
+    boundary, not here, so this module has one colour convention and POS's
+    projection matrix can't silently be fed reversed channels.
 
-    Regions are pooled into a single mean rather than averaged separately.
-    Pooling weights by usable pixel count, which is what we want: a cheek that
-    is half in shadow should contribute proportionally less than a fully lit
-    forehead, not equally.
+    Regions are pooled into one mean, weighted by usable pixel count, so a cheek
+    half in shadow contributes proportionally less than a fully lit forehead.
     """
     if frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError(f"expected (h, w, 3) RGB frame, got {frame.shape}")
@@ -129,39 +119,27 @@ def mean_rgb(frame: np.ndarray, face: tuple[int, int, int, int]) -> RoiSample:
 class FaceLocator:
     """Finds a face box, with OpenCV imported only when one is constructed.
 
-    Uses the Haar frontal-face cascade that ships inside `opencv-python`. That
-    choice is about supply chain rather than accuracy: it is already present
-    once OpenCV is installed, downloads nothing at runtime, and needs no model
-    file to pin or checksum. MediaPipe would track better and is also Apache
-    2.0, but it is a second model to vet, and a seated student facing a screen
-    is the case Haar handles least badly.
+    Uses the Haar frontal-face cascade that ships inside `opencv-python` -- a
+    supply-chain choice, not an accuracy one: it's already present, downloads
+    nothing, and needs no model file to vet. MediaPipe tracks better but is a
+    second model to vet, for a case (seated student facing a screen) Haar
+    already handles reasonably.
 
-    Detection is not run on every frame. It is slow relative to the frame rate,
-    and a face that was at a location 200 ms ago is almost certainly still
-    there; re-detecting constantly also makes the box jitter, and a box that
-    jitters moves the measurement regions across different skin, which injects
-    exactly the kind of in-band noise POS is there to remove.
+    Detection doesn't run every frame: it's slow relative to frame rate, a face
+    seen 200ms ago is almost certainly still there, and constant re-detection
+    makes the box jitter -- moving the measurement regions across different
+    skin, which injects exactly the noise POS exists to remove.
     """
 
     def __init__(self, redetect_every: int = 15, cascade: Any | None = None) -> None:
-        """`cascade` is injectable, and that is not a convenience.
-
-        Constructing this class used to import cv2 and load the Haar XML
-        unconditionally, so it could not exist in CI or in any test -- which
-        meant every test in front of it substituted a fake, and the real
-        `locate` was covered by nothing. Three defects in this pipeline traced
-        to that: a float-vs-CV_8U assertion that raised on the first real frame,
-        and twice over, logic here that no test could reach.
-
-        Anything with `detectMultiScale` will do. Passing one skips the cv2
-        import entirely, so the detection logic -- the dtype cast, the redetect
-        interval, forgetting a stale box -- is testable without OpenCV
-        installed.
+        """`cascade` is injectable so `locate`'s logic (dtype cast, redetect
+        interval, forgetting a stale box) can be tested without OpenCV
+        installed. Anything with `detectMultiScale` works.
         """
         if cascade is not None:
             self._cascade = cascade
         else:
-            import cv2                               # noqa: PLC0415 -- lazy by design
+            import cv2  # noqa: PLC0415 -- lazy by design
 
             self._cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
@@ -175,17 +153,13 @@ class FaceLocator:
     def locate(self, gray: np.ndarray) -> tuple[int, int, int, int] | None:
         """Face box for this frame, reusing the previous one between detections.
 
-        `gray` is a single-channel image, in any numeric dtype. Returns None
-        only when no face has been found yet or the last detection has aged out
-        without a replacement -- a caller should treat that as "no measurement",
-        never as a zero.
+        `gray` is a single-channel image, any numeric dtype. Returns None only
+        when no face has ever been found or the last detection aged out with no
+        replacement -- callers should treat that as "no measurement", not zero.
 
-        The cast to uint8 is load-bearing, not defensive. Both callers compute
-        luma as a weighted sum of the three channels, which is float, and
-        OpenCV's cascade asserts `_image.depth() == CV_8U` and raises rather
-        than converting. Every test in front of this used a fake locator, so the
-        assertion only ever fired on a real camera -- where it took the capture
-        thread down on the first frame.
+        The cast to uint8 is required, not defensive: callers compute luma as a
+        float-weighted sum of channels, and OpenCV's cascade asserts
+        `_image.depth() == CV_8U`, raising rather than converting.
         """
         if gray.dtype != np.uint8:
             gray = np.clip(gray, 0, 255).astype(np.uint8)
@@ -198,15 +172,13 @@ class FaceLocator:
                                                minNeighbors=5, minSize=(80, 80))
         self._since = 0
         if len(faces) == 0:
-            # Deliberately forget the stale box rather than returning it
-            # indefinitely. A student who has left should stop producing
-            # samples, not keep emitting the colour of whatever is now in that
-            # rectangle.
+            # Forget the stale box rather than returning it indefinitely -- a student
+            # who has left should stop producing samples, not keep emitting whatever
+            # is now in that rectangle.
             self._last = None
             return None
 
-        # Largest, which is the nearest face -- the student rather than someone
-        # walking past behind them.
+        # Largest face = nearest = the student, not someone walking past behind them.
         self._last = tuple(int(v) for v in max(faces, key=lambda f: f[2] * f[3]))
         return self._last
 

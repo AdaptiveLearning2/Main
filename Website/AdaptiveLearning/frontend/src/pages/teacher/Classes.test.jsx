@@ -24,16 +24,12 @@ describe('the class list', () => {
   })
 
   it('survives a class whose name is blank', async () => {
-    // `''[0]` is undefined and `.toUpperCase()` on it throws during render, so
-    // one row like this took out the whole list -- on the first page a teacher
-    // opens, and with no error boundary above it at the time. `ClassDetail.jsx`
-    // already carries this guard and regression-tests it; this page did not.
+    // A blank name must not crash the whole list on `''[0].toUpperCase()`.
     overrideApi('/api/classes', () => ([{ ...CLASS, id: 'c-2', name: '' }, CLASS]))
 
     draw()
 
-    // The good one still renders, which is what says the list survived rather
-    // than the page having been replaced by an error screen.
+    // Confirms the list rendered rather than being replaced by an error screen.
     expect(await screen.findByText('Year 7 Maths')).toBeInTheDocument()
     expect(screen.getByText('Untitled class')).toBeInTheDocument()
   })

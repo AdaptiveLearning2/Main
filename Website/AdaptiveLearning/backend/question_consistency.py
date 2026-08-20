@@ -2,11 +2,8 @@
 
 Every generator here returns two things that are supposed to agree: the
 `question_text` shown to the student, and a structured field (`variables`,
-`values`, `items`/`scenario`) that the solver computes the answer from.
-Nothing checked that they agreed, and an 8B model does not reliably keep
-them in step. `LLM_mode_generation.py` even carried a stale note
-contemplating this ("POSSIBLY: manually generate solution using numbers
-from question_text").
+`values`, `items`/`scenario`) the solver computes the answer from. Nothing
+checked that they agreed, and an 8B model doesn't reliably keep them in step.
 
 Measured 2026-08-19 on llama3.1:8b, 2 wrong answers in 12 generated:
 

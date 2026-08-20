@@ -73,17 +73,15 @@ Rules:
 solution = -1
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared with the other generation files so they can't drift apart.
+    # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# Grade-band-first: "early" (grades 1-3) students haven't been taught
-# equation-solving notation, so no value of x is "easy" there -- scaling
-# magnitude alone (the old approach) is the wrong fix. In practice these two
-# bands are defense-in-depth: LLM_topic_decider._safe_topic() already keeps
-# "algebra" from being selected before grade 6, so "early"/"middle" only
-# need to fail safely if that gate is bypassed, not serve as primary content.
+# "Early" (grades 1-3) students haven't been taught equation-solving
+# notation, so no value of x is "easy" for them -- the question shape itself
+# has to change, not just the numbers. LLM_topic_decider already keeps
+# algebra away from grades below 6, so the "early"/"middle" tiers here exist
+# only as a fallback in case that gate is bypassed.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use a ONE-STEP equation with a coefficient of 1 and values under 10 (e.g. x + 2 = 5). Frame it as a missing-number fact, not formal algebra.",

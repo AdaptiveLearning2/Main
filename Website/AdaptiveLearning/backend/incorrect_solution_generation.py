@@ -1,4 +1,4 @@
-# Generates incorrect answer options directly rather than via LLM, for consistency and speed.
+# Generates wrong answer options directly instead of via LLM, for speed and consistency.
 # Algebra/angles/geometry/mean/median/probability: offset the solution.
 # Expressions: perturb the 'x' term. Rationals: random numerator/denominator.
 

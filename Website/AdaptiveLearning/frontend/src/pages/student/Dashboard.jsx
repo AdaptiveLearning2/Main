@@ -12,18 +12,14 @@ import StatCard from '../../components/ui/StatCard'
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
-// Below this many attempts a topic has no accuracy worth showing, and
-// certainly none worth calling anyone's weakest: one unlucky question is 0%.
-// It is a floor on *claims*, not on display -- a topic with one attempt still
-// shows its figure, it just cannot win the "weakest" label.
+// Below this many attempts, a topic's accuracy is too noisy to call it the
+// student's "weakest" -- one unlucky question would read as 0%.
 const MIN_ATTEMPTS_TO_RANK = 3
 
 /** How a topic tile is tinted, from the accuracy the backend computed.
  *
- * **Never colour alone.** Each tile shows its percentage as text beside the
- * tint, because roughly one boy in twelve cannot separate the red from the
- * green -- and this is a page for children. The number is the signal; the
- * colour only makes it scannable.
+ * Each tile also shows the percentage as text, not just the color, since
+ * red/green alone isn't readable for everyone.
  */
 function toneFor(accuracy) {
   if (accuracy >= 80) return 'bg-green-50 dark:bg-green-950/40 text-green-700 dark:text-green-300'
@@ -42,55 +38,35 @@ function greeting() {
 
 export default function StudentDashboard() {
   const { user } = useAuth()
-  // `navigate`, not `window.location.href`. Assigning to href is a full browser
-  // navigation: it tears down the SPA, refetches the bundle and replays auth,
-  // so the primary CTA on the student's own dashboard was the slowest way to
-  // reach the lesson and dropped any in-memory state on the way.
+  // Use `navigate`, not `window.location.href` -- assigning to href would
+  // trigger a full page reload instead of an in-app navigation.
   const navigate = useNavigate()
   const [stats, setStats]     = useState(null)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
-  // The practice nudge, which is what the Preferences toggle actually controls.
-  // `null` while unknown, so a failed read of either half renders nothing --
-  // "you have not practised today" derived from a request that did not come
-  // back is the reporting rule this project keeps writing down, arriving on a
-  // student's own screen as a small untruth about their week.
+  // The practice nudge. Stays `null` until both reads land, so a failed
+  // request can't be read as "you have not practised today".
   const [nudge, setNudge] = useState(null)
-  // Per-topic accuracy, keyed by `topic_name` -- which is the same slug as
-  // `TOPICS` above, because `math_topics.topic_name` joins to
-  // `questions.subject` and the generators write these exact strings.
-  //
-  // `{}` on failure rather than a sentinel, and that is safe *here* only
-  // because an unmeasured tile and a tile whose read failed render
-  // identically: the plain, untinted one this grid has always drawn. Neither
-  // claims anything, so neither can be wrong. Do not add copy to that state
-  // without giving the failure its own flag first.
+  // Per-topic accuracy, keyed by `topic_name` (same slug as `TOPICS` above).
+  // Defaults to `{}` on failure, which renders the same plain tile as an
+  // unmeasured topic -- neither state claims anything, so neither is wrong.
   const [topics, setTopics] = useState({})
 
   useEffect(() => {
     Promise.all([
-      // Sentinel, not a zeroed object. Catching to zeros told a student who
-      // had practised all week that they had answered nothing, with no way to
-      // tell that from a genuine fresh start -- the same absence-from-a-failed
-      // -read rule the sessions call below already follows. The backend sends
-      // `retrieved: false` for its own failed read; both arrive here as null.
+      // Use null, not zeros, on failure -- zeros would tell a student who
+      // practised all week that they answered nothing.
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // Sentinel rather than `[]`: an empty list and a failed request are the
-      // same value and very different facts, and only one of them is a student
-      // who has not practised.
+      // null (failed request) vs [] (no sessions) mean different things.
       apiFetch('/api/sessions').catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, profile]) => {
       setStats(s)
       setSessions((sess || []).slice(0, 4))
-      // The browser's local day, deliberately not `_school_day`. That helper
-      // exists so recorded data buckets against the school's timezone; this is
-      // a nudge about the student's own afternoon, and telling a child at 6pm
-      // that they have not practised when they did so at lunchtime -- because
-      // the school is in another zone -- would be the wrong answer to a
-      // different question.
+      // The browser's local day, not the school's timezone -- this nudge is
+      // about the student's own afternoon.
       const today = new Date().toLocaleDateString('en-CA')   // YYYY-MM-DD, local
       const practisedToday = Array.isArray(sess) && sess.some(x =>
         x?.started_at && new Date(x.started_at).toLocaleDateString('en-CA') === today)
@@ -102,9 +78,8 @@ export default function StudentDashboard() {
     })
   }, [])
 
-  // Its own effect rather than a fourth entry in the `Promise.all` above: this
-  // one needs the student's id, so it has a dependency the others do not, and
-  // folding it in would re-run all four whenever that resolved.
+  // Separate effect because it depends on the student's id, unlike the other
+  // fetches above.
   useEffect(() => {
     if (!user?.id) return
     let cancelled = false
@@ -120,18 +95,14 @@ export default function StudentDashboard() {
 
   const acc  = stats?.total_questions > 0 ? Math.round((stats.total_correct / stats.total_questions) * 100) : 0
   const name = user?.email?.split('@')[0] || 'there'
-  // Null once loading has finished means the read failed. Distinct from a
-  // student with no record yet, who gets real zeros.
+  // `stats === null` after loading means the read failed, not that the
+  // student has no record (that would be real zeros).
   const statsFailed = !loading && stats === null
   const sub = statsFailed ? "couldn't be loaded" : null
 
-  // The streak card now carries the personal best as its subtitle. `best_streak`
-  // was in the payload all along and rendered nowhere, so a student on a bad
-  // week saw only the number they had fallen to.
-  //
-  // Only when it beats the current one: while a student is *on* their best
-  // streak the two are equal, and "best 6" under a 6 reads as though something
-  // is missing rather than as an achievement.
+  // Show the personal best only when it beats the current streak -- while a
+  // student is on their best streak, showing "best 6" under a 6 would look
+  // like something's missing rather than like an achievement.
   const best = stats?.best_streak ?? 0
   const streakSub = statsFailed
     ? sub
@@ -144,33 +115,22 @@ export default function StudentDashboard() {
     { icon: Flame,      title: 'Streak',     value: statsFailed ? '—' : (stats?.current_streak ?? 0),   sub: streakSub,          color: 'bg-gradient-to-br from-orange-500 to-amber-500',    delay: 0.4 },
   ]
 
-  // The topic the adaptive engine will actually start on, so naming it here is
-  // a description of what happens next rather than a promise this page makes.
-  // `LLM_topic_decider` picks the weakest topic itself; the hero banner beside
-  // this already says so.
-  //
-  // Ranked only among topics with enough attempts to mean anything -- one
-  // unlucky question is 0%, and calling that a student's weakest subject would
-  // be both wrong and discouraging.
+  // The topic the adaptive engine will actually start on. Ranked only among
+  // topics with enough attempts to be meaningful (see MIN_ATTEMPTS_TO_RANK).
   const weakest = Object.values(topics)
     .filter(t => (t.attempted_questions ?? 0) >= MIN_ATTEMPTS_TO_RANK)
     .sort((a, b) => a.accuracy - b.accuracy)[0] || null
 
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
-      {/* Above the header, and the only signal-related thing a student sees
-          outside settings. A sensor resuming is worth telling them about; a
-          live readout of their own focus is not. */}
+      {/* Tells the student a sensor was resumed by a parent. */}
       <ParentRestoredBanner studentId={user?.id} />
 
-      {/* A parent linking needs nothing from the child, and grants the parent
-          their reports and the ability to switch a sensor back on. Nothing told
-          them it had happened. */}
+      {/* Tells the student a parent has linked their account. */}
       <ParentLinkedBanner studentId={user?.id} />
 
-      {/* Says so rather than showing zeros. A student whose figures failed to
-          load was told they had answered nothing all term, which is both wrong
-          and discouraging in the one place it matters most. */}
+      {/* Show an explicit error instead of zeros, so a failed load doesn't
+          look like "you answered nothing all term". */}
       {statsFailed && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -179,12 +139,9 @@ export default function StudentDashboard() {
         </div>
       )}
 
-      {/* The practice reminder. This is the whole of what the Preferences
-          toggle switches on, and the toggle's copy says so -- it is a banner
-          here, not something that reaches a closed browser. Rendered only when
-          both reads landed *and* the student has not practised today: `nudge`
-          stays null otherwise, because a nudge invented from a failed request
-          would be telling a child they skipped a day they did not skip. */}
+      {/* Only rendered once both reads succeed and the student hasn't
+          practised today -- a nudge from a failed request would wrongly
+          tell a child they skipped a day. */}
       {nudge?.show && (
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
           className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
@@ -211,9 +168,8 @@ export default function StudentDashboard() {
         <motion.div
           whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
           onClick={() => navigate('/adaptive')}
-          // `hidden md:flex` put the page's primary action out of reach on a
-          // phone -- the one device most likely to be a student's. It wraps
-          // under the greeting on a narrow screen instead of disappearing.
+          // Wraps under the greeting on a narrow screen rather than being hidden,
+          // since a phone is likely to be a student's main device.
           className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 rounded-full text-sm font-bold shadow-lg cursor-pointer shrink-0"
         >
           <Brain size={16} /> Start AI Session
@@ -268,9 +224,8 @@ export default function StudentDashboard() {
               {TOPICS.map((t, i) => {
                 const row = topics[t]
                 const attempted = row?.attempted_questions ?? 0
-                // A topic with no attempts, and a topic whose read failed,
-                // draw the same plain tile this grid has always drawn --
-                // neither asserts anything, so neither can be wrong.
+                // An unattempted topic and a failed read look the same here --
+                // both draw a plain, untinted tile.
                 const measured = attempted > 0
                 return (
                   <motion.div key={t}
@@ -296,10 +251,8 @@ export default function StudentDashboard() {
               })}
             </div>
 
-            {/* Named because it is what `/adaptive` will actually open on --
-                the decider picks the weakest topic itself, which the banner
-                above already tells the student. Absent until a topic has
-                enough attempts to rank, so this never guesses. */}
+            {/* Shows the topic `/adaptive` will actually open on. Hidden until
+                a topic has enough attempts to rank, so this never guesses. */}
             {weakest && (
               <button
                 onClick={() => navigate('/adaptive')}

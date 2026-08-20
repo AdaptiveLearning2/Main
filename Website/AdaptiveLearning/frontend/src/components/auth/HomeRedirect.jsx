@@ -5,9 +5,9 @@ import { homeFor } from '../../lib/homeRoute'
 
 /** `/` -- send each role to its own app.
  *
- * Waits for auth rather than guessing: redirecting while `loading` is still
- * true reads `role` as undefined and sends everyone to the login page, which
- * for an already-signed-in parent looks like being logged out at random.
+ * Waits for auth rather than guessing: redirecting while still loading reads
+ * `role` as undefined and sends a signed-in parent to the login page, which
+ * looks like being logged out at random.
  */
 export default function HomeRedirect() {
   const { user, role, loading } = useAuth()
@@ -16,7 +16,6 @@ export default function HomeRedirect() {
   if (!user)   return <Navigate to="/login" replace />
 
   // No home for an unrecognised role, so fall through to the guarded student
-  // route, which now explains itself rather than bouncing. Any default picked
-  // here would be a route some role cannot see.
+  // route, which explains itself rather than bouncing.
   return <Navigate to={homeFor(role) || '/dashboard'} replace />
 }

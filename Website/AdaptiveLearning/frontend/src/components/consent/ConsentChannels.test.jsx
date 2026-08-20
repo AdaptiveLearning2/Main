@@ -17,11 +17,10 @@ const ALL_ON = {
   },
 }
 
-// What a failed read actually looks like. `_consent()` fails **closed**, so it
-// is not an error shape or a truncated one -- it is a complete, plausible
-// payload in which every channel is off and none carries a date. That is what
-// makes it dangerous to render, and why `{...ALL_ON, retrieved: false}` proved
-// nothing: those channels are on, so no switch could have misreported them.
+// What a failed read actually looks like. Consent fails closed, so it's not
+// an error shape -- it's a plausible payload with every channel off and no
+// date. `{...ALL_ON, retrieved: false}` would prove nothing here, since those
+// channels are on and no switch could misreport them.
 const READ_FAILED = {
   student_id: 'stu-1',
   retrieved: false,
@@ -45,9 +44,7 @@ beforeEach(() => { apiFetch.mockReset() })
 describe('reading', () => {
   it('maps the switch key to the channel the payload uses', async () => {
     // `eeg_enabled` on the write, `channels.eeg` on the read. Getting this
-    // wrong renders every switch as off and looks exactly like a student who
-    // withdrew everything -- silent, and the worst possible direction to be
-    // wrong in on a consent screen.
+    // wrong renders every switch off, as if the student withdrew everything.
     apiFetch.mockResolvedValue(ALL_ON)
 
     render(<ConsentChannels studentId="stu-1" role="student" />)
@@ -67,22 +64,22 @@ describe('reading', () => {
   })
 
   it('does not render a failed read as everything being off', async () => {
-    // `retrieved: false` is "we could not find out", which is not "the student
-    // withdrew". Telling a parent the second when the first is true is the
-    // three-state failure the reporting rules exist to stop.
+    // `retrieved: false` means "could not find out", not "the student
+    // withdrew" -- conflating the two is the failure the reporting rules
+    // exist to stop.
     apiFetch.mockResolvedValue(READ_FAILED)
 
     render(<ConsentChannels studentId="stu-1" role="parent" />)
 
     expect(await screen.findByText(/Could not load these settings/)).toBeInTheDocument()
-    // The banner was never the whole claim. Drawn beside the fail-closed
-    // payload it read as three deliberately withdrawn channels.
+    // The banner alone isn't enough -- beside the fail-closed payload it read
+    // as three deliberately withdrawn channels.
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 
   it('does not tell a student a parent must restore what nobody switched off', async () => {
-    // The student view is where this did the most damage: three locked switches
-    // and a sentence about a decision that was never made.
+    // Worst on the student view: three locked switches and a sentence about a
+    // decision that was never made.
     apiFetch.mockResolvedValue(READ_FAILED)
 
     render(<ConsentChannels studentId="stu-1" role="student" />)
@@ -103,7 +100,7 @@ describe('the student can only switch off', () => {
 
     expect(screen.getByText(/stays off/)).toBeInTheDocument()
     expect(screen.getByText(/a parent has to switch it back on/)).toBeInTheDocument()
-    // Nothing written until they confirm.
+    // Nothing written yet.
     expect(apiFetch).toHaveBeenCalledTimes(1)
   })
 
@@ -122,8 +119,8 @@ describe('the student can only switch off', () => {
   })
 
   it('cannot switch a withdrawn channel back on', async () => {
-    // The backend enforces this; the UI states it. A switch that vanishes when
-    // you turn it off looks like a bug, so it stays visible and disabled.
+    // The backend enforces this; the UI states it. Stays visible and disabled
+    // rather than vanishing, which would look like a bug.
     apiFetch.mockResolvedValue(CAMERA_OFF)
     render(<ConsentChannels studentId="stu-1" role="student" />)
 
@@ -135,8 +132,8 @@ describe('the student can only switch off', () => {
 
 describe('the parent can switch on', () => {
   it('re-enables without a confirmation step', async () => {
-    // Reversible by the same parent on the same screen, so there is nothing to
-    // warn about. The student's withdrawal is the irreversible one.
+    // Reversible by the same parent, so nothing to warn about here -- the
+    // student's withdrawal is the irreversible one.
     apiFetch.mockResolvedValueOnce(CAMERA_OFF).mockResolvedValueOnce(ALL_ON)
     render(<ConsentChannels studentId="stu-1" role="parent" />)
 
@@ -149,8 +146,7 @@ describe('the parent can switch on', () => {
   })
 
   it('reloads on a 409 rather than retrying', async () => {
-    // The decision moved under us -- a student withdrew while the parent was
-    // re-enabling. Retrying would record against a refusal.
+    // The decision moved under us -- retrying would record against a refusal.
     const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
     apiFetch.mockResolvedValueOnce(CAMERA_OFF)
              .mockRejectedValueOnce(conflict)
@@ -166,11 +162,9 @@ describe('the parent can switch on', () => {
   })
 
   it('does not promise nothing changed when the reload after a conflict fails', async () => {
-    // The two halves of a conflict point opposite ways: someone else's change
-    // landed, and this parent's did not. If the reload cannot tell us the
-    // resulting state, the first-load wording ("Nothing has been changed") is
-    // false in both directions at once -- and it is the wording this path used
-    // to fall through to.
+    // A conflict points two ways at once: someone else's change landed, this
+    // parent's did not. If the reload also fails, "Nothing has been changed"
+    // is false in both directions, so it must not fall back to that wording.
     const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
     apiFetch.mockResolvedValueOnce(CAMERA_OFF)
              .mockRejectedValueOnce(conflict)
@@ -181,15 +175,14 @@ describe('the parent can switch on', () => {
 
     expect(await screen.findByText(/your change was not applied/)).toBeInTheDocument()
     expect(screen.queryByText(/Nothing has been changed/)).not.toBeInTheDocument()
-    // And the switches go with it: what was on screen is not merely unverified,
-    // it is the state the 409 told us had been superseded.
+    // The switches go too -- the 409 told us the on-screen state is known
+    // superseded, not merely unverified.
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 
   it('says the same when the reload after a conflict throws', async () => {
-    // A thrown read and `retrieved: false` leave us knowing exactly the same
-    // thing. The raw 'Network down' would not tell a parent the part that
-    // matters, which is that their change did not apply.
+    // A thrown read and `retrieved: false` mean the same thing here. The raw
+    // 'Network down' wouldn't tell a parent what matters -- the change failed.
     const conflict = Object.assign(new Error('Consent changed'), { status: 409 })
     apiFetch.mockResolvedValueOnce(CAMERA_OFF)
              .mockRejectedValueOnce(conflict)
@@ -206,8 +199,8 @@ describe('the parent can switch on', () => {
 
 describe('copy', () => {
   it('says recorded, and never explains what the control does not do', async () => {
-    // The old control was a display filter, and its disclaimer sentence is what
-    // made it confusing. Needing one is the signal the control is wrong.
+    // The old control was a display filter; its disclaimer sentence is what
+    // made it confusing.
     apiFetch.mockResolvedValue(ALL_ON)
     const { container } = render(<ConsentChannels studentId="stu-1" role="student" />)
     await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(3))
@@ -221,10 +214,9 @@ describe('copy', () => {
 
 // ── erasure ──────────────────────────────────────────────────────────────
 //
-// A separate decision from consent, with a separate endpoint and a separate
-// gate: a student may withdraw, only a linked parent may erase, and nothing
-// undoes it. What is asserted here is that the two never get confused for one
-// another and that the irreversible one cannot be reached by accident.
+// A separate decision from consent, with its own endpoint and gate: a student
+// may withdraw, only a linked parent may erase, and nothing undoes it. These
+// tests check the two don't get confused and erasure can't be reached by accident.
 
 const ERASED = {
   ...ALL_ON,
@@ -245,7 +237,6 @@ function eraseOk(extra = {}) {
 describe('erasing stored readings', () => {
   it('is not offered to the student', async () => {
     // The backend refuses them outright, so a control here would always fail.
-    // They are still told an erasure happened -- see the test below.
     apiFetch.mockResolvedValue(ERASED)
     render(<ConsentChannels studentId="stu-1" role="student" />)
 
@@ -254,8 +245,7 @@ describe('erasing stored readings', () => {
   })
 
   it('tells the student their readings were erased', async () => {
-    // Only a parent can ask for it; a student is still entitled to know it
-    // happened to them.
+    // Only a parent can ask for it, but the student is still told.
     apiFetch.mockResolvedValue(ERASED)
     render(<ConsentChannels studentId="stu-1" role="student" />)
 
@@ -265,9 +255,8 @@ describe('erasing stored readings', () => {
   })
 
   it('reports an erasure even though the channel is still on', async () => {
-    // Erasure is a fact about the stored history, not the current decision. A
-    // parent who erased and left the sensor on has a channel that is recording
-    // and a past that is gone.
+    // Erasure is about stored history, not the current decision -- a parent
+    // can erase and leave the sensor recording.
     apiFetch.mockResolvedValue(ERASED)
     render(<ConsentChannels studentId="stu-1" role="parent" />)
 
@@ -294,8 +283,7 @@ describe('erasing stored readings', () => {
   })
 
   it('sends the channel name the endpoint takes, not the switch key', async () => {
-    // `camera_enabled` is the flag; `camera` is the channel. Sending the flag
-    // gets a 422 on every erasure.
+    // `camera_enabled` is the flag; `camera` is the channel. The flag 422s.
     const user = userEvent.setup()
     eraseOk()
     render(<ConsentChannels studentId="stu-1" role="parent" />)
@@ -313,8 +301,8 @@ describe('erasing stored readings', () => {
   })
 
   it('does not carry the acknowledgement over to another channel', async () => {
-    // Ticking the box for the camera and then opening the headband panel must
-    // not arrive pre-confirmed. One acknowledgement, one deletion.
+    // Ticking the box for the camera and opening the headband panel must not
+    // arrive pre-confirmed.
     const user = userEvent.setup()
     eraseOk()
     render(<ConsentChannels studentId="stu-1" role="parent" />)
@@ -322,9 +310,8 @@ describe('erasing stored readings', () => {
     await waitFor(() => expect(screen.getByText('Camera')).toBeInTheDocument())
     await user.click(screen.getAllByText(/erase what this recorded/i)[2])
     await user.click(screen.getByRole('checkbox'))
-    // Straight to another channel, without cancelling. Cancelling also clears
-    // the box, so a test that goes via Cancel passes whether or not opening a
-    // panel resets it -- which is the path that actually needs guarding.
+    // Straight to another channel without cancelling -- Cancel also clears the
+    // box, so going via Cancel wouldn't test the path that needs guarding.
     await user.click(screen.getAllByText(/erase what this recorded/i)[0])
     expect(screen.getByRole('checkbox')).not.toBeChecked()
     expect(screen.getByRole('button', { name: /erase them/i })).toBeDisabled()
@@ -332,8 +319,7 @@ describe('erasing stored readings', () => {
 
   it('says so when an archived chart could not be removed', async () => {
     // The rows are gone by the time storage is touched, so this is the one
-    // part of an erasure that can be incomplete. A parent told "erased" should
-    // not find out from a chart that still loads.
+    // part of an erasure that can stay incomplete.
     const user = userEvent.setup()
     eraseOk({ charts_failed: 2 })
     render(<ConsentChannels studentId="stu-1" role="parent" />)
@@ -349,8 +335,7 @@ describe('erasing stored readings', () => {
   })
 
   it('warns that erasing does not stop the sensor still recording', async () => {
-    // The two decisions are independent, and this is the combination a parent
-    // is most likely to get wrong: erase the past, leave it collecting.
+    // The two decisions are independent -- erase the past, leave it collecting.
     const user = userEvent.setup()
     eraseOk()
     render(<ConsentChannels studentId="stu-1" role="parent" />)
@@ -365,9 +350,8 @@ describe('erasing stored readings', () => {
 
 describe('the erasure result banner', () => {
   it('does not use the failure colour for a successful erasure', async () => {
-    // Rose is this component's colour for the destructive action itself.
-    // Carrying it into the confirmation of a *successful* one reads as
-    // something having gone wrong, and charts_failed: 0 is the good outcome.
+    // Rose is this component's colour for the destructive action itself --
+    // carrying it into a successful confirmation would read as an error.
     const user = userEvent.setup()
     eraseOk()
     render(<ConsentChannels studentId="stu-1" role="parent" />)
@@ -397,8 +381,7 @@ describe('the erasure result banner', () => {
   })
 
   it('clears the note when the parent does something else', async () => {
-    // Still true, but a note left above an unrelated change reads as the
-    // result of that change.
+    // Still true, but left up it would read as the result of the new change.
     const user = userEvent.setup()
     eraseOk()
     render(<ConsentChannels studentId="stu-1" role="parent" />)

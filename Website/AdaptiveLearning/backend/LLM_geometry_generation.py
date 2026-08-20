@@ -415,26 +415,21 @@ FINAL RULES:
 
 solution = -1
 
-# Maps each difficulty tier to the scenario numbers listed under EASY/MEDIUM/
-# HARD TOPICS in the prompt above (14 triangle_missing_side_area and
-# 15 triangle_missing_side_perimeter weren't called out explicitly there but
-# are the same "solve for a missing side" family as the other MEDIUM
-# scenarios). Previously the prompt described these tiers but scenario
-# selection ignored them entirely (random.randint(1,18) regardless of
-# difficulty), so difficulty had no actual effect on question complexity.
+# Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
+# TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side
+# area/perimeter) aren't listed there by name but belong to the same
+# "solve for a missing side" family as the other MEDIUM scenarios.
 DIFFICULTY_SCENARIOS = {
     "easy":   [1, 2, 3, 4, 5, 6],
     "medium": [10, 11, 12, 13, 14, 15, 16],
     "hard":   [7, 8, 9, 17, 18],
 }
 
-# Circle scenarios (5, 6 -- area/circumference need pi and multiplication)
-# and every 3D or pythagorean-theorem scenario assume formulas grades 1-3
-# haven't reached, regardless of difficulty tier -- restrict "early" band to
-# flat rectangle/triangle area and perimeter, which is roughly where grade-3
-# geometry standards land (grade 1-2 within that band get the ceiling of
-# what this topic can offer them; the four-band system is coarser than a
-# single grade).
+# Circle, 3D volume, and pythagorean-theorem scenarios need formulas grades
+# 1-3 haven't reached, so "early" band is restricted to flat rectangle/
+# triangle area and perimeter -- roughly where grade-3 geometry standards
+# land. Grades 1-2 in that band get the ceiling of what this topic can offer
+# them, since bands are coarser than a single grade.
 EARLY_BAND_SCENARIOS = {1, 2, 3, 4}
 
 def _pick_scenario(difficulty, grade_band):
@@ -470,7 +465,6 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         else:
             prompt = geometry_prompt
 
-        # select a scenario from the tier matching this question's difficulty and grade
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(difficulty, grade_band)
 

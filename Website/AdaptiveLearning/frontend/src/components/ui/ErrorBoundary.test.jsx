@@ -5,8 +5,7 @@ import userEvent from '@testing-library/user-event'
 import ErrorBoundary from './ErrorBoundary'
 
 // React logs a caught error to console.error on its own, in addition to the
-// boundary's own line. Silenced so a passing run does not print two stack
-// traces per test and read as a failure.
+// boundary's own line. Silenced so a passing run doesn't look like a failure.
 beforeEach(() => { vi.spyOn(console, 'error').mockImplementation(() => {}) })
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -23,9 +22,8 @@ describe('ErrorBoundary', () => {
   })
 
   it('shows the failure instead of unmounting the tree', () => {
-    // The behaviour this exists for. Without a boundary anywhere above it, a
-    // component that throws during render takes the whole application down to
-    // a blank document.
+    // Without a boundary, a component that throws during render takes the
+    // whole application down to a blank document.
     render(<ErrorBoundary resetKey="/a"><Boom /></ErrorBoundary>)
 
     expect(screen.getByRole('alert')).toBeInTheDocument()
@@ -33,10 +31,8 @@ describe('ErrorBoundary', () => {
   })
 
   it('clears the error when the reset key changes', async () => {
-    // An error boundary latches: `hasError` stays true for the life of the
-    // component. Without this, a student who crashed one page would keep
-    // seeing the error screen on every page they navigated to afterwards,
-    // having done nothing wrong and with no way out but a reload.
+    // An error boundary latches -- without this, a student who crashed one
+    // page would keep seeing the error screen on every page after.
     const { rerender } = render(
       <ErrorBoundary resetKey="/practice"><Boom /></ErrorBoundary>)
     expect(screen.getByRole('alert')).toBeInTheDocument()
@@ -48,9 +44,8 @@ describe('ErrorBoundary', () => {
   })
 
   it('does not clear the error while the reset key is unchanged', () => {
-    // The other half of the same rule: re-rendering in place must not clear a
-    // real error, or the boundary would flicker back to the component that is
-    // still throwing.
+    // Re-rendering in place must not clear a real error, or the boundary
+    // would flicker back to the component still throwing.
     const { rerender } = render(
       <ErrorBoundary resetKey="/practice"><Boom /></ErrorBoundary>)
 
@@ -60,9 +55,8 @@ describe('ErrorBoundary', () => {
   })
 
   it('retries in place when asked, without a reload', async () => {
-    // "Try again" is worth having because plenty of render errors come from a
-    // transient prop rather than a permanent one -- and it costs a click,
-    // against a reload costing the whole session's in-memory state.
+    // Many render errors come from a transient prop, not a permanent one, so
+    // a click is cheaper than a reload that loses in-memory state.
     let shouldThrow = true
     const Flaky = () => {
       if (shouldThrow) throw new Error('once')

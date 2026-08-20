@@ -1,8 +1,8 @@
-"""The `heart` block built from a headband optical window.
+"""Tests for the `heart` block built from a headband optical window.
 
-Two things are pinned: that every refusal is named rather than reported as a
-null reading, and that a real recording gets through the gates and produces the
-rate the fixture is known to contain.
+Checks that every refusal is named rather than reported as a null reading,
+and that a real recording gets through the gates and produces the rate the
+fixture is known to contain.
 """
 
 from __future__ import annotations
@@ -23,8 +23,8 @@ from src.app.services.optics_processing import (
 )
 from src.app.services.ppg_processing import HeartRateTracker
 
-# Ground truth for optics_rest_60s: 67.9 bpm by independent spectral analysis,
-# and the wearer's watch agreed. Same slice test_ppg_processing validates on.
+# Ground truth for optics_rest_60s: 67.9 bpm by spectral analysis, matching
+# the wearer's watch. Same slice test_ppg_processing validates on.
 RESTING_BPM = 68.0
 
 
@@ -39,22 +39,19 @@ def _window(samples=1600, fs=64.0, received=64.0, span=None, gap=None,
 def _build(window, tracker=None, since=EMIT_EVERY_SECONDS):
     if tracker is not None:
         return build_heart_record(window, tracker, since)
-    # A fresh tracker holds its first reading until a second window agrees,
-    # and these tests are about the record and the quality gates rather
-    # than the anchor policy -- `test_ppg_processing` owns that. Feeding the
-    # window once to warm the tracker models a session already producing
-    # readings, which is the state they all mean to describe.
+    # A fresh tracker holds its first reading until a second window agrees.
+    # These tests are about the record and quality gates, not anchor policy
+    # (`test_ppg_processing` owns that), so feed the window once first to
+    # model a session already producing readings.
     warm = HeartRateTracker()
     build_heart_record(window, warm, since)
     return build_heart_record(window, warm, since)
 
 
 def test_a_refusal_is_never_a_reading():
-    """The property the ingestion paths depend on.
-
-    `source` is set unconditionally, so a caller enqueuing on the block rather
-    than on the reading writes a null row every tick -- ~14k an hour at 4Hz,
-    each one counted as a sample by the aggregates.
+    """`source` is set unconditionally, so a caller enqueuing on the block
+    instead of the reading would write a null row every tick -- ~14k an hour
+    at 4Hz, each counted as a sample by the aggregates.
     """
     record = _build(_window(samples=0, fs=None, received=None, span=0.0))
     assert record["source"] == "muse_optics"
@@ -70,36 +67,33 @@ def test_the_first_seconds_of_a_session_are_warming_up_not_a_failure():
 
 
 def test_an_unmeasured_rate_is_refused_rather_than_assumed():
-    """Falling back to the preset's nominal 64Hz is the assumption the
-    measurement exists to remove: a link running slow would then report every
-    rate high by exactly the shortfall, with full confidence."""
+    """Falling back to the preset's nominal 64Hz would let a slow link report
+    every rate high by exactly the shortfall, with full confidence."""
     record = _build(_window(fs=None, received=None))
     assert record["rejected_by"] == "unmeasured_sample_rate"
     assert record["sample_rate_hz"] is None
 
 
 def test_a_window_that_is_mostly_interpolation_is_refused():
-    """The gap this opened, measured rather than reasoned about.
-
-    `fs` is read off `seq`, which counts what the headband *sent*, so it is 64Hz
-    whether or not the samples arrived; `window_coverage` is elapsed span, which
-    the surviving samples still bracket. Both stay healthy while the grid fills
-    with `np.interp` output -- and interpolation manufactures the smooth
-    periodicity autocorrelation rewards, so the result was a *confident* wrong
-    rate, not a noisy one.
+    """`fs` is read off `seq`, which counts what the headband *sent*, so it
+    reads 64Hz whether or not the samples arrived. `window_coverage` is
+    elapsed span, which the surviving samples still bracket. Both stay
+    healthy while the grid fills with `np.interp` output, and interpolation
+    manufactures the smooth periodicity autocorrelation rewards -- producing
+    a *confident* wrong rate, not a noisy one.
     """
     record = _build(_window(fs=64.0, received=2.0))
     assert record["rejected_by"] == "effective_rate_too_low"
-    # The link looks fine and the window looks full. Only the third number says
-    # otherwise, which is why it had to be carried separately.
+    # The link looks fine and the window looks full; only the third number
+    # says otherwise, which is why it's carried separately.
     assert record["sample_rate_hz"] == 64.0
     assert record["window_coverage"] >= 1.0
     assert record["completeness"] == pytest.approx(0.031, abs=0.001)
 
 
 def test_a_corrupt_sample_index_says_so_rather_than_no_samples():
-    """Empty channels alone reach the caller as `no_samples`, which is what a
-    headband that never emitted reports -- the opposite situation."""
+    """Empty channels alone would reach the caller as `no_samples`, which is
+    what a headband that never emitted reports -- the opposite situation."""
     record = _build(_window(samples=0, unusable="corrupt_sample_index"))
     assert record["rejected_by"] == "corrupt_sample_index"
 
@@ -107,8 +101,8 @@ def test_a_corrupt_sample_index_says_so_rather_than_no_samples():
 def test_a_collapsed_link_is_refused_and_says_so():
     record = _build(_window(fs=6.0))
     assert record["rejected_by"] == "sample_rate_too_low"
-    # Reported even though it is the reason for the rejection: it is the
-    # diagnosis, and a row that hid it could not be read back.
+    # Reported even though it caused the rejection -- it's the diagnosis, and
+    # a row that hid it couldn't be read back.
     assert record["sample_rate_hz"] == 6.0
 
 
@@ -125,7 +119,7 @@ def test_flat_channels_produce_no_rate():
 
 
 def _window_from(name: str, through_seconds: float | None = None):
-    """A window built the way the sidecar builds one: bridge lines in, buffer,
+    """Builds a window the way the sidecar does: bridge lines in, buffer,
     then the same `optics_window` call the tick makes."""
     with gzip.open(Path(__file__).parent / "fixtures" / name, "rt", encoding="utf-8") as fh:
         frames = [json.loads(line) for line in fh if line.strip()]
@@ -140,16 +134,16 @@ def _window_from(name: str, through_seconds: float | None = None):
 
 @pytest.fixture(scope="module")
 def recorded_window():
-    # 20-45s of the resting recording: the same slice test_ppg_processing uses,
-    # past the noisy opening, against a watch-confirmed 67.9 bpm.
+    # 20-45s of the resting recording, past the noisy opening: the same
+    # slice test_ppg_processing uses, against a watch-confirmed 67.9 bpm.
     return _window_from("optics_rest_60s.jsonl.gz", through_seconds=45.0)
 
 
 def test_a_real_resting_recording_produces_its_known_rate(recorded_window):
-    """The whole path, from bridge lines to the block that gets recorded.
+    """Exercises the whole path, from bridge lines to the recorded block.
 
-    Seated and at rest, which is the only condition this is cleared for: the
-    same estimator reports step cadence at confidence 1.00 through gait, and
+    Seated and at rest is the only condition this is cleared for: the same
+    estimator reports step cadence at confidence 1.00 through gait, and
     nothing derived from these channels tells the two oscillators apart.
     """
     record = _build(recorded_window)
@@ -164,13 +158,10 @@ def test_a_real_resting_recording_produces_its_known_rate(recorded_window):
 
 @pytest.mark.parametrize("keep_one_in,was", [(32, 55.8), (64, 44.0)])
 def test_heavy_sample_loss_is_refused_on_a_real_recording(keep_one_in, was):
-    """The regression, on the fixture that made it visible.
-
-    Decimating a window that reads 69.4 bpm intact used to produce these rates
-    at **confidence 1.00** with `rejected_by: None` and `trusted: True` -- a
-    25 bpm error at one-in-64, shipped as a measurement. Parametrised with the
-    numbers it actually reported so this cannot be quietly re-broken into
-    something merely different.
+    """Decimating a window that reads 69.4 bpm intact used to produce these
+    rates at **confidence 1.00** with `rejected_by: None` and `trusted: True`
+    -- a 25 bpm error at one-in-64, shipped as a measurement. Parametrised
+    with the actual reported numbers so this can't quietly regress.
     """
     with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
                    "rt", encoding="utf-8") as fh:
@@ -190,14 +181,13 @@ def test_heavy_sample_loss_is_refused_on_a_real_recording(keep_one_in, was):
 
 
 def test_isolated_gaps_do_not_distort_the_rate():
-    """Why MAX_GAP_SECONDS is not the defence against sample loss.
+    """MAX_GAP_SECONDS is not the defence against sample loss.
 
     A second is longer than a cardiac cycle above 60 bpm, so a 0.92s hole
-    swallows a whole beat -- which sounds like it should matter. Six of them,
-    each swallowing a beat, move the reported rate by 0.6 bpm. A 25s window
-    holds ~28 beats. The damage comes from the proportion of the window that is
-    reconstructed, not from the length of any one hole, which is what
-    `received_rate_hz` measures and this does not.
+    swallows a whole beat. Six such holes move the reported rate by only 0.6
+    bpm on a 25s window (~28 beats). The damage comes from the proportion of
+    the window reconstructed, not the length of any one hole -- which is what
+    `received_rate_hz` measures and this test does not.
     """
     with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
                    "rt", encoding="utf-8") as fh:
@@ -229,12 +219,13 @@ def test_isolated_gaps_do_not_distort_the_rate():
     (7, 9.2, False),   # first rung below it
 ])
 def test_the_gate_sits_where_the_estimate_actually_breaks(keep_one_in, effective_hz, accepted):
-    """The boundary, measured on both sides, on a real recording.
+    """Measures the accept/reject boundary on both sides, on a real recording.
 
-    Also the argument for gating the *rate* rather than `completeness`: at
-    one-in-six the window is 17% measurement and reads 69.5 bpm, because the
-    link is fast enough that a sixth of it still clears Nyquist. A completeness
-    threshold tight enough to catch a slow link would discard that for nothing.
+    This is the argument for gating the *rate* rather than `completeness`: at
+    one-in-six the window is 17% measurement and still reads 69.5 bpm,
+    because the link is fast enough that a sixth of it clears Nyquist. A
+    completeness threshold tight enough to catch a slow link would discard
+    that for nothing.
     """
     with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
                    "rt", encoding="utf-8") as fh:
@@ -258,9 +249,9 @@ def test_the_gate_sits_where_the_estimate_actually_breaks(keep_one_in, effective
 
 
 def test_light_sample_loss_still_reads_correctly():
-    """The gate has to cost windows that are genuinely usable, or it is just a
-    stricter version of not working. One in four lost leaves 16Hz, comfortably
-    above the pulse band, and the rate is unchanged."""
+    """The gate must not reject windows that are genuinely usable. One in
+    four samples lost leaves 16Hz, comfortably above the pulse band, and the
+    rate stays unchanged."""
     with gzip.open(Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz",
                    "rt", encoding="utf-8") as fh:
         frames = [json.loads(line) for line in fh if line.strip()]
@@ -278,16 +269,16 @@ def test_light_sample_loss_still_reads_correctly():
 
 
 def test_every_record_carries_a_parseable_stamp_of_its_own():
-    """Both writers key the row on this rather than on the tick's timestamp.
+    """Both writers key the row on this stamp, not the tick's timestamp.
 
-    The block is held on the payload between recomputes, so it arrives on ~40
-    consecutive ticks; without a stamp of its own, one measurement would be
+    The block is held on the payload between recomputes, so it arrives on
+    ~40 consecutive ticks; without its own stamp, one measurement would be
     forty rows on the push path and mostly missed readings on the pull one.
-    Present on rejections too, so the field has one meaning in both cases.
+    Present on rejections too, so the field means the same thing both ways.
     """
     for window in (_window(), _window(samples=0, fs=None, span=0.0)):
         stamp = _build(window)["ts"]
         parsed = datetime.fromisoformat(stamp)
-        # Timezone-aware: `heart_signals.ts` is timestamptz, and a naive stamp
-        # would be read as whatever the database's zone happens to be.
+        # Timezone-aware: `heart_signals.ts` is timestamptz, and a naive
+        # stamp would be read as whatever the database's zone happens to be.
         assert parsed.tzinfo is not None

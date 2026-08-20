@@ -76,11 +76,9 @@ function ConsentPanel({ flag, active, onSet, busy }) {
   const [minutes, setMinutes] = useState(30)
   const [ack, setAck] = useState(false)
 
-  // Cleared whenever the panel returns to the enforced state, so an
-  // acknowledgement cannot carry over into a second, unrelated bypass.
-  // Adjusted during render rather than in an effect: React re-runs this
-  // component before touching the DOM, so the box is never painted still
-  // ticked for the frame between enforcement resuming and an effect firing.
+  // Clear the checkbox when enforcement resumes, so it doesn't carry over
+  // into a later bypass. Done during render, not in an effect, so it never
+  // paints still ticked for a frame.
   const [wasActive, setWasActive] = useState(active)
   if (active !== wasActive) {
     setWasActive(active)
@@ -167,9 +165,8 @@ function ConsentPanel({ flag, active, onSet, busy }) {
 export default function AdminFlags() {
   const [env, setEnv] = useState([])
 
-  // The 30s poll is not cosmetic: the consent bypass expires on the clock
-  // rather than on a write, so nothing tells the page it is over and the
-  // banner would otherwise claim a bypass that has already lapsed.
+  // Poll every 30s: the bypass expires on the clock, not on a write, so
+  // without polling the banner would keep claiming a bypass that's over.
   const { data, busy, error, mutate } = useAdminResource({
     load: useCallback(() => apiFetch('/api/admin/flags'), []),
     pollMs: 30_000,
@@ -177,9 +174,8 @@ export default function AdminFlags() {
   const flags = data?.flags ?? null
   const active = data?.consent_enforcement_active ?? true
 
-  // Its own read, not the hook's: this one is static, unauthenticated by
-  // comparison, and a failure here means an empty list rather than an error
-  // over the whole page.
+  // Separate from the hook's poll: a failure here just empties this list,
+  // not the whole page.
   useEffect(() => {
     apiFetch('/api/admin/env-flags').then(d => setEnv(d.flags || [])).catch(() => setEnv([]))
   }, [])

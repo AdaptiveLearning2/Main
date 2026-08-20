@@ -16,9 +16,7 @@ const DIFF_STYLE = {
 }
 
 function QuestionModal({ question, onClose }) {
-  // Escape to close, Tab kept inside, focus returned to the row that opened
-  // it. The backdrop click was the only way out, so a keyboard-only teacher
-  // could open this and not leave it.
+  // Escape to close, Tab trapped inside, focus returned to the row that opened it.
   const panel = useRef(null)
   useDialog(panel, onClose)
 
@@ -81,12 +79,9 @@ export default function Questions() {
   const [page, setPage]           = useState(1)
   const PER_PAGE = 15
 
-  // See History.jsx: already true on mount, so setting it here would be a
-  // synchronous setState inside an effect.
+  // loading already starts true, so no setState is needed here on mount.
   const load = () => {
-    // This page paginates the whole bank client-side, so unlike the dashboard
-    // it genuinely wants every row. The limit stays; what changes is that a
-    // failure no longer reads as an empty question bank.
+    // Fetches the whole bank since this page paginates client-side.
     apiFetch('/api/questions?limit=1000')
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
       .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
@@ -120,7 +115,6 @@ export default function Questions() {
         </p>
       </motion.div>
 
-      {/* filters */}
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="relative">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -156,8 +150,7 @@ export default function Questions() {
       {loading ? (
         <SkeletonList count={5} height="h-14" gap="space-y-2" />
       ) : failed ? (
-        // Distinct from "No questions found", which invites a teacher to
-        // adjust filters that are not the problem.
+        // Distinct from "No questions found" so a failed load doesn't look like a filter problem.
         <LoadError what="the question bank" onRetry={retry} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
@@ -195,7 +188,6 @@ export default function Questions() {
             ))}
           </div>
 
-          {/* pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
@@ -212,7 +204,6 @@ export default function Questions() {
         </>
       )}
 
-      {/* question detail modal */}
       <AnimatePresence>
         {selected && <QuestionModal question={selected} onClose={() => setSelected(null)} />}
       </AnimatePresence>

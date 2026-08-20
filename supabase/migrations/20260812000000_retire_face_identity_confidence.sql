@@ -1,48 +1,30 @@
--- Retire face_signals.identity_confidence (#86).
+-- Retire face_signals.identity_confidence. Nothing ever computed a face
+-- identity -- FER+ expression classification is the only model that runs, and
+-- this column was always null.
 --
--- The column shipped in 20260625000000 and never had a producer. Nothing in
--- EEGResearch/src/app computes a face identity: FER+ expression classification
--- is the only model that runs, and the vendored reference this project started
--- from hard-codes identity_confidence to None with a note that it stays null
--- "until those are implemented". It never was.
+-- Retired rather than implemented: matching a child's face against a stored
+-- identity is a different purpose from what the camera consent asks about
+-- ("works out how they are finding the questions"). Shipping identity under
+-- that consent would record something nobody agreed to -- it needs its own
+-- consent channel and copy before it needs a model.
 --
--- Retired rather than implemented, which is a scope decision and not a
--- deferral. Matching a child's face against a stored identity is a *different
--- purpose* from the one the camera consent asks about -- the parent-facing copy
--- says the camera "works out how they are finding the questions", and the
--- student copy says the same. Shipping identity under that consent would be
--- recording something nobody agreed to, so it needs its own consent channel and
--- its own copy before it needs a model. If that is ever wanted, this column
--- comes back with those, and adding it back is a smaller change than the
--- conversation that should precede it.
+-- Removing it also closes a live bug, not just dead weight: the table carried
+-- two confidences answering different questions, and signal_fusion's face
+-- channel read the wrong one -- a clearly identified face with a garbage FER+
+-- label withheld a difficulty increase, while a well-classified expression on
+-- a poorly identified face was silently discarded.
 --
--- Removing it also closes a live footgun rather than only deleting dead weight.
--- The table carried two confidences answering different questions, and
--- signal_fusion's face channel read the wrong one of the pair -- a clearly
--- identified face with a garbage FER+ label withheld a difficulty increase,
--- while a well-classified expression on a poorly identified face was discarded.
--- Both silent. 20260805000000 predicted exactly that when it added
--- emotion_confidence ("an unqualified name leaves a reader a 50/50 guess about
--- which one it gates").
+-- No data loss: every row's value was already null.
 --
--- Data loss: none. Every row's value is NULL, because nothing ever wrote one.
+-- Deploy order: the code that stops selecting this column must ship first --
+-- PostgREST errors on a select naming a dropped column.
 --
--- Deploy order: this drops a column, so the code that stops selecting it must
--- ship *first* -- the reverse of the usual rule in CLAUDE.md, which covers
--- adding things. PostgREST errors on a select naming a dropped column, and the
--- backend reads face rows with an explicit column list. The application change
--- is in the same PR and does not depend on this migration having run, so
--- merging in either order is safe; deploying this one first is not.
---
--- attention, gaze_x and gaze_y are deliberately NOT dropped here. They have no
--- producer either, but unlike identity they are wanted: a landmark model to
--- derive them is its own phase of the plan. Dropping and re-adding columns that
--- are about to be filled would be churn.
+-- attention, gaze_x and gaze_y are deliberately not dropped here. They also
+-- have no producer yet, but unlike identity they're wanted once a landmark
+-- model exists to fill them.
 
 ALTER TABLE "public"."face_signals" DROP COLUMN IF EXISTS "identity_confidence";
 
--- No function signature changed: student_signal_summary and its siblings never
--- selected this column, so there is nothing to drop and recreate. The reload is
--- still needed -- PostgREST caches the table's shape, and a stale cache keeps
--- offering a column that is gone.
+-- No function signature changed -- student_signal_summary never selected this
+-- column. The reload is still needed since PostgREST caches the table shape.
 NOTIFY pgrst, 'reload schema';

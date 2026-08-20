@@ -22,9 +22,8 @@ from src.app.services.stream_manager import StreamManager, UnknownDeviceError
 logger = logging.getLogger(__name__)
 settings = get_settings()
 stream_manager = StreamManager()
-# None when push ingestion is off, which is the default and the co-located dev
-# stack. None rather than a disabled instance so there is no object to
-# accidentally start: the failure being avoided is two writers for one session.
+# None when push ingestion is off (the default, co-located dev stack), rather than a
+# disabled instance, so there's no object to accidentally start and duplicate writers.
 push_client = PushClient(settings.backend_url) if settings.push_enabled else None
 
 app = FastAPI(
@@ -66,11 +65,11 @@ async def request_timing(request: Request, call_next):
 
 @app.on_event("shutdown")
 async def _stop_pushing() -> None:
-    """Flush the tail and drop the token when the process goes down.
+    """Flush the queue and drop the token when the process goes down.
 
-    Without this a Ctrl-C loses whatever was queued since the last tick, which
-    is up to a flush interval of a lesson. `stop()` bounds its own flush by the
-    request timeout, so a backend that is already gone delays exit by seconds.
+    Without this a Ctrl-C loses whatever was queued since the last tick.
+    `stop()` bounds its own flush by the request timeout, so a backend that's
+    already gone only delays exit by seconds, not indefinitely.
     """
     if push_client is not None:
         stream_manager.set_payload_consumer(None)
@@ -130,11 +129,9 @@ async def get_state(
 
 class PushStartBody(BaseModel):
     session_id: str = Field(..., min_length=1)
-    # The student's own backend bearer token, handed over by the browser. It is
-    # held in memory for the session and never logged or persisted -- this
-    # process runs on a student's laptop, and a credential on that disk is a
-    # worse thing to own than one in RAM. Excluded from repr so it cannot reach
-    # a log line through an incidental f-string.
+    # The student's own backend bearer token, handed over by the browser. Held in
+    # memory only, never logged or persisted -- this runs on a student's laptop.
+    # Excluded from repr so it can't leak into a log line via an f-string.
     access_token: str = Field(..., min_length=1, repr=False)
 
 
@@ -142,12 +139,9 @@ class PushStartBody(BaseModel):
 async def push_start(body: PushStartBody, _: str = Depends(require_learner_token)) -> JSONResponse:
     """Begin posting this session's samples to the website backend.
 
-    Refuses when push is off rather than starting a client that would duplicate
-    a poller's writes. Under pull ingestion the backend polls this sidecar, and
-    both running at once puts every EEG sample in `cognitive_signals` twice --
-    valid rows, wrong counts, no error, and no dedupe key on that table to catch
-    it. The backend logs a warning when it sees both; this refuses to be the
-    second writer in the first place.
+    Refuses when push is off, rather than duplicating a poller's writes: under pull
+    ingestion the backend already polls this sidecar, and both running at once
+    would insert every EEG sample twice with no error and no dedupe key to catch it.
     """
     if push_client is None:
         raise HTTPException(
@@ -175,10 +169,10 @@ async def push_stop(_: str = Depends(require_learner_token)) -> JSONResponse:
 async def push_status(_: str = Depends(require_learner_token)) -> JSONResponse:
     """Queue depths, delivery counts and the last error.
 
-    `enabled: false` rather than a 404 when push is off, and `recorded` counts
-    what the *backend* said it stored rather than what was sent -- the backend
-    drops samples for a sensor the student has not consented to. A client
-    reporting what it sent would show a healthy session that recorded nothing.
+    `enabled: false` rather than a 404 when push is off. `recorded` counts what
+    the backend said it stored, not what was sent -- the backend drops samples for
+    an unconsented sensor, so counting sent would show a healthy session that
+    recorded nothing.
     """
     if push_client is None:
         return JSONResponse({"status": "ok", "data": {"enabled": False}})

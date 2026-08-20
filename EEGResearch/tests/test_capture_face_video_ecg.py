@@ -1,13 +1,9 @@
-"""The guards on the one script that writes a face to disk.
+"""Tests for the one script that writes a face to disk.
 
-The camera loop is not tested — it needs a webcam, like `FaceLocator` itself.
-What is tested is the part that decides *where* frames may go and what happens
-to them afterwards, because that is the half carrying the promise made in the
-script's own docstring: a consenting adult, one measurement, deleted after.
-
-A path check is worth a test in a way most path checks are not. Everything else
-this project writes is committable by design; this is the one artefact that must
-never be, and `git add -A` does not ask.
+The camera loop itself needs a webcam and isn't tested here. What's tested is
+where frames may be written and what happens to them afterward -- this is the
+one artefact in the project that must never be committed, and `git add -A`
+does not ask.
 """
 
 from __future__ import annotations
@@ -34,12 +30,11 @@ def _module():
 capture = _module()
 
 
-# ── where frames may be written ─────────────────────────────────────────────
+# -- where frames may be written --
 
 def test_a_path_inside_the_repository_is_refused():
-    """`git add -A` does not ask. A capture that lands anywhere git can reach
-    is one command away from being published, permanently, in a repository
-    whose whole point is that it holds no footage."""
+    """A capture inside the repo is one `git add -A` away from being
+    committed and published permanently."""
     inside = capture.repo_root() / "EEGResearch" / "tests" / "fixtures" / "session1"
 
     with pytest.raises(SystemExit) as exc:
@@ -57,20 +52,20 @@ def test_a_path_outside_the_repository_is_allowed(tmp_path):
 
 
 def test_a_sibling_directory_is_not_mistaken_for_the_repo(tmp_path):
-    """Prefix matching would reject `/work/AdaptiveLearning-captures` because it
-    starts with the repo path. The check is on path components, not strings."""
+    """A prefix-string check would wrongly reject `/work/AdaptiveLearning-captures`
+    since it starts with the repo path. The check must compare path
+    components, not strings."""
     sibling = pathlib.Path(str(capture.repo_root()) + "-captures") / "s1"
 
     capture.refuse_if_inside_repo(sibling)                   # must not raise
 
 
-# ── deletion ────────────────────────────────────────────────────────────────
+# -- deletion --
 
 def test_delete_removes_the_frames_and_keeps_the_header(tmp_path, capsys):
     """The header has no face in it and is the record that a capture happened
-    and was cleaned up. That is worth more than the tidiness of removing it —
-    a deleted capture with no trace is indistinguishable from one that was
-    never cleaned up at all."""
+    and was cleaned up. Removing it too would leave a deleted capture
+    indistinguishable from one nobody cleaned up."""
     prefix = tmp_path / "session1"
     (tmp_path / "session1.npy").write_bytes(b"frames")
     (tmp_path / "session1.jsonl").write_text("{}\n", encoding="utf-8")
@@ -87,8 +82,8 @@ def test_delete_removes_the_frames_and_keeps_the_header(tmp_path, capsys):
 
 
 def test_delete_is_safe_to_run_twice(tmp_path, capsys):
-    """Someone unsure whether they already deleted a capture will run it again.
-    That must not be an error, or they will learn to ignore the output."""
+    """Running delete twice must not error, since someone unsure whether they
+    already deleted a capture will run it again."""
     prefix = tmp_path / "gone"
 
     capture.delete(str(prefix))
@@ -96,24 +91,22 @@ def test_delete_is_safe_to_run_twice(tmp_path, capsys):
     assert "nothing found" in capsys.readouterr().out
 
 
-# ── the window ──────────────────────────────────────────────────────────────
+# -- the window --
 
 def test_a_capture_too_short_to_produce_a_window_is_refused():
-    """The model's window is 160 frames. A capture shorter than that yields no
-    measurement at all, and finding that out after recording — and after
-    deleting, since the frames should not be kept — wastes the session."""
+    """The model's window is 160 frames. A shorter capture yields no
+    measurement, so it should be refused up front rather than discovered
+    after recording and deleting."""
     assert capture.MIN_SECONDS >= 160 / 30.0
 
 
-# ── trimming the preallocated tail ──────────────────────────────────────────
+# -- trimming the preallocated tail --
 
 def _preallocated(path, capacity, written, shape=(4, 4, 3)):
-    """A capture that filled `written` of `capacity` rows, as the loop leaves it.
-
-    Row `i` is filled with `i + 1`, so a row that was never written is the only
-    all-zero one — which is the whole point: zeros are what `open_memmap` gives
-    you and what a black frame gives you, and nothing downstream can tell them
-    apart.
+    """A capture that filled `written` of `capacity` rows, as the loop leaves
+    it. Row `i` is filled with `i + 1`, so an unwritten row is the only
+    all-zero one -- zeros are what both `open_memmap` and a black frame give
+    you, and nothing downstream can tell them apart.
     """
     a = np.lib.format.open_memmap(path, mode="w+", dtype=np.uint8,
                                   shape=(capacity, *shape))
@@ -127,11 +120,10 @@ def _preallocated(path, capacity, written, shape=(4, 4, 3)):
 
 
 def test_rows_nobody_wrote_do_not_survive_as_black_frames(tmp_path):
-    """`capacity` is deliberately 20% + 64 above the expected frame count, so a
-    capture that ends short is the normal case rather than an edge one. Left
-    untrimmed, the tail reads back as a run of pure black frames — a sharp,
-    non-physiological step that a frequency-domain heart-rate estimate would
-    absorb without anything looking wrong.
+    """`capacity` is deliberately larger than the expected frame count, so a
+    capture ending short is the normal case. Left untrimmed, the tail reads
+    back as a run of black frames -- a sharp, non-physiological step that a
+    frequency-domain heart-rate estimate would absorb silently.
     """
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=100, written=40)
@@ -144,9 +136,8 @@ def test_rows_nobody_wrote_do_not_survive_as_black_frames(tmp_path):
 
 
 def test_trimming_leaves_the_captured_frames_byte_identical(tmp_path):
-    """The trim rewrites the header in place and shortens the file. If it moved
-    the data offset by a byte, every frame would decode as garbage — and a
-    128x128 field of noise is still a plausible-looking array."""
+    """The trim rewrites the header in place and shortens the file. Moving
+    the data offset by even a byte would decode every frame as garbage."""
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=100, written=40)
     expected = np.stack([np.full((4, 4, 3), i + 1, dtype=np.uint8)
@@ -158,9 +149,8 @@ def test_trimming_leaves_the_captured_frames_byte_identical(tmp_path):
 
 
 def test_trimming_actually_shortens_the_file_on_disk(tmp_path):
-    """Rewriting the header alone would satisfy every assertion above while
-    leaving the bytes there — the frames would be unreachable through numpy but
-    still present in a file the whole script exists to be careful about."""
+    """Rewriting the header alone would satisfy the assertions above while
+    leaving the bytes on disk, unreachable through numpy but still present."""
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=100, written=40)
     before = path.stat().st_size
@@ -182,10 +172,9 @@ def test_a_full_capture_is_left_alone(tmp_path):
 
 
 def test_a_capture_that_saw_no_face_at_all_trims_to_nothing(tmp_path):
-    """A wrong camera index or a covered lens records zero frames. That must
-    produce an empty array rather than `capacity` black ones, which is the
-    version of this bug that would be hardest to notice: a file full of
-    plausible-looking data where there was no capture."""
+    """A wrong camera index or a covered lens records zero frames, which must
+    trim to an empty array rather than `capacity` black frames -- the latter
+    would look like plausible data for a capture that never happened."""
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=100, written=0)
 
@@ -196,8 +185,8 @@ def test_a_capture_that_saw_no_face_at_all_trims_to_nothing(tmp_path):
 
 def test_the_real_frame_shape_round_trips(tmp_path):
     """The header is rewritten into the padding numpy left, so its length
-    matters. 128x128x3 is what the script actually writes; a shape that fits in
-    the test above could in principle be one that does not fit here."""
+    matters. 128x128x3 is the real shape the script writes; a smaller test
+    shape could pass while a real one would not fit."""
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=5, written=3, shape=(capture.CROP, capture.CROP, 3))
 
@@ -209,8 +198,9 @@ def test_the_real_frame_shape_round_trips(tmp_path):
 
 
 def test_a_one_dimensional_array_keeps_its_trailing_comma(tmp_path):
-    """`(3,)` and `(3)` are a tuple and an int. numpy parses the header with
-    `ast.literal_eval`, so dropping the comma makes the file unloadable."""
+    """`(3,)` and `(3)` parse as a tuple and an int respectively. numpy parses
+    the header with `ast.literal_eval`, so dropping the comma makes the file
+    unloadable."""
     path = tmp_path / "flat.npy"
     _preallocated(path, capacity=10, written=4, shape=())
 
@@ -220,9 +210,9 @@ def test_a_one_dimensional_array_keeps_its_trailing_comma(tmp_path):
 
 
 def test_growing_is_refused(tmp_path):
-    """Not reachable from `capture()` — `written` cannot exceed `capacity` — but
-    the header would be rewritten to claim rows past the end of the file, and
-    numpy would read whatever followed it."""
+    """Not reachable from `capture()`, since `written` can't exceed `capacity`
+    -- but growing would rewrite the header to claim rows past the end of the
+    file, and numpy would read whatever followed it."""
     path = tmp_path / "session1.npy"
     _preallocated(path, capacity=8, written=8)
 
@@ -231,12 +221,12 @@ def test_growing_is_refused(tmp_path):
     assert "cannot grow" in str(exc.value)
 
 
-# ── the preview ─────────────────────────────────────────────────────────────
+# -- the preview --
 
 def test_the_preview_adds_no_new_way_to_persist_a_frame():
-    """This script *does* write face images, so the preview is not a privacy
-    question here — but it must not become a second copy. The only bytes that
-    reach disk should be the ones the capture loop was already writing."""
+    """This script already writes face images, so the preview must not
+    become a second copy -- only the bytes the capture loop already writes
+    should reach disk."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     for forbidden in ("imwrite", "imencode", "VideoWriter"):
@@ -245,9 +235,8 @@ def test_the_preview_adds_no_new_way_to_persist_a_frame():
 
 def test_the_preview_helpers_run_against_a_synthetic_frame():
     """The drawing code has no camera in CI, but every call in it can be
-    exercised on an array — which is what catches a wrong argument type or a
-    shape mismatch before someone finds it five minutes into a capture they
-    then have to redo."""
+    exercised on an array, which catches a wrong argument type or shape
+    mismatch before someone hits it mid-capture."""
     cv2 = pytest.importorskip("cv2")
     import numpy as np
 
@@ -271,19 +260,18 @@ def test_the_preview_helpers_run_against_a_synthetic_frame():
 
     assert len(drawn) == 2, "the preview drew nothing"
     # The crop panel is stacked beside the frame, so the composed image is
-    # wider than the source. A preview that silently dropped it would look fine
-    # and hide the one picture that shows what is actually stored.
+    # wider than the source. If it were dropped the preview would still look
+    # fine while hiding the picture that shows what's actually stored.
     assert drawn[0][1].shape[1] > frame.shape[1]
 
 
-# ── the auto-exposure warm-up ───────────────────────────────────────────────
+# -- the auto-exposure warm-up --
 
 
 def test_the_warmup_matches_the_live_adapter_rather_than_restating_it():
-    """The number is measured, not chosen: mean green climbs 17% over ~5 s
-    against a pulse under 1%, and that ramp took a recording from confidence
-    0.81 to 0.05. Imported so the capture and the live path cannot drift if it
-    is ever re-measured."""
+    """Measured, not chosen: mean green climbs 17% over ~5s against a pulse
+    under 1%, and that ramp took a recording from confidence 0.81 to 0.05.
+    Imported here so the capture and live path can't drift apart."""
     from src.app.services.face_ingestion import WARMUP_SECONDS
 
     assert capture.WARMUP_SECONDS is WARMUP_SECONDS
@@ -291,20 +279,20 @@ def test_the_warmup_matches_the_live_adapter_rather_than_restating_it():
 
 
 def test_the_header_records_what_was_discarded():
-    """"the first frame is 8 s after the lens opened" is not recoverable from
-    the frames, and an ECG alignment search would absorb a constant offset as a
-    lag rather than report it."""
+    """"the first frame is 8s after the lens opened" is not recoverable from
+    the frames alone, and an ECG alignment search would absorb that as a lag
+    instead of reporting it."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert '"warmup_seconds"' in source
-    # wall_start is re-stamped after the discard, so it marks the first usable
-    # frame rather than the moment the camera opened.
+    # wall_start is re-stamped after the discard, marking the first usable
+    # frame rather than when the camera opened.
     assert source.index('header["wall_start"] =') > source.index("warm_until")
 
 
 def test_skipping_the_warmup_is_possible_but_argued_for():
-    """A camera with genuinely fixed exposure exists; a flag that offered no
-    reason would just get used by anyone in a hurry."""
+    """Some cameras genuinely have fixed exposure, so the flag exists -- but
+    it states why, so it isn't just used by anyone in a hurry."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert "--no-warmup" in source
@@ -312,9 +300,8 @@ def test_skipping_the_warmup_is_possible_but_argued_for():
 
 
 def test_the_warmup_preview_does_not_look_like_recording(capsys):
-    """Eight seconds of a frozen window, or of a preview identical to the one
-    shown while writing, would have the subject believe the capture had
-    started."""
+    """A frozen preview, or one identical to the recording view, would let the
+    subject think the capture had already started."""
     cv2 = pytest.importorskip("cv2")
     import numpy as np
 
@@ -337,11 +324,10 @@ def test_the_warmup_preview_does_not_look_like_recording(capsys):
 MIN_FOR_TEST = 30.0
 
 
-# ── q, everywhere the preview offers it ─────────────────────────────────────
+# -- q, everywhere the preview offers it --
 #
-# `q to abort` is the only interactive control this preview has, and it was
-# ignored during the whole warm-up and on every frame where no face was found.
-# Nothing exercised abort at all, which is why both survived.
+# `q to abort` is the only interactive control this preview has. Tests below
+# cover it during warm-up and on frames with no face found.
 
 
 class _AbortingGui:
@@ -374,11 +360,11 @@ class _Args:
 
 
 def _stub_cv2(monkeypatch):
-    """A `cv2` with just the resize the capture loop calls.
+    """A `cv2` stub with just the resize the capture loop calls.
 
-    CI has no OpenCV by design, and the loop reaches `cv2.resize` on every frame
-    with a face in it. Skipping there would leave the abort path that actually
-    writes frames uncovered in the only place that runs on every push.
+    CI has no OpenCV, and the loop calls `cv2.resize` on every frame with a
+    face in it. Without this stub, the frame-writing abort path would go
+    untested in CI.
     """
     import sys
     import types
@@ -413,9 +399,9 @@ def _fake_camera(monkeypatch, faces=True):
 
 
 def test_q_during_warmup_records_nothing(monkeypatch, tmp_path, capsys):
-    """The eight seconds it is most likely to be pressed -- while the subject is
-    still deciding whether the framing is right. It set the flag and the loop
-    ran to completion, then recorded anyway."""
+    """Warm-up is when `q` is most likely to be pressed, while the subject is
+    still deciding whether the framing is right, so an abort here must
+    prevent recording, not just be noted and ignored."""
     _fake_camera(monkeypatch)
     gui = _AbortingGui(on_warming=2)
     monkeypatch.setattr(capture, "Gui", lambda: gui)
@@ -428,17 +414,14 @@ def test_q_during_warmup_records_nothing(monkeypatch, tmp_path, capsys):
     assert code == 1
     assert "aborted during warm-up" in capsys.readouterr().out
     assert not (tmp_path / "s1.jsonl").exists(), "recording started after an abort"
-    # The point of the finding: the flag was set on the second draw and the loop
-    # ran out all five seconds regardless. Checking only the file state afterwards
-    # cannot tell that apart from an abort that was honoured at once.
+    # Checking only the file state afterward can't tell an abort honoured at
+    # once from one that just ran out the warm-up regardless, hence the timing
+    # check too.
     assert elapsed < 2.0, (
         f"took {elapsed:.1f}s to honour q during a 5s warm-up")
-    # The claim in the message, checked. The array is allocated before the
-    # warm-up so a full disk is found early, which means an abort here has a
-    # full-capacity zero-filled file to clean up -- and the early return
-    # skipped the `finally` that would have trimmed it. "nothing was recorded"
-    # sat on top of half a gigabyte of black frames with no header to explain
-    # them.
+    # The array is allocated before the warm-up, so an early abort must still
+    # clean up that preallocated zero-filled file rather than leaving it on
+    # disk with no header to explain it.
     assert not (tmp_path / "s1.npy").exists(), (
         "'nothing was recorded' left the preallocated array on disk")
     assert not (tmp_path / "s1.json").exists(), (
@@ -446,10 +429,9 @@ def test_q_during_warmup_records_nothing(monkeypatch, tmp_path, capsys):
 
 
 def test_aborting_warmup_repeatedly_leaves_nothing_behind(monkeypatch, tmp_path):
-    """The reason `q` matters during warm-up is that the subject is adjusting
-    the framing -- which means aborting two or three times in a row. Each one
-    leaving a full-capacity file behind is how a few hundred megabytes becomes
-    a few gigabytes without anything saying so."""
+    """A subject adjusting framing may abort several times in a row. Each
+    abort leaving a full-capacity file behind would quietly add up to
+    gigabytes of unused disk."""
     _fake_camera(monkeypatch)
     monkeypatch.setattr(capture, "WARMUP_SECONDS", 5.0)
 
@@ -463,10 +445,8 @@ def test_aborting_warmup_repeatedly_leaves_nothing_behind(monkeypatch, tmp_path)
 
 
 def test_q_with_no_face_in_frame_still_stops(monkeypatch, tmp_path):
-    """The worse half. With no face found the preview froze on the last good
-    frame *and* `q` did nothing until one appeared -- which is exactly the
-    situation someone wants to stop in, since a stretch with no face is the one
-    failure they can see and fix."""
+    """With no face found, `q` must still stop the capture -- a stretch with
+    no face is exactly the situation someone would want to abort and fix."""
     _fake_camera(monkeypatch, faces=False)
     gui = _AbortingGui(on_frame=3)
     monkeypatch.setattr(capture, "Gui", lambda: gui)
@@ -487,8 +467,8 @@ def test_q_with_no_face_in_frame_still_stops(monkeypatch, tmp_path):
 
 
 def test_aborting_mid_recording_keeps_what_was_captured(monkeypatch, tmp_path):
-    """The trim runs in the `finally`, so an aborted capture is a short valid
-    file rather than a preallocated one full of black frames."""
+    """The trim runs in a `finally`, so an aborted capture ends up as a short
+    valid file rather than a preallocated one full of black frames."""
     _fake_camera(monkeypatch)
     _stub_cv2(monkeypatch)
     gui = _AbortingGui(on_frame=5)

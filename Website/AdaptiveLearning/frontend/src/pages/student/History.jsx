@@ -10,18 +10,13 @@ export default function History() {
   const [failed, setFailed]     = useState(false)
   const [filter, setFilter]     = useState('all')
 
-  // Named so the retry button can call it again. A student whose history
-  // failed to load once should not have to know that reloading the page is
-  // the fix.
-  // No `setLoading(true)` here: it is already true on mount, and setting state
-  // synchronously inside an effect is a cascading render. The retry path below
-  // sets it, because by then it is false.
+  // Named so the retry button can call it again.
+  // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     apiFetch('/api/sessions')
       .then(s => { setSessions(s || []); setFailed(false); setLoading(false) })
-      // Not `setLoading(false)` alone. That left `sessions` empty and drew
-      // "No sessions here" -- telling a student who had practised all term
-      // that they had never practised, because one request failed.
+      // Also set failed, not just loading: otherwise an empty sessions list
+      // reads as "no sessions" instead of "the request failed".
       .catch(e => { console.error('Failed to load sessions:', e); setFailed(true); setLoading(false) })
   }
 

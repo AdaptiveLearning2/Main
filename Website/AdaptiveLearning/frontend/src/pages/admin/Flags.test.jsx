@@ -3,11 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import AdminFlags from './Flags'
 
-// The consent bypass is the one control here that records signals from students
-// who have not agreed. The backend bounds it -- an explicit duration, a cap, and
-// an expiry evaluated on every read -- and these are the matching properties on
-// the control itself: it cannot be armed by one click, and it never offers
-// "indefinitely".
+// The consent bypass records signals from students who have not agreed, so the
+// control must require explicit acknowledgement, use a bounded duration, and
+// never offer "indefinitely".
 
 const apiFetch = vi.fn()
 vi.mock('../../lib/api', () => ({ apiFetch: (...a) => apiFetch(...a) }))
@@ -83,15 +81,13 @@ it('offers no way to bypass consent indefinitely', async () => {
   for (const label of options) {
     expect(label).toMatch(/^\d+ minutes$/)
   }
-  // The cap the backend enforces. A longer option would be refused with a 422
-  // a reader could only discover by clicking it.
+  // The backend rejects anything longer with a 422.
   const longest = Math.max(...options.map(l => parseInt(l, 10)))
   expect(longest).toBeLessThanOrEqual(240)
 })
 
 it('says plainly that students who did not consent are being recorded', async () => {
-  // The banner is the only thing standing between "someone left it on" and
-  // nobody noticing, so it states the consequence rather than the setting.
+  // States the consequence, not just the setting, so it can't be missed.
   respond({
     active: false,
     flags: DEFAULTS.map(f => f.key === 'consent_enforcement_enabled'
@@ -108,12 +104,10 @@ it('says plainly that students who did not consent are being recorded', async ()
 })
 
 it('clears the acknowledgement once enforcement is back on', async () => {
-  // Otherwise a tick carries across into a second, unrelated bypass -- the
-  // acknowledgement would then be describing a decision nobody made twice.
-  //
-  // Driven through the real round trip rather than by re-rendering with new
-  // props: the panel reads `active` from its own fetch, so a rerender changes
-  // nothing and the test would pass without the effect that clears the box.
+  // Otherwise the checkbox stays ticked for a later, unrelated bypass.
+  // Driven through a real round trip, not a rerender with new props: the
+  // panel reads `active` from its own fetch, so only a real state change
+  // exercises the clearing logic.
   let active = true
   apiFetch.mockImplementation((path, opts) => {
     if (path === '/api/admin/env-flags') return Promise.resolve({ flags: [] })
@@ -132,12 +126,12 @@ it('clears the acknowledgement once enforcement is back on', async () => {
   await userEvent.click(
     within(dangerZone()).getByRole('button', { name: /Bypass consent/ }))
 
-  // Bypassed: the acknowledgement is gone from the DOM along with the form.
+  // Bypassed: the form and its acknowledgement checkbox are gone from the DOM.
   const reEnable = await within(dangerZone())
     .findByRole('button', { name: /Re-enable consent enforcement/ })
   await userEvent.click(reEnable)
 
-  // Back to enforced, and the box must not still be carrying the last tick.
+  // Back to enforced, and the checkbox must not still be ticked.
   const box = await within(dangerZone()).findByRole('checkbox')
   expect(box).not.toBeChecked()
   expect(within(dangerZone()).getByRole('button', { name: /Bypass consent/ }))
@@ -145,8 +139,8 @@ it('clears the acknowledgement once enforcement is back on', async () => {
 })
 
 it('re-reads on a timer, because the bypass expires on the clock', async () => {
-  // Nothing writes when it lapses, so without polling the page would go on
-  // claiming a bypass that ended ten minutes ago.
+  // Nothing writes when the bypass lapses, so polling is the only way the
+  // page notices it's over.
   vi.useFakeTimers({ shouldAdvanceTime: true })
   respond()
   render(<AdminFlags />)
@@ -174,8 +168,8 @@ it('marks the deployment flags as needing a redeploy', async () => {
   })
   render(<AdminFlags />)
 
-  // Rendered as a value with no control, so it cannot read as a switch that
-  // silently does nothing.
+  // Shown as a plain value, not a switch, so it can't look like a control
+  // that silently does nothing.
   const row = (await screen.findByText('INGEST_MODE')).closest('div.rounded-xl')
   expect(within(row).queryByRole('switch')).not.toBeInTheDocument()
   expect(within(row).getByText('pull')).toBeInTheDocument()

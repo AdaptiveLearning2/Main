@@ -12,11 +12,8 @@ const ROLES = [
 ]
 
 
-// One rung per score, bar colour and label together. Previously two arrays
-// indexed in parallel, which is how index 0 came to hold `''` in both: nothing
-// tied them, so nothing showed that one had been left behind. The text colour
-// joins them for the same reason -- it was a third expression deriving the same
-// verdict from `score` in a separate place.
+// Bar color, text color, and label grouped per score, rather than three
+// parallel arrays that could drift out of sync.
 const STRENGTH = [
   { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
   { bar: 'bg-rose-500',   text: 'text-rose-500',   label: 'Weak' },
@@ -28,16 +25,8 @@ const STRENGTH = [
 function StrengthBar({ password }) {
   if (!password) return null
   const score = [password.length >= 8, /[A-Z]/.test(password), /[0-9]/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length
-  // One array of pairs rather than two indexed in parallel. The bug this
-  // replaces was exactly that shape: `colors` and `labels` both held `''` at
-  // index 0, and nothing tied them together, so index 0 could be -- and was --
-  // forgotten in both. Editing one array without the other is no longer
-  // possible.
-  //
-  // Index 0 is a real score. Four checks, so a non-empty password can satisfy
-  // none of them ("abc" scores 0), and `if (!password) return null` above
-  // already covers the empty case -- everything reaching here has a verdict to
-  // give.
+  // Index 0 is a real score: a non-empty password can satisfy none of the
+  // four checks ("abc" scores 0). The empty case is already handled above.
   const rung = STRENGTH[score]
   return (
     <div className="mt-2">
@@ -65,8 +54,7 @@ export default function Register() {
     setLoading(true)
     try {
       await signUp(email, password, role, displayName)
-      // See Login: one role-to-home map, in homeRoute.js, reached through
-      // HomeRedirect once the role has actually resolved.
+      // HomeRedirect picks the destination once the role resolves.
       navigate('/')
       toast.success('Account created! Welcome 🎉')
     } catch (err) {
@@ -94,9 +82,8 @@ export default function Register() {
           <p className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-3">I am joining as...</p>
           <div className="grid grid-cols-3 gap-2">
             {ROLES.map(r => (
-              // Selection was conveyed by border and background colour alone,
-              // so which role is chosen was invisible to a screen reader and
-              // to anyone who cannot separate the two border colours.
+              // aria-pressed conveys the selection for screen readers, since
+              // color alone doesn't.
               <motion.button key={r.id} type="button" onClick={() => setRole(r.id)}
                 aria-pressed={role === r.id}
                 whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}

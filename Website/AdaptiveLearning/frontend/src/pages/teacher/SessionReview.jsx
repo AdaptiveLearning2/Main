@@ -8,21 +8,15 @@ import {
 } from 'recharts'
 import { apiFetch } from '../../lib/api'
 
-// Fixed per label, so a colour means the same thing between two sessions --
-// index-based colours would repaint the same emotion differently whenever the
-// set of labels present changed. Keyed on the FER+ labels the backend
-// actually stores (EEGResearch/src/app/services/face_emotion.py), the same
-// ones the EMOJI map below uses -- not the -happiness/-sadness/-anger nouns,
-// which never match a real sample and silently fell back to neutral's grey.
+// Fixed per label so the same emotion is always the same colour across sessions.
+// Keyed on the FER+ labels the backend actually stores.
 const EMOTION_COLOURS = {
   neutral: '#94a3b8', happy: '#10b981', surprise: '#38bdf8',
   sad: '#6366f1', angry: '#f43f5e', disgust: '#84cc16',
   fear: '#a855f7', contempt: '#f59e0b',
 }
 
-// `calibrating` and `unknown` are muted rather than absent: they are states the
-// session was genuinely in, and dropping them would overstate how much of it
-// was categorised.
+// calibrating/unknown are shown, not dropped: omitting them would overstate how much was categorised.
 const STRESS_COLOURS = {
   low: '#10b981', moderate: '#f59e0b', high: '#f43f5e',
   calibrating: '#cbd5e1', unknown: '#94a3b8',
@@ -36,11 +30,9 @@ function fmtTime(ms) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-// What the archived SVG is called, per section, so a fallback never lands
-// under a heading promising a different view. The emotion *ribbon* has no
-// archived equivalent -- it shows sequence and the archive only kept the pie --
-// so that section deliberately maps to nothing and says so instead of
-// borrowing the pie.
+// Per-section label for the archived SVG, so a fallback never appears under
+// the wrong heading. The emotion ribbon has no archived equivalent (it shows
+// sequence; the archive only kept the pie), so it deliberately maps to nothing.
 function ArchivedChart({ url, label }) {
   return (
     <figure className="mt-3">
@@ -55,49 +47,33 @@ function ArchivedChart({ url, label }) {
 
 export default function SessionReview() {
   const { sessionId } = useParams()
-  // Where "Back" goes, from where the teacher came. Falls back to Live rather
-  // than `history.back()`: a teacher who arrived by pasting a link has no
-  // history to go back to, and Live is where the session ids are most likely
-  // to have come from.
+  // Falls back to Live rather than history.back(): a teacher who arrived via a pasted link has no history to return to.
   const location = useLocation()
   const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
-  // Which session the state below belongs to. `loading` falls out of comparing
-  // it to the session in the URL, so arriving at a different session raises the
-  // skeleton on the render that changes the id rather than one effect later.
+  // Deriving loading from comparing loadedFor to the URL's session id means
+  // switching sessions raises the skeleton immediately, not one render later.
   const [loadedFor, setLoadedFor] = useState(null)
   const loading = loadedFor !== sessionId
-  // The archived charts, fetched only when there are no raw rows left. Kept
-  // separate from `data` because a failure here must not become the page's
-  // error state: the answers, the tiles and the accuracy above do not depend
-  // on it, and blanking all of them over a missing picture would be the
-  // opposite of what this fallback is for.
+  // Kept separate from `data`: a failure loading the archive must not blank
+  // the answers/tiles/accuracy above it, which don't depend on it.
   const [archive, setArchive] = useState(null)
   const [archiveErr, setArchiveErr] = useState(false)
 
   useEffect(() => {
     let killed = false
-    // Returns one session's raw facial samples, plotted below, and
-    // deliberately does NOT honour the facial-recognition switch in
-    // lib/viewPrefs.js -- that control covers the reporting surfaces, which
-    // render it, and this page does not. See the scope note there before
-    // wiring it in.
+    // Deliberately does NOT honour the "Hide sensor data" switch in
+    // lib/viewPrefs.js -- that control covers reporting surfaces, not this page.
     apiFetch(`/api/signals/session/${sessionId}`)
       .then(d => {
         if (killed) return
         setData(d)
-        // The previous session's archive is cleared here rather than before the
-        // request, because `loading` is derived: everything below reads it
-        // through an early return, so a stale chart has no frame to appear in.
+        // Cleared here rather than before the request, so a stale chart never appears while loading is derived.
         setArchive(null)
         setArchiveErr(false)
-        // Only when every channel is empty. That is precisely the expired
-        // case -- `expire_signal_rows` takes all three channels for a day at
-        // once and leaves the objects -- so a session that still has rows
-        // never pays for the extra call, and one channel merely being off
-        // does not trigger it. Erasure is the other way round: it deletes the
-        // objects too, so there would be nothing to fall back to anyway.
+        // Only fetch the archive when every channel is empty -- that's the
+        // signature of expired per-sample rows, not of one sensor being off.
         const empty = ['cognitive', 'face', 'heart']
           .every(k => !Array.isArray(d?.[k]) || d[k].length === 0)
         if (!empty) return
@@ -139,7 +115,7 @@ export default function SessionReview() {
   const heart     = Array.isArray(data?.heart)     ? data.heart     : []
   const answers   = Array.isArray(data?.answers)   ? data.answers   : []
 
-  // numeric ms x-axis — way more stable than category strings
+  // Numeric ms x-axis, more stable than category strings.
   const cognitiveByT = new Map(
     cognitive
       .map(c => {
@@ -149,22 +125,15 @@ export default function SessionReview() {
       .filter(Boolean),
   )
 
-  // Heart merged into the same rows by nearest timestamp rather than plotted
-  // from its own array: Recharts wants one dataset, and the two channels are
-  // sampled at different rates. Nulls elsewhere, with `connectNulls` on the
-  // line, so a sparse heart series draws as a line rather than as dots.
+  // Heart is merged into the cognitive rows by nearest timestamp, since
+  // Recharts wants one dataset and the two channels sample at different rates.
   const heartByT = heart
     .map(h => ({ t: new Date(h.ts).getTime(), h }))
     .filter(x => Number.isFinite(x.t))
     .sort((a, b) => a.t - b.t)
 
-  // Row timestamps are the union of both channels, not cognitive alone: a
-  // student can consent to the heart sensor without EEG (independent
-  // switches -- ConsentChannels.jsx), in which case cognitive is empty and
-  // heart is not. Building the base series from cognitive only left that
-  // session with zero rows to ever merge a heart reading onto, so the bpm
-  // axis, lines and failover markers below silently never rendered even
-  // though real heart data existed.
+  // Union of both channels' timestamps, not cognitive alone: a student can
+  // consent to heart without EEG, so cognitive can be empty while heart isn't.
   const series = Array.from(new Set([...cognitiveByT.keys(), ...heartByT.map(x => x.t)]))
     .sort((a, b) => a - b)
     .map(t => {
@@ -177,18 +146,14 @@ export default function SessionReview() {
       }
     })
 
-  // Each heart reading lands on **one** row: the row nearest to it. Cognitive
-  // arrives at 4Hz, so matching every row to its nearest reading within 15s
-  // would copy a single heart reading onto up to 120 consecutive rows and draw
-  // it as half a minute of dead-flat line.
-  //
-  // One reading, one point. `dot` on the lines below is what makes a lone
-  // reading visible, since a single point with no neighbours draws no segment.
+  // Each heart reading lands on exactly one row (the nearest), not every row
+  // within 15s -- cognitive arrives at 4Hz, so that would copy one reading
+  // across up to 120 rows and draw it as a flat line. `dot` on the chart lines
+  // below is what makes a single point visible.
   const rowIndexByT = series.map(r => r.t)
   let heartCollisions = 0
   for (const { t, h } of heartByT) {
-    // Binary search for the insertion point, then compare the two neighbours --
-    // "nearest" in both directions, not the last one at-or-before.
+    // Binary search for the insertion point, then compare both neighbours.
     let lo = 0, hiIdx = rowIndexByT.length
     while (lo < hiIdx) {
       const mid = (lo + hiIdx) >> 1
@@ -200,21 +165,12 @@ export default function SessionReview() {
     const dBefore = before !== null ? Math.abs(series[before].t - t) : Infinity
     const dAfter  = after  !== null ? Math.abs(series[after].t  - t) : Infinity
     const pick = dAfter < dBefore ? after : before
-    // Still bounded. A reading with no row within 15s belongs to a stretch the
-    // cognitive channel was not recording, and pinning it to the nearest row
-    // minutes away would place a measurement at a time it was not taken.
+    // Bounded at 15s: a reading with no row that close belongs to a gap in cognitive recording.
     if (pick === null || Math.min(dBefore, dAfter) > 15_000) continue
     const row = series[pick]
     const d = Math.min(dBefore, dAfter)
-    // Two readings can choose the same row -- `heart_signals` is unique per
-    // (session, source, ts), so a headband and a camera reading the same
-    // instant are two rows with one timestamp, and the union above collapses
-    // them to one point.
-    //
-    // Closest wins, first wins a tie, and the loser is counted rather than
-    // vanishing. Not merged or averaged: two sensors' calibrations combined
-    // into one number is the same mistake the failover markers below exist to
-    // avoid, one layer down.
+    // Two readings (e.g. headband and camera at the same instant) can land on
+    // one row. Closest wins, first wins a tie; the loser is counted, not merged or averaged.
     if (row.heart_rate_bpm !== undefined && row._heartDist <= d) {
       heartCollisions++
       continue
@@ -232,9 +188,8 @@ export default function SessionReview() {
 
   const hasHeart = series.some(r => r.heart_rate_bpm !== undefined && r.heart_rate_bpm !== null)
 
-  // Where the sensor changed mid-session. Marked rather than spliced: two
-  // sensors' calibrations in one continuous trace reads as a physiological
-  // event that did not happen.
+  // Marks where the heart sensor changed mid-session, rather than splicing
+  // both into one continuous trace, which would look like a real physiological event.
   const failovers = []
   for (let i = 1; i < heartByT.length; i++) {
     if (heartByT[i].h.source && heartByT[i].h.source !== heartByT[i - 1].h.source) {
@@ -242,9 +197,8 @@ export default function SessionReview() {
     }
   }
 
-  // Proportion, which the ribbon below cannot show: it shows sequence. The
-  // bucketing it already does is deliberately not reused here -- a pie of
-  // bucketed samples would weight a 10 s bucket the same as a 2 s one.
+  // Shows proportion, which the ribbon below can't (it shows sequence).
+  // Uses raw samples, not the ribbon's 10s buckets, so a 10s bucket doesn't outweigh a 2s one.
   const emotionSlices = Object.entries(
     face.reduce((acc, f) => {
       if (!f.emotion) return acc          // a rejected window is not a reading
@@ -255,9 +209,7 @@ export default function SessionReview() {
 
   const stressSlices = Object.entries(
     heart.reduce((acc, h) => {
-      // `calibrating` and `unknown` are kept as slices rather than dropped:
-      // a pie that silently omits them claims a session was entirely
-      // categorised when part of it was not.
+      // calibrating/unknown kept as slices, not dropped, so the pie doesn't overstate categorisation.
       const key = h.stress_category || 'unknown'
       acc[key] = (acc[key] || 0) + 1
       return acc
@@ -267,14 +219,12 @@ export default function SessionReview() {
   const tMin = series.length ? series[0].t : 0
   const tMax = series.length ? series[series.length - 1].t : 0
 
-  // emotion ribbon — bucket every ~10s
+  // Emotion ribbon, bucketed every ~10s.
   const ribbon = []
   let lastBucket = 0
   face.forEach(f => {
     const t = new Date(f.ts).getTime()
     if (Number.isFinite(t) && t - lastBucket > 10_000) {
-      // Emotion only. `attention` has no producer, so carrying it here put a
-      // permanently-null field on every ribbon segment.
       ribbon.push({ t, emotion: f.emotion })
       lastBucket = t
     }
@@ -286,21 +236,14 @@ export default function SessionReview() {
 
   const hasChart = series.length >= 2
 
-  // The archive's five states, kept apart rather than collapsed into "is there
-  // a picture". Only the first two are facts about the session; the other
-  // three are facts about the archive, and reporting them as "recorded
-  // nothing" would assert an absence from data that never arrived.
-  //
+  // Five distinct states, so a backend hiccup or a missing archive is never
+  // reported as "nothing was recorded":
   //   url          -- archived and still readable
   //   'empty'      -- the archive ran and this channel drew nothing
-  //   'unavailable'-- a path was recorded and the object could not be read
+  //   'unavailable'-- a path was recorded but the object couldn't be read
   //   'unarchived' -- the archive never ran for this session
-  //   'failed'     -- we asked and the request did not come back
-  //   'pending'    -- we have not finished asking
-  //
-  // Each state gets its own sentence below, so a backend hiccup, a stale
-  // permission error, or the moment before the request lands can never read
-  // as "there was nothing".
+  //   'failed'     -- the request for it failed
+  //   'pending'    -- still waiting on the request
   const archivedChart = (name) => {
     if (archiveErr) return 'failed'
     if (!archive) return 'pending'
@@ -310,9 +253,7 @@ export default function SessionReview() {
     return url || 'empty'
   }
 
-  // One sentence per non-URL state, and no two of them the same, so a teacher
-  // can tell a session with nothing recorded from one whose charts simply
-  // failed to load, where the useful next action is to try again.
+  // One distinct sentence per non-URL state, so a teacher can tell "nothing recorded" from "failed to load".
   const NO_CHART_COPY = {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',
@@ -323,18 +264,11 @@ export default function SessionReview() {
 
   const isUrl = (v) => typeof v === 'string' && v.startsWith('http')
 
-  // A section can cover more than one chart -- the timeline block draws both
-  // cognitive and heart -- and the backend signs each object independently, so
-  // the states genuinely differ across a set: `cognitive_timeline` empty while
-  // `heart_rate` is unavailable is an ordinary outcome, not a corner case.
-  //
-  // A fault therefore outranks an absence whenever they are mixed. Reading the
-  // state of one member and speaking for the whole set is how "the object could
-  // not be read" becomes "nothing was recorded", which is the single thing this
-  // payload's shape exists to prevent.
+  // A section can cover multiple charts with independently differing states
+  // (e.g. cognitive_timeline empty while heart_rate is unavailable), so a
+  // fault always outranks a mere absence when reporting on the set.
   const anyUnavailable = (names) => names.some(n => archivedChart(n) === 'unavailable')
 
-  // The copy for a set with no drawable chart in it, fault first.
   const noChartCopy = (names) =>
     anyUnavailable(names)
       ? NO_CHART_COPY.unavailable
@@ -351,7 +285,6 @@ export default function SessionReview() {
         <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm font-mono break-all">id: {sessionId}</p>
       </motion.div>
 
-      {/* summary tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Cognitive samples', value: cognitive.length, icon: <Brain size={16} className="text-indigo-500" /> },
@@ -366,20 +299,14 @@ export default function SessionReview() {
         ))}
       </div>
 
-      {/* main timeseries chart */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
         <h2 className="font-black text-gray-900 dark:text-white mb-4 flex items-center gap-2">
           <Brain size={18} className="text-indigo-600" /> Cognitive timeline
         </h2>
         {!hasChart ? (
           <div className="text-center py-12">
-            {/* The fallback. Once `expire_signal_rows` has taken the
-                per-sample rows on `ends_on`, the archived SVG is the only
-                remaining view of this session -- so an empty state here would
-                be reporting an absence that is contradicted by a picture
-                sitting in the bucket. Both archived charts are shown, because
-                the live version of this section merges cognitive and heart
-                into one trace and the archive keeps them apart. */}
+            {/* Falls back to the archived SVGs once per-sample rows have expired. Both are shown since the
+                archive keeps cognitive and heart separate, unlike the live merged trace. */}
             {isUrl(archivedChart('cognitive_timeline')) || isUrl(archivedChart('heart_rate')) ? (
               <>
                 <p className="text-sm text-gray-500">
@@ -392,8 +319,7 @@ export default function SessionReview() {
                 {isUrl(archivedChart('heart_rate')) && (
                   <ArchivedChart url={archivedChart('heart_rate')} label="Heart rate and HRV" />
                 )}
-                {/* One chart drawn, the other unreadable. Saying nothing here
-                    would present a partial view as the whole session. */}
+                {/* One chart drawn, the other unreadable -- said explicitly so a partial view isn't mistaken for the whole session. */}
                 {anyUnavailable(['cognitive_timeline', 'heart_rate']) && (
                   <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-2">
                     One archived chart for this session could not be loaded.
@@ -403,15 +329,10 @@ export default function SessionReview() {
             ) : (
               <>
                 <div className="text-5xl mb-2">🧠</div>
-                {/* Now reachable from heart-only data too (series merges both
-                    channels' timestamps), so this can no longer name just the
-                    one channel it used to be the only source for. */}
                 <p className="text-sm text-gray-400">
                   {noChartCopy(['cognitive_timeline', 'heart_rate'])}
                 </p>
-                {/* Only under the empty branch. Beside an archived chart it
-                    would be telling a teacher to wait for a stream on a
-                    session that ended months ago. */}
+                {/* Only shown here, not beside an archived chart -- that would tell a teacher to wait on a session that already ended. */}
                 <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
               </>
             )}
@@ -430,10 +351,7 @@ export default function SessionReview() {
                   fontSize={10}
                   minTickGap={50}
                 />
-                {/* Two axes with explicit ids. The existing one is ratio-scaled;
-                    bpm (~40-180) and RMSSD (ms) do not belong on it. Adding a
-                    second axis without giving the first an id silently rebinds
-                    every existing series to the new one. */}
+                {/* Two axes with explicit ids: bpm/RMSSD don't belong on the 0-1 ratio scale. */}
                 <YAxis yAxisId="ratio" domain={[0, 1]} fontSize={10} />
                 {hasHeart && (
                   <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
@@ -446,22 +364,12 @@ export default function SessionReview() {
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
                 <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
-                {/* Named "EEG stress" rather than bare "stress": this is
-                    cognitive_signals.stress (inverted calm), a different
-                    measurement from the heart-derived stress_category pie
-                    below, and CLAUDE.md is explicit that the two must never
-                    share a label. */}
+                {/* "EEG stress" not bare "stress": distinct from the heart-derived stress_category pie below, must never share a label. */}
                 <Line yAxisId="ratio" type="monotone" dataKey="stress" name="EEG stress" stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
 
-                {/* Omitted rather than drawn as an all-null line: an empty
-                    legend entry reads as a measurement that flatlined. */}
-                {/* `dot` on, unlike the cognitive lines above. Heart is a held
-                    25s window recomputed every 10s, so a session yields tens of
-                    readings where cognitive yields thousands -- and each one now
-                    occupies a single row. Without dots an isolated reading has
-                    no neighbour to draw a segment to and renders as nothing at
-                    all, which is how "measured once" would look identical to
-                    "never measured". */}
+                {/* `dot` on, unlike the cognitive lines: heart readings are sparse
+                    (one held window per ~10s vs thousands of cognitive samples),
+                    so an isolated point needs a dot to be visible at all. */}
                 {hasHeart && (
                   <Line yAxisId="abs" type="monotone" dataKey="heart_rate_bpm" name="Heart rate (bpm)"
                         stroke="#a855f7" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
@@ -471,19 +379,15 @@ export default function SessionReview() {
                         stroke="#f59e0b" dot={{ r: 2 }} connectNulls isAnimationActive={false} />
                 )}
 
-                {/* Sensor changed here. Distinct from the answer markers below
-                    by colour and by being solid. Gated on hasHeart, not just
-                    failovers.length: failovers is built from raw heart_signals
-                    source changes and can be non-empty (every window rejected
-                    but still carrying a source) while no row ever got a
-                    numeric heart_rate_bpm -- and the "abs" axis these markers
-                    reference only mounts when hasHeart is true. */}
+                {/* Marks where the heart sensor changed. Gated on hasHeart (not
+                    just failovers.length) since the "abs" axis these reference
+                    only mounts when hasHeart is true. */}
                 {hasHeart && failovers.map((f, i) => (
                   <ReferenceLine key={`fo-${i}`} yAxisId="abs" x={f.t}
                                  stroke="#a855f7" strokeOpacity={0.5} />
                 ))}
 
-                {/* answer markers as vertical reference lines (numeric x is safe) */}
+                {/* Answer markers as vertical reference lines. */}
                 {answers.map((a, i) => {
                   const x = new Date(a.answered_at).getTime()
                   if (!Number.isFinite(x) || x < tMin || x > tMax) return null
@@ -510,7 +414,6 @@ export default function SessionReview() {
         )}
       </div>
 
-      {/* emotion ribbon */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
         <h2 className="font-black text-gray-900 dark:text-white mb-4 flex items-center gap-2">
           <Camera size={18} className="text-pink-600" /> Emotion timeline
@@ -518,16 +421,8 @@ export default function SessionReview() {
         {ribbon.length === 0 ? (
           <div className="text-center py-8">
             <div className="text-4xl mb-2">📷</div>
-            {/* No archived equivalent, deliberately. This section shows
-                sequence and the archive only kept the proportion pie, so
-                borrowing `emotion_pie` here would answer a different question
-                under this heading. The pie is rendered below, where it says
-                what it is. */}
-            {/* Compared against the state, not against the rendered string.
-                Testing `NO_CHART_COPY[x] === NO_CHART_COPY.empty` worked only
-                as long as no two states shared wording -- and two of them
-                already do, so it was one copy edit away from silently
-                misreporting. */}
+            {/* No archived equivalent here, deliberately: the archive only kept the proportion pie (shown below), not the sequence this section shows. */}
+            {/* Compared against the state, not the rendered string, since two states can share wording. */}
             <p className="text-sm text-gray-400">
               {isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
@@ -551,16 +446,9 @@ export default function SessionReview() {
         )}
       </div>
 
-      {/* Proportion beside sequence. The ribbon above shows the order emotions
-          came in; these show how much of the session each accounted for, which
-          the ribbon cannot -- a single bad stretch and a whole bad session look
-          alike scrolling through emojis. Rendered only when there is something
-          to render: an empty pie is a claim about a session that recorded
-          nothing, which an unread channel has not earned. */}
-      {/* `unavailable` keeps the section mounted rather than hiding it. A
-          hidden section reports nothing at all, which is how an unreadable
-          stress chart would have gone unmentioned on every surface -- the
-          absence swallowing the fault, one level up. */}
+      {/* Shows proportion beside the ribbon's sequence: a single bad stretch
+          and a whole bad session look the same scrolling through emojis.
+          'unavailable' still mounts the section rather than hiding it, so an unreadable chart is reported, not silently dropped. */}
       {(emotionSlices.length > 0 || stressSlices.length > 0
         || isUrl(archivedChart('emotion_pie')) || isUrl(archivedChart('stress_pie'))
         || anyUnavailable(['emotion_pie', 'stress_pie'])) && (
@@ -594,10 +482,7 @@ export default function SessionReview() {
           {(stressSlices.length > 0 || isUrl(archivedChart('stress_pie'))
             || archivedChart('stress_pie') === 'unavailable') && (
             <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-5">
-              {/* Not bare "Stress": heart_signals.stress_category is a
-                  physiological measurement, distinct from the EEG-derived
-                  "EEG stress" series in the timeline chart above. CLAUDE.md:
-                  never render both under one "Stress" label. */}
+              {/* Not bare "Stress": distinct physiological measurement from the "EEG stress" line above; never share the label. */}
               <h2 className="font-black text-gray-900 dark:text-white mb-3 text-sm">Heart-rate stress</h2>
               {stressSlices.length === 0 ? (
                 isUrl(archivedChart('stress_pie'))
@@ -624,7 +509,6 @@ export default function SessionReview() {
         </div>
       )}
 
-      {/* answers table */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
         <h2 className="font-black text-gray-900 dark:text-white px-5 pt-5 mb-3">Answers</h2>
         {answers.length === 0 ? (

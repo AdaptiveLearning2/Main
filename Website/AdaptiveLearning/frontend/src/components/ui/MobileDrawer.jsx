@@ -6,38 +6,27 @@ import useDialog from '../../hooks/useDialog'
 /**
  * The slide-in navigation drawer, once.
  *
- * All four layouts carried a byte-identical copy of this — overlay, panel,
- * spring, close button — and all four were missing the same three things, so
- * the fix would otherwise have been the same edit made four times and then
- * drifted apart. That is the shape `_close_session` exists to prevent on the
- * backend.
+ * All four layouts carried an identical copy of this and were all missing the
+ * same three things, via `useDialog`:
  *
- * What they were missing, via `useDialog`:
- *
- * - **Escape closed nothing.** The backdrop was the only way out, so a
- *   keyboard user who opened the menu had none — on the control that is the
- *   whole of the navigation on a phone.
- * - **Tab walked out of it.** Straight into the page behind, which is still
- *   there and still focusable under an opaque overlay, with no visible cursor
- *   to say focus had left.
+ * - **Escape closed nothing.** The backdrop was the only way out.
+ * - **Tab walked out of it**, into the still-focusable page behind, with no
+ *   visible cursor to say focus had left.
  * - **Focus did not come back.** Closing dropped it to the top of the
- *   document, so the reader lost their place every time they opened the menu
- *   and changed their mind.
+ *   document, losing the reader's place each time.
  *
- * `role="dialog"` + `aria-modal` is the other half: without it a screen reader
- * announces the page behind as though it were still available, which is
- * exactly the confusion the trap prevents for a sighted keyboard user.
+ * `role="dialog"` + `aria-modal` is the other half: without it a screen
+ * reader announces the page behind as though it were still available.
  *
- * Deliberately not a general `<Modal>`. `Questions.jsx`'s overlay has its own
- * markup and its own animation and shares only the behaviour, which is why
- * `useDialog` is a hook. This is the one shape that genuinely repeats.
+ * Not a general `<Modal>` -- `Questions.jsx`'s overlay has its own markup and
+ * animation and shares only the behaviour, which is why `useDialog` is a hook.
  */
 export default function MobileDrawer({ open, onClose, label = 'Navigation', children }) {
   const panel = useRef(null)
 
-  // Memoised because `useDialog` lists it in its dependencies: a fresh closure
-  // every render would tear down and rebuild the trap on each one, re-focusing
-  // the first item and stealing focus from wherever the user had tabbed to.
+  // Memoised because `useDialog` depends on it -- a fresh closure every
+  // render would rebuild the trap and steal focus from wherever the user
+  // had tabbed to.
   const close = useCallback(() => onClose?.(), [onClose])
 
   useDialog(panel, close, open)
@@ -53,10 +42,8 @@ export default function MobileDrawer({ open, onClose, label = 'Navigation', chil
           />
           <motion.aside
             ref={panel}
-            // `tabIndex={-1}` so the panel itself can hold focus if it ever
-            // renders with nothing focusable inside. Without somewhere to put
-            // it, focus stays on the page behind and there is nothing for the
-            // trap to trap.
+            // `tabIndex={-1}` so the panel can hold focus if it ever renders
+            // with nothing focusable inside.
             tabIndex={-1}
             role="dialog"
             aria-modal="true"

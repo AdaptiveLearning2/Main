@@ -28,9 +28,8 @@ ALTER TABLE "public"."lesson_plans" ENABLE ROW LEVEL SECURITY;
 -- Same shape as math_topics/questions: reference content, public read.
 CREATE POLICY "lesson_plans: public read" ON "public"."lesson_plans" FOR SELECT USING (true);
 
--- Supabase's ALTER DEFAULT PRIVILEGES grants every table privilege to anon
--- and authenticated by name before this migration runs anything -- revoke
--- before granting, per CLAUDE.md's table-grants convention.
+-- Supabase already grants every table privilege to anon and authenticated by
+-- name, so revoke first -- a bare GRANT on top wouldn't narrow anything.
 REVOKE ALL ON TABLE "public"."lesson_plans" FROM "anon";
 REVOKE ALL ON TABLE "public"."lesson_plans" FROM "authenticated";
 

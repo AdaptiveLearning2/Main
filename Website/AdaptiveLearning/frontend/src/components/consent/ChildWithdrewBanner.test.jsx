@@ -40,11 +40,8 @@ describe('ChildWithdrewBanner', () => {
   })
 
   it('offers no way to override the decision from here', async () => {
-    // A student's withdrawal stands. A parent can restore a channel in
-    // Settings if that is the right conversation to have; a button here would
-    // make overriding a child's decision the one-click default response to
-    // being told they made it, which is the opposite of what the asymmetry in
-    // this consent model is for.
+    // A student's withdrawal stands. A button here would make overriding a
+    // child's decision the default response to hearing about it.
     apiFetch.mockResolvedValue(ONE)
     draw()
 
@@ -54,8 +51,8 @@ describe('ChildWithdrewBanner', () => {
   })
 
   it('says what is and is not affected', async () => {
-    // Withdrawal stops future recording and keeps what is already stored. A
-    // parent told only "a sensor is off" cannot tell that from erasure.
+    // Withdrawal stops future recording but keeps what's already stored --
+    // "a sensor is off" alone reads as erasure otherwise.
     apiFetch.mockResolvedValue(ONE)
     draw()
 
@@ -104,10 +101,8 @@ describe('ChildWithdrewBanner', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
-    // Hands back the watermark the server gave it, per child. Acking with
-    // `now()` instead would mark as seen any withdrawal that landed between the
-    // read that drew this banner and the click that dismissed it -- silently,
-    // and for ever.
+    // Sends back the server's watermark per child -- acking with `now()`
+    // instead would silently mark seen any withdrawal that landed in between.
     expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
       { method: 'POST', body: { through: { 'kid-1': '2026-08-12T09:00:00Z' } } })
     await waitFor(() =>
@@ -139,9 +134,8 @@ it('sends a watermark for every child it displayed', async () => {
   draw()
   await userEvent.click(await screen.findByRole('button', { name: /Got it/ }))
 
-  // Per child, not one stamp for the family: the two were withdrawn at
-  // different times, and acking both at the later one would swallow anything
-  // that landed for Basil in between.
+  // Per child, not one stamp for the family -- acking both at the later time
+  // would swallow anything that landed for Basil in between.
   expect(apiFetch).toHaveBeenLastCalledWith('/api/parent/consent-notices/ack',
     { method: 'POST', body: { through: {
       'kid-1': '2026-08-12T09:00:00Z', 'kid-2': '2026-08-10T09:00:00Z' } } })

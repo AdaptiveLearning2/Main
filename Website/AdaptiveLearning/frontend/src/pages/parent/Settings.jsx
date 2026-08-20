@@ -2,14 +2,9 @@
  * Parent settings — the account, the children linked to it, and what is
  * measured for each.
  *
- * The consent panels are the part with the sharp edge. A student may withdraw
- * at any time and that decision stands; only a linked parent may re-enable.
- * Without this page the "off" was effectively permanent, which is not what the
- * consent model says and not what a parent was told.
- *
- * Turning a channel back on raises `needs_student_ack`, so the child is told on
- * their next load. Discovering a resumed sensor by noticing data reappear is a
- * surprise, not consent.
+ * A student can withdraw consent at any time; only a linked parent can
+ * re-enable it. Turning a channel back on raises `needs_student_ack`, so the
+ * child is told on their next load instead of just noticing data reappear.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -37,28 +32,21 @@ export default function ParentSettings() {
   const [children, setChildren] = useState(null)
   const [failed, setFailed]     = useState(false)
 
-  // `null` until the profile lands, so the field never shows a value the parent
-  // did not set — the same reason the teacher page does not seed it from the
-  // email prefix, where an untouched "Save" would have written that guess over
-  // a real display name.
+  // `null` until the profile lands, so the field never shows a value the
+  // parent did not set.
   const [displayName, setDisplayName] = useState(null)
   const [savingName, setSavingName]   = useState(false)
   const [joinedAt, setJoinedAt]       = useState(null)
 
-  // Which child's unlink is awaiting a second click. A link is what
-  // `_verify_can_view_student` reads as entitlement to a child's reports, so
-  // ending one is not a thing to do on a stray click — and a `confirm()` dialog
-  // is the browser's, not this page's, and says nothing about what is kept.
+  // Which child's unlink is awaiting a second click, since unlinking removes
+  // report access and shouldn't happen on a stray click.
   const [confirmingUnlink, setConfirmingUnlink] = useState(null)
   const [unlinking, setUnlinking]               = useState(null)
 
   const loadChildren = useCallback(() => {
-    // include_face=false: this page renders names and consent switches and no
-    // facial data at all. Left at the default, the endpoint reads
-    // `face_signals` for every linked child — on the one page whose whole
-    // subject is what may be measured. Same fix ChildDetail.jsx already
-    // carries, and the same rule: the opt-out means the rows are not read, not
-    // that they are dropped on the way out.
+    // include_face=false: this page shows names and consent switches only,
+    // no facial data. Left at the default the endpoint would read
+    // `face_signals` for every linked child.
     apiFetch('/api/parent/children?include_face=false')
       .then(c => { setChildren(c || []); setFailed(false) })
       .catch(e => { console.error('[parent settings] children not loaded', e); setFailed(true) })
@@ -136,8 +124,8 @@ export default function ParentSettings() {
           <input
             id="parent-display-name"
             value={displayName ?? ''}
-            // Disabled until the profile lands, so a fast typist cannot have
-            // their input overwritten by the response arriving behind them.
+            // Disabled until the profile lands, so a fast typist's input
+            // can't be overwritten by the response arriving late.
             disabled={displayName === null}
             onChange={e => setDisplayName(e.target.value)}
             placeholder={displayName === null ? 'Loading…' : 'Your name'}
@@ -150,10 +138,9 @@ export default function ParentSettings() {
           <div className="mt-4 grid sm:grid-cols-2 gap-3 text-sm">
             <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
               <Mail size={14} className="flex-shrink-0" />
-              {/* Read-only: the address is the account's identity in Supabase
-                  auth, and changing it there is a verification flow this page
-                  does not implement. Shown rather than hidden so a parent can
-                  confirm which account they are signed in to. */}
+              {/* Read-only — changing it needs a verification flow this page
+                  doesn't implement. Shown so a parent can confirm the
+                  account they're signed in to. */}
               <span className="truncate">{user?.email || '—'}</span>
             </div>
             {joined && (
@@ -191,8 +178,7 @@ export default function ParentSettings() {
           )}
 
           <div className="space-y-2">
-            {/* `user_id`, not `id` -- that is what /api/parent/children
-                returns, and the same key ChildDetail routes on. */}
+            {/* `user_id`, not `id` — matches what /api/parent/children returns. */}
             {children?.map(child => (
               <div key={child.user_id}
                    className="flex items-center justify-between gap-3 flex-wrap rounded-xl border border-gray-100 dark:border-gray-800 px-4 py-3">
@@ -225,11 +211,8 @@ export default function ParentSettings() {
             ))}
           </div>
 
-          {/* Linking was reachable only from the sidebar nav, which is not where
-              anyone looks for it: Settings is the page about the account and
-              the children on it, and it listed them without offering the one
-              action that changes the list. Rendered whether or not any are
-              linked, so the empty state has a way forward. */}
+          {/* Shown whether or not any children are linked, so the empty
+              state has a way forward too. */}
           <Link to="/parent/link"
                 className="mt-4 inline-flex items-center gap-1.5 px-3 py-2.5 min-h-[44px] rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-bold text-gray-600 dark:text-gray-300 hover:border-emerald-300 hover:text-emerald-600 transition">
             <Plus size={14} /> Link another child
@@ -259,9 +242,8 @@ export default function ParentSettings() {
               <h3 className="font-black text-gray-900 dark:text-white mb-4">
                 {child.name || child.email || 'Child'}
               </h3>
-              {/* `role="parent"`, so the switches are two-way and no
-                  confirmation step appears: a parent's change is reversible by
-                  the same parent on the same screen. */}
+              {/* `role="parent"`: switches are two-way with no confirmation
+                  step, since a parent can reverse their own change here. */}
               <ConsentChannels studentId={child.user_id} role="parent"
                                studentName={child.name || null} />
               <p className="text-xs text-gray-400 mt-4">

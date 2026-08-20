@@ -4,10 +4,9 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import StudentProgressReport from './StudentProgressReport'
 
-// The viewer-side facial opt-out is gone: stored consent decides what the
-// server reads, and the teacher's remaining switch only hides what is drawn.
-// So what matters on the wire now is the *absence* of a viewer flag, and what
-// matters on screen is that hiding costs nothing and changes no request.
+// Stored consent decides what the server reads; the teacher's switch only
+// hides what is drawn. On the wire that means no viewer flag; on screen it
+// means hiding costs nothing and changes no request.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 
@@ -26,8 +25,8 @@ function urlsFor(fragment) {
   return apiFetch.mock.calls.map(c => String(c[0])).filter(u => u.includes(fragment))
 }
 
-// The default responses, named so a test that overrides one endpoint can defer
-// the rest here rather than restating all four.
+// The default responses, so a test overriding one endpoint can defer the
+// rest here rather than restating all four.
 function defaultFetch(url) {
   const u = String(url)
   if (u.includes('/stats/'))                return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
@@ -51,7 +50,7 @@ function renderReport(props = {}) {
 }
 
 it('requests the weekly report once per render, not twice', async () => {
-  // Guards against two effects both fetching the report on mount.
+  // Guards against two effects fetching the report on mount.
   renderReport()
   await screen.findByText('Recent Sessions')
   expect(urlsFor('/weekly-report')).toHaveLength(1)
@@ -64,8 +63,7 @@ it('requests the weekly report once per render, not twice', async () => {
 
 describe('at-home strategies', () => {
   it('is absent unless the route asks for it', async () => {
-    // Teacher-facing copy would be wrong: these are written for a parent
-    // sitting down with a child at home.
+    // These are written for a parent at home; teacher-facing copy is wrong here.
     renderReport()
     await screen.findByText('Recent Sessions')
     expect(screen.queryByText(/at-home learning strategies/i)).not.toBeInTheDocument()
@@ -73,10 +71,9 @@ describe('at-home strategies', () => {
 
 
   it('carries the "signals did not load" flag from the response to the panel', async () => {
-    // The endpoint answers with a usable generic list when its aggregate
-    // fails, so nothing about the response says the advice is not about this
-    // student's week except basis.signals_retrieved. Dropping it on the way
-    // through left the panel claiming the list was built from the report.
+    // `basis.signals_retrieved` is the only signal that the advice is generic
+    // rather than built from this student's week -- dropping it on the way
+    // through would make the panel misclaim it.
     apiFetch.mockImplementation((u) => {
       if (String(u).includes('/learning-strategies')) {
         return Promise.resolve({
@@ -100,11 +97,9 @@ describe('at-home strategies', () => {
 
 
   it('POSTs a JSON body, not an empty request', async () => {
-    // The endpoint's only parameter is a Pydantic model with no default of
-    // its own, so FastAPI requires a body even though every field inside the
-    // model defaults -- a bodyless POST 422s. apiFetch is mocked here, so
-    // this cannot exercise real serialization -- it only asserts the call
-    // itself still carries a body for lib/api.js's `if (body)` to serialize.
+    // FastAPI requires a body even though every field defaults -- a bodyless
+    // POST 422s. apiFetch is mocked, so this only asserts the call carries a
+    // body for lib/api.js's `if (body)` to serialize.
     renderReport({ showStrategies: true })
     await screen.findByText('Recent Sessions')
     await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
@@ -132,8 +127,8 @@ describe('at-home strategies', () => {
 
 
 it('asks for the report without a viewer-side flag', async () => {
-  // Consent decides what the server reads, server-side, and it is not the
-  // viewer's to override with a client-side `include_face` flag.
+  // Consent decides what the server reads -- not a client-side `include_face`
+  // flag.
   renderReport()
 
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
@@ -141,20 +136,19 @@ it('asks for the report without a viewer-side flag', async () => {
 })
 
 it('renders the sensor panels by default', async () => {
-  // The teacher's filter is passed in; a caller that knows nothing about it --
-  // the parent surface -- must get the whole report.
+  // The teacher's filter is passed in; the parent surface, which knows
+  // nothing about it, must get the whole report.
   renderReport()
 
   expect(await screen.findByText(/Weekly EEG/)).toBeInTheDocument()
 })
 
 it('hides the sensor panels when the caller asks, without changing the request', async () => {
-  // Client-side only, which is the whole point of keeping it out of the API.
-  // See lib/viewPrefs.js for why a filter that fetches what it hides is
-  // acceptable here and would not be for consent.
+  // Client-side only. See lib/viewPrefs.js for why a filter that fetches
+  // what it hides is acceptable here but not for consent.
   renderReport({ showSignals: false })
 
-  // Still fetched -- the request is unchanged, only the rendering is not.
+  // Still fetched -- the request is unchanged; only rendering is.
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
   expect(screen.queryByText(/Weekly EEG/)).not.toBeInTheDocument()
 })

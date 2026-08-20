@@ -1,16 +1,9 @@
 /** Read and write one browser-local preference, without letting storage break a page.
  *
- * `localStorage` **throws** rather than returning null when it is unavailable —
- * Safari private browsing, a browser with site data blocked, an iframe with
- * third-party storage partitioned off. Every access needs a guard, and by the
- * time this was extracted the same try/catch had been written three times:
- * `viewPrefs.js`, `useCollapsedSidebar.js`, and — the reason it matters —
- * `ThemeContext.jsx`, which had **no guard at all**, so an unavailable
- * `localStorage` threw during the provider's own `useState` initialiser and took
- * down every route in the application.
- *
- * A preference that cannot be saved is a small problem. A preference that
- * cannot be *read* without throwing is the whole app.
+ * `localStorage` can throw instead of returning null — Safari private
+ * browsing, blocked site data, a partitioned iframe. Every access needs a
+ * try/catch, or an unavailable `localStorage` can crash a component during
+ * render and take down the whole app.
  */
 
 /** The stored string, or `fallback` when there is nothing to read or reading throws. */

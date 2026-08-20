@@ -11,17 +11,13 @@ import StatCard from '../../components/ui/StatCard'
 
 
 
-// How often the dashboard refreshes itself. A teacher leaves this open on a
-// second screen during a lesson, so figures that never move are figures they
-// are reading wrong -- but nothing here is live enough to want a fast poll.
+// A teacher may leave this open on a second screen, but nothing here changes fast enough to need a quick poll.
 const REFRESH_MS = 60_000
 
 export default function TeacherDashboard() {
   const { user } = useAuth()
   const [questions, setQuestions] = useState([])
-  // Three states, not two. `null` is "not read", which must not render as an
-  // empty question bank -- the failure this page had was reporting 0 questions
-  // and no classes for a backend that was simply down.
+  // null means "not read yet", so a failed load doesn't render as an empty question bank.
   const [questionCount, setQuestionCount] = useState(null)
   const [loading, setLoading]     = useState(true)
   const [questionsFailed, setQuestionsFailed] = useState(false)
@@ -31,8 +27,7 @@ export default function TeacherDashboard() {
   const [classAverages, setClassAverages] = useState({}) // class_id -> { avgAccuracy, avgStreak }
   const [classesLoading, setClassesLoading] = useState(true)
   const [classesFailed, setClassesFailed] = useState(false)
-  // When the figures on screen were last actually confirmed. Null until the
-  // first success, so a page that has never loaded cannot claim a time.
+  // Null until the first successful load, so a page that never loaded can't claim a time.
   const [lastUpdated, setLastUpdated] = useState(null)
   const headcount = (c) => c.class_memberships?.[0]?.count ?? 0
   const totalStudents = classes.reduce((sum, c) => sum + headcount(c), 0)
@@ -40,8 +35,6 @@ export default function TeacherDashboard() {
   useEffect(() => {
     let killed = false
 
-    // Five rows and a count, not a thousand rows. The list is ordered by the
-    // endpoint now, so these really are the five most recent.
     const loadQuestions = async () => {
       try {
         const [recent, count] = await Promise.all([
@@ -56,8 +49,7 @@ export default function TeacherDashboard() {
       } catch (e) {
         if (killed) return
         console.error('Failed to load questions:', e)
-        // Kept on screen if we had them: a failed *refresh* should not blank a
-        // dashboard that was correct a minute ago. Only the banner changes.
+        // Leave old data on screen: a failed refresh shouldn't blank an already-correct dashboard.
         setQuestionsFailed(true)
         return false
       } finally {
@@ -70,15 +62,8 @@ export default function TeacherDashboard() {
         const rows = await apiFetch('/api/classes')
         if (killed) return
         setClasses(rows || [])
-        // One request for every class's averages, not one request per class.
-        // The page used to fetch each full roster -- names, emails and lifetime
-        // totals for every student -- to reduce them to two integers per card,
-        // every 60s. The backend has the rows already and does the same
-        // arithmetic; see /api/classes/summary for why accuracy averages over
-        // the students who attempted something and the streak over everyone.
-        //
-        // Its own catch: the cards degrade to "unavailable" per class rather
-        // than the class list failing, which is what the roster loop did.
+        // One request for every class's averages instead of one roster fetch per class.
+        // Its own catch means a failure here only blanks the averages, not the class list.
         const averages = await apiFetch('/api/classes/summary').catch(() => ({}))
         if (killed) return
         setClassAverages(averages)
@@ -96,8 +81,7 @@ export default function TeacherDashboard() {
 
     const refresh = async () => {
       const [q, c] = await Promise.all([loadQuestions(), loadClasses()])
-      // Stamped only when both halves succeeded, or the time would vouch for
-      // figures that are partly stale -- which is worse than no time at all.
+      // Only stamp when both loads succeeded, or the timestamp would vouch for partly stale figures.
       if (!killed && q && c) setLastUpdated(new Date())
     }
 
@@ -133,7 +117,6 @@ export default function TeacherDashboard() {
   }
   return (
     <div className="p-6 lg:p-8 space-y-8 pb-12">
-      {/* header */}
       <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}
         className="flex items-center justify-between">
         <div>
@@ -141,9 +124,6 @@ export default function TeacherDashboard() {
             Hey, <span className="text-violet-600">{name}</span> 👋
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Here's what's going on with your class.</p>
-          {/* When the numbers were last confirmed. A dashboard left open on a
-              second screen otherwise gives no way to tell figures that are
-              current from figures that stopped updating an hour ago. */}
           {lastUpdated && (
             <p className="text-[11px] text-gray-400 mt-1">
               Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
@@ -159,9 +139,6 @@ export default function TeacherDashboard() {
         </Link>
       </motion.div>
 
-      {/* A failed read is not a quiet week. Whatever loaded stays on screen --
-          blanking a correct dashboard because a refresh failed is the louder
-          mistake -- and this says which half is stale. */}
       {failed && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-5 py-3">
           <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
@@ -172,16 +149,12 @@ export default function TeacherDashboard() {
         </div>
       )}
 
-      {/* stat cards */}
       <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-        {/* The teacher portal's accent, against the shared component's indigo
-            default. The only thing that ever differed between this page's copy
-            of StatCard and the student dashboard's. */}
+        {/* Violet accent, overriding StatCard's default indigo, to match the teacher portal. */}
         {CARDS.map(c => (
           <StatCard key={c.title} hoverTint="from-violet-400/10 to-purple-500/10" {...c} />
         ))}
       </div>
-      {/* Your Classes */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-black text-gray-900 dark:text-white">Your Classes</h2>
@@ -228,7 +201,6 @@ export default function TeacherDashboard() {
           </div>
         )}
       </motion.div>
-        {/* class averages */}
         {classes.length > 0 && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
             <h2 className="text-lg font-black text-gray-900 dark:text-white mb-3">Class Averages</h2>
@@ -263,7 +235,6 @@ export default function TeacherDashboard() {
 
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="xl:col-span-2 space-y-4">
-          {/* hero banner */}
           <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.45 }}
             className="relative bg-gradient-to-br from-violet-600 via-violet-700 to-purple-800 rounded-2xl p-7 text-white overflow-hidden shadow-xl shadow-violet-200 dark:shadow-violet-950">
             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -translate-y-16 translate-x-16" />
@@ -290,7 +261,6 @@ export default function TeacherDashboard() {
             </div>
           </motion.div>
 
-          {/* quick actions */}
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
             className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
@@ -314,7 +284,6 @@ export default function TeacherDashboard() {
           </motion.div>
         </div>
         
-        {/* recent questions */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm h-fit">
           <div className="flex items-center justify-between mb-4">

@@ -1,40 +1,33 @@
--- The end-of-year delete.
---
--- Per-sample rows expire; the year does not. `signal_daily_rollup` and the
--- weekly report's fallback path (both already shipped) are what make this
--- survivable: after this runs a parent still sees every day of the year, at
+-- The end-of-year delete. Per-sample rows expire; the year does not.
+-- `signal_daily_rollup` and the weekly report's fallback path make this
+-- survivable: after this runs, a parent still sees every day of the year, at
 -- reduced fidelity, marked as such.
 --
--- **Deleted:** `cognitive_signals`, `face_signals`, `heart_signals`.
--- **Kept:** `sessions`, `session_answers`, `user_stats`,
--- `user_math_performance` -- academic history is not signal data and carries
--- different expectations. A parent asking "how did the term go" is asking about
--- both, and only one of them is a recording of their child's body.
+-- Deleted: `cognitive_signals`, `face_signals`, `heart_signals`.
+-- Kept: `sessions`, `session_answers`, `user_stats`, `user_math_performance`
+-- -- academic history is not signal data and carries different expectations.
 --
--- Not handled here: Supabase Storage. Object deletion does not cascade from a
--- row delete, and `sessions.chart_paths` -- the column that would say which
--- objects to remove -- does not exist yet. When it lands, this job grows a
--- step; until then there are no archived charts to orphan.
+-- Not handled here: Supabase Storage. Object deletion doesn't cascade from a
+-- row delete, and there's no column yet recording which objects to remove --
+-- this job grows a step once that lands.
 
--- ── which days are expired ──────────────────────────────────────────────────
+-- Two rules decide which days are expired:
 --
--- Two rules, and the second is what makes "runs on ends_on" true:
---
---   1. Always: days **before `starts_on`**. Once a new school year is
---      configured, the previous one's detail is outside the window and goes.
---   2. Once today (in the school's timezone) is **on or after `ends_on`**: days
+--   1. Always: days before `starts_on` -- once a new school year is
+--      configured, the previous one's detail is outside the window.
+--   2. Once today (in the school's timezone) is on or after `ends_on`: days
 --      up to and including `ends_on` -- this year, now finished.
 --
 -- Expressed as one cutoff so the delete is a single comparison.
 --
--- **Idempotent and catch-up by construction.** The cutoff is derived from the
--- window and today, never from "the day this run fired", so a cron that misses
--- its day completes on the next run and a run that repeats deletes nothing new.
--- A same-day delete with no margin is only acceptable because a missed run is
--- self-healing.
+-- Idempotent and catch-up by construction: the cutoff is derived from the
+-- window and today, not from "the day this run fired", so a cron that misses
+-- its day completes on the next run and a repeat run deletes nothing new. A
+-- same-day delete with no margin is only safe because a missed run heals
+-- itself.
 --
 -- Fails closed like everything else here: no window row means no cutoff and
--- nothing is deleted. An unconfigured school is not one whose data has expired.
+-- nothing is deleted.
 CREATE OR REPLACE FUNCTION "public"."expired_signal_cutoff"()
 RETURNS date
 LANGUAGE "sql"
@@ -56,24 +49,20 @@ REVOKE ALL ON FUNCTION "public"."expired_signal_cutoff"() FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."expired_signal_cutoff"() TO "service_role";
 
 
--- ── the delete ──────────────────────────────────────────────────────────────
+-- Refuses to delete a day with no rollup row, per student per channel. This
+-- is the most important line in the file: without it, a bug in the rollup
+-- writer becomes silent permanent data loss, since the deleted rows are the
+-- only copy. With it, a broken writer just leaves data that doesn't expire,
+-- which is visible and fixable.
 --
--- **Refuses to delete a day that has no rollup row**, per student per channel.
--- This is the single most important line in the file. Without it a bug in the
--- rollup writer becomes silent permanent data loss on a fixed date -- the one
--- failure mode here with no recovery, since the rows it would take are
--- the only copy. With it, a broken writer degrades to data that simply does not
--- expire, which is visible, fixable, and reversible.
---
--- Batched. An unbounded DELETE over a year of per-sample rows takes an
--- ACCESS EXCLUSIVE-scale lock footprint and holds it; `p_batch_size` rows at a
--- time keeps each statement short. The loop stops when a pass deletes nothing,
--- or when `p_max_batches` is reached -- a bound so one invocation cannot run
--- unboundedly long against a first-ever expiry of a full year.
+-- Batched, since an unbounded DELETE over a year of rows would hold a long
+-- lock. `p_batch_size` rows per pass, stopping when a pass deletes nothing or
+-- `p_max_batches` is reached, so a first-ever expiry of a full year can't run
+-- unboundedly long in one invocation.
 --
 -- SECURITY INVOKER: pg_cron runs a job as the role that scheduled it, so this
--- has a real invoking user with the privileges it needs. A definer function
--- whose entire job is destroying data is escalation surface for nothing.
+-- already has the privileges it needs. A definer function whose entire job
+-- is destroying data would be escalation surface for nothing.
 CREATE OR REPLACE FUNCTION "public"."expire_signal_rows"(
     "p_batch_size" integer DEFAULT 5000,
     "p_max_batches" integer DEFAULT 200
@@ -97,8 +86,7 @@ BEGIN
     cutoff := expired_signal_cutoff();
     SELECT w.timezone INTO tz FROM retention_window w LIMIT 1;
     IF cutoff IS NULL OR tz IS NULL THEN
-        -- No window configured. Nothing has expired, because nothing has a term
-        -- to have fallen outside of.
+        -- No window configured, so nothing has expired.
         RETURN jsonb_build_object('cutoff', NULL, 'deleted', removed,
                                   'skipped_days_without_rollup', skipped,
                                   'hit_batch_cap', capped);
@@ -136,19 +124,16 @@ BEGIN
         END LOOP;
         removed := removed || jsonb_build_object(table_name, total);
         -- Whether the batch cap stopped this table before it ran out of work.
-        -- Reported because it is what makes the two counts below readable: rows
-        -- that were eligible and simply not reached appear in neither `deleted`
-        -- nor `skipped_days_without_rollup`, so `skipped = 0` alone does not
-        -- mean everything eligible was handled. `capped = false` is the half
-        -- that says so. Harmless either way -- the job is idempotent and the
-        -- next run finishes the work -- but a reader should not have to infer
-        -- that from the absence of a number.
+        -- Rows that were eligible but not reached appear in neither `deleted`
+        -- nor `skipped_days_without_rollup`, so `skipped = 0` alone doesn't
+        -- mean everything eligible was handled -- `capped` says so instead of
+        -- leaving it to be inferred. Harmless either way, since the job is
+        -- idempotent and the next run finishes the work.
         capped := capped || jsonb_build_object(table_name, n <> 0);
 
-        -- Student-days left behind on this table because nothing had
-        -- summarised them. Counted per channel and reported, not logged: this
-        -- is the number that says the rollup writer is broken, and it needs to
-        -- surface somewhere a human looks. Zero is the healthy answer.
+        -- Student-days left behind because nothing had summarised them. This
+        -- is the number that says the rollup writer is broken, so it's
+        -- reported rather than just logged. Zero is the healthy answer.
         EXECUTE format($f$
             SELECT count(*) FROM (
                 SELECT DISTINCT s.user_id, (s.ts AT TIME ZONE %L)::date AS day
@@ -174,23 +159,18 @@ REVOKE ALL ON FUNCTION "public"."expire_signal_rows"(integer, integer) FROM "ano
 REVOKE ALL ON FUNCTION "public"."expire_signal_rows"(integer, integer) FROM "authenticated";
 GRANT EXECUTE ON FUNCTION "public"."expire_signal_rows"(integer, integer) TO "service_role";
 
--- ── scheduling ──────────────────────────────────────────────────────────────
+-- Daily, not "on ends_on". The cutoff is derived from the window and today,
+-- so a run on any other day finds nothing to delete and costs little, while
+-- a run on the right day -- or any day after it, if the scheduler was down --
+-- does the whole job. Scheduling a single date would make a missed run a
+-- year-long silence.
 --
--- Daily, not "on ends_on". The cutoff is derived from the window and today, so
--- a run on any other day of the year finds nothing to delete and costs three
--- index scans -- while a run on the right day, or on any day after it if the
--- scheduler was down, does the whole job. Scheduling it for a single date would
--- make a missed run a year-long silence.
+-- 03:30 UTC: outside the school day for most of the world, and deliberately
+-- not midnight, when every other cron on a host tends to fire.
 --
--- 03:30 UTC: outside the school day for most of the world, and deliberately not
--- midnight, which is when every other cron on a host tends to fire.
---
--- `cron.schedule` upserts on the job name in pg_cron 1.4+, so re-running this
--- migration re-points the existing job rather than adding a second one that
--- would delete the same rows twice over.
---
--- The job runs as the role that scheduled it, which is the migration's role,
--- and that role holds the EXECUTE granted above.
+-- `cron.schedule` upserts on the job name, so re-running this migration
+-- re-points the existing job rather than creating a second one that would
+-- delete the same rows twice.
 CREATE EXTENSION IF NOT EXISTS "pg_cron";
 
 SELECT cron.schedule('expire-signal-rows', '30 3 * * *',

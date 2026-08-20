@@ -9,10 +9,8 @@ vi.mock('../../lib/supabase', async () => await import('../../test/mocks/supabas
 const toastError = vi.fn()
 vi.mock('sonner', () => ({ toast: { error: (...a) => toastError(...a), success: vi.fn() } }))
 
-// `lib/session` is deliberately **not** mocked. `recordAnswer` lives there now,
-// and it owns the failure toast these tests assert on -- stubbing the module
-// would test the stub. Its only dependency is `apiFetch`, which is mocked
-// above, so the close and the answer POST both go to the router below.
+// `lib/session` is deliberately not mocked, since `recordAnswer` owns the
+// failure toast these tests assert on -- stubbing it would just test the stub.
 
 import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import { buildAuthSession, resetSupabaseMock, setSession } from '../../test/mocks/supabase'
@@ -32,25 +30,21 @@ const QUESTION = {
 const draw = () => render(<MemoryRouter><Practice /></MemoryRouter>)
 
 beforeEach(() => {
-  // One test drives the countdown with fake timers. Restoring here rather than
-  // only in its own teardown: if it fails mid-test the restore can be skipped,
-  // and every test after it then waits on a clock that never advances -- which
-  // surfaces as five unrelated timeouts rather than as the one real failure.
+  // Reset real timers here (not just in the fake-timer test's own teardown),
+  // so a mid-test failure there can't leave every later test waiting on a
+  // clock that never advances.
   vi.useRealTimers()
   resetApi()
   resetSupabaseMock()
   toastError.mockReset()
   setSession(buildAuthSession({ accessToken: 't' }))
-  // The whole happy path once. Each test below overrides the single endpoint
-  // it is about, rather than restating the rest -- which is what the router
-  // exists for.
+  // The happy path. Each test below overrides just the endpoint it's testing.
   mockApi({
     'POST /api/sessions/start': () => ({ id: 'sess-1' }),
     [QUESTIONS_PATH]: () => [QUESTION],
     'POST /api/sessions/sess-1/answer': () => ({ ok: true }),
-    // Reached by the real `endSession` at the end of a run. Registered so it
-    // succeeds quietly rather than toasting a close failure into the middle of
-    // an assertion about answers.
+    // Reached by the real `endSession` at the end of a run, so it succeeds
+    // quietly instead of toasting an unrelated close failure.
     'POST /api/sessions/sess-1/end': () => ({ ok: true }),
   })
 })
@@ -62,10 +56,8 @@ describe('starting a session', () => {
   })
 
   it('says the session could not be started, rather than that there are no questions', async () => {
-    // The two are one state apart and mean opposite things. A failed start
-    // leaves `questions` empty, so the length check fired first and told a
-    // student the question bank was empty whenever the backend was simply
-    // unreachable -- an absence asserted from data that never came back.
+    // A failed start also leaves `questions` empty, so this must not be
+    // reported as "no questions available".
     overrideApi('/api/sessions/start', () => { throw apiError(500, 'down') }, 'POST')
 
     draw()
@@ -91,25 +83,17 @@ describe('starting a session', () => {
   })
 
   it('does not sit on the spinner for ever when there is no session', async () => {
-    // The hang. `loading` starts true and the old code only cleared it inside
-    // `startSession`, which a signed-out student never reached -- so the page
-    // showed its spinner indefinitely with no error, no timeout and nothing to
-    // click. Escapable only by reloading, with nothing on screen saying so.
     setSession(null)
 
     draw()
 
     expect(await screen.findByText(/couldn't load this practice session/i)).toBeInTheDocument()
-    // And it never asked for a session, which is the half that says the page
-    // stopped rather than failed later.
+    // Confirms the page stopped early rather than attempting and failing later.
     expect(apiFetch).not.toHaveBeenCalledWith('/api/sessions/start', expect.anything())
   })
 
   it('survives a question the backend sent without any options', async () => {
-    // The crash. The render maps `q.options` and indexes it in three more
-    // places, none of them guarded, so one row like this threw during render --
-    // and with no boundary above it that took the whole application down to a
-    // blank document.
+    // A question with no options would crash the render if not filtered out.
     overrideApi(QUESTIONS_PATH, () => ([
       { id: 'bad', question_text: 'no options here', correct_answer: 'x' },
       QUESTION,
@@ -117,17 +101,14 @@ describe('starting a session', () => {
 
     draw()
 
-    // The usable one is still offered, and the broken one is simply not there.
+    // The usable question still renders; the broken one is dropped.
     expect(await screen.findByText('What is 2 + 2?')).toBeInTheDocument()
     expect(screen.queryByText('no options here')).not.toBeInTheDocument()
   })
 
   it('drops a question that cannot be got right', async () => {
-    // `correct_answer` is nullable (init.sql:198) and `normalize` stringifies,
-    // so `normalize(null)` is the literal "null" and no real option matches it.
-    // Such a row passes an options-only filter, renders, and is unwinnable
-    // whatever the student picks -- with nothing on screen, in the console or
-    // in the boundary to say why.
+    // A question with no correct_answer is unwinnable no matter what's picked,
+    // since `normalize(null)` matches no real option.
     overrideApi(QUESTIONS_PATH, () => ([
       { id: 'bad', question_text: 'unwinnable', options: ['a', 'b'] },
       QUESTION,
@@ -140,15 +121,10 @@ describe('starting a session', () => {
   })
 
   it('does not leave the retried question already revealed', async () => {
-    // The countdown runs whenever the page is neither loading nor finished --
-    // including while the failed-start screen is up, where there is no question
-    // at all. Sixty seconds there sets `revealed`, nothing resets it, and the
-    // retry then renders question one with every option `disabled={revealed}`:
-    // on screen, correct-looking, and unanswerable.
-    // `shouldAdvanceTime` so the clock still moves on its own. Without it the
-    // fetches this page awaits during the initial render never settle -- the
-    // promise chain is waiting on a timer that only moves when the test says
-    // so, and the test is waiting on the promise chain.
+    // Confirms the countdown doesn't run (and pre-reveal the next question)
+    // while the failed-start screen has no question to time.
+    // `shouldAdvanceTime` lets the clock move on its own, since the initial
+    // fetches this page awaits depend on real timer progress.
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     try {
@@ -177,9 +153,7 @@ describe('starting a session', () => {
   })
 
   it('falls back to the empty state when nothing is answerable', async () => {
-    // Dropping unanswerable rows must not turn "the bank has nothing usable"
-    // into a blank screen -- the existing empty state is the right thing to
-    // say, and this is the path that reaches it.
+    // When every question is filtered out, show the empty state, not a blank screen.
     overrideApi(QUESTIONS_PATH, () => ([{ id: 'bad', question_text: 'no options here' }]))
 
     draw()
@@ -190,9 +164,7 @@ describe('starting a session', () => {
 
 describe('answering', () => {
   it('tells the student when their answer could not be saved', async () => {
-    // It had no catch at all, and the timeout path does not await it, so a
-    // failed POST became an unhandled rejection: the screen moved on and the
-    // answer was recorded nowhere, with nothing said.
+    // A failed save must surface as a toast, not silently go nowhere.
     overrideApi('/api/sessions/sess-1/answer', () => { throw apiError(500, 'nope') }, 'POST')
 
     draw()
@@ -206,8 +178,7 @@ describe('answering', () => {
   })
 
   it('says nothing when the answer saves', async () => {
-    // The other half: a toast on every answer would train a student to ignore
-    // the one that matters.
+    // A toast on every successful answer would train students to ignore the one that matters.
     draw()
     await screen.findByText('What is 2 + 2?')
 

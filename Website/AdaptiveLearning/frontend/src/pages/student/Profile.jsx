@@ -8,15 +8,10 @@ import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
 
 // The three learning preferences, read off a profile the backend returned.
+// One shared definition, used both on load and after a save.
 //
-// One definition, because there are two places that need it -- the initial load
-// and the reconcile after a save -- and they were written out separately with
-// the defaults repeated in each. Two copies of a default is how one of them
-// ends up disagreeing with the column default it is standing in for.
-//
-// `??`, not `||`: 0 is the adaptive bias and false is reminders off, and both
-// are choices a student made. `||` would quietly restore the default every time
-// this ran, so turning reminders off would never stick.
+// Use `??`, not `||`: 0 (adaptive bias) and false (reminders off) are valid
+// choices, and `||` would overwrite them with the defaults every time.
 const prefsFrom = (p) => ({
   difficulty_bias:          p?.difficulty_bias ?? 0,
   session_duration_minutes: p?.session_duration_minutes ?? 15,
@@ -37,17 +32,9 @@ export default function Profile() {
   const [editGrade, setEditGrade] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Preferences live on the profile, not in localStorage.
-  //
-  // `al_prefs` was written here and read by nothing -- not the adaptive engine,
-  // not the session, not any reminder -- so all three controls were decoration.
-  // localStorage could not have fixed that on its own either: the backend picks
-  // the difficulty and it cannot read a key in one browser's storage, and a
-  // preference that does not survive the student opening the app on a school
-  // computer is not a preference.
-  //
-  // `null` until the profile lands, which is what stops the controls rendering
-  // a default as though the student had chosen it.
+  // Preferences live on the profile, not in localStorage, so they follow the
+  // student to any device. Stays `null` until the profile loads, so the
+  // controls don't render defaults as if the student had chosen them.
   const [prefs, setPrefs] = useState(null)
   const [prefsBusy, setPrefsBusy] = useState(false)
   const [sessionsFailed, setSessionsFailed] = useState(false)
@@ -57,9 +44,8 @@ export default function Profile() {
       apiFetch('/api/stats/me')
         .then(s => (s?.retrieved === false ? null : s))
         .catch(() => null),
-      // `null`, not `[]`. An empty array is a student who has never practised;
-      // this is a request that did not come back, and the two drove the same
-      // "no sessions" rendering below.
+      // `null` (fetch failed) is kept separate from `[]` (no sessions yet),
+      // so a failed request doesn't render the same as "no sessions".
       apiFetch('/api/sessions').catch(() => null),
       apiFetch('/api/profile/me').catch(() => null),
     ]).then(([s, sess, p]) => {
@@ -73,13 +59,9 @@ export default function Profile() {
     })
   }, [])
 
-  // Optimistic, then reconciled against what the server stored.
-  //
-  // Optimistic because these are three-tap controls and a round trip per tap
-  // makes them feel broken; reconciled because the endpoint clamps, so what
-  // came back is the authority. Reverted on failure rather than left showing a
-  // setting that was not saved -- a preference silently not applying is the
-  // exact failure this whole change is fixing.
+  // Update the UI immediately so taps feel instant, then reconcile with what
+  // the server actually stored (it clamps values). Revert on failure so the
+  // UI never shows a setting that didn't actually save.
   const savePrefs = async (updated) => {
     const previous = prefs
     setPrefs(updated)
@@ -189,9 +171,8 @@ export default function Profile() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    // Em dash where the read failed, zero where it succeeded
-                    // and found nothing. A student's own profile is the last
-                    // place to report a network error as "you did nothing".
+                    // Show an em dash if the read failed, but 0 if it succeeded
+                    // with no data -- don't report a network error as "you did nothing".
                     { label: 'Total Sessions',     value: sessionsFailed ? '—' : sessions.length,        icon: '📋' },
                     { label: 'Questions Answered', value: stats ? stats.total_questions ?? 0 : '—',      icon: '📝' },
                     { label: 'Correct Answers',    value: stats ? stats.total_correct ?? 0 : '—',        icon: '✅' },
@@ -254,9 +235,8 @@ export default function Profile() {
             {/* PREFERENCES */}
             {tab === 'Preferences' && !prefs && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
-                {/* Not the controls at their defaults. Rendering those before the
-                    profile lands shows the student settings they did not choose,
-                    and a tap during that window saves whatever was on screen. */}
+                {/* Show a loading message instead of default controls, so a tap
+                    here can't save a setting the student never chose. */}
                 <p className="text-sm text-gray-400">Loading your preferences…</p>
               </div>
             )}
@@ -266,12 +246,10 @@ export default function Profile() {
 
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2">Difficulty</label>
-                  {/* Three options, not four, because three is what the system
-                      has. This sets the starting value of the Easier/Auto/Harder
-                      control on the practice page, which is a *shift* applied on
-                      top of the difficulty the model picked from the student's
-                      own accuracy history. There is no "always medium" to offer:
-                      medium and adaptive would both mean no shift. */}
+                  {/* Sets the starting Easier/Auto/Harder value on the practice page.
+                      It's a shift on top of the model's own difficulty pick, so
+                      there's no "medium" option -- medium and adaptive both mean
+                      no shift. */}
                   <div className="grid grid-cols-3 gap-2">
                     {[[-1, 'Easier'], [0, 'Adaptive'], [1, 'Harder']].map(([v, label]) => (
                       <button key={v} disabled={prefsBusy}
@@ -305,13 +283,9 @@ export default function Profile() {
 
                 <div className="flex items-center justify-between">
                   <div>
-                    {/* Named for what it does. "Notifications — daily reminders
-                        to practice" described a system that does not exist: a
-                        reminder that reaches a closed browser needs a service
-                        worker, VAPID keys and a scheduled fan-out, and none of
-                        that is here. This is a banner on the dashboard, so it
-                        says so -- the same reason FacialRecognitionToggle was
-                        retired rather than given a disclaimer. */}
+                    {/* Named for what it actually is: a dashboard banner, not a
+                        push notification -- there's no service worker or
+                        scheduled fan-out behind it. */}
                     <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Practice reminder</p>
                     <p className="text-xs text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
                   </div>
@@ -325,15 +299,8 @@ export default function Profile() {
             {tab === 'Devices' && (
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm space-y-4">
                 <h3 className="font-black text-gray-900 dark:text-white">Sensors</h3>
-                {/* This tab used to list Muse Headband and Webcam with "Connect"
-                    buttons that did nothing when clicked -- the only
-                    sensor-related control a student could find, and decorative.
-                    Real consent state is what they should have been showing.
-
-                    The switches live here rather than on the practice screen on
-                    purpose: a student sits down and answers questions, and
-                    sensor settings are somewhere else, the way they are in any
-                    normal app. */}
+                {/* Sensor consent switches live here, not on the practice screen,
+                    so a student can just sit down and answer questions. */}
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   Choose what gets measured while you practise. You can turn anything off at any time.
                 </p>

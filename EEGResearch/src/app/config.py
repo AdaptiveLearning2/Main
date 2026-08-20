@@ -14,12 +14,9 @@ class Settings(BaseSettings):
     port: int = Field(default=8001, alias="PORT")
     api_token: str = Field(alias="API_TOKEN")
     admin_token: str = Field(alias="ADMIN_TOKEN")
-    # Under push ingestion the student's browser calls this sidecar directly --
-    # the hosted backend has no route to their laptop -- so the *frontend*
-    # origin has to be here, not just the backend's. The Vite dev origin is in
-    # the default; a hosted deployment must add its own origin to
-    # ALLOWED_ORIGINS or every local call fails CORS while the sidecar itself
-    # looks perfectly healthy.
+    # Under push ingestion the student's browser calls this sidecar directly, so the
+    # frontend origin must be listed here, not just the backend's. A hosted deployment
+    # that forgets to add its origin fails CORS while the sidecar looks healthy.
     allowed_origins: str = Field(
         default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000",
         alias="ALLOWED_ORIGINS",
@@ -30,28 +27,24 @@ class Settings(BaseSettings):
     muse_bridge_port: int = Field(default=8765, alias="MUSE_BRIDGE_PORT")
     muse_bridge_timeout_seconds: int = Field(default=5, alias="MUSE_BRIDGE_TIMEOUT_SECONDS")
     # Multi-headband registry: "device_id:kind[@[host:]port],...", e.g.
-    # "station1:muse@8765,station2:muse@8766" or "station1:sim,station2:sim". Empty/unset
-    # means single-device mode -- see parse_eeg_devices below.
+    # "station1:muse@8765,station2:muse@8766" or "station1:sim,station2:sim".
+    # Empty/unset means single-device mode -- see parse_eeg_devices below.
     eeg_devices: str = Field(default="", alias="EEG_DEVICES")
 
-    # Camera. Off by default and gated separately from EEG_SOURCE: a deployment
-    # with a headband and no webcam is the common case, and the sidecar must
-    # boot with the `face` extra uninstalled.
+    # Camera. Off by default and gated separately from EEG_SOURCE, since a headband-only
+    # deployment must boot even with the `face` extra uninstalled.
     face_enabled: bool = Field(default=False, alias="FACE_ENABLED")
     face_camera_index: int = Field(default=0, ge=0, alias="FACE_CAMERA_INDEX")
-    # Floors, not bare ints. A camera that reports 0 fps would make the POS
-    # window zero-length and the sample interval infinite; 1 fps is already
-    # useless but at least arithmetically defined.
+    # A camera reporting 0 fps would make the POS window zero-length and the sample
+    # interval infinite, so this is floored above 1.
     face_fps: float = Field(default=30.0, gt=1.0, le=240.0, alias="FACE_FPS")
-    # The two camera channels, switchable independently. Consent is enforced by
-    # the website backend; these are the runtime switches it drives, and the
-    # reason emotion defaults on while heart defaults off is that heart is the
-    # failover path -- it should not run while a headband is healthy.
+    # Two camera channels, switchable independently by the website backend (which enforces
+    # consent). Emotion defaults on; heart defaults off since it's only a failover for when
+    # the headband isn't providing a heart rate.
     face_emotion_enabled: bool = Field(default=True, alias="FACE_EMOTION_ENABLED")
     face_heart_enabled: bool = Field(default=False, alias="FACE_HEART_ENABLED")
-    # Off by default. Gaze needs a second detector on every sampled frame and a
-    # model file that is not in the MediaPipe wheel, so a deployment that has
-    # not provisioned one must not have the camera path fail on it.
+    # Off by default: gaze needs a second per-frame detector and a model file not included
+    # in the MediaPipe wheel, so an unprovisioned deployment must not fail on it.
     face_gaze_enabled: bool = Field(default=False, alias="FACE_GAZE_ENABLED")
     face_landmark_model_path: str = Field(
         default="models/face_landmarker.task", alias="FACE_LANDMARK_MODEL_PATH"
@@ -60,12 +53,11 @@ class Settings(BaseSettings):
         default="models/emotion-ferplus-8.onnx", alias="FACE_EMOTION_MODEL_PATH"
     )
 
-    # Push ingestion. Off by default, so a co-located dev stack keeps working
-    # exactly as before: there, `eeg_poller` inside the website backend polls
-    # this sidecar and nothing should be posting the same samples a second time.
-    # On, this sidecar POSTs to BACKEND_URL/api/signals/* with the student's own
-    # bearer token, which arrives from the browser at session start and is never
-    # stored -- see services/push_client.py.
+    # Push ingestion. Off by default so a co-located dev stack keeps polling via
+    # `eeg_poller` in the website backend, with nothing double-posting the same samples.
+    # On, this sidecar POSTs to BACKEND_URL/api/signals/* with the student's bearer
+    # token (handed over from the browser at session start, never stored) -- see
+    # services/push_client.py.
     push_enabled: bool = Field(default=False, alias="PUSH_ENABLED")
     backend_url: str = Field(default="http://127.0.0.1:8000", alias="BACKEND_URL")
 
@@ -84,10 +76,8 @@ class DeviceConfig:
     kind: str  # "sim", "muse" or "face"
     host: str
     port: int
-    # Only meaningful for kind == "face". A camera is addressed by index, not by
-    # host:port, so reusing `port` for it would make two different things share
-    # one field and let a face device silently collide with a muse endpoint in
-    # the uniqueness check below.
+    # Only meaningful for kind == "face". A camera is addressed by index, not host:port,
+    # so it needs its own field rather than reusing `port`.
     camera_index: int | None = None
 
 
@@ -112,16 +102,12 @@ def parse_eeg_devices(settings: Settings) -> dict[str, DeviceConfig]:
         }
 
     devices: dict[str, DeviceConfig] = {}
-    # Each "muse" device owns a TCP connection to one muse_native_bridge.exe
-    # process, which accepts exactly one client. Two devices resolving to the
-    # same (host, port) would both try to claim that one bridge -- the exact
-    # cross-attribution/contention failure this registry exists to prevent,
-    # just one layer down. "sim" devices have no such constraint (no shared
-    # process behind them), so they're exempt.
+    # Each "muse" device owns a TCP connection to one muse_native_bridge.exe process,
+    # which accepts exactly one client, so two devices can't share a (host, port).
+    # "sim" devices have no such process behind them, so they're exempt.
     seen_muse_endpoints: set[tuple[str, int]] = set()
-    # The camera equivalent of the same constraint: one OpenCV capture per
-    # device index. Two devices pointed at index 0 would fight over one webcam
-    # and interleave frames from the same student into two sessions.
+    # Same reasoning for cameras: one OpenCV capture per device index, or two devices
+    # would fight over one webcam and interleave frames from different sessions.
     seen_camera_indices: set[int] = set()
     for entry in raw.split(","):
         entry = entry.strip()

@@ -7,30 +7,20 @@ from src.app.models import LearnerState
 
 class AdaptationEngine:
     """Turns features into a learner-state label. It does **not** choose
-    difficulty.
-
-    It used to. `next_question_policy` walked a difficulty 1-5 up and down from
-    this label, and the result was emitted on the wire as `question_policy`,
-    stored in `cognitive_signals.raw` and rendered in a debug panel -- while
-    nothing anywhere read it to pick a question. Difficulty is chosen in the
-    website backend's `LLM_topic_decider`, from correctness, topic history,
-    grade and manual bias, none of which the sidecar can see.
-
-    Two implementations where one is inert is worse than one, and this was the
-    dangerous kind of inert: computed every tick and persisted, so a reader
-    reasonably concluded it drove adaptation. Deleted rather than merged.
+    difficulty -- that's decided by the website backend's `LLM_topic_decider`,
+    from correctness, topic history, grade and manual bias, none of which the
+    sidecar can see.
     """
 
     def __init__(self) -> None:
         self.last_label = "neutral"
-        # Ensure the first real state transition is never blocked by cooldown.
+        # -inf so the first real transition is never blocked by cooldown.
         self.last_change_ts = float("-inf")
         self.cooldown_seconds = 3.0
 
     def reset_for_signal_loss(self) -> None:
-        """Mark the learner state as unknown after a data gap so the next real
-        reading is applied immediately instead of being held by the cooldown
-        meant for flapping between real readings."""
+        """After a data gap, apply the next real reading immediately instead of
+        holding it under the cooldown meant for flapping between readings."""
         self.last_label = "no_signal"
         self.last_change_ts = float("-inf")
 

@@ -2,11 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import AdminGuard from './AdminGuard'
 
-// The gate in front of the switch that turns consent enforcement off.
-//
-// It is not the security boundary -- every /api/admin/* endpoint checks again
-// -- but it decides what a browser renders, and the state that matters is the
-// one in between: while the check is in flight the answer is not yet "no".
+// Not the security boundary -- every /api/admin/* endpoint checks again --
+// but it decides what the browser renders while the backend check is in
+// flight.
 
 const apiFetch = vi.fn()
 let authState
@@ -24,8 +22,8 @@ beforeEach(() => {
 })
 
 it('asks the backend rather than reading a role from the session', async () => {
-  // The whole reason this component exists instead of RoleGuard: the role on
-  // the session comes from user_metadata, which the client can rewrite.
+  // The role on the session comes from user_metadata, which the client can
+  // rewrite -- so this must ask the backend instead of trusting it.
   authState = { user: { id: 'u1' }, loading: false, role: 'student' }
   apiFetch.mockResolvedValue({ is_admin: true })
 
@@ -41,8 +39,8 @@ it('renders nothing but a loader while the check is in flight', async () => {
 
   render(<AdminGuard><div>console</div></AdminGuard>)
 
-  // Not redirected, and not shown. An unanswered check is not a refusal, and
-  // treating it as one bounces an admin off their own page on every load.
+  // An unanswered check is not a refusal -- treating it as one would bounce
+  // an admin off their own page on every load.
   expect(screen.getByText('loading')).toBeInTheDocument()
   expect(screen.queryByText('console')).not.toBeInTheDocument()
   expect(screen.queryByText(/redirected/)).not.toBeInTheDocument()
@@ -52,8 +50,8 @@ it('renders nothing but a loader while the check is in flight', async () => {
 })
 
 it('redirects a non-admin away instead of showing an error', async () => {
-  // They did not ask for this page -- they followed a stale link or typed the
-  // URL -- so an error would be about a problem they do not have.
+  // They followed a stale link, not a broken feature, so redirect rather than
+  // show an error.
   apiFetch.mockRejectedValue(Object.assign(new Error('Forbidden'), { status: 403 }))
 
   render(<AdminGuard><div>console</div></AdminGuard>)
@@ -63,7 +61,7 @@ it('redirects a non-admin away instead of showing an error', async () => {
 })
 
 it('does not admit anyone when the check itself fails', async () => {
-  // Fails closed. A network blip must not be a way in.
+  // Fails closed -- a network blip must not be a way in.
   apiFetch.mockRejectedValue(new Error('network'))
 
   render(<AdminGuard><div>console</div></AdminGuard>)

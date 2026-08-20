@@ -1,59 +1,53 @@
 #!/usr/bin/env python3
 """Capture face frames for an ECG-referenced rPPG measurement.
 
-**This is the one script here that writes images of a face to disk**, and it
-exists because a video/ECG comparison cannot be answered without them. `capture_face_rgb.py`
-reduces each frame to three numbers, which is why its fixture is committable —
-and why it cannot evaluate a learned model, which needs the pixels that
-reduction throws away.
+**The one script here that writes images of a face to disk.** A learned model
+needs the actual pixels, which `capture_face_rgb.py` throws away when it
+reduces each frame to three numbers.
 
-The standing product rule is that no webcam footage is stored. This does not
-break it, because it is not the product: a consenting **adult** recording
-themselves for one measurement, held only as long as the analysis takes and
-deleted afterwards, is a different activity from a platform retaining footage of
-children. The distinction only holds if the second half is actually done, so
-this script is built to make that hard to forget rather than easy.
+The product's rule is that no webcam footage is stored. This doesn't break
+that rule — it's not the product, it's a consenting **adult** recording
+themselves for one measurement, kept only as long as the analysis takes and
+deleted afterwards. That second half (deleting it) is the part this script is
+built to make hard to skip.
 
 What it writes
 --------------
-Not video. **128x128 face crops**, which is exactly what RhythmMamba consumes,
-stored losslessly as raw uint8:
+Not video. **128x128 face crops** (what RhythmMamba consumes), stored
+losslessly as raw uint8:
 
-- `<out>.npy`      — (N, 128, 128, 3) uint8, where N is exactly the number of
-                     frames captured. Allocated for the worst case and trimmed
-                     on close: unwritten rows are zero-filled, and a run of
-                     black frames at the end of a recording is not distinguishable
-                     from footage once it is in the file
+- `<out>.npy`      — (N, 128, 128, 3) uint8, N = frames actually captured.
+                     Allocated for the worst case and trimmed on close, since
+                     an untrimmed tail reads back as black frames
+                     indistinguishable from real footage.
 - `<out>.jsonl`    — one line per frame: elapsed seconds, face box, whether the
                      detector found one
 - `<out>.json`     — header: wall-clock start, nominal fps, camera, exposure lock
 
-Lossless on purpose. rPPG reads colour variation of well under one part in a
-hundred, and every lossy codec is designed to discard exactly that — an MP4 of
-this would look identical and measure nothing. Crops rather than full frames
-because it is what the model takes and because 128x128 is ~1.5 MB/s where raw
-640x480 is ~27 MB/s; five minutes is 440 MB rather than 8 GB.
+Lossless because rPPG reads colour variation under 1%, and every lossy codec is
+designed to discard exactly that variation. Crops rather than full frames
+because that's what the model takes, and because 128x128 is ~1.5 MB/s versus
+raw 640x480 at ~27 MB/s (five minutes: 440 MB vs 8 GB).
 
-The cost of storing crops is that the ROI choice is baked in. A later analysis
-wanting a different region has to re-capture. That is the deliberate trade: the
-alternative is storing considerably more of a person than the measurement needs.
+Storing crops bakes in the ROI choice — a later analysis wanting a different
+region has to re-capture. Accepted trade: the alternative is storing far more
+of a person than the measurement needs.
 
 Aligning with the ECG
 ---------------------
-Nothing here talks to a watch. The header records the wall-clock start and every
-frame carries a `perf_counter` offset, which is what lets an offset search line
-the two up afterwards — the same approach `test_hrv_against_ecg.py` already uses
-with its `PAIRS` offsets. Export the ECG separately and align in analysis.
+Nothing here talks to a watch. The header records the wall-clock start, and
+every frame carries a `perf_counter` offset, so an offset search can line the
+two recordings up afterwards (same approach as `test_hrv_against_ecg.py`'s
+`PAIRS`). Export the ECG separately and align during analysis.
 
-`perf_counter`, not `time.monotonic()`: on Windows the latter resolves only
-15.625 ms, which quantises a 30 fps interval into 2- and 3-tick steps and makes
-a steady camera look like it was stuttering.
+Uses `perf_counter`, not `time.monotonic()`: on Windows the latter resolves
+only 15.625 ms, which can make a steady camera look like it's stuttering.
 
 Usage
 -----
     python scripts/capture_face_video_ecg.py --seconds 300 --out D:/rppg/session1
 
-Then, once the analysis is done and its results are written up:
+Then, once the analysis is done and written up:
 
     python scripts/capture_face_video_ecg.py --delete D:/rppg/session1
 """
@@ -72,23 +66,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 CROP = 128
 
-# The model's window is 160 frames; anything shorter cannot produce even one.
+# The model's window is 160 frames; anything shorter can't produce even one.
 MIN_SECONDS = 30.0
 
-# Seconds discarded before anything is written, for the reason
-# `face_ingestion.WARMUP_SECONDS` states and measures: a camera's auto-exposure
-# converges over the first few seconds and does so **enormously** relative to
-# the signal -- mean green climbed 17% over ~5 s against a pulse under 1%, and
-# the same recording scored confidence 0.05 with that ramp inside the window
-# against 0.81 on a clean stretch after it.
-#
-# The live adapter has always discarded them. This script did not, and it is the
-# one whose entire output exists to evaluate an rPPG model -- so a five-minute
-# capture began with the single artefact most able to produce a confident wrong
-# rate, in the first window or two the model would ever see.
-#
-# Imported, not restated, so the two cannot drift: if the ramp is ever measured
-# again the capture and the live path move together.
+# Seconds discarded before anything is written. A camera's auto-exposure ramps
+# for the first few seconds and swamps the pulse signal while it does (mean
+# green moved 17% over ~5s against a pulse under 1%; see
+# `face_ingestion.WARMUP_SECONDS` for the full measurement). Imported rather
+# than restated so this can't drift from what the live adapter does.
 from src.app.services.face_ingestion import WARMUP_SECONDS  # noqa: E402
 
 
@@ -99,10 +84,9 @@ def repo_root() -> pathlib.Path:
 def refuse_if_inside_repo(out: pathlib.Path) -> None:
     """A capture must not land anywhere git can reach it.
 
-    Not a stylistic preference. Everything else this project writes is
-    committable by design; this is the one artefact that must never be, and
-    `git add -A` does not ask. A path check is the only guard that works
-    regardless of who is running it or how tired they are.
+    This is the one artefact here that must never be committed, and
+    `git add -A` doesn't ask. A path check is the guard that works no matter
+    who's running the script.
     """
     root = repo_root().resolve()
     try:
@@ -119,22 +103,15 @@ def refuse_if_inside_repo(out: pathlib.Path) -> None:
 def truncate_npy(path: pathlib.Path, rows: int) -> None:
     """Shrink a preallocated `.npy` to the rows that were actually written.
 
-    The array is sized for the worst case and filled at whatever rate the camera
-    manages, so the tail is normally unwritten — a dropped read or a frame with
-    no face does not advance the cursor. `open_memmap` zero-fills, so those rows
-    read back as **pure black frames**, which is indistinguishable from footage
-    of a covered lens. A windowing script iterating the file would hand them to
-    the model as captured data, and a step to black is exactly the kind of sharp
-    non-physiological edge a frequency-domain estimator converts into a
-    confident wrong number.
+    The array is sized for the worst case, so unwritten tail rows are
+    zero-filled and read back as pure black frames — indistinguishable from a
+    covered lens. A windowing script would feed those to the model as real
+    data, and a hard step to black is exactly what a frequency-domain
+    estimator turns into a confident wrong rate. Trimming makes the file mean
+    what it says instead of relying on every reader remembering to slice it.
 
-    The header records `frames_written` separately, so nothing is lost — but
-    that leaves correctness resting on every future reader remembering to slice,
-    and this is the codebase whose recurring rule is that absence must not be
-    representable as data. Trimming makes the file mean what it says.
-
-    In place, because the alternative — load, slice, re-save — needs a second
-    copy of a file that runs to hundreds of megabytes.
+    Done in place because loading, slicing and re-saving would need a second
+    copy of a file that can run to hundreds of megabytes.
     """
     import numpy as np
 
@@ -156,9 +133,8 @@ def truncate_npy(path: pathlib.Path, rows: int) -> None:
         if rows == shape[0]:
             return
 
-        # Rewrite the header in place. The declared header length stays as it
-        # is and the shortfall goes into the padding numpy already allows, so
-        # the data offset does not move and the rows below it are untouched.
+        # Rewrite the header in place using numpy's existing padding, so the
+        # data offset doesn't move and the rows below stay untouched.
         dims = ", ".join(str(d) for d in (rows, *shape[1:]))
         body = "{'descr': %s, 'fortran_order': %s, 'shape': (%s%s), }" % (
             repr(np.lib.format.dtype_to_descr(dtype)), fortran, dims,
@@ -196,22 +172,15 @@ Type 'yes' to record: """, end="")
 class Gui:
     """Live preview for a capture. Opt-in (`--gui`).
 
-    Different constraints from `verify_landmarks`' preview, because this script
-    **does** write face images -- so the preview is not a privacy question here,
-    it is a correctness one. A five-minute capture is expensive to redo and
-    every way it can be wasted is invisible without a window: the face drifting
-    out of the crop, a light behind the subject, the detector missing more
-    frames than it finds, an exposure lock the driver quietly refused.
+    Here the preview is a correctness aid, not a privacy question, since this
+    script already writes face images. A five-minute capture is expensive to
+    redo, and problems like the face drifting out of frame or exposure lock
+    failing are otherwise invisible until it's too late.
 
-    What it must not do is become a second copy. It draws and drops, exactly
-    like the capture loop's own frames; the only bytes that reach disk are the
-    ones the loop was already writing, and a test asserts no new
-    persisting call appears here.
-
-    It also shows the crop the model will actually see, next to the full frame.
-    Those are different pictures -- the crop is what gets stored, and judging
-    framing from the full frame is how you discover afterwards that the model
-    was fed a chin.
+    Draws and drops frames like the capture loop does — never a second
+    persisting call, which a test asserts. It also shows the actual stored
+    crop next to the full frame, since judging framing from the full frame can
+    hide that the model was fed a chin.
     """
 
     WINDOW = "capture_face_video_ecg -- RECORDING"
@@ -239,11 +208,10 @@ class Gui:
                           scale, colour, weight, self._cv2.LINE_AA)
 
     def warming(self, frame, *, remaining: float) -> None:
-        """The warm-up, shown rather than a frozen window for 8 seconds.
+        """The warm-up, shown instead of a frozen window for 8 seconds.
 
-        Distinct from `frame` on purpose: nothing is being written yet, and a
-        preview that looked identical would have the subject believe the capture
-        had started.
+        Drawn differently from `frame` so the subject doesn't mistake this for
+        the capture starting — nothing is being written yet.
         """
         cv2 = self._cv2
         img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -278,7 +246,7 @@ class Gui:
         cv2.rectangle(over, (0, h - 30), (w, h), (0, 0, 0), -1)
         cv2.addWeighted(over, 0.55, img, 0.45, 0, img)
 
-        cv2.circle(img, (18, 20), 7, self.BAD, -1)          # a record dot
+        cv2.circle(img, (18, 20), 7, self.BAD, -1)          # record dot
         self._text(img, f"RECORDING  {elapsed:5.1f} / {total:.0f}s",
                    (34, 26), (255, 255, 255), 0.6, 2)
         self._text(img, f"{written} frames written, {missed} without a face",
@@ -293,8 +261,8 @@ class Gui:
         bar = int(w * max(0.0, min(1.0, elapsed / total))) if total else 0
         cv2.rectangle(img, (0, 58), (bar, 63), self.BAD, -1)
 
-        # The stored crop, upscaled, beside the frame. Nearest-neighbour so it
-        # is obvious this is a 128x128 image rather than a smooth one.
+        # The stored crop, upscaled beside the frame. Nearest-neighbour on
+        # purpose, so it looks like the 128x128 image it actually is.
         if crop is not None:
             shown = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_RGB2BGR),
                                (h // 2, h // 2), interpolation=cv2.INTER_NEAREST)
@@ -344,12 +312,11 @@ def capture(args) -> int:
         "camera": args.camera,
         "crop": CROP,
         # Whether the driver accepted the exposure lock. Auto-exposure hunting
-        # is a brightness oscillation the model would read as a pulse, so an
-        # unlocked capture is worth knowing about before analysing it, not
-        # after.
+        # looks like a pulse to the model, so this is worth knowing before
+        # analysis, not after.
         "exposure_locked": bool(getattr(source, "locked", False)),
-        # What was discarded before `wall_start`. Recorded because "the first
-        # frame is 8 s after the lens opened" is not recoverable from the data.
+        # Seconds discarded before `wall_start`. Recorded because that offset
+        # isn't recoverable from the data itself.
         "warmup_seconds": 0.0,
         "note": "128x128 face crops, lossless. Not video. Delete after analysis.",
     }
@@ -365,13 +332,11 @@ def capture(args) -> int:
             print(f"no GUI available ({exc}); recording without the preview",
                   file=sys.stderr)
 
-    # Discarded before anything is written and before the clock the frames are
-    # stamped against starts, so `t` in the .jsonl is time since the first
-    # *usable* frame rather than since the lens opened. The header carries the
-    # warm-up separately, and `wall_start` is stamped after it -- an ECG
-    # alignment search keys off that, and an 8 s constant offset silently baked
-    # into one side of it is exactly the kind of error that search would absorb
-    # as a lag rather than report.
+    # Warm-up happens before the clock starts, so `t` in the .jsonl is time
+    # since the first usable frame, not since the lens opened. `wall_start` is
+    # stamped after warm-up for the same reason — an 8s offset baked silently
+    # into one side would show up as alignment error against the ECG, not as
+    # a reported bug.
     if not args.no_warmup:
         print(f"warming up {WARMUP_SECONDS:.0f}s (auto-exposure ramp -- these "
               f"frames are read and dropped)")
@@ -383,35 +348,24 @@ def capture(args) -> int:
                 if gui.aborted:
                     break
 
-    # Checked here rather than only inside the loop: aborting during the warm-up
-    # means nothing has been written and nothing should be, so this returns
-    # instead of falling through into a recording the subject just asked not to
-    # make. `q` is the only interactive control this preview offers and it was
-    # ignored for the whole eight seconds it is most likely to be pressed --
-    # while the subject is still deciding whether the framing is right.
+    # Checked here, not just inside the loop: aborting during warm-up means
+    # nothing should be recorded, so this must return instead of falling
+    # through into a capture the subject just declined.
     if gui is not None and gui.aborted:
         source.release()
         gui.close()
-        # The array is allocated *before* the warm-up, deliberately -- a disk
-        # too full for the capture should be found before the subject sits
-        # through eight seconds, not after. So aborting here leaves a
-        # full-capacity zero-filled file behind, and returning without removing
-        # it printed "nothing was recorded" over half a gigabyte of black
-        # frames with no header to explain them: `truncate_npy`'s own warning,
-        # in the one path that skips `truncate_npy`.
-        #
-        # It compounds, too. The reason `q` matters during warm-up is that the
-        # subject is still adjusting the framing, which means aborting two or
-        # three times in a row.
+        # The array is allocated before warm-up (so a full disk is caught
+        # before the subject waits through it), which means an abort here
+        # would otherwise leave a full-capacity zero-filled file — half a
+        # gigabyte of black frames with no header. Delete it instead of
+        # relying on `truncate_npy`, which this path skips.
         mapping = getattr(frames, "_mmap", None)
         del frames
         if mapping is not None:
             mapping.close()
         pathlib.Path(f"{out}.npy").unlink(missing_ok=True)
-        # No header either. `--delete` keeps one because frames existed and were
-        # removed, and a cleaned-up capture with no trace is indistinguishable
-        # from one nobody cleaned up. Nothing was captured here, so there is
-        # nothing to have a record of.
+        # No header either — nothing was captured, so there's nothing to
+        # record. `--delete` keeps a header because it removes real frames.
         print("aborted during warm-up; nothing was recorded")
         return 1
 
@@ -432,19 +386,14 @@ def capture(args) -> int:
                 gray = frame.astype("float32") @ np.array([0.299, 0.587, 0.114])
                 box = locator.locate(gray)
                 if box is None:
-                    # Logged, not dropped silently: a stretch with no face is a
-                    # gap the analysis has to know about rather than discover as
-                    # an unexplained discontinuity.
+                    # Logged, not dropped silently, so a no-face stretch is a
+                    # known gap in analysis rather than an unexplained one.
                     log.write(json.dumps({"t": round(now, 4), "ok": False}) + "\n")
                     missed += 1
                     if gui is not None:
-                        # Drawn on the no-face path too, and the abort
-                        # checked here. Without it the preview freezes
-                        # on the last good frame *and* `q` does nothing
-                        # until a face is found again -- which is
-                        # exactly the situation someone wants to stop
-                        # in, since a stretch with no face is the one
-                        # failure they can see and fix.
+                        # Drawn on the no-face path too, with the abort check,
+                        # or the preview freezes and `q` stops working exactly
+                        # when someone most wants to stop.
                         gui.frame(frame, None, None, elapsed=now,
                                   total=args.seconds, written=written,
                                   missed=missed,
@@ -458,8 +407,8 @@ def capture(args) -> int:
                 if crop.size == 0:
                     missed += 1
                     continue
-                # Nearest-neighbour would alias; area averaging is what the
-                # model's own preprocessing does.
+                # Area averaging, matching the model's own preprocessing;
+                # nearest-neighbour would alias.
                 import cv2                                     # noqa: PLC0415
                 frames[written] = cv2.resize(crop, (CROP, CROP),
                                              interpolation=cv2.INTER_AREA)
@@ -482,8 +431,8 @@ def capture(args) -> int:
         if gui is not None:
             gui.close()
         frames.flush()
-        # Release the mapping before truncating — Windows refuses to shorten a
-        # file that is still mapped. Nothing touches `frames` after this.
+        # Release the mapping before truncating — Windows refuses to shorten
+        # a file that's still mapped.
         mapping = getattr(frames, "_mmap", None)
         del frames
         if mapping is not None:
@@ -517,9 +466,8 @@ def delete(target: str) -> int:
         if p.exists():
             p.unlink()
             gone.append(p.name)
-    # The header stays. It is metadata with no face in it, and it is the record
-    # that a capture happened and was cleaned up -- which is worth more than the
-    # tidiness of removing it.
+    # The header stays: it has no face in it, and it's the record that a
+    # capture happened and was cleaned up.
     print(f"deleted: {', '.join(gone) if gone else 'nothing found'}")
     header = pathlib.Path(f"{out}.json")
     if header.exists():

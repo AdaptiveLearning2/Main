@@ -2,29 +2,20 @@ import { Component } from 'react'
 
 /** The last line between a thrown render and a white screen.
  *
- * There was no error boundary anywhere in this app, so any component that threw
- * during render unmounted the entire tree -- not the page, the *application*,
- * down to a blank document with the error only in the console. `Practice.jsx`
- * mapping an absent `options` array was one reachable path to it; the reason to
- * have this is that there is no way to enumerate the rest.
+ * With no error boundary, any component that threw during render unmounted
+ * the whole application down to a blank document, error only in the console.
  *
- * Deliberately not `LoadError`. That one is for a *failed request*, which the
- * page knows about and can re-issue. This is for a bug -- the page's own render
- * threw, and the honest thing to say is that something went wrong rather than
- * to blame the backend.
+ * Not `LoadError` -- that's for a failed request the page can re-issue. This
+ * is for a bug: the page's own render threw.
  *
- * **A class, because there is no hook form of this.** `componentDidCatch` and
- * `getDerivedStateFromError` have no function-component equivalent in React 19;
- * this is the one place in the codebase that has to be a class.
+ * **A class, because there is no hook form of this.** `componentDidCatch`
+ * and `getDerivedStateFromError` have no function-component equivalent.
  *
- * **`resetKey` is what makes it recoverable.** An error boundary latches: once
- * `hasError` is true it stays true for the life of the component, so without
- * this a student who crashed the practice page would keep seeing the error
- * screen on every page they navigated to afterwards, having done nothing wrong
- * and with no way out but a reload. The layouts pass the current pathname, so a
- * navigation clears it. It is a prop rather than a `key` on the element so the
- * reset survives someone reordering the layout around it -- coupling this to
- * where it happens to sit in the tree is how it would quietly stop working.
+ * **`resetKey` makes it recoverable.** An error boundary latches -- once
+ * `hasError` is true it stays true, so without this a crashed page would keep
+ * showing the error screen on every later page. The layouts pass the current
+ * pathname, so a navigation clears it. It's a prop rather than a `key` on the
+ * element so the reset survives the layout being reordered around it.
  */
 export default class ErrorBoundary extends Component {
   state = { error: null }
@@ -34,8 +25,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // The only place this surfaces otherwise. There is no error-reporting
-    // service wired up here, so the console is the whole of the record.
+    // No error-reporting service wired up, so the console is the whole record.
     console.error('[ErrorBoundary]', error, info?.componentStack)
   }
 
@@ -59,15 +49,14 @@ export default class ErrorBoundary extends Component {
             Something went wrong on this page
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {/* Not "your work was lost". Answers are posted as they are given,
-                so in the common case nothing was, and saying otherwise would
-                frighten a child out of a session that is fine. */}
+            {/* Not "your work was lost" -- answers are posted as given, so
+                usually nothing was lost, and saying otherwise would scare a
+                child out of a session that is fine. */}
             The rest of the app still works — try again, or move to another page.
           </p>
 
-          {/* The message itself only in development. In production it is a
-              stack-shaped string a student cannot act on, and it can carry
-              internals into a screenshot. */}
+          {/* Message shown only in development -- in production it's a
+              stack-shaped string a student can't act on. */}
           {import.meta.env.DEV && (
             <pre className="mt-4 text-left text-xs text-rose-600 dark:text-rose-400 whitespace-pre-wrap break-words">
               {String(this.state.error?.message || this.state.error)}

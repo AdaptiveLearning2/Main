@@ -6,9 +6,8 @@ import { apiFetch } from '../../lib/api'
 const STATUS = {
   ok:       { Icon: CheckCircle2,  cls: 'text-emerald-600 dark:text-emerald-400' },
   degraded: { Icon: AlertTriangle, cls: 'text-amber-600 dark:text-amber-400' },
-  // Never rendered as a tick. A check that could not run has not earned one --
-  // the backend answers `unknown` rather than `ok` for exactly this reason, and
-  // collapsing it here would undo that.
+  // A check that could not run is `unknown`, never `ok` — a checkmark would
+  // wrongly claim it passed.
   unknown:  { Icon: HelpCircle,    cls: 'text-gray-400 dark:text-gray-500' },
 }
 
@@ -88,11 +87,9 @@ function ConsentCounts() {
 
 function StudentSearch() {
   const [term, setTerm] = useState('')
-  // One piece of state, holding the query the results in hand belong to. Both
-  // `searching` and `results` fall out of comparing it to the query in the box,
-  // so neither needs setting on the way in or clearing on every exit path --
-  // and a response that arrives after the term moved on cannot be rendered
-  // against the wrong query.
+  // Holds the query its results belong to. `searching`/`results` are derived
+  // by comparing it to the current box value, so a late response can't be
+  // rendered against a query the user has since changed.
   const [hits, setHits] = useState({ q: '', students: [] })
 
   const q = term.trim()
@@ -102,13 +99,12 @@ function StudentSearch() {
 
   useEffect(() => {
     if (!enough) return
-    // Debounced: the field fires on every keystroke and each one is a query
-    // against `profiles`.
+    // Debounced, since every keystroke would otherwise fire a query.
     let cancelled = false
     const t = setTimeout(() => {
       apiFetch(`/api/admin/students/search?q=${encodeURIComponent(q)}`)
-        // A failed search records the query with no students rather than
-        // leaving the previous query's hits on screen under a new term.
+        // On failure, record the query with no results rather than leaving
+        // the previous query's hits on screen.
         .then(d => { if (!cancelled) setHits({ q, students: d.students || [] }) })
         .catch(() => { if (!cancelled) setHits({ q, students: [] }) })
     }, 300)

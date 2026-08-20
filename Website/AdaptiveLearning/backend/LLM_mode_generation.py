@@ -133,12 +133,10 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. The solver (mode()/generate_incorrect_answers() above)
-# supports multi-modal datasets (returns a list of tied values); bimodal
-# datasets are reserved for "hard" difficulty everywhere, since spotting a
-# tie is a genuine extra step over a single clear mode. "mode" isn't in
-# LLM_topic_decider's grade-1-3 allowlist, so "early" is defense-in-depth
-# only.
+# The solver can return more than one tied value (a bimodal dataset), so
+# bimodal datasets are kept to "hard" difficulty at every grade -- spotting
+# a tie takes an extra step over a single clear mode. "mode" isn't offered
+# to grades 1-3 at all, so the "early" tier here is just a backup.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 4-5 values, whole numbers below 20, with a SINGLE clear mode appearing at least 2 more times than any other value.",
@@ -221,9 +219,8 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
                                         attempt + 1):
             continue
 
-        # The student is shown question_text but scored on the field
-        # above; nothing used to check they agree. See
-        # question_consistency for the measured failure.
+        # The student reads question_text but is scored against variables --
+        # check the numbers in the text match the scored dataset.
         inconsistent = question_consistency.dataset_mismatch(
             question_data.get("question_text"), question_data.get("variables"))
         if inconsistent:

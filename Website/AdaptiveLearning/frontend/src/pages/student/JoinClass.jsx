@@ -13,14 +13,12 @@ export default function JoinClass() {
   const [loadingClasses, setLoadingClasses] = useState(true)
   const [classesFailed, setClassesFailed]   = useState(false)
 
-  // See History.jsx: already true on mount, so setting it here would be a
-  // synchronous setState inside an effect.
+  // loadingClasses already starts true, so no setState is needed here on mount.
   const loadClasses = () => {
     apiFetch('/api/classes')
       .then(c => { setClasses(c); setClassesFailed(false); setLoadingClasses(false) })
-      // Swallowed, this drew "You haven't joined any classes yet" at a student
-      // who had -- and the page's whole purpose is joining one, so it invited
-      // them to re-join a class they are already in.
+      // Also set classesFailed: otherwise a failed read looks like "no classes
+      // joined yet" and prompts a student to rejoin one they're already in.
       .catch(e => { console.error('Failed to load classes:', e); setClassesFailed(true); setLoadingClasses(false) })
   }
 

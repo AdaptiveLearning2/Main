@@ -108,25 +108,20 @@ Return ONLY valid JSON with no text before or after the JSON object.
 """
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared with the other generation files so they can't drift apart.
+    # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# Scenario 3 ("simplify", e.g. "2x + 3x") is algebraic notation -- combining
-# like terms with a variable -- and used to be pickable via random.randint(1,3)
-# for every grade with no gating at all, so a 1st grader could land on it.
-# Withheld until "upper" (grades 7-8) regardless of difficulty, since
-# pre-algebra notation isn't in reach before then. This means grade 6
-# ("middle" band, though the topic-selection rule elsewhere in this codebase
-# treats grade 6 as pre-algebra-ready) won't see "simplify" from this topic
-# either -- a deliberate simplification rather than adding a fifth grade
-# bucket just for this one scenario.
-# Scenario 2 ("order_of_operations") is withheld from "early" as well, on top
-# of scenario 3. Order of operations is CCSS 5.OA.1 -- a grade-5 concept --
-# and the scenario is *defined* by mixing precedence levels, so it cannot be
-# expressed within the early band's addition-and-subtraction-only rule. It
-# was measurably harmful, not just conceptually wrong: see EARLY_BAND_EXAMPLE.
+# Scenario 3 ("simplify", e.g. "2x + 3x") uses algebraic notation, so it's
+# withheld until "upper" (grades 7-8) regardless of difficulty -- pre-algebra
+# notation isn't in reach before then. Grade 6 ("middle" band) also misses out
+# on it, even though the topic-selection rule elsewhere treats grade 6 as
+# pre-algebra-ready; that's a deliberate simplification rather than adding a
+# fifth grade bucket for one scenario.
+# Scenario 2 ("order_of_operations") is withheld from "early" too. It's a
+# grade-5 concept (CCSS 5.OA.1) defined by mixing precedence levels, which
+# can't be expressed within the early band's addition-and-subtraction-only
+# rule -- see EARLY_BAND_EXAMPLE for what happened when it wasn't withheld.
 def _pick_scenario(grade_band):
     if grade_band == "early":
         return 1
@@ -135,14 +130,12 @@ def _pick_scenario(grade_band):
     return random.randint(1, 3)
 
 
-# Every scenario example in expr_prompt above is written for older students --
-# scenario 1's is "36/3+(8*2)-(15-7)+4" -- and a few-shot example beats a
-# textual constraint. Measured on llama3.1:8b against the seeded lesson plans
-# (2026-08-18, grade 1 / easy): 2 of 8 questions came back with parentheses,
-# and a separate run produced "Evaluate (3+2)*4-1.", despite
-# COMPLEXITY_BY_GRADE forbidding both in the same prompt. So the early band
-# gets a worked example in the shape it is actually allowed, and
-# `grade_appropriateness` rejects the ones that still slip through.
+# The scenario examples in expr_prompt above are all written for older
+# students (e.g. "36/3+(8*2)-(15-7)+4"), and a few-shot example beats a text
+# rule. Measured on llama3.1:8b with the lesson plans seeded (2026-08-18,
+# grade 1 / easy): 2 of 8 questions came back with parentheses despite
+# COMPLEXITY_BY_GRADE forbidding them. So the early band gets its own worked
+# example below, and `grade_appropriateness` catches whatever still slips through.
 EARLY_BAND_EXAMPLE = """
 EXAMPLE OF A CORRECT QUESTION FOR THIS GRADE LEVEL -- follow this shape, NOT
 the scenario examples above, which are written for much older students:
@@ -156,11 +149,9 @@ The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
 "/", and no parentheses of any kind.
 """
 
-# Grade-band-first: which OPERATIONS are even available changes by grade,
-# not just how many of them or how big the numbers are. Multiplication/
-# division and parentheses used to be available at every grade the moment
-# difficulty ticked up to "medium", regardless of whether that grade has
-# been taught multiplication yet.
+# Which operations are available changes by grade, not just how many of them
+# or how big the numbers are -- multiplication, division, and parentheses
+# should only appear once a grade has actually been taught them.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-9.",

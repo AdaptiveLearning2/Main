@@ -9,22 +9,20 @@ import { vi } from 'vitest'
  *     vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
  *     import { apiFetch, mockApi, resetApi, apiError } from '../../test/mocks/apiFetch'
  *
- * A router rather than a bare `vi.fn()` because most pages here fetch two to
- * four endpoints in parallel on mount and the interesting tests need *one* of
- * them to fail. `mockResolvedValueOnce` chains express that by call order,
- * which is the order `Promise.all` happens to start them in -- so a test
- * written that way passes for a reason unrelated to what it claims, and breaks
- * when a page adds a fetch.
+ * A router, not a bare `vi.fn()`, because most pages fetch several endpoints
+ * in parallel on mount and tests need one of them to fail. Chaining
+ * `mockResolvedValueOnce` calls would depend on `Promise.all`'s call order,
+ * which breaks the moment a page adds another fetch.
  */
 
 const routes = []
 
 /** An unmatched path throws rather than resolving undefined.
  *
- *  A silent `undefined` reaches the page as a successful read of nothing, which
- *  is the exact state most of this suite exists to tell apart from a failure --
- *  so a gap in a test's own setup would arrive dressed as the bug being tested
- *  for. Loud, with the routes it did have, so the fix is obvious.
+ *  A silent `undefined` would read as a successful empty response, which is
+ *  exactly the state most of this suite exists to distinguish from a
+ *  failure — so throwing keeps a gap in test setup from masquerading as the
+ *  bug under test.
  */
 function noRoute(path, method) {
   const known = routes.length
@@ -49,9 +47,8 @@ function matches(entry, path, opts) {
   return m === path
 }
 
-/** Still a real `vi.fn()`, so `toHaveBeenCalledWith` keeps working -- the
- *  routing is how a response is *chosen*, not a replacement for asserting on
- *  the call. Note `resetApi()` rather than `mockReset()`: the latter drops this
+/** Still a real `vi.fn()`, so `toHaveBeenCalledWith` keeps working. Reset
+ *  with `resetApi()`, not `mockReset()` — the latter drops this
  *  implementation and every route with it. */
 export const apiFetch = vi.fn(async (path, opts = {}) => {
   for (const entry of routes) {
@@ -83,12 +80,9 @@ function normalize(spec) {
 
 /** Replace the route table. Call in `beforeEach` or at the top of a test.
  *
- *  Method-scoped routes are tried before methodless ones, whatever order they
- *  were written in. First-match-wins alone made this depend on object key
- *  order: `{'/api/profile/me': …, 'PUT /api/profile/me': …}` had the read
- *  answering the write, and the fix would have been to reorder two keys --
- *  which is not a rule anyone would infer, and fails silently by returning a
- *  plausible payload for the wrong verb.
+ *  Method-scoped routes are always tried before methodless ones, regardless
+ *  of write order — otherwise `{'/api/profile/me': …, 'PUT /api/profile/me':
+ *  …}` would have the read route silently answer the write too.
  */
 export function mockApi(spec) {
   const entries = normalize(spec)
@@ -98,9 +92,8 @@ export function mockApi(spec) {
 
 /** Layer one route over the table, taking precedence over what is there.
  *
- *  This is the point of the router: a test that needs a single endpoint to fail
- *  starts from the page's whole happy path and overrides one entry, instead of
- *  restating every endpoint the page happens to call.
+ *  Lets a test start from the page's whole happy path and override just the
+ *  one endpoint it needs to fail, instead of restating every route.
  */
 export function overrideApi(match, handler, method = undefined) {
   routes.unshift({ match, handler, method })
@@ -114,9 +107,9 @@ export function resetApi() {
 
 /** An error shaped like the one the real `apiFetch` throws.
  *
- *  `.status` is the part that matters: callers that tell "this doesn't exist"
- *  apart from "the request failed" branch on it, and a bare `new Error()` in a
- *  test silently exercises only the second path.
+ *  `.status` is the part that matters — callers branch on it to tell "not
+ *  found" from "request failed", and a bare `new Error()` would only
+ *  exercise the second path.
  */
 export function apiError(status, message) {
   const err = new Error(message ?? `HTTP ${status}`)
@@ -125,9 +118,8 @@ export function apiError(status, message) {
 }
 
 /** A never-settling response, for testing what a page shows while it waits.
- *
- *  Distinct from a rejection on purpose -- "still loading" and "failed" are
- *  different states and several pages here have been wrong about exactly that.
+ *  Distinct from a rejection on purpose — "still loading" and "failed" are
+ *  different states.
  */
 export function pending() {
   return () => new Promise(() => {})

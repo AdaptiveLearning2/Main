@@ -1,9 +1,8 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
 import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
 
-// Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
-// face_signals store. Guards against rendering them unscaled, which would
-// print focus 0.72 as "1%" and every metric ~100x too small.
+// Signals cross the wire as 0..1 ratios. Guards against rendering them
+// unscaled, which would print focus 0.72 as "1%".
 
 const report = {
   days: 7,
@@ -23,20 +22,16 @@ const report = {
 }
 
 // Every metric renders its label and value as sibling <p>s in one wrapper, so
-// scoping to the label's parent pins label -> value. Asserting that a number
-// appears somewhere on the panel would pass even if it appeared in the wrong
-// tile, and would encode fixture assumptions rather than component behaviour.
-// The tiles, not the screen-reader tables. Those carry the same column names
-// on purpose -- a chart's text alternative has to name its series -- so an
-// unscoped `getByText('Engagement')` now finds a tile and a `<th>` and fails on
-// the ambiguity rather than on anything being wrong.
+// scoping to the label's parent pins label -> value rather than asserting a
+// number appears anywhere on the panel. Excludes the screen-reader tables,
+// which share column names with the tiles on purpose.
 const VISIBLE = { ignore: 'script, style, .sr-only, .sr-only *' }
 const metric = (label) => within(screen.getByText(label, VISIBLE).parentElement)
 
 describe('WeeklySignalReport', () => {
   it('renders each average as a percentage in its own tile', () => {
     render(<WeeklySignalReport report={report} />)
-    // With the bug these read 1%, 0%, 1% and 1% respectively.
+    // With the scaling bug these read 1%, 0%, 1%.
     expect(metric('Avg Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
     expect(metric('Engagement').getByText('64%')).toBeInTheDocument()
@@ -57,9 +52,8 @@ describe('WeeklySignalReport', () => {
   })
 
   it('shows how many sessions there were, not how many rows came back', () => {
-    // sample_counts is rows-retrieved throughout, so under the session row cap
-    // this tile showed exactly the cap while the parent dashboard -- counting
-    // the same week in Postgres -- showed the real number for the same child.
+    // sample_counts is rows-retrieved throughout, so under the session row
+    // cap this tile showed the cap instead of the real count.
     const busy = {
       ...report,
       truncated: true,
@@ -80,7 +74,7 @@ describe('WeeklySignalReport', () => {
     const partial = { ...report, averages: { ...report.averages, focus: null } }
     render(<WeeklySignalReport report={partial} />)
     expect(metric('Avg Focus').getByText('N/A')).toBeInTheDocument()
-    // Its neighbours are unaffected.
+    // Neighbours unaffected.
     expect(metric('Avg Stress').getByText('31%')).toBeInTheDocument()
   })
 
@@ -98,9 +92,8 @@ describe('WeeklySignalReport', () => {
   })
 
   it('counts a day whose sessions were cut as unretrieved', () => {
-    // Sessions have their own query and their own cap, so a day can lose only
-    // them. Counting the two signal flags alone left that day looking like a
-    // day with nothing on it.
+    // Sessions have their own query and cap, so a day can lose only them --
+    // counting the two signal flags alone made it look like a quiet day.
     const truncated = {
       ...report,
       truncated: true,
@@ -121,9 +114,9 @@ describe('WeeklySignalReport', () => {
   })
 
   it('names the reads that failed rather than showing their defaults as figures', () => {
-    // The backend swallows a failed table read so one broken query does not
-    // blank the report -- which leaves the tiles showing N/A and a dash, both
-    // of which read as "nothing recorded" on their own.
+    // The backend swallows a failed table read so one broken query doesn't
+    // blank the report, but that leaves N/A and a dash on the tiles, both of
+    // which read as "nothing recorded" alone.
     const broken = {
       ...report,
       retrieved: { cognitive: false, face: true, sessions: true },
@@ -134,9 +127,8 @@ describe('WeeklySignalReport', () => {
   })
 
   it('shows a dash rather than zero when the sessions read failed', () => {
-    // sessions_recorded is null on that path and sample_counts.sessions is the
-    // length of an empty list, so the fallback chain answered a broken query
-    // with a confident "0 sessions this week".
+    // The fallback chain would otherwise answer a broken query with a
+    // confident "0 sessions this week".
     const broken = {
       ...report,
       sessions_recorded: null,
@@ -149,8 +141,8 @@ describe('WeeklySignalReport', () => {
   })
 
   it('does not read the facial opt-out as a failed facial read', () => {
-    // retrieved.face is null with the opt-out on: there was no retrieval to
-    // succeed or fail, and the warning must not fire on it.
+    // retrieved.face is null with the opt-out on -- no retrieval happened, so
+    // the failure warning must not fire.
     const off = {
       ...report,
       face_included: false,
@@ -173,8 +165,8 @@ describe('WeeklySignalReport', () => {
   })
 
   it('stays quiet for a report whose reads all succeeded', () => {
-    // Payloads predating the field came from working reads by definition, so
-    // an absent `retrieved` must not raise the warning either.
+    // Payloads predating the field came from working reads, so an absent
+    // `retrieved` must not raise the warning either.
     render(<WeeklySignalReport report={report} />)
     expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument()
   })
@@ -185,27 +177,23 @@ describe('LiveSignalSummary', () => {
     render(<LiveSignalSummary report={report} />)
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Stress').getByText('31%')).toBeInTheDocument()
-    // No Identity Confidence tile: the column it read was retired.
+    // No Identity Confidence tile -- the column it read was retired.
     expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
 
   it('survives a report with no latest reading', () => {
     render(<LiveSignalSummary report={{}} />)
-    // Was 'N/A'. The cognitive tiles were the last three still printing
-    // `pct()`'s raw string; they go through `valueOrReason` now, so an absent
-    // channel says which kind of absence it is.
+    // Was 'N/A'; now goes through `valueOrReason` so an absent channel says
+    // which kind of absence it is.
     expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
-    // Channel on (no flag says otherwise) and read, but nothing came back --
-    // offLabel's no-sensor state, not a generic "no data".
+    // Channel on (no flag says otherwise) and read, but nothing came back.
     expect(metric('Facial Emotion').getByText('No sensor')).toBeInTheDocument()
   })
 
   it('says Calibrating, not No sensor, when rows arrived but none was usable', () => {
-    // The case that sent me here: a headband recording with poor electrode
-    // contact writes rows with the measurement columns nulled -- deliberately,
-    // so the session's timeline survives. The snapshot read the newest of those
-    // and printed "N/A" beside a weekly average of 64% on the same screen: two
-    // true numbers that read as a contradiction.
+    // Poor electrode contact writes rows with the measurement columns
+    // nulled, so the snapshot could print "N/A" beside a weekly average of
+    // 64% on the same screen -- two true numbers that read as a contradiction.
     render(<LiveSignalSummary report={{
       latest: { cognitive: { focus: null, stress: null, engagement: null } },
       sample_counts: { cognitive: 155 },
@@ -216,10 +204,9 @@ describe('LiveSignalSummary', () => {
   })
 
   it('says Off since <date> when EEG consent was withdrawn', () => {
-    // The three cognitive tiles were the only ones that could not say this:
-    // `eegReason` hardcoded `on: true` because the payload carried no EEG
-    // consent state at all, so a parent who switched the headband off read
-    // "No sensor" -- which is what a fault looks like, not what they did.
+    // Before `eeg_enabled` existed, `eegReason` hardcoded `on: true`, so a
+    // parent who switched the headband off read "No sensor" -- a fault, not
+    // what they did.
     render(<LiveSignalSummary report={{
       eeg_enabled: false,
       eeg_revoked_at: '2026-08-05T09:00:00Z',
@@ -232,26 +219,24 @@ describe('LiveSignalSummary', () => {
   })
 
   it('still reports a withdrawn EEG channel as off when it has readings behind it', () => {
-    // Withdrawal stops future recording and keeps what is stored, and the
-    // cognitive channel has no read filter on the aggregate -- so a withdrawn
-    // channel legitimately still has a value. `eeg_enabled` therefore has to be
-    // consent state rather than an `eeg_included`-style claim that nothing was
-    // read, and this is the case that tells the two apart.
+    // Withdrawal stops future recording but keeps what's stored, and the
+    // cognitive channel has no read filter -- so a withdrawn channel can
+    // legitimately still have a value. `eeg_enabled` is consent state, not an
+    // `eeg_included`-style claim that nothing was read.
     render(<LiveSignalSummary report={{
       latest: { cognitive: { focus: 0.72, stress: 0.31, engagement: 0.5 } },
       eeg_enabled: false,
       eeg_revoked_at: '2026-08-05T09:00:00Z',
       sample_counts: { cognitive: 155 },
     }} />)
-    // The reading is what a viewer sees; the tile is not blanked. What changes
-    // is that there is a date available for the surfaces that render one.
+    // The tile is not blanked -- what changes is a date becomes available for
+    // surfaces that render one.
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
   })
 
   it('treats a payload with no EEG consent field as on, not off', () => {
-    // Absent means a payload from before the field existed. Defaulting to off
-    // would tell every reader of an older payload that a headband had been
-    // switched off -- a claim about a decision nobody made.
+    // Absent means a pre-field payload. Defaulting to off would claim a
+    // headband was switched off when nobody made that decision.
     render(<LiveSignalSummary report={{ sample_counts: { cognitive: 0 } }} />)
     expect(metric('Focus').getByText('No sensor')).toBeInTheDocument()
     expect(metric('Focus').queryByText(/^Off since /)).not.toBeInTheDocument()
@@ -266,19 +251,16 @@ describe('LiveSignalSummary', () => {
   })
 })
 
-// The backend nulls every face field when the viewer opts out, which on its
-// own is indistinguishable from "the camera recorded nothing". face_included
-// carries the difference, and these panels have to show it as one -- "N/A"
-// where a parent switched facial reporting off reports a missing measurement
-// instead of a respected choice.
+// The backend nulls every face field when the viewer opts out, which alone
+// is indistinguishable from "the camera recorded nothing". `face_included`
+// carries the difference, and the panel must show it -- "N/A" for an opt-out
+// would report a missing measurement instead of a respected choice.
 describe('facial reporting switched off', () => {
   const faceOff = { ...report, face_included: false }
 
   it('labels the weekly face tiles as off rather than missing', () => {
-    // "Off" alone cannot say which of three states happened, so this goes
-    // through the shared offLabel/valueOrReason path for every face tile.
-    // With no revocation date in the payload it degrades to "Not recorded",
-    // which is still not "no data".
+    // Goes through the shared offLabel/valueOrReason path. With no
+    // revocation date it degrades to "Not recorded", still not "no data".
     render(<WeeklySignalReport report={faceOff} />)
     expect(metric('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()
@@ -302,7 +284,7 @@ describe('facial reporting switched off', () => {
   })
 
   it('does not count the opt-out as data it failed to retrieve', () => {
-    // face_retrieved is null (not requested), not false (the cap stopped us).
+    // face_retrieved is null (not requested), not false (cap stopped it).
     const truncated = {
       ...faceOff,
       truncated: true,
@@ -318,8 +300,8 @@ describe('StrategyPanel', () => {
   const strategies = ['Review fractions for ten minutes', 'Take a short break between sets']
 
   it('numbers the strategies and names their source', () => {
-    // The source distinguishes the fixed rule set from model output that
-    // passed the backend's safety checks -- worth seeing before acting on it.
+    // Distinguishes the fixed rule set from model output that passed the
+    // backend's safety checks.
     render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
     expect(screen.getByText(strategies[0])).toBeInTheDocument()
     expect(screen.getByText('Source: rule-based')).toBeInTheDocument()
@@ -342,18 +324,15 @@ describe('StrategyPanel', () => {
   })
 
   it('retracts the "built from this week\'s report" claim when the signals did not load', () => {
-    // The endpoint still answers with a usable list -- the rules read a null
-    // average as no signal to act on and fall through to their generic
-    // branches. But that list is not about this student's week, and the
-    // subtitle says it is.
+    // The endpoint still answers with a usable list, but it's not about this
+    // student's week, and the subtitle would otherwise claim it is.
     render(<StrategyPanel strategies={strategies} source="rule-based"
                           signalsRetrieved={false} onGenerate={() => {}} />)
     expect(screen.getByText(/general practice suggestions/i)).toBeInTheDocument()
     expect(screen.queryByText(/built from this week's report/i)).not.toBeInTheDocument()
     // Stated above the list too, since it changes how every item reads.
     expect(screen.getByText(/so these are general suggestions/i)).toBeInTheDocument()
-    // Still shows the advice: a generic list is the correct answer here, not
-    // an error state.
+    // Still shows the advice -- a generic list is correct here, not an error.
     expect(screen.getByText(strategies[0])).toBeInTheDocument()
   })
 
@@ -365,8 +344,8 @@ describe('StrategyPanel', () => {
   })
 
   it('treats a payload predating the field as a working read', () => {
-    // signals_retrieved is absent on older responses, which came from a
-    // working read by definition -- undefined must not read as a failure.
+    // Absent on older responses, from a working read -- undefined must not
+    // read as a failure.
     render(<StrategyPanel strategies={strategies} source="rule-based" onGenerate={() => {}} />)
     expect(screen.getByText(/built from this week's report/i)).toBeInTheDocument()
     expect(screen.queryByText(/so these are general suggestions/i)).not.toBeInTheDocument()
@@ -374,22 +353,20 @@ describe('StrategyPanel', () => {
 })
 
 describe('pct', () => {
-  // Shared with the parent dashboard, which had a verbatim copy -- so a fix to
-  // one of them did not reach the other. Both guarded with
-  // Number.isNaN(Number(v)), which lets two kinds of non-measurement through.
+  // Shared with the parent dashboard, which used to have its own copy that a
+  // fix to one didn't reach.
   it('scales a ratio to a whole percent', () => {
     expect(pct(0.72)).toBe('72%')
     expect(pct(0)).toBe('0%')       // a real zero reading still renders
   })
 
   it('reports an empty value as N/A rather than a confident zero', () => {
-    // Number('') and Number('  ') are both 0, so these rendered as "0%" --
-    // a measurement of a struggling student, out of no measurement at all.
+    // Number('') and Number('  ') are both 0, so these rendered as "0%".
     for (const v of ['', '   ', null, undefined]) expect(pct(v)).toBe('N/A')
   })
 
   it('reports a non-finite number as N/A', () => {
-    // Number.isNaN(Infinity) is false, so this reached Math.round.
+    // Number.isNaN(Infinity) is false, so this used to reach Math.round.
     for (const v of [Infinity, -Infinity, NaN, 'abc']) expect(pct(v)).toBe('N/A')
   })
 })
@@ -410,13 +387,12 @@ const heartReport = {
 }
 
 test('heart figures render in absolute units, not as percentages', () => {
-  // The trap this guards: every other series here is a 0..1 ratio the panel
-  // multiplies by 100. Putting 72.4 bpm through the same path prints "7240%".
+  // Every other series is a 0..1 ratio the panel multiplies by 100; putting
+  // 72.4 bpm through the same path would print "7240%".
   render(<WeeklySignalReport report={heartReport} />)
 
-  // Scoped to the tile. A bare queryByText('72%') would collide with the
-  // summary sentence, which legitimately says "average focus was 72%" -- and a
-  // test that fails on a correct render is worse than no test.
+  // Scoped to the tile -- a bare queryByText('72%') would collide with the
+  // summary sentence, which legitimately says "average focus was 72%".
   const bpmTile = screen.getByText(/Avg Heart Rate/i).closest('div')
   expect(within(bpmTile).getByText('72 bpm')).toBeInTheDocument()
   expect(within(bpmTile).queryByText(/%/)).not.toBeInTheDocument()
@@ -427,16 +403,15 @@ test('heart figures render in absolute units, not as percentages', () => {
 })
 
 test('the heart row is absent entirely when the channel was not read', () => {
-  // Rather than a row of N/A, which is indistinguishable from a headband that
-  // recorded nothing.
+  // Rather than a row of N/A, indistinguishable from a headband recording nothing.
   render(<WeeklySignalReport report={{ ...heartReport, heart_included: false }} />)
 
   expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
 })
 
 test('a payload from before the split does not claim the heart channel is off', () => {
-  // It has no heart_included at all. Defaulting to true would draw an empty
-  // series and report a sensor that never existed as having recorded nothing.
+  // No heart_included at all -- defaulting to true would draw an empty
+  // series claiming a sensor that never existed recorded nothing.
   render(<WeeklySignalReport report={report} />)
 
   expect(screen.queryByText(/Avg Heart Rate/i)).not.toBeInTheDocument()
@@ -448,17 +423,16 @@ test('the sensor behind the readings is named', () => {
 })
 
 test('samples recorded but all rejected reads as unusable, not absent', () => {
-  // Three states: measured and fine, measured and unusable, never measured.
-  // A null average with a nonzero count is the middle one.
+  // Three states: measured and fine, measured and unusable, never measured --
+  // a null average with a nonzero count is the middle one.
   render(<WeeklySignalReport report={{
     ...heartReport,
     highlights: { ...heartReport.highlights, heart_rate_bpm: null, rmssd_ms: null },
   }} />)
 
   expect(screen.getByText(/none met the quality threshold/i)).toBeInTheDocument()
-  // Not a raw "N/A": the channel was read (sample_counts.heart is 90), so a
-  // null average here means the samples were rejected, which offLabel calls
-  // Calibrating -- same distinction the Sensor tile already draws.
+  // Not a raw "N/A": the channel was read, so a null average means the
+  // samples were rejected, which offLabel calls Calibrating.
   expect(metric('Avg Heart Rate').getByText('Calibrating')).toBeInTheDocument()
   expect(metric('Avg RMSSD').getByText('Calibrating')).toBeInTheDocument()
 })
@@ -486,8 +460,7 @@ test('the emotion mix is rendered as a distribution, not just its argmax', () =>
 })
 
 test('no emotion mix is drawn when the channel was not read', () => {
-  // An empty pie is a claim about a quiet week that an unread channel has not
-  // earned.
+  // An empty pie would claim a quiet week an unread channel hasn't earned.
   render(<WeeklySignalReport report={{
     ...heartReport, emotion_included: false, emotion_distribution: null,
   }} />)
@@ -508,8 +481,8 @@ test('the live snapshot shows heart in bpm when the channel was read', () => {
 })
 
 test('the live snapshot omits heart rather than showing an empty tile', () => {
-  // The backend leaves the key out when the channel was not read; a tile built
-  // from {} would read as a sensor that recorded nothing.
+  // The backend leaves the key out when unread; a tile built from {} would
+  // read as a sensor that recorded nothing.
   render(<LiveSignalSummary report={{
     ...heartReport,
     latest: { cognitive: { focus: 0.7 }, face: { attention: 0.8 } },
@@ -520,11 +493,9 @@ test('the live snapshot omits heart rather than showing an empty tile', () => {
 
 
 describe('per-channel off states', () => {
-  // The rule these exist for: never render "no data" for something that was not
-  // recorded. A tile saying "N/A" for a withdrawn channel reports an absence in
-  // data nobody collected; one saying "Off" for a failed read reports a
-  // preference nobody expressed.
-  // Local, since `faceOff` is scoped to the describe above.
+  // The rule: never render "no data" for something that was not recorded.
+  // "N/A" for a withdrawn channel and "Off" for a failed read both make a
+  // claim that isn't true. Local, since `faceOff` is scoped to the describe above.
   const base = { ...report, face_included: false, emotion_included: false,
                  consent_retrieved: true }
 
@@ -533,12 +504,11 @@ describe('per-channel off states', () => {
   })
 
   it('does not claim a withdrawal when the consent read failed', () => {
-    // "The student turned this off" is a claim we have not earned when we could
-    // not find out. Distinct state, distinct word.
+    // "The student turned this off" is a claim we haven't earned when we
+    // couldn't find out.
     render(<WeeklySignalReport report={{ ...base, consent_retrieved: false }} />)
-    // Dominant Emotion goes through the same faceOn as Face Attention, and a
-    // failed read leaves faceOn false exactly as a withdrawal would -- the
-    // reason it has to go through offLabel too, not a bare faceOn ternary.
+    // A failed read leaves faceOn false exactly as a withdrawal would, so
+    // this must go through offLabel, not a bare faceOn ternary.
     expect(metric('Dominant Emotion').getByText('Unavailable')).toBeInTheDocument()
   })
 
@@ -548,9 +518,8 @@ describe('per-channel off states', () => {
   })
 
   it('distinguishes a channel that read nothing from one that read nothing usable', () => {
-    // The average has to be null too: the channel is on and was read, it just
-    // produced nothing usable. With a value present there is nothing for the
-    // reason to replace.
+    // The average has to be null too -- with a value present there's nothing
+    // for the reason to replace.
     const on = { ...report, emotion_included: true, face_included: true,
                  consent_retrieved: true,
                  averages: { ...report.averages, face_attention: null } }
@@ -564,15 +533,14 @@ describe('per-channel off states', () => {
   })
 
   it('keeps the heart row when the channel is off, with the reason in it', () => {
-    // Dropping the row would tell a parent who switched the sensor off nothing
-    // at all -- the "no data" failure wearing a different shape.
+    // Dropping the row would tell a parent who switched the sensor off nothing.
     render(<WeeklySignalReport report={{ ...base, heart_included: false,
                                          heart_revoked_at: '2026-08-05T09:00:00Z' }} />)
     expect(screen.getByText((t) => /^Off since /.test(t) && t.includes('Aug'))).toBeInTheDocument()
   })
 
   it('omits the heart row entirely for a payload that predates the channel', () => {
-    // Nothing true to say about a channel this payload does not know about.
+    // Nothing true to say about a channel this payload doesn't know about.
     const { heart_included, ...preSplit } = base
     render(<WeeklySignalReport report={preSplit} />)
     expect(screen.queryByText(/Avg Heart Rate/)).not.toBeInTheDocument()
@@ -582,10 +550,8 @@ describe('per-channel off states', () => {
 
 // ── the charts, for anyone who cannot see them ──────────────────────────────
 //
-// Recharts emits bare `<svg>` with no accessible name and no walkable
-// structure, so the trend and the distribution -- the whole of what a parent or
-// teacher is shown about a child's week beyond the tiles -- announced as
-// nothing at all.
+// Recharts emits a bare `<svg>` with no accessible name, so the trend and the
+// distribution charts announced as nothing at all.
 
 describe('chart accessibility', () => {
   it('gives the trend a name that says what it shows', () => {
@@ -595,16 +561,16 @@ describe('chart accessibility', () => {
   })
 
   it('states each series as a range rather than only naming it', () => {
-    // "Focus" alone is a legend, not a description. The range is the part that
-    // carries what the picture actually showed.
+    // "Focus" alone is a legend, not a description -- the range carries what
+    // the picture actually showed.
     render(<WeeklySignalReport report={report} />)
     expect(screen.getByRole('img', { name: /daily signal trend/i }))
       .toHaveAccessibleName(/Focus 70% to 74%/i)
   })
 
   it('leaves a series nobody recorded out of the description', () => {
-    // A gap in the line is not a zero, and the text alternative has to make the
-    // same distinction -- otherwise it claims a flat week the chart never drew.
+    // A gap in the line is not a zero, and the text alternative has to make
+    // the same distinction.
     render(<WeeklySignalReport report={report} />)
     const name = screen.getByRole('img', { name: /daily signal trend/i })
       .getAttribute('aria-label')
@@ -612,15 +578,10 @@ describe('chart accessibility', () => {
   })
 
   it('keeps the data table out of the role="img" subtree', () => {
-    // The bug this replaces: the table was nested *inside* the `role="img"`
-    // wrapper. WAI-ARIA's presentational-children rule prunes every descendant
-    // role from an `img` unconditionally, so the table built for screen-reader
-    // users was invisible to them -- and the test below could not tell, because
-    // Testing Library reads DOM attributes rather than modelling the
-    // accessibility tree, so `getByRole('table')` found it either way.
-    //
-    // Structure is therefore what gets asserted, since it is the part the
-    // pruning depends on and the part a test in jsdom can actually see.
+    // The bug this replaces: the table nested *inside* the `role="img"`
+    // wrapper. WAI-ARIA prunes every descendant role from an `img`, so the
+    // table was invisible to assistive tech, but Testing Library reads DOM
+    // attributes and found it either way -- so structure is what's asserted.
     render(<WeeklySignalReport report={report} />)
     const chart = screen.getByRole('img', { name: /daily signal trend/i })
     const table = screen.getByRole('table', { name: /daily signal trend/i })
@@ -628,8 +589,8 @@ describe('chart accessibility', () => {
   })
 
   it('carries the days themselves, not just the summary', () => {
-    // A sighted reader can pick a Tuesday out of a line. Without the table, a
-    // screen-reader user gets a range and no way to ask which day was which.
+    // Without the table, a screen-reader user gets a range and no way to ask
+    // which day was which.
     render(<WeeklySignalReport report={report} />)
     const table = screen.getByRole('table', { name: /daily signal trend/i })
     expect(within(table).getByRole('rowheader', { name: '07-20' })).toBeInTheDocument()
@@ -637,7 +598,7 @@ describe('chart accessibility', () => {
   })
 
   it('says "not recorded" rather than leaving a cell blank', () => {
-    // A blank cell is indistinguishable from a table that failed to render.
+    // A blank cell would be indistinguishable from a table that failed to render.
     render(<WeeklySignalReport report={report} />)
     const table = screen.getByRole('table', { name: /daily signal trend/i })
     expect(within(table).getAllByText('not recorded').length).toBeGreaterThan(0)

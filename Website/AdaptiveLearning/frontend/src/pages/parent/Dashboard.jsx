@@ -5,34 +5,24 @@ import { Users, ArrowUpRight, TrendingUp, BookOpen, Flame, Brain, Zap, Activity,
 import { apiFetch } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 import ChildWithdrewBanner from '../../components/consent/ChildWithdrewBanner'
-// pct, emotionOn are shared rather than redefined here: this page had verbatim
-// copies of both, which is how it kept a fixed weakness in one after the other
-// was patched. emotionOn -- whether a payload in hand was built with the
-// emotion channel in it -- is aliased to faceIncluded, this page's existing
-// name for the same check.
+// Shared with SignalPanel rather than redefined, so a fix there doesn't miss
+// a duplicate copy here. emotionOn is aliased to faceIncluded, this page's
+// existing name for the same check.
 import { pct, emotionOn as faceIncluded } from '../../components/signals/SignalPanel'
 
-// Exactly the values the tiles below can render -- deliberately not every
-// field the summary carries. engagement is absent because this page has no
-// engagement tile (the full report does); counting it here would let a child
-// whose only reading is engagement through to a row of four N/As, which is the
-// "something is broken" display this check exists to avoid. Keep this list and
-// the tiles below in step.
+// Only the fields the tiles below actually render. `engagement` and
+// `face_attention` are deliberately excluded — this page has no tile for
+// either, and counting them would show a "something is broken" row of N/As
+// for a child whose only reading is one of those. Keep this list and the
+// tiles below in step.
 function hasSignalSummary(summary) {
-  // `face_attention` was in this list while a Face Attention tile existed.
-  // The tile is gone -- the column has no producer -- so counting it would let
-  // a child whose only reading is attention through to a card with no facial
-  // tile to show, which is the same failure the engagement note above
-  // describes. Keep this list and the tiles below in step.
   return Boolean(summary && (summary.sessions > 0 || summary.focus != null || summary.stress != null))
 }
 
-// Whether the aggregate behind those values was actually read. The endpoint
-// swallows a failed summary query so one broken read does not blank the
-// dashboard, and answers 200 with defaults -- which every check above reads as
-// a quiet week. Without this the page told a parent their child had recorded
-// nothing whenever the RPC was broken. Absent on payloads predating the field,
-// which came from a working read by definition.
+// Whether the aggregate was actually read. A failed summary query still
+// answers 200 with defaults, which would otherwise read as a quiet week
+// instead of a broken read. Absent on older payloads, which came from a
+// working read by definition.
 function signalsRetrieved(summary) {
   return summary?.retrieved !== false
 }
@@ -49,16 +39,13 @@ export default function ParentDashboard() {
     apiFetch('/api/parent/children')
       .then(c => { if (!cancelled) { setChildren(c || []); setError(false); setLoading(false) } })
       .catch(() => { if (!cancelled) { setError(true); setLoading(false) } })
-    // Kept: an unmount mid-flight would otherwise set state on a gone
-    // component. There is no longer a toggle to re-run this.
+    // Prevents setting state after an unmount mid-flight.
     return () => { cancelled = true }
   }, [])
 
   return (
     <div className="p-6 lg:p-8 pb-12 space-y-8">
-      {/* A child switching a sensor off is the one event that changes what is
-          measured, and it was the one nobody was told about: the notice only
-          existed in the other direction. */}
+      {/* Notifies the parent when a child withdraws consent for a sensor. */}
       <ChildWithdrewBanner />
 
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
@@ -67,11 +54,7 @@ export default function ParentDashboard() {
       </motion.div>
 
       {/* A failed refresh with rows already on screen is a banner, not a
-          takeover. This effect re-runs when the facial switch flips, so the
-          whole-page error used to replace a screenful of academic stats and
-          sessions -- none of which the switch has anything to do with -- over
-          one failed request. The rows that are up were scrubbed of facial data
-          when the switch moved, so what stays visible still honours it. */}
+          takeover — don't blank out data that's still valid. */}
       {error && children.length > 0 && (
         <div className="rounded-2xl border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
           Couldn't refresh this page just now — showing the last data loaded.
@@ -105,9 +88,7 @@ export default function ParentDashboard() {
               : 0
             const signals = child.signal_summary || {}
             const retrieved = signalsRetrieved(signals)
-            // Only render the tiles from figures that were actually read. A
-            // failed aggregate leaves them all at their defaults, which
-            // hasSignalSummary reads as a quiet week.
+            // Only render tiles from figures that were actually read.
             const showSignals = retrieved && hasSignalSummary(signals)
             const initial = (child.name || child.email || '?')[0].toUpperCase()
             return (
@@ -153,13 +134,6 @@ export default function ParentDashboard() {
                     {[
                       { icon: Brain,    label: 'Weekly Focus',   value: pct(signals.focus),          color: 'text-emerald-600' },
                       { icon: Zap,      label: 'Weekly Stress',  value: pct(signals.stress),         color: 'text-rose-600' },
-                      // Never a raw "N/A" for a channel that was not recorded,
-                      // and never a raw "N/A" for one that was recorded but
-                      // produced nothing usable this week -- `valueOrReason`
-                      // (SignalPanel.jsx) picks between withdrawn, unavailable,
-                      // calibrating and no-sensor so this tile can't fall back
-                      // to the generic string the rest of the reporting surfaces
-                      // stopped showing.
                       { icon: Activity, label: 'AI Sessions',    value: signals.sessions ?? 0,           color: 'text-amber-600' },
                     ].map(item => (
                       <div key={item.label} className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4">
@@ -172,19 +146,10 @@ export default function ParentDashboard() {
                 ) : (
                   <div className="p-4 border-t border-gray-50 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/20">
                     <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 dark:text-gray-400">
-                      {/* Naming facial recognition with the switch off would
-                          report an absence that was never measured -- the same
-                          distinction the weekly report's summary draws.
-                          Saying nothing at all about it is not enough either:
-                          hasSignalSummary reached "no data" without consulting
-                          any facial reading, and the copy has to be clear that
-                          is the scope of the claim rather than leaving a
-                          parent to read it as covering everything.
-
-                          A failed read is not an absence at all, so it gets
-                          neither claim. Nothing was measured to report on, and
-                          the invitation to open the full report would send a
-                          parent to a page reading from the same aggregate. */}
+                      {/* Say plainly whether facial signals were read or not
+                          — don't imply "no data" when they were never read.
+                          A failed read gets neither claim, since nothing was
+                          measured to report on. */}
                       {!retrieved
                         ? "This week's signal data couldn't be loaded just now — the figures above are unaffected."
                         : <>

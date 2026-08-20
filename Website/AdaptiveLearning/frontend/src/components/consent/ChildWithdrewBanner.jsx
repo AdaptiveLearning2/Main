@@ -1,19 +1,13 @@
 /**
  * Tells a parent that a child has switched a sensor off.
  *
- * The consent model notified in one direction only. A parent re-enabling a
- * channel raises `needs_student_ack` and `ParentRestoredBanner` clears it;
- * nothing told a *parent* when their child turned one off. They found out by
- * opening Settings and reading "Off since <date>" on a panel they had no reason
- * to visit — so the one event that changes what is being measured was the event
- * nobody was told about.
+ * Notification used to run only one way: a parent re-enabling a channel
+ * notified the student, but a child withdrawing one told nobody.
  *
- * **This is a notice, not a prompt to undo it.** A student's withdrawal stands,
- * and a parent can already restore a channel from Settings if that is the right
- * conversation to have. Putting a "turn it back on" button here would make
- * overriding a child's decision the one-click default response to being told
- * they made it, which is the opposite of what the asymmetry is for. It links to
- * Settings and says nothing about what they should do there.
+ * **This is a notice, not a prompt to undo it.** A student's withdrawal
+ * stands; a parent can restore a channel from Settings if that's the right
+ * call. A "turn it back on" button here would make overriding the child's
+ * decision the default response to hearing about it.
  */
 
 import { useEffect, useState } from 'react'
@@ -37,11 +31,10 @@ export default function ChildWithdrewBanner() {
   useEffect(() => {
     let cancelled = false
     apiFetch('/api/parent/consent-notices')
-      // Only on a genuine retrieved read. The endpoint fails open to an empty
-      // list, and drawing this off a failure would tell a parent their child
-      // withdrew something they may not have.
+      // Only on a genuine retrieved read -- a failed read must not be shown as
+      // "child withdrew something", since it fails open to an empty list.
       .then(r => { if (!cancelled && r?.retrieved) setNotices(r.notices || []) })
-      .catch(() => { /* silent: advisory, not a blocker */ })
+      .catch(() => { /* advisory, not a blocker */ })
     return () => { cancelled = true }
   }, [])
 
@@ -50,19 +43,16 @@ export default function ChildWithdrewBanner() {
   const acknowledge = async () => {
     setBusy(true)
     try {
-      // Hands back the watermark the server gave us, per child, rather than
-      // letting the endpoint stamp `now()`. A withdrawal landing between the
-      // read that drew this banner and the click that dismissed it would
-      // otherwise be marked seen and never shown again -- silently, on the
-      // notification whose whole job is to stop exactly that.
+      // Sends back the server's own watermark per child rather than letting the
+      // endpoint stamp `now()` -- otherwise a withdrawal that lands between the
+      // read and the dismiss click would be marked seen and never shown.
       const through = Object.fromEntries(
         notices.filter(n => n.through).map(n => [n.child_id, n.through]))
       await apiFetch('/api/parent/consent-notices/ack',
                      { method: 'POST', body: { through } })
       setNotices([])
     } catch {
-      // Left up. As far as the record is concerned the parent has not been
-      // told, and hiding it here would lose that.
+      // Left up: the parent has not actually been told yet.
       setBusy(false)
     }
   }

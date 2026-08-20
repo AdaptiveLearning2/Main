@@ -1,75 +1,63 @@
 """Pulse waveform from face-video colour, by POS (plane-orthogonal-to-skin).
 
-**Dormant.** This is a correct implementation of a published method and it is
-not wired into anything that ships: `FACE_HEART_ENABLED` defaults to false and
-should stay there. Validated against a simultaneous ECG on 2026-08-08, the
-camera path reported 47.7 bpm at confidence 0.74 against a true 88 -- not a
-derivation error but an absent signal, confirmed in the raw R, G and B channels
-before POS ever touched them. `tests/fixtures/FACE_RPPG_ECG.md` is the evidence.
+Dormant: a correct implementation of a published method, but not wired into
+anything that ships. `FACE_HEART_ENABLED` defaults to false and should stay
+there. Against a simultaneous ECG the camera path reported 47.7 bpm at
+confidence 0.74 against a true 88 -- an absent signal, not a derivation error
+(confirmed in the raw R/G/B channels before POS touches them). See
+`tests/fixtures/FACE_RPPG_ECG.md`.
 
-Kept, rather than deleted, because the failure was the sensor and not the
-algorithm: on a camera whose exposure genuinely locks and whose frames are
-stamped at exposure, this is still the right front half. Do not read the tests
-below as evidence that it measures a heart rate -- they show it computes POS
-correctly on synthetic input, which is a different claim.
+Kept rather than deleted: the failure is the sensor, not the algorithm, and on
+a camera with locked exposure this is still the right approach. The tests below
+only prove POS computes correctly on synthetic input -- not that it measures a
+real heart rate.
 
-This is the front half of camera heart rate. It turns a stream of mean RGB
-values from a face region into a 1-D pulse waveform — the same shape the
-headband's optical sensor produces directly — and hands it to
-`ppg_processing.estimate_window`, which is already validated to within 1 bpm of
-ECG. Nothing here derives a rate; there is exactly one rate derivation in this
-codebase and this feeds it.
+This is the front half of camera heart rate: it turns a stream of mean RGB
+values from a face region into a 1-D pulse waveform (the same shape the
+headband's optical sensor produces) and hands it to
+`ppg_processing.estimate_window`, which is validated to within 1 bpm of ECG.
+There is exactly one rate derivation in this codebase, and this feeds it.
 
 Why an algorithm rather than a package
 --------------------------------------
-Seven rPPG packages were surveyed before writing this. Every deep-learning one carries weights trained on a
-physiological dataset gated behind a per-requester agreement, and the classical
-ones fail on packaging or licence: `yarppg` has no POS, `rPPG-Toolbox` is under
-RAIL, whose §3.2.a.ii restricts inferring and *storing* health data — which is
-precisely what this product does — and `heartbeat` is GPL-3.0, which would
-oblige us to open-source a platform we ship to student devices.
+Every deep-learning rPPG package carries weights gated behind a per-requester
+data agreement. Of the classical ones, `yarppg` has no POS, `rPPG-Toolbox` is
+under a RAIL licence that restricts inferring and storing health data (which is
+what this product does), and `heartbeat` is GPL-3.0, which would force this
+platform open-source. POS itself is a published linear method (Wang et al.
+2017, IEEE TBME 64(7)) implemented from the paper -- algorithms aren't
+copyrightable, so this carries no licence obligation and adds no dependency
+beyond numpy.
 
-POS itself is a published linear method (Wang et al. 2017, "Algorithmic
-Principles of Remote PPG", IEEE TBME 64(7)). Algorithms are not copyrightable
-and this is implemented from the paper, so it carries no licence obligation and
-adds no dependency beyond numpy.
-
-What POS actually does, and why not just the green channel
-----------------------------------------------------------
-The pulse changes facial skin colour by well under 1%. Sitting on top of that,
-much larger, is *specular* variation: lighting shifts, the screen's brightness
-changing as the page redraws, the student leaning. That noise is broadly
-achromatic — it moves all three channels together.
-
-POS exploits the fact that the pulse is *not* achromatic: haemoglobin absorbs
-green far more than red, so a real pulse moves the channels in a fixed, known
-direction while illumination noise moves them along the intensity axis. Project
-onto a plane orthogonal to that intensity axis and the noise largely cancels
-while the pulse survives.
-
-That projection is the whole method:
+What POS does, and why not just the green channel
+---------------------------------------------------
+The pulse changes facial skin colour by well under 1%. On top of that, much
+larger, sits specular variation -- lighting shifts, screen brightness, the
+student leaning -- which is broadly achromatic (moves all three channels
+together). Haemoglobin absorbs green far more than red, so a real pulse moves
+channels in a fixed known direction while illumination noise moves along the
+intensity axis. Projecting onto a plane orthogonal to that axis cancels most of
+the noise while the pulse survives:
 
     P = [[ 0,  1, -1],
          [-2,  1,  1]]
 
-Row 1 is green-minus-blue, row 2 is a chrominance contrast. Neither has any
-component along (1,1,1), so a change that scales all channels equally lands at
+Row 1 is green-minus-blue, row 2 is a chrominance contrast; neither has any
+component along (1,1,1), so a change scaling all channels equally lands at
 zero in both.
 
-The two rows are then combined with `alpha = std(S1) / std(S2)`, which is what
-makes POS adaptive rather than a fixed matrix: the ratio is recomputed per
-window, so it tracks the wearer's own skin tone and the room's lighting instead
-of assuming a population average.
+The two rows are combined with `alpha = std(S1) / std(S2)`, recomputed per
+window, which is what makes POS adaptive: it tracks the wearer's skin tone and
+the room's lighting instead of assuming a population average.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-# Sliding window length in seconds. 1.6 s is the value from the paper, and it is
-# not arbitrary: it is a little longer than the longest plausible beat interval
-# (1.43 s at MIN_BPM = 42), so every window is guaranteed to contain at least one
-# complete cycle for the temporal normalisation to be meaningful.
+# Sliding window length in seconds, from the paper. Slightly longer than the
+# longest plausible beat interval (1.43 s at MIN_BPM = 42), so every window
+# contains at least one full cycle for the temporal normalisation to work.
 WINDOW_SECONDS = 1.6
 
 # The projection. Fixed by the method, not a tuning knob -- both rows are
@@ -83,22 +71,18 @@ def resample_uniform(
 ) -> tuple[np.ndarray, float]:
     """Put an unevenly-sampled colour series onto a uniform time grid.
 
-    Measured on a real webcam, this is not optional. Asked for 30 fps, the
-    camera delivered intervals that were **bimodal** -- 78% at 31 ms and 21% at
-    47 ms -- with the occasional stall past 100 ms. That is not jitter around a
-    mean; it is a mixture of two spacings, and no single number describes it.
-    The mean-based rate said 28 Hz, the mode said 32 Hz, and treating either as
-    a uniform grid distorts every interval by up to 50%.
+    Not optional: a real webcam asked for 30 fps delivered bimodal intervals
+    (78% at 31 ms, 21% at 47 ms, occasional stalls past 100 ms) -- a mixture of
+    two spacings, not jitter around one mean. Treating either the mean rate
+    (28 Hz) or the mode (32 Hz) as uniform distorts intervals by up to 50%.
 
-    Both POS and the autocorrelation downstream assume even sampling. A gate on
-    "is the rate stable" cannot repair that -- it can only refuse everything a
-    real camera produces. Interpolating onto an even grid uses the timestamps we
-    already carry and makes the assumption true instead of merely asserted.
+    Both POS and the downstream autocorrelation assume even sampling, and no
+    quality gate can repair uneven input -- it can only refuse it. Interpolating
+    makes the even-sampling assumption true instead of merely asserted.
 
-    Linear interpolation, not something cleverer: the pulse is heavily
-    oversampled at 30 Hz against a 1-2 Hz signal, so the error from a straight
-    line between adjacent samples is far below the noise floor. Returns the
-    resampled series and the grid rate actually used.
+    Linear interpolation is enough: the pulse is heavily oversampled at 30 Hz
+    against a 1-2 Hz signal, so straight-line error is far below the noise
+    floor. Returns the resampled series and the grid rate used.
     """
     timestamps = np.asarray(timestamps, dtype=float)
     rgb = np.asarray(rgb, dtype=float)
@@ -124,11 +108,10 @@ def resample_uniform(
 def largest_gap(timestamps: np.ndarray) -> float:
     """The biggest interval in a series, in seconds.
 
-    Interpolation fills a gap with a straight line, which is right for a missed
-    frame or two and wrong for a long stall -- there the line is invention, not
-    measurement, and it lands in the pulse band as a slow ramp. Callers gate on
-    this; resampling deliberately does not, because the two questions are
-    separate: how to place the samples, and whether there are enough of them.
+    Interpolation across a missed frame or two is fine; across a long stall it's
+    invention, not measurement, and lands in the pulse band as a slow ramp.
+    Callers gate on this value; resampling itself doesn't, since placing samples
+    and judging whether there are enough of them are separate questions.
     """
     timestamps = np.asarray(timestamps, dtype=float)
     return float(np.diff(timestamps).max()) if len(timestamps) > 1 else 0.0
@@ -141,16 +124,14 @@ def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
     face region. Returns a 1-D waveform of the same length, suitable for
     `ppg_processing.estimate_window`.
 
-    The output is a *relative* signal with no physical unit. Only its timing
+    The output is a relative signal with no physical unit -- only its timing
     carries information, which is all the rate derivation uses.
 
-    There is no streaming variant. An earlier revision had one that returned a
-    single window's contribution and claimed to produce "the same signal for
-    constant work per frame" -- it did not. This overlap-adds up to `window`
-    estimates per frame, so the two differ in both amplitude and noise, and a
-    live reading would have disagreed with any offline re-analysis of the same
-    recording. Constant-work streaming is worth having, but it has to be an
-    incremental form of *this* sum, not a different signal wearing its name.
+    There is no streaming variant. A per-frame streaming version would differ in
+    amplitude and noise from this overlap-add (which sums up to `window`
+    estimates per frame), so a live reading would disagree with an offline
+    re-analysis of the same recording. Any future streaming form must be an
+    incremental version of this same sum, not a different signal.
     """
     rgb = np.asarray(rgb, dtype=float)
     if rgb.ndim != 2 or rgb.shape[1] != 3:
@@ -166,14 +147,11 @@ def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
         start = end - window
         block = rgb[start:end]
 
-        # Temporal normalisation, per channel, within this window only.
-        #
-        # This is what removes the DC skin tone and makes the projection
-        # comparable across people: after it, each channel is a fractional
-        # deviation from its own recent average rather than an absolute
-        # brightness. Doing it per window rather than globally is deliberate --
-        # a global mean would let a lighting change in one part of the session
-        # bias every other part.
+        # Temporal normalisation, per channel, within this window only. Removes
+        # DC skin tone so the projection compares across people: each channel
+        # becomes a fractional deviation from its own recent average. Done per
+        # window, not globally, so a lighting change in one part of the session
+        # can't bias every other part.
         mean = block.mean(axis=0)
         if np.any(mean == 0):
             continue
@@ -181,19 +159,19 @@ def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
 
         projected = PROJECTION @ normalised.T          # (2, window)
 
-        # Adaptive combination. alpha rescales the second row to match the
-        # first's variance before summing, which is what tunes the method to
-        # this wearer's skin tone and this room's light. A fixed weight here
-        # would be CHROM, and would need a per-population constant.
+        # Adaptive combination: alpha rescales the second row to match the first's
+        # variance before summing, tuning to this wearer's skin tone and this
+        # room's light. A fixed weight here would be CHROM, needing a population
+        # constant instead.
         s1, s2 = projected[0], projected[1]
         sd2 = s2.std()
         alpha = (s1.std() / sd2) if sd2 > 0 else 0.0
         combined = s1 + alpha * s2
 
-        # Overlap-add. Each frame is covered by up to `window` overlapping
-        # estimates and they are summed, which averages away per-window noise.
-        # The mean is removed first so that windows with different DC levels do
-        # not add a staircase into the result.
+        # Overlap-add: each frame is covered by up to `window` overlapping
+        # estimates, summed to average away per-window noise. The mean is
+        # removed first so windows with different DC levels don't add a
+        # staircase into the result.
         pulse[start:end] += combined - combined.mean()
 
     return pulse

@@ -104,12 +104,11 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first: what "easy"/"medium"/"hard" MEANS changes fundamentally
-# by grade, not just the magnitude of the numbers. Decimals are typically a
-# grade-4+ concept and fractions grade-3+ -- a "no fractions" easy tier next
-# to a "use fractions" hard tier, both layered under the SAME magnitude cap,
-# used to hand a 1st grader fraction comparisons at "hard" difficulty just
-# because their grade only capped the numbers below 20.
+# Difficulty changes which math concept is used, not just how big the
+# numbers are. Decimals are roughly a grade-4+ concept and fractions
+# grade-3+, so each grade band defines its own easy/medium/hard tiers --
+# otherwise scaling magnitude alone could put fraction comparisons in
+# front of a 1st grader just because that grade allows bigger numbers.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 3 values, whole numbers below 20 only. No decimals, no fractions, no negatives.",
@@ -193,9 +192,8 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
                                         attempt + 1):
             continue
 
-        # The student is shown question_text but scored on the field
-        # above; nothing used to check they agree. See
-        # question_consistency for the measured failure.
+        # The student reads question_text but is scored against values --
+        # check the numbers in the text match the scored dataset.
         inconsistent = question_consistency.dataset_mismatch(
             question_data.get("question_text"), question_data.get("values"))
         if inconsistent:

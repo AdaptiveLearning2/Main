@@ -3,7 +3,6 @@ import { supabase } from './supabase'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 async function getAccessToken() {
-  // supabase v2: supabase.auth.getSession()
   try {
     const { data } = await supabase.auth.getSession()
     return data?.session?.access_token || null
@@ -12,26 +11,18 @@ async function getAccessToken() {
   }
 }
 
-/** `timeoutMs` is opt-in, and deliberately has no default.
+/** `timeoutMs` is opt-in with no default. Most callers show a spinner on a
+ * slow request, so a blanket timeout would just add a new failure mode. The
+ * exception is a caller that gates a whole page behind the request (like the
+ * role read in `AuthContext`), which must not hang forever with `loading`
+ * stuck true.
  *
- * Most callers here render into a page that is already on screen, so a slow
- * request costs a spinner in one panel and a blanket default would be a new way
- * for them to fail. The one that cannot afford to wait for ever is the role
- * read in `AuthContext`, because `loading` gates every route: a request that
- * *hangs* rather than fails leaves the whole app behind a loader with nothing
- * to catch. Callers that gate something pass a bound; the rest do not.
+ * A blanket default would also be too short for the LLM strategies endpoint,
+ * which can legitimately take up to `STRATEGY_LLM_TIMEOUT` (20s) server-side.
  *
- * Not a blanket default for a second reason: `/api/students/{id}/learning-
- * strategies` is bounded server-side at `STRATEGY_LLM_TIMEOUT` (20s) and can
- * queue behind other waiters first, so any default short enough to be useful
- * here would abort that one mid-flight -- and `sidecar.js` already documents
- * what a client timeout shorter than the work does: it does not cancel
- * anything, it just stops you finding out what happened.
- *
- * The bound covers the **whole call**, not just the fetch. `getAccessToken`
- * awaits `supabase.auth.getSession()`, which goes to the network when the
- * access token needs refreshing -- so a timeout wrapped around `fetch` alone
- * would leave exactly the hang it was added to stop.
+ * The bound covers the whole call, not just `fetch` — `getAccessToken` can
+ * itself hit the network refreshing the token, so wrapping only `fetch`
+ * would leave that part unbounded.
  */
 export async function apiFetch(path, { method = 'GET', body = null,
                                        timeoutMs = null } = {}) {
@@ -41,8 +32,7 @@ export async function apiFetch(path, { method = 'GET', body = null,
   let timer
   const expired = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      // Aborted as well as rejected: without this the request stays in flight
-      // after the caller has given up on it.
+      // Abort the request too, or it keeps running after the caller gives up.
       controller.abort()
       const err = new Error(`Request to ${path} timed out after ${timeoutMs}ms`)
       err.timeout = true
@@ -75,8 +65,7 @@ async function request(path, { method, body, signal }) {
     let detail = txt
     try { detail = JSON.parse(txt) } catch {}
     const err = new Error(detail?.detail || detail || res.statusText)
-    // Callers that must tell "this doesn't exist" apart from "the request
-    // failed" need the code, and the message alone doesn't carry it.
+    // Carry the status code so callers can tell errors apart (e.g. 404 vs 500).
     err.status = res.status
     throw err
   }

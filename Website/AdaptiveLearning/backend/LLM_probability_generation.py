@@ -182,7 +182,6 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         else:
             prompt = prob_prompt
 
-        # select a scenario from the tier matching this question's difficulty
         scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."

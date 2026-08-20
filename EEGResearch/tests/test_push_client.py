@@ -1,10 +1,8 @@
-"""The sidecar half of the ingestion split.
+"""Tests for the sidecar-side push client.
 
-The failure this guards is the same one `INGEST_MODE` guards on the backend: a
-signal path that produces nothing, raises nothing, and leaves a session looking
-live. Here that would be a queue quietly discarding samples, a token outliving
-the session it was granted for, or a client counting what it sent rather than
-what was stored.
+Guards against a signal path that produces nothing, raises nothing, and looks
+live: a queue silently dropping samples, a token outliving its session, or a
+client counting what it sent instead of what was actually stored.
 """
 
 import asyncio
@@ -16,9 +14,8 @@ from src.app.services.push_client import MAX_BATCH, MAX_QUEUE, PushClient
 
 @pytest.fixture
 def anyio_backend():
-    """asyncio only. anyio's plugin is already a dependency (FastAPI pulls it
-    in), so async tests need no pytest-asyncio; without this fixture it would
-    also run every test under trio, which is not installed."""
+    """asyncio only -- trio isn't installed and anyio would otherwise also run
+    these tests under it."""
     return "asyncio"
 
 
@@ -72,8 +69,7 @@ async def _started(pc, session_id="s1", token="tok"):
 
 @pytest.mark.anyio
 async def test_nothing_is_queued_before_a_session_starts():
-    """A sidecar streaming for its local dashboard with no session open must not
-    be holding a student's samples, let alone sending them."""
+    """No session open means no student samples held, let alone sent."""
     pc = PushClient("http://backend:8000")
     pc.enqueue("cognitive", {"ts": "t"})
     assert pc.status()["queued"]["cognitive"] == 0
@@ -81,8 +77,7 @@ async def test_nothing_is_queued_before_a_session_starts():
 
 @pytest.mark.anyio
 async def test_the_token_does_not_outlive_the_session(client):
-    """The whole argument for holding a student's bearer token in a process on
-    their laptop is that it lives in memory for one session."""
+    """The token lives in memory for one session only."""
     await _started(client)
     assert client._token == "tok"
 
@@ -93,9 +88,8 @@ async def test_the_token_does_not_outlive_the_session(client):
 
 @pytest.mark.anyio
 async def test_switching_session_drops_the_previous_queue(client):
-    """Those samples belong to a session this token may no longer own. Posting
-    them would either be rejected, or -- for the same student -- attribute one
-    session's readings to another."""
+    """Old samples belong to a session the new token may not own; posting them
+    could attribute one session's readings to another."""
     await _started(client, "s1")
     client.enqueue("cognitive", {"ts": "t"})
     assert client.status()["queued"]["cognitive"] == 1
@@ -107,8 +101,8 @@ async def test_switching_session_drops_the_previous_queue(client):
 
 @pytest.mark.anyio
 async def test_a_full_queue_drops_oldest_and_counts_it(client):
-    """`deque(maxlen=...)` evicts silently. Unrecorded, that is a signal path
-    losing data with nothing anywhere to say so."""
+    """`deque(maxlen=...)` evicts silently; the drop must be counted or nothing
+    says data was lost."""
     await _started(client)
     for i in range(MAX_QUEUE + 5):
         client.enqueue("face", {"ts": i})
@@ -116,8 +110,7 @@ async def test_a_full_queue_drops_oldest_and_counts_it(client):
     status = client.status()
     assert status["queued"]["face"] == MAX_QUEUE
     assert status["dropped_locally"]["face"] == 5
-    # Oldest gone, newest kept: for a live session the recent samples are the
-    # ones worth having.
+    # Oldest gone, newest kept -- recent samples matter more for a live session.
     assert client._queues["face"][-1]["ts"] == MAX_QUEUE + 4
 
 
@@ -136,8 +129,8 @@ async def test_a_flush_stays_within_the_backends_batch_bound(client):
 
 @pytest.mark.anyio
 async def test_a_failed_post_puts_the_samples_back_in_order(client, monkeypatch):
-    """A transient failure must not reorder a session's samples relative to what
-    comes after them."""
+    """A transient failure must not reorder samples relative to what comes
+    after them."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
@@ -153,8 +146,8 @@ async def test_a_failed_post_puts_the_samples_back_in_order(client, monkeypatch)
 
 @pytest.mark.anyio
 async def test_a_429_is_a_failure_not_a_delivery(client, monkeypatch):
-    """The backend's rate limit. Counting it as delivered would drop the samples
-    and report success."""
+    """A 429 is the backend's rate limit; counting it as delivered would drop
+    the samples while reporting success."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=429))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
@@ -170,10 +163,8 @@ async def test_a_429_is_a_failure_not_a_delivery(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_delivery_is_counted_from_the_backends_answer(client, monkeypatch):
-    """It drops samples for a sensor the student declined and says how many. A
-    client counting what it *sent* would report a healthy session that recorded
-    nothing -- the write-side version of a dashboard that cannot tell "no data"
-    from "zero"."""
+    """`recorded` must reflect what the backend actually inserted, not what was
+    sent -- otherwise a session that recorded nothing looks healthy."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(
         body={"ok": True, "inserted": 0, "dropped": 2, "reason": "camera not consented"}))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
@@ -189,7 +180,7 @@ async def test_delivery_is_counted_from_the_backends_answer(client, monkeypatch)
 
 @pytest.mark.anyio
 async def test_repeated_failures_back_off_and_recover(client, monkeypatch):
-    """A backend that is down must not be retried at the flush rate for a whole
+    """A downed backend must not be retried at the flush rate for a whole
     lesson."""
     failing = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
@@ -213,14 +204,12 @@ async def test_repeated_failures_back_off_and_recover(client, monkeypatch):
     assert client.status()["last_error"] is None
 
 
-# ── payload shaping ──────────────────────────────────────────────────────────
+# ── payload shaping ─────────────────────────────────────────────────────
 
 @pytest.mark.anyio
 async def test_eeg_features_go_up_unconverted(client):
     """No arithmetic on this side. The 0..100 -> 0..1 conversion lives once, in
-    the backend's `signal_mapping`, reached identically by the poller and by
-    this path -- a second copy here is how one path stores percentages while the
-    other stores ratios."""
+    the backend's `signal_mapping`, shared by both the poller and this path."""
     await _started(client)
     client.submit_payload({
         "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
@@ -244,8 +233,7 @@ async def test_a_camera_tick_splits_into_the_channels_present(client):
 
     queued = client.status()["queued"]
     assert queued["face"] == 1 and queued["heart"] == 1
-    # A camera has no electrodes; a cognitive row from one would be averaged
-    # into an EEG session's numbers.
+    # A camera has no electrodes, so it must not produce a cognitive row.
     assert queued["cognitive"] == 0
     assert client._queues["face"][0]["emotion_trusted"] is True
     assert client._queues["heart"][0]["heart_rate_bpm"] == 71.0
@@ -253,9 +241,8 @@ async def test_a_camera_tick_splits_into_the_channels_present(client):
 
 @pytest.mark.anyio
 async def test_a_switched_off_channel_produces_no_row(client):
-    """`build_camera_payload` omits a disabled channel rather than nulling it. A
-    student who refused heart recording is not a camera that failed to get a
-    reading, and neither is a row."""
+    """`build_camera_payload` omits a disabled channel rather than nulling it --
+    declined consent is not the same as a failed reading."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t", "device_id": "cam0",
@@ -267,9 +254,8 @@ async def test_a_switched_off_channel_produces_no_row(client):
 
 @pytest.mark.anyio
 async def test_a_heart_reading_without_a_source_is_dropped_locally(client):
-    """Consent is per sensor, so a reading that cannot name its sensor cannot be
-    consent-checked. Dropped here rather than rejected there, so the failure is
-    local and counted."""
+    """Consent is per sensor, so a reading with no named sensor can't be
+    consent-checked, and is dropped locally instead."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t",
@@ -281,10 +267,8 @@ async def test_a_heart_reading_without_a_source_is_dropped_locally(client):
 
 @pytest.mark.anyio
 async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch):
-    """The batches were drained for all three channels up front, so re-raising
-    on the first failure discarded the other two outright -- popped, never put
-    back, and counted nowhere. Silent loss in the error path of the module
-    written to prevent silent loss."""
+    """Each channel's batch must be drained and flushed independently -- a
+    failure in one must not discard batches already popped from the others."""
     def responder(url, json, headers):
         return _Response(status_code=500) if url.endswith("/cognitive") else _Response(
             body={"ok": True, "inserted": len(json["samples"])})
@@ -309,9 +293,8 @@ async def test_one_channels_failure_does_not_cost_the_others(client, monkeypatch
 
 @pytest.mark.anyio
 async def test_restoring_into_a_full_queue_counts_what_it_evicts(client, monkeypatch):
-    """`extendleft` on a maxlen deque silently evicts from the far end -- the
-    *newest* samples, which is the reverse of the drop-oldest rule and
-    uncounted, which is worse than either."""
+    """`extendleft` on a maxlen deque evicts from the far end (newest samples),
+    the reverse of the drop-oldest rule -- must still be counted."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
@@ -319,7 +302,7 @@ async def test_restoring_into_a_full_queue_counts_what_it_evicts(client, monkeyp
     for i in range(MAX_BATCH):
         client.enqueue("cognitive", {"ts": i})
 
-    # The queue fills while that batch is notionally in flight.
+    # Queue fills while that batch is notionally in flight.
     taken = client._take("cognitive")
     for i in range(MAX_QUEUE):
         client.enqueue("cognitive", {"ts": 1000 + i})
@@ -335,13 +318,13 @@ async def test_restoring_into_a_full_queue_counts_what_it_evicts(client, monkeyp
 @pytest.mark.anyio
 async def test_the_backoff_survives_a_full_queue(client):
     """The wake event fires whenever a batch fills, which during an outage is
-    every few samples. Flushing on it regardless made the backoff decorative and
-    retried a dead backend at the sample rate."""
+    every few samples -- flushing on it regardless would retry a dead backend
+    at the sample rate."""
     await _started(client)
     client._note_failure(RuntimeError("backend down"))
     assert client._retry_at > 0
 
-    # A full batch sets the wake event; the deadline must still hold.
+    # A full batch sets the wake event; the backoff deadline must still hold.
     for i in range(MAX_BATCH):
         client.enqueue("cognitive", {"ts": i})
     assert client._wake.is_set()
@@ -350,8 +333,8 @@ async def test_the_backoff_survives_a_full_queue(client):
 
 @pytest.mark.anyio
 async def test_shutdown_flushes_the_whole_backlog(client):
-    """`_flush_once` takes at most MAX_BATCH per channel, so one call at
-    shutdown delivered 50 samples and dropped the rest of what had backed up."""
+    """`_flush_once` takes at most MAX_BATCH per channel, so shutdown must call
+    it repeatedly rather than once, or a large backlog is dropped."""
     await _started(client)
     for i in range(MAX_BATCH * 3):
         client.enqueue("cognitive", {"ts": i})
@@ -364,12 +347,10 @@ async def test_shutdown_flushes_the_whole_backlog(client):
 
 @pytest.mark.anyio
 async def test_the_emitted_payload_carries_what_the_pull_path_stores():
-    """`bands` and `ingestion` are assembled in `snapshot()` and were never in
-    `latest_payload`, so emitting the raw payload gave push-ingested EEG rows
-    null alpha/beta/theta/delta/gamma while pull-ingested ones -- which read
-    /api/v1/state, i.e. snapshot() -- had them. One deployment silently
-    recording less than the other is the divergence the shared mapping exists to
-    rule out, one layer upstream of it."""
+    """`bands` and `ingestion` are assembled in `snapshot()`, not carried on
+    `latest_payload`. Emitting the raw payload instead of the snapshot would
+    give push-ingested EEG rows null band powers while pull-ingested ones
+    (which read `/api/v1/state`, i.e. `snapshot()`) have them."""
     from src.app.config import DeviceConfig, get_settings
     from src.app.services.stream_manager import DeviceSession
 
@@ -388,8 +369,8 @@ async def test_the_emitted_payload_carries_what_the_pull_path_stores():
 
 @pytest.mark.anyio
 async def test_a_raising_consumer_does_not_kill_the_sampling_loop():
-    """Losing the local stream to fix up a remote write is strictly worse than
-    losing the remote write."""
+    """A consumer that raises must not kill the local sampling loop -- losing
+    it would be worse than losing the remote write."""
     from src.app.config import DeviceConfig, get_settings
     from src.app.services.stream_manager import DeviceSession
 
@@ -402,14 +383,13 @@ async def test_a_raising_consumer_does_not_kill_the_sampling_loop():
         raise RuntimeError("network on fire")
 
     session.on_payload = boom
-    await session._emit()  # must not raise
+    await session._emit()  # must not propagate
 
 
 @pytest.mark.anyio
 async def test_switching_session_does_not_post_the_old_queue(client):
-    """The docstring said "drops" and the code called `stop()`, which flushes --
-    so those samples were posted after all. They belong to a session the new
-    token may not own."""
+    """A switch must not flush the old queue via `stop()` -- those samples
+    belong to a session the new token may not own."""
     await _started(client, "s1")
     client.enqueue("cognitive", {"ts": "old"})
 
@@ -421,12 +401,11 @@ async def test_switching_session_does_not_post_the_old_queue(client):
 
 @pytest.mark.anyio
 async def test_a_stopped_client_does_not_carry_a_queue_into_the_next_session(client):
-    """The guard was `if self.running`, so a client whose loop had already ended
-    skipped the stop entirely -- and the old queue went out under the *new*
-    session id, filing one session's readings under another."""
+    """A client whose loop already ended must still clear its queue on the next
+    start, or old samples go out under the new session id."""
     await _started(client, "s1")
     client.enqueue("cognitive", {"ts": "old"})
-    # The loop ends without a stop(), as a cancelled task would leave it.
+    # Loop ends without a stop(), as a cancelled task would leave it.
     client._task.cancel()
     try:
         await client._task
@@ -444,8 +423,8 @@ async def test_a_stopped_client_does_not_carry_a_queue_into_the_next_session(cli
 
 @pytest.mark.anyio
 async def test_samples_produced_during_the_shutdown_window_are_counted(client):
-    """A session is open but the loop has ended. Those samples will never be
-    sent, which is a loss, and every other loss on this path is counted."""
+    """A session open with no running loop still loses samples, and that loss
+    must be counted like every other one on this path."""
     await _started(client)
     client._task.cancel()
     try:
@@ -460,8 +439,8 @@ async def test_samples_produced_during_the_shutdown_window_are_counted(client):
 
 @pytest.mark.anyio
 async def test_no_session_is_not_a_drop():
-    """A sidecar streaming for its local dashboard has nowhere to send samples
-    and is not losing them. Counting that would make the number meaningless."""
+    """With no session open, samples aren't being lost, just not sent -- must
+    not count toward drops."""
     pc = PushClient("http://backend:8000")
     pc.enqueue("cognitive", {"ts": 0})
 
@@ -470,10 +449,10 @@ async def test_no_session_is_not_a_drop():
 
 @pytest.mark.anyio
 async def test_a_rejected_face_window_is_not_a_row(client):
-    """`build_face_record` always returns a dict -- a rejected window arrives as
-    `emotion: None, rejected_by: "no_face"`, not as an absent block. Enqueuing
-    on the block's presence wrote ~14k all-null rows an hour, each counted as a
-    sample by the aggregates and by `dominant_emotion`."""
+    """`build_face_record` always returns a dict, so a rejected window arrives
+    as `emotion: None, rejected_by: "no_face"`, not an absent block. Enqueuing
+    must check for a reading, not just block presence, or it writes thousands
+    of all-null rows an hour."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t", "device_id": "cam0",
@@ -486,12 +465,9 @@ async def test_a_rejected_face_window_is_not_a_row(client):
 
 @pytest.mark.anyio
 async def test_a_gaze_without_an_emotion_is_still_a_reading(client):
-    """A reading is an emotion **or** a gaze. Gating on emotion alone was right
-    while emotion was the only measurement in this block; with gaze in it, a
-    window where FER+ refused and the landmarks did not would be dropped -- and
-    the gaze channel would appear to work everywhere except on the faces the
-    classifier finds hardest, which is the population it is least reliable on
-    to begin with."""
+    """A reading is an emotion **or** a gaze. Gating on emotion alone would drop
+    a window where FER+ refused but the landmarks succeeded -- exactly the
+    faces the emotion classifier is least reliable on."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t", "device_id": "cam0",
@@ -505,8 +481,8 @@ async def test_a_gaze_without_an_emotion_is_still_a_reading(client):
 
 @pytest.mark.anyio
 async def test_neither_measurement_is_still_not_a_row(client):
-    """Widening the gate must not reopen the all-null flood it was added to
-    stop: a window that refused both is not a reading of anything."""
+    """A window that refuses both emotion and gaze is not a reading of
+    anything, and must not be enqueued."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t", "device_id": "cam0",
@@ -520,8 +496,8 @@ async def test_neither_measurement_is_still_not_a_row(client):
 
 @pytest.mark.anyio
 async def test_the_gaze_refusal_reaches_raw_separately_from_the_emotion_one(client):
-    """Two measurements, two refusals. One field for both cannot say which
-    failed."""
+    """Two measurements, two refusal fields -- one shared field couldn't say
+    which failed."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t", "device_id": "cam0",
@@ -537,8 +513,8 @@ async def test_the_gaze_refusal_reaches_raw_separately_from_the_emotion_one(clie
 
 @pytest.mark.anyio
 async def test_an_untrusted_emotion_is_still_a_reading(client):
-    """`emotion_trusted` is a column and fusion gates on it. Dropping untrusted
-    readings here would silently narrow what the backend gets to decide about."""
+    """`emotion_trusted` is a column the backend's fusion logic gates on --
+    dropping untrusted readings here would take that decision away from it."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t",
@@ -551,9 +527,9 @@ async def test_an_untrusted_emotion_is_still_a_reading(client):
 
 @pytest.mark.anyio
 async def test_a_rejected_heart_window_is_not_a_row(client):
-    """`build_heart_record` sets `source: "rppg"` unconditionally, including on
-    warming_up and no_face rejects, so `source` alone was not enough of a test.
-    Latent only because FACE_HEART_ENABLED is off."""
+    """`build_heart_record` sets `source: "rppg"` unconditionally, even on
+    rejects, so checking `source` alone isn't enough -- must check for an
+    actual bpm reading."""
     await _started(client)
     client.submit_payload({
         "kind": "camera", "timestamp": "t",
@@ -566,8 +542,8 @@ async def test_a_rejected_heart_window_is_not_a_row(client):
 
 @pytest.mark.anyio
 async def test_an_unreadable_receipt_does_not_re_post_a_committed_batch(client, monkeypatch):
-    """Past `raise_for_status()` the rows are written. Throwing while reading the
-    body would restore the batch and post it again -- and neither
+    """Past `raise_for_status()` the rows are already written. Raising while
+    reading the response body would restore and re-post the batch, and neither
     `cognitive_signals` nor `face_signals` has a dedupe key."""
     class _BadBody(_Response):
         def json(self):
@@ -582,15 +558,15 @@ async def test_an_unreadable_receipt_does_not_re_post_a_committed_batch(client, 
     await client._flush_once()  # must not raise
 
     assert client.status()["queued"]["cognitive"] == 0, "a committed batch was re-queued"
-    # Neither recorded nor lost: the write happened, our knowledge of it did not.
+    # Neither recorded nor lost: the write happened but we couldn't confirm it.
     assert client.status()["recorded"]["cognitive"] == 0
     assert client.status()["unaccounted"]["cognitive"] == 1
 
 
 @pytest.mark.anyio
 async def test_counters_do_not_carry_into_the_next_session(client):
-    """A fresh session showing readings recorded before any were taken is a
-    worse lie than a blank tile."""
+    """A fresh session must start at zero, not show readings recorded before
+    it began."""
     await _started(client, "s1")
     client.enqueue("cognitive", {"ts": 0})
     await client._flush_once()
@@ -604,8 +580,8 @@ async def test_counters_do_not_carry_into_the_next_session(client):
 
 @pytest.mark.anyio
 async def test_submit_payload_counts_the_shutdown_window_like_enqueue(client):
-    """It had its own `running` guard in front of `enqueue`, so it short-circuited
-    the accounting `enqueue` was fixed to do."""
+    """`submit_payload` must go through the same shutdown-window accounting as
+    `enqueue`, not skip it with its own separate guard."""
     await _started(client)
     client._task.cancel()
     try:
@@ -620,9 +596,8 @@ async def test_submit_payload_counts_the_shutdown_window_like_enqueue(client):
 
 @pytest.mark.anyio
 async def test_an_empty_pass_does_not_clear_the_backoff(client, monkeypatch):
-    """A lull in sampling during an outage -- a paused lesson, a student
-    thinking -- reset a 120s backoff to 0 and reported `last_error: null` on the
-    strength of having delivered no bytes to a backend that is still down."""
+    """A lull in sampling during an outage must not reset the backoff or clear
+    `last_error` -- nothing was actually delivered to confirm recovery."""
     fake = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: fake)
@@ -644,10 +619,9 @@ async def test_an_empty_pass_does_not_clear_the_backoff(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_concurrent_starts_do_not_leave_a_running_loop_without_a_token(client):
-    """Both await, so the slower one used to resume inside its own stop() and
-    clear the session and token the other had just installed -- a running task
-    with no token: status() says running, nothing records, and the drops are not
-    even counted because enqueue reads it as "no session"."""
+    """Two concurrent `start()` calls must not leave a running loop with its
+    token cleared -- e.g. by the slower call's internal `stop()` wiping what
+    the other just installed."""
     await _started(client, "s0")
 
     await asyncio.gather(client.start("s1", "tok1"), client.start("s1", "tok1"))
@@ -661,7 +635,7 @@ async def test_concurrent_starts_do_not_leave_a_running_loop_without_a_token(cli
 
 @pytest.mark.anyio
 async def test_a_successful_pass_still_clears_the_backoff(client, monkeypatch):
-    """The guard above must not have broken recovery."""
+    """A real successful flush must still clear the backoff."""
     failing = _FakeClient(responder=lambda *_a, **_k: _Response(status_code=500))
     monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
                         lambda **_k: failing)
@@ -683,10 +657,10 @@ async def test_a_successful_pass_still_clears_the_backoff(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_a_held_heart_block_is_enqueued_once(client):
-    """The headband's block is a 25s window recomputed every 10s and held on the
-    payload in between -- which is what lets a 1Hz poller see every reading
-    rather than most of them -- so one measurement arrives on ~40 consecutive
-    ticks. Keyed on the tick's timestamp, each of those was a distinct row.
+    """The heart block is a 25s window recomputed every 10s and held on the
+    payload in between, so one measurement arrives on ~40 consecutive ticks.
+    Must be keyed on the reading's own timestamp, not the tick's, or each
+    arrival becomes a distinct row.
     """
     await _started(client)
     block = {"source": "muse_optics", "bpm": 68.2, "confidence": 0.8,
@@ -698,17 +672,15 @@ async def test_a_held_heart_block_is_enqueued_once(client):
         })
 
     assert client.status()["queued"]["heart"] == 1
-    # The reading's own stamp, not the tick it happened to ride in on.
+    # The reading's own timestamp, not the tick it arrived on.
     assert client._queues["heart"][0]["ts"] == "2026-08-10T10:00:00+00:00"
 
 
 @pytest.mark.anyio
 async def test_rmssd_gating_fields_are_carried_into_the_enqueued_sample(client):
     """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates, kept
-    apart from `rejected_by`: a row can carry a good bpm and no RMSSD, and
-    these say which of the two was refused. The enqueue dict was hand-copied
-    field by field and silently dropped both when they were added to
-    `build_heart_record`."""
+    apart from `rejected_by` -- a row can carry a good bpm with no RMSSD, and
+    these fields say why. The enqueue path must carry both."""
     await _started(client)
     client.submit_payload({
         "timestamp": "2026-08-10T10:00:00Z", "device_id": "station1",
@@ -738,8 +710,8 @@ async def test_a_new_heart_reading_is_enqueued_again(client):
 
 @pytest.mark.anyio
 async def test_two_devices_do_not_suppress_each_others_readings(client):
-    """A laptop running a headband and a camera has two sessions feeding one
-    client, so a single last-stamp slot would let each hide the other's."""
+    """A headband and a camera can feed one client at once; a single
+    last-stamp slot would let one device's reading hide the other's."""
     await _started(client)
     for device, source in (("station1", "muse_optics"), ("cam0", "rppg")):
         client.submit_payload({

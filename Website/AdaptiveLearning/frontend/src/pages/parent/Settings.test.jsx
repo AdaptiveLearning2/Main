@@ -15,8 +15,8 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'p-1', email: 'parent@example.com' } }),
 }))
 
-// The consent panels fetch four endpoints of their own and have their own
-// file. Stubbed so this one is about the page around them.
+// Stubbed so this file tests the page around the consent panels, not the
+// panels themselves — they have their own test file.
 vi.mock('../../components/consent/ConsentChannels', () => ({
   default: ({ studentId }) => <div data-testid={`consent-${studentId}`} />,
 }))
@@ -46,10 +46,8 @@ beforeEach(() => {
 
 describe('the facial opt-out', () => {
   it('does not read facial data for a page that renders none', async () => {
-    // The whole subject of this page is what may be measured, and it was the
-    // one reading `face_signals` for every linked child to print their names.
-    // The rule is that the opt-out skips the query, not that the values are
-    // dropped on the way out -- so this asserts on the request.
+    // The opt-out must skip the query entirely, not just drop the values
+    // on the way out.
     draw()
     await waitFor(() => expect(apiFetch).toHaveBeenCalled())
     const urls = apiFetch.mock.calls.map(c => String(c[0]))
@@ -68,13 +66,9 @@ describe('the account section', () => {
 
   it('saves the display name', async () => {
     draw()
-    // Waited for by *value*, not just by presence. Both pages disable the field
-    // until the profile lands -- so that a fast typist cannot have their input
-    // overwritten by the response arriving behind them -- and `findByLabelText`
-    // resolves the moment the input exists, which is before the fetch settles.
-    // `userEvent.clear()` throws on a disabled element, so this raced: it
-    // passed locally every time and failed on CI, where the microtask lands a
-    // tick later.
+    // Wait for the value, not just presence: `findByLabelText` resolves as
+    // soon as the (still-disabled) input exists, before the fetch settles,
+    // and `userEvent.clear()` throws on a disabled element.
     await screen.findByDisplayValue('Rae')
     const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
@@ -98,8 +92,6 @@ describe('the account section', () => {
 
 describe('unlinking a child', () => {
   it('asks first, and does nothing until the second click', async () => {
-    // A link is what `_verify_can_view_student` reads as entitlement to a
-    // child's reports. One stray click should not end it.
     draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
     await userEvent.click(rows[0])
@@ -118,17 +110,13 @@ describe('unlinking a child', () => {
     await waitFor(() =>
       expect(apiFetch).toHaveBeenCalledWith('/api/parent/children/kid-1',
         expect.objectContaining({ method: 'DELETE' })))
-    // Named twice on the page -- once in the list above, once as the heading
-    // of their consent panel -- so both have to go.
+    // Named twice on the page: the list row and the consent panel heading.
     await waitFor(() => expect(screen.queryAllByText('Ada')).toHaveLength(0))
     expect(screen.queryAllByText('Basil').length).toBeGreaterThan(0)
   })
 
   it('keeps the child on the page when the unlink fails', async () => {
-    // The removal waits for the response rather than being optimistic: a child
-    // vanishing from this list is exactly what a successful unlink looks like,
-    // so drawing it before the request lands would report one that did not
-    // happen.
+    // Removal waits for the response rather than being optimistic.
     overrideApi('/api/parent/children/kid-1', () => { throw apiError(500) }, 'DELETE')
     draw()
     const rows = await screen.findAllByRole('button', { name: /^unlink$/i })
@@ -151,9 +139,7 @@ describe('unlinking a child', () => {
 
 describe('when the children read fails', () => {
   it('says so rather than showing an empty family', async () => {
-    // "No children linked yet" is a claim about this parent's account. A failed
-    // request has not earned it -- the same three-state rule the reporting
-    // helpers carry `retrieved` for.
+    // "No children linked yet" is a claim a failed request hasn't earned.
     overrideApi(p => String(p).includes('/api/parent/children'),
                 () => { throw apiError(500) })
     draw()
@@ -181,11 +167,8 @@ describe('when the children read fails', () => {
 })
 
 it('offers a way to link another child', async () => {
-  // Linking was reachable only from the sidebar nav, which is not where anyone
-  // looks for it: this page lists the children and, until now, offered no way
-  // to change the list.
   draw()
-  // Named twice -- the list row and their consent panel's heading.
+  // Named twice: the list row and their consent panel's heading.
   await screen.findAllByText('Ada')
   expect(screen.getByRole('link', { name: /link another child/i }))
     .toHaveAttribute('href', '/parent/link')

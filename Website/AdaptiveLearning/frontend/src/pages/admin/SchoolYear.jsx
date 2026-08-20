@@ -3,9 +3,9 @@ import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
 import { isValidTimezone, knownTimezones } from '../../lib/timezone'
 
-// What each state means to a person. The backend keeps six apart on purpose --
-// "not gating on a year" and "inside the year" both record, for different
-// reasons, and an admin looking at this page needs to know which one they have.
+// The backend has six states because "not gating on a year" and "inside the
+// year" both record but for different reasons, and an admin needs to know
+// which one applies.
 const STATE_COPY = {
   open:          ['Recording', 'Today is inside the configured school year.'],
   not_enforced:  ['Recording', 'The year is not being enforced. Consent still applies.'],
@@ -15,19 +15,16 @@ const STATE_COPY = {
   unreadable:    ['Not recording', 'The window could not be read — check the timezone.'],
 }
 
-// Once per module rather than per render: the list is ~450 strings and does
-// not change while the tab is open.
+// Computed once per module, not per render: it's ~450 strings and doesn't
+// change while the tab is open.
 const ZONES = knownTimezones()
 
 export default function AdminSchoolYear() {
   // The user's unsaved edits, or `null` for "showing what the server said".
   const [draft, setDraft] = useState(null)
 
-  // Every edit goes through this rather than `setDraft` directly, so "Saved."
-  // cannot outlive the thing it was said about. Without it the message stayed
-  // up while the admin typed a new timezone over the saved one -- reporting an
-  // unsaved draft as persisted, on the form that decides whether recording is
-  // permitted at all.
+  // Route every edit through this, not `setDraft` directly, so "Saved."
+  // can't linger once the admin starts typing a new, unsaved change.
   const edit = (patch) => {
     setSaved(false)
     setDraft(patch)
@@ -38,15 +35,12 @@ export default function AdminSchoolYear() {
     load: useCallback(() => apiFetch('/api/admin/retention-window'), []),
   })
 
-  // Derived, not synced. Mirroring the server's payload into state through an
-  // effect means a render with the old form, a setState, and a second render --
-  // and it is what `react-hooks/set-state-in-effect` is warning about. The
-  // draft simply wins while it exists, and clearing it after a save re-derives
-  // from what the server actually stored, which is the reconcile the save
-  // wanted anyway.
+  // Derived, not synced via an effect, to avoid an extra render each time the
+  // server payload changes. The draft wins while it exists; clearing it after
+  // a save re-derives the form from what the server actually stored.
   //
-  // `enforced !== false` because a row predating the column, or one PostgREST
-  // returns without it, must read as enforced rather than as the gate being off.
+  // `enforced !== false` so a row missing the column, or one PostgREST returns
+  // without it, reads as enforced rather than as the gate being off.
   const form = draft ?? (data && {
     enforced: data.enforced !== false,
     starts_on: data.starts_on || '',
@@ -54,17 +48,14 @@ export default function AdminSchoolYear() {
     timezone: data.timezone || 'UTC',
   })
 
-  // Checked in the form because the backend's answer to an unresolvable zone is
-  // to *deny*, not to fall back -- so a typo here stops recording for every
-  // student in the deployment, and the only symptom is a status line saying the
-  // window could not be read. `form` is null until the first load, so this is
-  // computed after the guards below rather than here.
+  // The backend denies rather than falling back on an unresolvable timezone,
+  // so a typo here would silently stop recording for every student.
   const save = async () => {
     setSaved(false)
     const ok = await mutate(() =>
       apiFetch('/api/admin/retention-window', { method: 'PUT', body: form }))
-    // Drop the draft so the form re-derives from what came back: the endpoint
-    // clamps, so the stored row is the authority, not what was typed.
+    // Drop the draft so the form re-derives from the saved row: the endpoint
+    // clamps values, so the stored row is the authority, not what was typed.
     if (ok) { setDraft(null); setSaved(true) }
   }
 
@@ -156,9 +147,8 @@ export default function AdminSchoolYear() {
                 : 'border-rose-400 dark:border-rose-600'
             }`}
           />
-          {/* Suggestions, not the check. An engine without
-              `Intl.supportedValuesOf` gets an empty list and a field that still
-              validates, rather than a crash. */}
+          {/* Suggestions only, not the validator — an empty list here just
+              means no autocomplete, not a broken field. */}
           <datalist id="school-timezone-options">
             {ZONES.map(z => <option key={z} value={z} />)}
           </datalist>

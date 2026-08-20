@@ -1,22 +1,19 @@
 """What `DeviceSession` puts on the payload has to survive `/api/v1/state`.
 
-`Envelope.data` is typed `InterpretedEegData | CameraData | None`, so the
-snapshot is serialised through a declared model -- and pydantic drops undeclared
-keys **silently**. `heart` was not declared on `InterpretedEegData`, so the
-headband's optical block was deleted on the way out of the one endpoint the pull
-poller reads (`eeg_client.get_state`). Under `INGEST_MODE=pull`, the default, a
-headband on an optics preset could therefore never record a heart rate, with
-nothing raised anywhere and every upstream stage working correctly.
+`Envelope.data` is typed `InterpretedEegData | CameraData | None`, so a
+snapshot serialized through it silently drops any key the model doesn't
+declare. `heart` was missing from `InterpretedEegData`, so a headband's
+optical block was deleted from the one endpoint the pull poller reads
+(`eeg_client.get_state`) -- a headband on an optics preset never recorded a
+heart rate, with nothing raised anywhere.
 
-It survived because every heart test asserts on `session.latest_payload` -- the
-dict *before* the response model -- and the push path posts `snapshot()`
-directly, bypassing the envelope entirely. So the channel was well covered on
-both sides of the one layer that was eating it.
+Every heart test asserts on `session.latest_payload` (the dict before the
+response model), and the push path posts `snapshot()` directly, bypassing the
+envelope -- so both existing test paths missed the layer that was eating it.
 
-The exhaustiveness test below is derived from `stream_manager`'s own source
-rather than a hand-kept list, the same pattern as `_MODE_AWARE` and
-`test_every_recording_site_gates_on_the_window`: a field added to the payload
-later cannot go missing here without failing.
+The exhaustiveness test below derives its key list from `stream_manager`'s own
+source rather than a hand-kept list, so a field added later can't go missing
+here silently.
 """
 
 import re
@@ -44,9 +41,9 @@ EEG_SNAPSHOT = {
     "ingestion": {"eeg_source": "muse", "optics_packets": 2697},
 }
 
-# What `build_heart_record` actually returns for an accepted window, trimmed to
-# the fields a consumer keys on. `map_heart_to_heart_signal` reads `ts` and
-# `source`; the poller dedupes on them.
+# What `build_heart_record` returns for an accepted window, trimmed to the
+# fields a consumer uses. `map_heart_to_heart_signal` reads `ts` and `source`;
+# the poller dedupes on them.
 HEART_BLOCK = {
     "source": "muse_optics",
     "ts": "2026-08-15T22:00:00+00:00",
@@ -67,7 +64,7 @@ def _through_envelope(snapshot):
 
 
 def test_the_headband_heart_block_survives_the_state_endpoint():
-    """The regression. Without `heart` on the model this returns None."""
+    """Without `heart` declared on the model, this returns None."""
     out = _through_envelope({**EEG_SNAPSHOT, "heart": HEART_BLOCK})
 
     assert out.get("heart") is not None, (
@@ -76,16 +73,15 @@ def test_the_headband_heart_block_survives_the_state_endpoint():
     )
     assert out["heart"]["bpm"] == pytest.approx(68.4)
     assert out["heart"]["source"] == "muse_optics"
-    # The stamp is what lets both writers record one reading exactly once; a
-    # block that arrived without it would be deduped against the tick clock.
+    # The timestamp lets both writers dedupe a reading; without it, dedup
+    # would fall back to the tick clock instead.
     assert out["heart"]["ts"] == HEART_BLOCK["ts"]
 
 
 def test_a_refused_window_keeps_its_reason_rather_than_becoming_an_absent_block():
-    """`bpm: None` with a reason is a measurement that was refused; an absent
-    block means the device has no optical channel. Collapsing the two would put
-    a headband that is failing to measure into the same bucket as one that was
-    never asked to."""
+    """`bpm: None` with a reason means a refused measurement; an absent block
+    means no optical channel. Collapsing the two would hide a failing headband
+    behind one that was never asked to measure."""
     refused = {**HEART_BLOCK, "bpm": None, "trusted": False,
                "rejected_by": "unconfirmed_anchor"}
 
@@ -104,12 +100,11 @@ def test_an_eeg_payload_with_no_optics_still_validates():
 
 
 def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
-    """Derived from `stream_manager`, not listed here.
-
-    Any key assigned into `latest_payload` (or added by `snapshot`) that the
-    model does not declare is dropped silently at the HTTP boundary -- which is
-    invisible from both sides: the session tests read `latest_payload`, and the
-    push path never crosses the envelope.
+    """Any key assigned into `latest_payload` (or added by `snapshot`) that the
+    model doesn't declare is dropped silently at the HTTP boundary -- invisible
+    to the session tests (which read `latest_payload` directly) and to push
+    (which never crosses the envelope). Key list is derived from
+    `stream_manager`'s source, not hand-kept.
     """
     import inspect
 
@@ -117,9 +112,8 @@ def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
 
     keys = set()
     # The dict literal assigned to self.latest_payload on the EEG path. Only
-    # keys at the literal's own indentation: `channels` nests a dict of its own,
-    # and pulling tp9/af7 up to the top level would compare the wrong names
-    # against the model and fail for a reason that is not the one under test.
+    # keys at the literal's own indentation -- `channels` nests its own dict,
+    # and pulling tp9/af7 to the top level would compare the wrong names.
     literal = re.search(r"self\.latest_payload = \{(.*?)\n                \}",
                         source, re.DOTALL)
     if literal:
@@ -127,7 +121,7 @@ def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
         if found:
             top = min(len(indent) for indent, _ in found)
             keys |= {name for indent, name in found if len(indent) == top}
-    # Keys attached afterwards, and the ones snapshot() adds on the way out.
+    # Keys attached afterwards, plus the ones snapshot() adds on the way out.
     keys |= set(re.findall(r'self\.latest_payload\["(\w+)"\]\s*=', source))
     keys |= set(re.findall(r'out\["(\w+)"\]\s*=', source))
     keys |= set(re.findall(r'out\.setdefault\("(\w+)"', source))

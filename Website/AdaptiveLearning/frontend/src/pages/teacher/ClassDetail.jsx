@@ -9,8 +9,7 @@ export default function ClassDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [cls, setCls]           = useState(null)
-  // Defaults to an array, never null: the render path calls students.length,
-  // and the endpoint resolving to anything non-array would crash the page.
+  // Always an array, never null, so students.length can't crash the render.
   const [students, setStudents] = useState([])
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
@@ -22,20 +21,15 @@ export default function ClassDetail() {
     setLoading(true)
     setError(null)
     try {
-      // allSettled, not all: a missing class 404s *both* routes, because
-      // /students runs the same owner check. Under Promise.all the roster's
-      // rejection could land first and turn a genuinely missing class into
-      // "something went wrong" -- the exact confusion this page exists to
-      // avoid. Both outcomes have to be in hand before deciding.
+      // allSettled, not all: both requests can 404 for a missing class, and
+      // we need both results before deciding what to tell the teacher.
       const [classRes, studentsRes] = await Promise.allSettled([
         apiFetch(`/api/classes/${id}`),
         apiFetch(`/api/classes/${id}/students`)
       ])
 
-      // The class request alone decides "missing", and only on a 404. Any
-      // other failure of it, and any failure of the roster while the class
-      // itself resolved, is a failed request: the class exists and we could
-      // not show it, which is a different thing to tell a teacher.
+      // Only a 404 on the class request itself means "class not found".
+      // Any other failure means the class exists but couldn't be shown.
       if (classRes.status === 'rejected') {
         if (classRes.reason?.status !== 404) throw classRes.reason
         setCls(null)
@@ -46,10 +40,8 @@ export default function ClassDetail() {
       setCls(classRes.value)
       setStudents(Array.isArray(studentsRes.value) ? studentsRes.value : [])
     } catch (err) {
-      // Tracked separately from "class not found" -- a failed request (offline,
-      // 403, server error) is a different situation from a class that doesn't
-      // exist, and telling a teacher "Class not found" when their request just
-      // failed sends them looking for the wrong problem.
+      // Kept separate from "class not found" so a failed request doesn't
+      // send the teacher looking for the wrong problem.
       setError(err.message || 'Could not load class')
       toast.error(err.message || 'Could not load class')
     } finally {
@@ -58,7 +50,7 @@ export default function ClassDetail() {
   }
 
   function copyCode() {
-    // Without the guard this copies the string "undefined" and reports success.
+    // Guard so it doesn't copy the literal string "undefined".
     if (!cls?.join_code) {
       toast.error('This class has no join code yet')
       return

@@ -1,15 +1,16 @@
-"""Ingestion is the trust boundary, so these are the enforcement.
+"""Tests ingestion, the trust boundary: the client posting these rows is
+not trusted.
 
-The sidecar runs on the student's own machine and POSTs with the student's own
-bearer token, which means the client is not trusted. `_verify_session_owner`
-answers "whose session"; everything here answers the two questions it does not:
-**may this be recorded**, and **how much of it**.
+The sidecar runs on the student's own machine and posts with the
+student's own bearer token. `_verify_session_owner` answers "whose
+session"; this file answers the two questions it does not: may this be
+recorded, and how much of it.
 
-The consent check matters most, and it is deliberately redundant with the
-sidecar's own. A stale sidecar that kept sending after a student withdrew would
-otherwise keep recording, and the withdrawal would look respected from every
-surface that reads. Getting this wrong does not leak data to the wrong reader --
-it records a child's body against their refusal.
+The consent check matters most, and is deliberately redundant with the
+sidecar's own -- a stale sidecar that kept sending after a withdrawal
+would otherwise keep recording, invisible to every surface that reads.
+Getting this wrong doesn't leak data to the wrong reader; it records a
+child's body against their refusal.
 """
 
 import os
@@ -54,9 +55,8 @@ class _Query:
 
     def single(self):
         # Records nothing on purpose: nothing on these paths uses it, and a
-        # half-implemented single() that returned a bare row would diverge from
-        # the builder's real behaviour in a way the next person extending this
-        # fake would trip over. Implement it properly when a path needs it.
+        # half-implemented single() would diverge from the real builder's
+        # behaviour. Implement it properly when a path needs it.
         return self
 
     def insert(self, rows, **_k):
@@ -206,10 +206,10 @@ def test_face_ingestion_stores_both_emotion_fields(store):
     row = store["face_signals"][0]
     assert row["emotion_confidence"] == 0.81
     assert row["emotion_trusted"] is True
-    # Sent by the caller and deliberately not stored: #86 retired the column,
-    # and Pydantic drops unknown fields rather than erroring. Asserted because a
-    # row still carrying the key would fail the INSERT against the migrated
-    # table, and the failure would be at the database rather than here.
+    # Sent by the caller and deliberately not stored: the column was retired,
+    # and Pydantic drops unknown fields rather than erroring. Asserted
+    # because a row still carrying the key would fail the INSERT at the
+    # database instead of here.
     assert "identity_confidence" not in row
 
 
@@ -225,11 +225,10 @@ def test_consent_failing_to_read_records_nothing(store, monkeypatch):
 # ── the retry that would otherwise double every average ──────────────────────
 
 def test_replaying_a_batch_inserts_nothing_the_second_time(store):
-    """ON CONFLICT DO NOTHING against (session_id, source, ts).
-
-    A retried batch is the normal consequence of a flaky connection, and the
-    failure it used to cause is silent: nothing about a doubled row is visible
-    in a chart except that the average is wrong."""
+    """ON CONFLICT DO NOTHING against (session_id, source, ts). A
+    retried batch is the normal consequence of a flaky connection; the
+    failure it used to cause is silent -- nothing about a doubled row is
+    visible except that the chart's average is wrong."""
     _consent(store, headband_optical_enabled=True)
     batch = [_heart(ts="2026-08-09T10:00:00Z"), _heart(ts="2026-08-09T10:00:01Z")]
 
@@ -300,12 +299,9 @@ def test_the_limit_is_per_caller(store, monkeypatch):
 
 
 def test_the_rate_limit_runs_before_the_session_lookup(store, monkeypatch):
-    """A flooding client should cost nothing but the limiter.
-
-    With the checks the other way round, every refused request still paid for a
-    `sessions` query first -- the exact cost the limit exists to avoid, and one
-    a caller can force by ignoring the 429 it just received.
-    """
+    """A flooding client should cost nothing but the limiter. With
+    the checks reversed, every refused request still paid for a
+    `sessions` query first -- exactly the cost the limit exists to avoid."""
     from fastapi import HTTPException
 
     _consent(store, headband_optical_enabled=True)
@@ -387,10 +383,10 @@ def test_an_active_caller_is_never_swept(store, monkeypatch):
 
 
 def test_a_clients_raw_blob_survives_the_mapper(store):
-    """The endpoints accepted a `raw` from the client and stored it verbatim
-    before the shared mappers existed. Building a fresh dict there dropped it
-    silently -- a data loss no test noticed, because nothing asserted on a field
-    the endpoint only passed through."""
+    """The endpoints accepted a `raw` blob from the client and stored it
+    verbatim before the shared mappers existed. Building a fresh dict
+    there dropped it silently -- a data loss no test noticed, since
+    nothing asserted on a field only being passed through."""
     _consent(store, headband_optical_enabled=True, camera_enabled=True)
 
     _post_heart([_heart(raw={"probe": "kept"})])
@@ -405,11 +401,11 @@ def test_a_clients_raw_blob_survives_the_mapper(store):
 
 
 def test_rmssd_gating_fields_reach_the_stored_row(store):
-    """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates, kept
-    apart from `rejected_by`: a row can carry a good heart rate and no RMSSD,
-    and these say which of the two was refused. They have to survive the push
-    ingest endpoint the same way the pull path's mapper carries them, or a
-    push-mode row loses the reason a null rmssd_ms is null."""
+    """`beat_coverage` and `rmssd_rejected_by` are RMSSD's own gates,
+    kept apart from `rejected_by`: a row can have a good heart rate and no
+    RMSSD, and these say which was refused. They must survive the push
+    endpoint the same way the pull mapper carries them, or a push-mode row
+    loses the reason a null rmssd_ms is null."""
     _consent(store, headband_optical_enabled=True)
 
     _post_heart([_heart(rmssd_ms=None, beat_coverage=0.91,
@@ -420,10 +416,10 @@ def test_rmssd_gating_fields_reach_the_stored_row(store):
 
 
 def test_a_non_finite_heart_value_is_refused_by_the_model(store):
-    """Same check as `CognitiveSample._finite`, for the same reason: a
-    `float | None` annotation alone does not reject NaN/Infinity, both survive
-    JSON and Pydantic, and `double precision` cannot hold either -- so an
-    unvalidated one fails the insert and takes the whole batch down with it."""
+    """Same check as `CognitiveSample._finite`: a `float | None` annotation
+    alone does not reject NaN/Infinity, both survive JSON and Pydantic,
+    and `double precision` can't hold either -- so an unvalidated one
+    fails the insert and takes the whole batch down."""
     from pydantic import ValidationError
 
     for field in ("heart_rate_bpm", "rmssd_ms", "beat_coverage",
@@ -459,18 +455,17 @@ def test_gaze_survives_the_face_mapper(store):
 
 
 def test_every_column_the_mapper_writes_can_be_supplied_by_the_endpoint(store):
-    """The boundary that silently ate head pose.
+    """The boundary that silently ate head pose. `FaceSample` is
+    Pydantic, so a key it doesn't declare is dropped before the handler
+    runs. The whole chain behind this -- landmarker, `build_face_record`,
+    `push_client`, `map_face_to_face_signal` -- was tested per hop, yet
+    `head_yaw`/`head_pitch`/`head_roll` still couldn't reach the database,
+    because this endpoint is the only writer and nothing exercised it.
 
-    `FaceSample` is Pydantic, so a key it does not declare is dropped without
-    error before the handler runs. The whole chain behind this -- landmarker,
-    `build_face_record`, `push_client`, `map_face_to_face_signal` -- was wired
-    and tested per hop, and `head_yaw`/`head_pitch`/`head_roll` still could not
-    reach the database on any deployment, because this endpoint is the only
-    writer of `face_signals` and nothing exercised it.
-
-    Derived rather than a list, so the next column added to the mapper cannot
-    quietly fail the same way. Columns the endpoint supplies itself are excluded
-    by name; everything else has to be a field a client can actually send.
+    Derived rather than a list, so the next column added to the mapper
+    can't quietly fail the same way. Columns the endpoint supplies itself
+    are excluded by name; everything else has to be a field a client can
+    actually send.
     """
     supplied_by_the_endpoint = {"session_id", "user_id", "ts", "raw"}
     written = set(signal_mapping.map_face_to_face_signal(

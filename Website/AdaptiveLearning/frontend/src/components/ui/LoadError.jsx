@@ -1,15 +1,10 @@
 /** "This didn't load" — the state that must never be drawn as an empty list.
  *
- * Every list page had the same two-state shape: a skeleton while loading, then
- * either rows or an empty state. A failed request set `loading` to false and
- * left the rows empty, so the page said "no sessions yet" / "no questions yet"
- * / "no classes" for a backend that was simply unreachable. That is the same
- * failure the reporting helpers carry `retrieved` to prevent, arriving through
- * the page instead of the payload: an absence asserted from data that never
- * came back.
+ * A failed request used to set `loading` false and leave the rows empty, so
+ * the page said "no sessions yet" for a backend that was simply unreachable.
  *
- * Deliberately not a toast. A toast disappears and the condition does not, and
- * the empty state it needs to override is still on screen afterwards.
+ * Not a toast -- a toast disappears while the condition doesn't, and the
+ * empty state it needs to override is still on screen afterwards.
  *
  * `what` names the thing, so the sentence reads as a fact about this page
  * rather than a generic apology.

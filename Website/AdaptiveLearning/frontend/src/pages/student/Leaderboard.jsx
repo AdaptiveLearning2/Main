@@ -14,10 +14,7 @@ export default function Leaderboard() {
       .catch(() => { setError(true); setLoading(false) })
   }, [])
 
-  // Which row is "you" comes from the backend as is_me. It used to be decided
-  // here by comparing the signed-in id against a user_id on every row, which
-  // meant the response had to carry everyone's UUID to answer a question about
-  // one of them.
+  // The backend flags "you" as is_me, so the response doesn't need to include everyone's UUID.
   const RANK_BADGE = { 1: 'bg-yellow-400 text-white', 2: 'bg-gray-400 text-white', 3: 'bg-orange-400 text-white' }
   const MEDALS     = ['🥇','🥈','🥉']
 

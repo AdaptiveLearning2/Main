@@ -123,10 +123,10 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. Odd-length datasets need no averaging (just pick the
-# middle value); even-length datasets require averaging the two middle
-# values -- one genuine extra step, reserved for grades that have division.
-# "median" isn't in LLM_topic_decider's grade-1-3 allowlist, so "early" is
+# Odd-length datasets need no averaging (just pick the middle value);
+# even-length ones require averaging the two middle values -- one genuine
+# extra step, reserved for grades that have division. "median" isn't in
+# LLM_topic_decider's grade-1-3 allowlist, so "early" here is
 # defense-in-depth only.
 COMPLEXITY_BY_GRADE = {
     "early": {

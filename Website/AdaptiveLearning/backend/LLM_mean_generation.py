@@ -86,11 +86,10 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. "mean" isn't in LLM_topic_decider's grade-1-3 allowlist
-# (see _allowed_topics() there), so "early" is defense-in-depth only -- kept
-# to whole-number datasets that divide evenly, so a student who hasn't been
-# taught division yet still lands on a whole-number average rather than a
-# decimal one, whichever tier fires.
+# "mean" isn't in LLM_topic_decider's grade-1-3 allowlist (see
+# _allowed_topics() there), so "early" here is defense-in-depth only. It's
+# still kept to whole-number datasets that divide evenly, so a student who
+# hasn't learned division yet still gets a whole-number average.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 3 values, one or two-digit whole numbers under 20, that divide evenly (no remainder) for a whole-number average.",

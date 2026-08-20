@@ -7,10 +7,7 @@ import { apiFetch, mockApi, overrideApi, resetApi, apiError } from '../../test/m
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
 // The student search is debounced and its results are keyed to the query they
-// answer. Both matter for the same reason: an admin typing a name should never
-// be shown a list belonging to a query they have already moved past, and
-// "searching" must mean the box and the list disagree -- not that some flag was
-// set on the way in and cleared on one of several exit paths.
+// answer, so a stale response can never repaint the list under a newer term.
 
 const HEALTH = {
   retrieved: true,
@@ -28,9 +25,8 @@ const searchPath = q => `/api/admin/students/search?q=${encodeURIComponent(q)}`
 
 beforeEach(() => {
   resetApi()
-  // `shouldAdvanceTime` is what the other timer-driven tests here use: without
-  // it, Testing Library's own polling and userEvent's keystroke delays wait on
-  // a clock nothing is advancing, and every test times out rather than failing.
+  // `shouldAdvanceTime` keeps Testing Library's polling and userEvent's
+  // keystroke delays moving; without it every test would just time out.
   vi.useFakeTimers({ shouldAdvanceTime: true })
   mockApi({
     '/api/admin/health': HEALTH,
@@ -40,8 +36,7 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
-// userEvent installs its own timer handling, so it has to be told which clock
-// is running or every keystroke hangs against the fake one.
+// Tell userEvent which clock is running, or keystrokes hang against the fake one.
 const setup = () => {
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
   render(<MemoryRouter><AdminOverview /></MemoryRouter>)
@@ -89,8 +84,6 @@ describe('the student search', () => {
   })
 
   it('drops the list when the term falls back below two characters', async () => {
-    // And does not leave the previous query's hits standing under a term that
-    // is no longer being searched for.
     const user = setup()
     await user.type(box(), 'ada')
     await settle()
@@ -104,8 +97,7 @@ describe('the student search', () => {
   })
 
   it('ignores a response that arrives after the term has moved on', async () => {
-    // The slow query is the *first* one, so its response lands last. Keyed on
-    // the query it answers, it cannot repaint the list under a newer term.
+    // The first query is slow, so its response lands after a later one.
     let releaseAda
     overrideApi(searchPath('ada'), () => new Promise(r => { releaseAda = r }))
     overrideApi(searchPath('adam'), { students: [GRACE] })
@@ -145,9 +137,8 @@ describe('the student search', () => {
 })
 
 describe('the surrounding panels', () => {
-  // Both read through helpers that fail closed to a `retrieved` flag, and both
-  // must say so rather than rendering an empty panel that reads as "nothing to
-  // report" -- the same rule the reporting surfaces follow.
+  // Both must report a failed read explicitly, not render an empty panel
+  // that looks like "nothing to report".
   it('says the consent counts could not be read when the read failed', async () => {
     overrideApi('/api/admin/consent-summary', { retrieved: false })
     setup()

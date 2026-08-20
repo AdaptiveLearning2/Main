@@ -4,10 +4,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import Sessions from './Sessions'
 
-// Sessions is the one converted page that fans out: it reads the roster, then a
-// session list *per student*. That gives it a failure mode the other seven do
-// not have -- the outer read succeeding while the inner ones fail -- and it is
-// the path the page's own empty state did not know about.
+// Sessions reads the roster, then a session list per student, so the roster
+// read can succeed while individual per-student reads fail.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 const { apiFetch } = await import('../../lib/api')
@@ -49,26 +47,19 @@ const ERROR = /couldn't load this class's sessions/i
 beforeEach(() => { apiFetch.mockReset() })
 
 it('does not call a class with no readable sessions an empty one', async () => {
-  // The roster loads and every per-student read fails -- what a degraded
-  // /api/sessions/student/* looks like for the whole class rather than for one
-  // child. `failed` stayed false and `allRows` was empty, so the page drew the
-  // partial-failure banner directly above "No sessions yet": it told a teacher
-  // both that some sessions were missing and that there were none.
+  // Every per-student read fails: this should show an error, not "no sessions".
   wire({ students: { a: new Error('down'), b: new Error('down') } })
 
   draw()
 
   expect(await screen.findByText(ERROR)).toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
-  // And not the partial banner either. Nothing loaded, so there is nothing for
-  // the list to be incomplete *about* -- two messages for one failure, one of
-  // them implying the rest of the class came back fine.
+  // Not the partial banner either, since nothing loaded at all.
   expect(screen.queryByText(BANNER)).not.toBeInTheDocument()
 })
 
 it('still calls a class that genuinely ran no sessions empty', async () => {
-  // The mirror, so the branch above cannot be satisfied by treating every empty
-  // class as broken. A class at the start of term really has no sessions.
+  // A class can genuinely have no sessions -- not every empty result is a failure.
   wire({ students: { a: [], b: [] } })
 
   draw()
@@ -79,9 +70,7 @@ it('still calls a class that genuinely ran no sessions empty', async () => {
 })
 
 it('reports a partly-loaded class as partly loaded, and shows what it has', async () => {
-  // One student's read fails and the other's does not. This is the case the
-  // banner was written for, and it has to keep working -- the fix above must
-  // not turn every partial failure into a total one.
+  // A partial failure should show the banner and still display what loaded.
   wire({ students: { a: [SESSION], b: new Error('down') } })
 
   draw()
@@ -93,9 +82,7 @@ it('reports a partly-loaded class as partly loaded, and shows what it has', asyn
 })
 
 it('offers a retry that does not need a page reload', async () => {
-  // LoadError renders its button only when handed an `onRetry`, and this page
-  // never extracted one from its inline .then()/.catch() -- so it was the only
-  // converted page whose error state had no way out but knowing to reload.
+  // LoadError only shows its retry button when given an onRetry handler.
   wire({ students: { a: new Error('down'), b: new Error('down') } })
   draw()
   await screen.findByText(ERROR)
@@ -108,9 +95,8 @@ it('offers a retry that does not need a page reload', async () => {
 })
 
 it('retries the class list when that is the read that failed', async () => {
-  // The two reads fail differently and the button has to re-run the right one.
-  // With no class selected there is no roster to re-fetch, so retrying the
-  // inner call would leave the page on its error state for ever.
+  // Retry must re-run the class list fetch here, not the per-student one --
+  // with no class selected, there's no roster to retry.
   wire({ classes: new Error('down') })
   draw()
   await screen.findByText(ERROR)

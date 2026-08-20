@@ -19,33 +19,21 @@ import eeg_poller
 load_dotenv()
 
 def _env_number(name: str, default, cast, minimum=None):
-    """A numeric setting from the environment, falling back on a bad value.
+    """Read a numeric setting from the environment, falling back on a bad value.
 
-    These are read at import, so a typo in a deployment's environment would
-    otherwise raise ValueError before the app object exists -- taking down every
-    endpoint over a tuning parameter for one optional feature. Falling back to
-    the shipped default keeps the process up, and the log line is what says the
-    setting is not the one that was configured.
+    These run at import time, so a typo would otherwise crash the whole app
+    before it starts, over one optional feature's tuning knob. Falls back to
+    the default instead, with a log line saying so.
 
-    `minimum` extends that to values that parse but are not usable. A number is
-    not automatically a setting: every caller here has a floor below which the
-    value does not tune the feature but disables or breaks it, quietly and in
-    whichever direction the parameter happens to point -- see the call sites.
-    Clamping rather than falling back to the default, because a deployer who
-    wrote a small number was asking for a small number, and the nearest usable
-    one is closer to that than the shipped value is.
+    `minimum` is a floor: some settings don't just tune a feature below a
+    certain value, they break it. Clamps to the minimum rather than the
+    default, since a small value was still an intentional ask for something
+    small.
 
-    The non-finite check is separate from both, and falls back rather than
-    clamping. "inf" and "nan" parse cleanly under float() and pass a `minimum`
-    comparison -- inf because it is above every floor, nan because every
-    comparison against it is False -- so neither of the guards above sees them,
-    and they are not magnitudes there is a nearest usable value to clamp to.
-    They reach the call sites as settings that break rather than tune:
-    STRATEGY_RATE_WINDOW=inf makes the 429 path compute int(inf) and raise
-    OverflowError, turning a rate limit into a 500, and STRATEGY_LLM_TIMEOUT=nan
-    makes future.result() time out instantly, switching the model pass off for
-    good while STRATEGY_LLM_ENABLED still says it is on. int() rejects both at
-    the cast, so this only bites the float callers.
+    Non-finite values ("inf", "nan") parse fine but aren't real magnitudes, so
+    they fall back to the default instead of being clamped -- inf passes any
+    minimum check, nan fails every comparison. Only affects the float callers;
+    int() rejects both at the cast.
     """
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -66,12 +54,6 @@ def _env_number(name: str, default, cast, minimum=None):
 
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-# Every numeric setting goes through this, including this one. It was
-# `int(os.getenv(...))`, which is the pattern the helper exists to replace:
-# read at import, so a malformed BACKEND_PORT raised ValueError before the
-# app object existed and took the whole backend down over the port number.
-# The helper lives here rather than 2600 lines below, next to the settings
-# it serves and above the first one that needs it.
 BACKEND_PORT     = _env_number("BACKEND_PORT", 8000, int, minimum=1)
 
 if not SUPABASE_URL or not SERVICE_ROLE_KEY:
@@ -81,23 +63,14 @@ supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Process-lifetime hooks. Everything before the yield is startup.
-
-    A lifespan handler rather than @app.on_event, which FastAPI deprecated --
-    and which has to be attached to the app object, so it would have pulled
-    this handler up here anyway. The names below resolve when the handler runs,
-    which lets each one stay defined beside the state it owns.
-    """
+    """Process-lifetime hooks. Everything before the yield is startup."""
     yield
-    # Pollers first: they are daemon threads that print on the way out, so
-    # leaving them to interpreter teardown risks a fatal stdout-lock abort on
-    # an otherwise clean shutdown. See eeg_poller.stop_all.
+    # Pollers first: they're daemon threads that print on the way out, and
+    # leaving them to interpreter teardown risks a fatal stdout-lock crash.
     try:
         eeg_poller.stop_all()
     finally:
-        # Nested finally: neither shutdown gets a second chance after this, so
-        # one raising must not skip the other -- the same reason eeg_poller's
-        # own shutdown is in a finally above.
+        # Nested finally so each shutdown step runs even if an earlier one raises.
         try:
             _shutdown_strategy_pool()
         finally:
@@ -137,19 +110,14 @@ def rand_code(n=6):
 
 
 def _unique_ids(values) -> list:
-    """The ids worth querying for: in order, without blanks or repeats.
-
-    Every `_*_many` helper opened by writing this out, which is how one of them
-    came to skip the blank-dropping half and pay a round trip for an empty id.
-    """
+    """The ids worth querying for: in order, without blanks or repeats."""
     return [v for v in dict.fromkeys(values) if v]
 
 
 def _group_by_user(rows) -> dict[str, list]:
     """Rows bucketed by `user_id`, order within a bucket preserved.
 
-    The closing half of the same helpers, for the same reason -- and the order
-    matters at one of them: `_open_sessions_many` asks the database for
+    Order matters for `_open_sessions_many`: it asks the database for
     newest-first and its caller takes `[0]`.
     """
     grouped: dict[str, list] = {}
@@ -161,21 +129,13 @@ def _group_by_user(rows) -> dict[str, list]:
 def _row_or_404(query, what: str) -> dict:
     """Run a `.single()` lookup and answer 404 when the row is not there.
 
-    **`.single()` raises on zero rows** -- `APIError(PGRST116)` -- rather than
-    returning an empty result. So the `if not res.data: raise HTTPException(404)`
-    that six endpoints were written with is dead code standing exactly where
-    their 404 was supposed to be, and a bogus id escaped as a 500 with a stack
-    trace, for input any client can supply.
+    `.single()` raises `APIError(PGRST116)` on zero rows instead of returning
+    empty, so this catches that and turns it into a proper 404 rather than a
+    500 with a stack trace. The empty-data check below the try is kept as a
+    backstop in case the client library ever stops raising here.
 
-    One place, because the alternative is the same four lines written out at
-    every `.single()` in the file -- which is how it came to be right at two of
-    them and wrong at the other six. The empty check stays below the `try`
-    rather than being dropped: it costs nothing and it is what protects a
-    caller if the client library ever stops raising here.
-
-    Not for lookups that have a legitimate "absent" answer. `generate_question`
-    reads a class only to refine a default grade, so a missing one must fall
-    back rather than fail the request -- it does its own narrow catch.
+    Don't use this for a lookup where "absent" is a legitimate answer and
+    should fall back instead of failing (see `generate_question`'s class read).
     """
     try:
         res = query.single().execute()
@@ -187,9 +147,8 @@ def _row_or_404(query, what: str) -> dict:
         raise HTTPException(404, f"{what} not found")
     return res.data
 
-# The four values `profiles.role` may hold. `admin` is the only one a person
-# cannot choose for themselves at sign-up -- `handle_new_user` whitelists the
-# other three.
+# The four values `profiles.role` may hold. `admin` is the only one nobody can
+# choose at sign-up -- `handle_new_user` whitelists the other three.
 ADMIN_ROLE = "admin"
 SELF_SERVICE_ROLES = ("student", "teacher", "parent")
 
@@ -197,17 +156,11 @@ SELF_SERVICE_ROLES = ("student", "teacher", "parent")
 def _role(uid: str) -> str:
     """A caller's role, from `profiles` -- never from `user_metadata`.
 
-    `user_metadata.role` is set by the client at sign-up and can be rewritten
-    at any time with `supabase.auth.updateUser({data: {role: 'teacher'}})`,
-    which talks to GoTrue and never passes through this process. Gating on it
-    would let a student self-elevate and create classes. UPDATE/INSERT on
-    `profiles.role` is revoked from `anon` and `authenticated`, which is what
-    makes this column the answer rather than a second copy of the same
-    client-supplied claim.
-
-    Fails **closed**, to the least-privileged role: `_profile` already degrades
-    to a student-shaped dict on a failed read, and 'student' is the value that
-    grants nothing. A failed read must not be a way past a role check.
+    `user_metadata.role` is client-writable (`supabase.auth.updateUser`), so a
+    student could self-elevate to teacher if we trusted it. `profiles.role`
+    can't be edited by the client (UPDATE/INSERT revoked), so it's the source
+    of truth. Falls back to 'student' -- the least-privileged role -- on a
+    failed read, so a database blip can never grant access.
     """
     return (_profile(uid) or {}).get("role") or "student"
 
@@ -215,16 +168,10 @@ def _role(uid: str) -> str:
 def _placeholder_profile(uid: str) -> dict:
     """What a caller gets when a profile cannot be read, or has no row.
 
-    The preference defaults are repeated from the column defaults
-    deliberately. This stands in for a *failed read*, and the caller cannot tell
-    it from a real profile -- so omitting them would hand the page `undefined`
-    for three controls and it would render them unset, which reads as "the
-    student turned this off" rather than "we could not find out". Same shape as
-    the reporting helpers, minus the flag: nothing downstream of a preference is
-    worth a 500, and the values below are what a new account gets anyway.
-
-    One copy, shared with `_profiles_many`. Written out twice, the batch version
-    would answer a different shape from the single one for the same student.
+    The caller can't tell this from a real profile, so the preference fields
+    are filled with the same values a new account gets -- leaving them out
+    would render as "the student turned this off" instead of "read failed".
+    Shared with `_profiles_many` so single and batch lookups agree.
     """
     return {"id": uid, "display_name": "Student", "email": "", "role": "student",
             "grade_level": None, "difficulty_bias": 0,
@@ -244,16 +191,9 @@ def _profile(uid: str) -> dict:
 def _profiles_many(uids) -> dict[str, dict]:
     """`_profile` for a roster, in one query rather than one per student.
 
-    Every roster surface -- the class list, a parent's children, the live
-    monitor -- looked its students' profiles up inside a loop that was already
-    making several reads each. `_stats_including_open_session_many` fixed the
-    *stats* half of those same three loops and left the profile half doing a
-    round trip per student right beside it.
-
-    Same fallback as `_profile`, resolved per missing student rather than for
-    the batch: an absent row and a failed read both come back as the placeholder,
-    because the caller cannot tell those apart and a student rendered with no
-    name reads as bad data rather than as a read that did not land.
+    Same fallback as `_profile`, per missing student: an absent row and a
+    failed read both become the placeholder, since a blank name reads as bad
+    data rather than a failed read either way.
     """
     ids = _unique_ids(uids)
     if not ids:
@@ -287,31 +227,23 @@ def _avg(values):
 
 
 def _utc_now() -> datetime:
-    """Timezone-aware UTC.
-
-    datetime.utcnow() is deprecated in 3.12 and returns a *naive* datetime,
-    which compares wrongly against the timestamptz columns these queries filter
-    on. The rest of this module still uses utcnow() in older endpoints; new
-    code should use this instead of spreading the pattern further.
-    """
+    """Timezone-aware UTC. `datetime.utcnow()` is deprecated and naive, which
+    compares wrongly against the timestamptz columns these queries filter on.
+    Use this instead in new code."""
     return datetime.now(timezone.utc)
 
 
 # ── the school-year retention window ────────────────────────────────────────
 #
-# Every state a caller can be in, named. `open` is the only one that records.
-#
-# Five rather than a boolean for the same reason the reporting payloads carry
-# three: "recording has not started yet", "the year is over" and "nobody has
-# configured a year" are different sentences to put in front of a parent, and a
-# surface that collapses them into "off" tells a student their consent was
-# ignored. `unreadable` is separate again -- it is the one state that is our
-# fault rather than a fact about the school.
+# Every state a caller can be in. `open` is the only one that records. Five
+# states rather than a boolean because "not started yet", "year is over" and
+# "no year configured" are different things to tell a parent, and collapsing
+# them to "off" reads as consent being ignored. `unreadable` is its own state
+# because that one is our fault, not a fact about the school.
 WINDOW_OPEN = "open"
-# Records, like WINDOW_OPEN, but for a different reason and it is worth being
-# able to tell them apart: "inside the configured year" and "not gating on a
-# year at all" look identical from the recording side and are very different
-# facts about a deployment.
+# Also records, but for a different reason than WINDOW_OPEN: "inside a real
+# year" and "not gating on a year at all" look the same from the recording
+# side but are different facts worth keeping apart.
 WINDOW_NOT_ENFORCED = "not_enforced"
 WINDOW_BEFORE = "before_year"
 WINDOW_AFTER = "after_year"
@@ -321,19 +253,15 @@ WINDOW_UNREADABLE = "unreadable"
 class _WindowMeaning(NamedTuple):
     """What a window state means, in the three places that need to know."""
     records: bool
-    # Shown to a person. Lowercase, because the ingest endpoints embed it in a
-    # `reason` field beside "eeg not consented" and friends.
+    # Shown to a person. Lowercase since ingest endpoints embed it in a
+    # `reason` field beside "eeg not consented" and similar.
     reason: str | None
     # Rendered by the frontend, which picks its own copy from the key.
     stopped_reason: str | None
 
 
-# **One table.** These three facts about a state were three separate structures
-# kept in step by hand, and the failure mode is silent: a sixth state added to
-# only two of them would deny correctly and then explain itself as nothing at
-# all, or explain itself and quietly record. Adding a row here is now the whole
-# change, and `test_every_window_state_has_a_meaning` fails if a constant is
-# declared without one.
+# One table for all three facts about each state, so adding a state can't miss
+# one of them. `test_every_window_state_has_a_meaning` enforces it.
 _WINDOW_STATES = {
     WINDOW_OPEN: _WindowMeaning(True, None, None),
     WINDOW_NOT_ENFORCED: _WindowMeaning(True, None, None),
@@ -350,29 +278,20 @@ _WINDOW_STATES = {
         "school_year_unknown"),
 }
 
-# Derived, not maintained. A state absent from the table above denies, because
-# `.get` returns None and an unknown state is not evidence that recording is
-# allowed -- the same fail-closed direction as everything else here.
+# Derived, not maintained by hand. A state missing from the table above denies
+# by default, the same fail-closed direction as everything else here.
 _WINDOW_DENIED = {k for k, v in _WINDOW_STATES.items() if not v.records}
 
 
-# How long a successful window read is reused. The window is one row, identical
-# for every student, edited twice a year -- so a read per ingest request is a
-# round trip for an answer that has not changed since the last one.
+# How long a successful window read is cached. The window is one row shared by
+# every student and edited twice a year, so caching it saves a round trip per
+# ingest request.
 #
-# **Why this may be cached when `_consent` may not.** Consent is per-student and
-# a withdrawal has to land mid-lesson: caching it would record against a refusal
-# for the length of the TTL, which is the exact failure the consent rules exist
-# to prevent. The window is a pair of dates that move twice a year, so the only
-# staleness it can produce is up to `_RETENTION_TTL_SECONDS` of recording just
-# after local midnight on the day the year ends. That is bounded, it is the same
-# order as the poller's own re-check interval, and it costs nothing anyone can
-# perceive -- where a stale consent answer costs a student their decision.
-#
-# A plain constant, not `_env_number`: that rule covers settings read from the
-# environment, and this is not one. There is no deployment that wants a
-# different value -- shorter buys nothing, and longer only extends the one
-# staleness described above.
+# Unlike `_consent`, which may never be cached: a withdrawal has to take effect
+# mid-lesson, so caching it would keep recording against a refusal. The window
+# only moves twice a year, so the worst case here is recording briefly past
+# local midnight on the last day of the year -- bounded and harmless, unlike a
+# stale consent answer.
 _RETENTION_TTL_SECONDS = 30.0
 _retention_cached: tuple[float, dict] | None = None
 _retention_lock = threading.Lock()
@@ -388,37 +307,30 @@ def _retention_cache_clear() -> None:
 def _retention_window() -> dict:
     """The configured school year, and today's position in it.
 
-    Fails **closed**, like `_consent` and unlike the reporting helpers: an
-    unreadable or unconfigured window records nothing. An unset date is not an
-    open-ended licence, and the failure would otherwise be invisible, because
-    recording looks identical whether or not anyone meant it to happen.
+    Fails closed like `_consent`: an unreadable or unconfigured window records
+    nothing, since an unset date isn't an open-ended licence.
 
     Returns `state` plus the raw dates, so a caller can say *when* recording
-    starts or stopped rather than only that it is not happening.
+    starts or stopped, not just that it isn't happening.
 
-    The comparison is made in the school's own timezone, not UTC. "The last day
-    of school" ends at local midnight, and against a UTC clock it would end
-    somewhere in the middle of the afternoon or run several hours into the next
-    day, depending which side of the meridian the school is on.
+    Compares in the school's own timezone, not UTC -- "the last day of school"
+    should end at local midnight, not somewhere in the afternoon UTC.
     """
     global _retention_cached
     now = time.monotonic()
     with _retention_lock:
         cached = _retention_cached
     if cached and now < cached[0]:
-        # Recomputed rather than returned whole: the *state* depends on today's
-        # date, and a cached "open" that outlived the last day of school would
-        # be the one staleness that matters. Only the row is reused.
+        # Only the row is cached, not the verdict -- the state depends on
+        # today's date, so it's recomputed on every call.
         return _resolve_window(cached[1])
 
     try:
         rows = supabase.table("retention_window").select("*").limit(1).execute().data or []
     except Exception as e:
         print(f"[retention:read] {e}")
-        # Failures are deliberately not cached. Denial is the safe direction, so
-        # holding one costs nothing in correctness -- but it would keep denying
-        # for the TTL after the database came back, and a transient blip should
-        # not outlive itself.
+        # Not cached: caching a failure would keep denying for the TTL even
+        # after the database recovers.
         return {"state": WINDOW_UNREADABLE, "starts_on": None, "ends_on": None,
                 "timezone": None}
     if not rows:
@@ -431,17 +343,14 @@ def _retention_window() -> dict:
 
 
 def _resolve_window(row: dict) -> dict:
-    """Today's position in a window row. Split out so the cache stores the row
-    and not the verdict -- the row is what is stable, the verdict is a fact
-    about right now."""
+    """Today's position in a window row. Split out so the cache stores the
+    stable row, not the verdict, which depends on today's date."""
     name = row.get("timezone") or "UTC"
     try:
         tz = ZoneInfo(name)
     except Exception:
-        # A typo'd zone denies rather than falling back to UTC. Falling back
-        # would move every boundary by hours while looking like it worked, and
-        # this value is edited by hand twice a year -- exactly the cadence at
-        # which a silent wrong answer survives longest. Loud and closed.
+        # A typo'd timezone denies rather than silently falling back to UTC,
+        # which would shift every boundary by hours while looking fine.
         print(f"[retention:tz] unknown timezone {name!r} -- recording denied")
         return {"state": WINDOW_UNREADABLE, "starts_on": row.get("starts_on"),
                 "ends_on": row.get("ends_on"), "timezone": name}
@@ -449,18 +358,13 @@ def _resolve_window(row: dict) -> dict:
     today = _utc_now().astimezone(tz).date()
     starts, ends = row.get("starts_on"), row.get("ends_on")
 
-    # Checked after the timezone, before the dates. A row that is not enforcing
-    # has nothing to say about term dates -- they are nullable for exactly that
-    # case -- so reading them first would send an unenforced row down the
-    # unparseable branch and deny. The timezone still has to resolve, because
-    # the reporting surfaces bucket days with it whether or not the year is
-    # being enforced.
+    # Checked before the dates: an unenforced row has no term dates to check
+    # (they're nullable for exactly this case), so reading them first would
+    # wrongly deny it as unparseable.
     #
-    # `is False`, not falsiness: a row from before this column existed, or one
-    # PostgREST hands back without it, must not read as "not enforcing". Only an
-    # explicit false disables the gate; anything else -- true, missing, null --
-    # keeps it on, which is the same fail-closed direction as the rest of this
-    # function.
+    # `is False`, not falsiness: a row predating this column, or one missing
+    # it, must not read as "not enforcing". Only an explicit false disables the
+    # gate.
     if row.get("enforced") is False:
         return {"state": WINDOW_NOT_ENFORCED, "starts_on": starts,
                 "ends_on": ends, "timezone": name}
@@ -470,10 +374,9 @@ def _resolve_window(row: dict) -> dict:
         ends_d = date.fromisoformat(str(ends))
     except (TypeError, ValueError):
         if starts is None and ends is None:
-            # Enforcing, with no year given. Not "record for ever" -- that is
-            # what `enforced = false` says, deliberately and in one place. A row
-            # in this state is a half-finished edit, so it denies and names
-            # itself the same way an absent row does.
+            # Enforcing with no dates set is a half-finished edit, not "record
+            # forever" -- that's what `enforced = false` means. Deny it the
+            # same way an absent row denies.
             print("[retention:dates] enforced with no dates set -- recording denied")
             return {"state": WINDOW_UNCONFIGURED, "starts_on": None,
                     "ends_on": None, "timezone": name}
@@ -484,10 +387,7 @@ def _resolve_window(row: dict) -> dict:
     if today < starts_d:
         state = WINDOW_BEFORE
     elif today > ends_d:
-        # Inclusive of `ends_on`: the last day of school is a school day. The
-        # delete job runs *on* that date, so the final day records and is then
-        # reduced to its rollup like every other -- it is not a day that both
-        # records and is deleted, because the deletion is of per-sample detail.
+        # Inclusive of ends_on: the last day of school is still a school day.
         state = WINDOW_AFTER
     else:
         state = WINDOW_OPEN
@@ -496,16 +396,14 @@ def _resolve_window(row: dict) -> dict:
 
 # ─── feature flags ───────────────────────────────────────────────────────
 #
-# Global runtime switches, edited from the admin dashboard rather than from a
-# `.env` and a redeploy. The defaults below are the contract: a key absent from
-# the table still has a value, and it is the value the system had before this
-# table existed. That is what lets the flags be introduced without changing any
-# behaviour, and what keeps a failed read from being a change of behaviour
-# either.
+# Global runtime switches, edited from the admin dashboard instead of `.env` +
+# redeploy. A key absent from the table still has a value -- the one the
+# system had before the table existed -- so introducing a flag, or a failed
+# read, never changes behaviour by itself.
 #
-# The map is also the *whitelist*. A row whose key is not here is ignored, so a
-# typo'd INSERT is inert rather than a silently dead switch, and a write to an
-# unknown key is refused by the endpoint instead of creating one.
+# This map is also the whitelist: an unknown key in the table is ignored, and
+# a write to an unknown key is refused rather than silently creating a dead
+# switch.
 _FEATURE_FLAG_DEFAULTS = {
     "strategy_llm_enabled": False,
     "recording_eeg_enabled": True,
@@ -514,19 +412,14 @@ _FEATURE_FLAG_DEFAULTS = {
     "consent_enforcement_enabled": True,
 }
 
-# The one flag with an expiry, named rather than spelled out at its three call
-# sites: the whole safety property is that this specific switch cannot be left
-# off, and a literal repeated three times is a literal that gets changed twice.
+# Named rather than repeated as a literal at its three call sites, since this
+# is the one flag that must never be left off for long.
 CONSENT_ENFORCEMENT_FLAG = "consent_enforcement_enabled"
 
-# Same TTL and the same reasoning as `_RETENTION_TTL_SECONDS`: this is global
-# configuration, not a per-student decision, so a bounded staleness costs
-# nothing that anyone can perceive. It is deliberately *not* the consent cache
-# that `_consent` refuses to have -- a withdrawal has to land mid-lesson, and
-# nothing here is a withdrawal. The one flag whose staleness matters is the
-# consent bypass, and it fails in the safe direction: turning enforcement back
-# **on** takes effect within the TTL, and its expiry is evaluated against the
-# clock on every read rather than being cached as a verdict.
+# Same TTL and reasoning as `_RETENTION_TTL_SECONDS`: global config, not a
+# per-student decision, so bounded staleness is harmless. The bypass expiry
+# itself is checked against the clock on every read, not cached as a verdict,
+# so turning enforcement back on always takes effect within the TTL.
 _FEATURE_FLAGS_TTL_SECONDS = 30.0
 _feature_flags_cached: tuple[float, dict] | None = None
 _feature_flags_lock = threading.Lock()
@@ -542,17 +435,13 @@ def _feature_flags_cache_clear() -> None:
 def _feature_flags() -> dict:
     """Every known flag, as `{key: {"enabled": bool, "bypass_until": str|None}}`.
 
-    **Fails to the declared defaults, not to off and not to on.** A flag is a
-    statement about how this deployment is configured, and an unreadable table
-    is not a reconfiguration -- so a failed read reproduces the behaviour the
-    system had before the table existed, which is also what an empty table
-    gives. The direction that matters is `consent_enforcement_enabled`, whose
-    default is True: a database that cannot be read must never be the reason
-    consent stops being enforced.
+    Fails to the declared defaults on a read error, never to off or on --
+    an unreadable table isn't a reconfiguration. This matters most for
+    `consent_enforcement_enabled`, which defaults True: a database outage must
+    never be the reason consent stops being enforced.
 
-    Unknown keys in the table are dropped rather than surfaced, so the returned
-    dict has exactly the keys of `_FEATURE_FLAG_DEFAULTS` whatever the table
-    holds.
+    Unknown keys in the table are dropped, so the result always has exactly
+    the keys in `_FEATURE_FLAG_DEFAULTS`.
     """
     global _feature_flags_cached
     now = time.monotonic()
@@ -567,10 +456,8 @@ def _feature_flags() -> dict:
         rows = supabase.table("feature_flags").select("*").execute().data or []
     except Exception as e:
         print(f"[flags:read] {e}")
-        # Not cached, for the same reason `_retention_window` does not cache a
-        # failure: holding one would keep answering from defaults for the TTL
-        # after the database came back, and a transient blip should not outlive
-        # itself.
+        # Not cached, same reasoning as `_retention_window`: a transient blip
+        # shouldn't keep answering with defaults after the database recovers.
         return flags
 
     for row in rows:
@@ -587,14 +474,11 @@ def _feature_flags() -> dict:
 def _consent_enforcement_active(flags: dict | None = None) -> bool:
     """Whether per-student consent gates recording right now.
 
-    True in every case except a live, unexpired bypass. The expiry is checked
-    against the clock **here**, on the read, rather than by a job that flips the
-    row back: a scheduled job that fails to run leaves consent enforcement off
-    indefinitely, and the single guarantee this mechanism has to make is that it
-    cannot. A bypass with no `bypass_until` at all has already expired by this
-    rule -- an unbounded bypass is exactly the state the column exists to
-    prevent, so an unparseable or absent value resumes enforcement rather than
-    extending it.
+    True unless there's a live, unexpired bypass. Expiry is checked against the
+    clock on every read rather than by a job flipping the row back, so a
+    missed cron run can't leave enforcement off forever. A bypass with no
+    `bypass_until` counts as already expired -- an unbounded bypass is exactly
+    what this guards against.
     """
     flags = flags if flags is not None else _feature_flags()
     flag = flags.get(CONSENT_ENFORCEMENT_FLAG) or {}
@@ -609,24 +493,18 @@ def _consent_enforcement_active(flags: dict | None = None) -> bool:
 def _school_timezone() -> tzinfo:
     """The school's zone, for bucketing report days. Defaults to UTC.
 
-    **The opposite default to `_retention_window`, deliberately.** There, an
-    unreadable or typo'd zone denies recording, because getting a boundary wrong
-    means recording outside the window -- data collected that nobody agreed to.
-    Here the same failure means a day boundary is a few hours off on a chart,
-    and denying would blank a parent's dashboard entirely. A wrong bucket is a
-    smaller harm than no report, so this degrades where the gate refuses.
+    Opposite default from `_retention_window` on purpose: there, a bad zone
+    denies recording (wrong boundary = data collected nobody agreed to). Here
+    it just shifts a chart's day boundary by a few hours, and denying would
+    blank the whole dashboard -- a bigger harm than a slightly wrong bucket.
 
-    Shares `_retention_window`'s cache, so a corrected timezone typo can take
-    up to `_RETENTION_TTL_SECONDS` to reach a report -- a bounded lag, not the
-    unbounded one a process-lifetime cache here would add on top of it.
+    Shares `_retention_window`'s cache, so a timezone fix can take up to
+    `_RETENTION_TTL_SECONDS` to show up.
 
-    Both branches are guarded, and the fallback is `timezone.utc` rather than
-    `ZoneInfo("UTC")`, because `ZoneInfo` needs a timezone database that Windows
-    does not ship -- so without the `tzdata` package the *fallback* raised too
-    and this function took the request down instead of degrading. `tzdata` is a
-    dependency now, but a fallback that can fail is not a fallback: CI runs on
-    Linux, where the system database makes this path work whatever is installed,
-    so the one platform that can catch it is the one nobody tests on.
+    Falls back to `timezone.utc`, not `ZoneInfo("UTC")` -- `ZoneInfo` needs a
+    timezone database Windows doesn't ship, so without `tzdata` installed even
+    the fallback would raise. CI runs on Linux, where this gap doesn't show up,
+    so it's easy to miss.
     """
     try:
         return ZoneInfo(_retention_window().get("timezone") or "UTC")
@@ -640,18 +518,14 @@ def _school_timezone() -> tzinfo:
 def _school_date(ts, tz: tzinfo) -> date | None:
     """The calendar day `ts` falls on *at the school*. None if unparseable.
 
-    Not `str(ts)[:10]`. PostgREST hands back UTC, so slicing the string buckets
-    by UTC midnight -- which is mid-afternoon the previous day in Los Angeles
-    and mid-morning the next in Sydney. A late-afternoon lesson therefore landed
-    on the wrong day of a parent's chart, and the last day of a school week
-    could show sessions that happened on the Saturday.
+    Not `str(ts)[:10]` -- PostgREST returns UTC, and slicing the string buckets
+    by UTC midnight, which is mid-afternoon the previous day in Los Angeles.
+    A late lesson would land on the wrong day of a parent's chart.
 
-    The `date` form exists because the rollup writer does arithmetic on it
-    (stepping from a session's first day to its last); `_school_day` below is
-    the same derivation as a string, for bucketing. One conversion, two shapes,
-    so the report and the rollup cannot come to disagree about which day a
-    reading belongs to -- which is the whole reason the rollup can answer the
-    report's questions after the raw rows are gone.
+    Returns a `date` because the rollup writer does arithmetic on it;
+    `_school_day` below gives the same day as a string, for bucketing. One
+    conversion feeding both keeps the report and the rollup from disagreeing
+    about which day a reading belongs to.
     """
     parsed = _parse_ts(ts)
     return None if parsed is None else parsed.astimezone(tz).date()
@@ -660,8 +534,8 @@ def _school_date(ts, tz: tzinfo) -> date | None:
 def _school_day(ts, tz: tzinfo) -> str:
     """`_school_date` as YYYY-MM-DD, for bucketing.
 
-    Empty string for anything unparseable, which no day matches, so a bad
-    timestamp drops out of every bucket rather than silently joining one.
+    Empty string for anything unparseable -- no day matches that, so a bad
+    timestamp drops out rather than silently joining a bucket.
     """
     resolved = _school_date(ts, tz)
     return "" if resolved is None else resolved.isoformat()
@@ -670,22 +544,16 @@ def _school_day(ts, tz: tzinfo) -> str:
 def _credit_session_to_user_stats(user_id: str, total_q: int, correct: int) -> None:
     """Add one closed session's answers to the student's lifetime totals.
 
-    Extracted because `/end` was the only caller and **the stale-session sweep
-    is the other close path**. A student who shuts the tab is closed by the
-    sweep, and the sweep set `ended_at`, rolled up and archived -- but never
-    touched `user_stats`. Every question they answered in that session was
-    dropped from their lifetime totals permanently, while `session_answers` and
-    `user_math_performance` kept it. The same oversight was caught once already
-    for the rollup ("Only the /end endpoint called this"); the stats update sat
-    two lines above that comment and was missed.
+    Shared by every close path (`/end`, the stale-session sweep, `class_live`)
+    so none of them can close a session without crediting it.
 
-    Never raises: it runs alongside the writes that close a session, and a
-    failure here must not cost the student the session record itself.
+    Never raises: runs alongside the writes that close a session, and a
+    failure here must not cost the student their session record.
     """
     if not total_q:
-        # Nothing to credit. Skipped rather than written as a zero-row so a
-        # student who has never answered anything has no `user_stats` row at
-        # all, which is what `/api/stats/*` already treats as "no data yet".
+        # Skip rather than write a zero-row, so a student who's never answered
+        # anything has no `user_stats` row -- which `/api/stats/*` already
+        # treats as "no data yet".
         return
     try:
         existing = supabase.table("user_stats").select("*").eq("user_id", user_id).execute()
@@ -715,38 +583,25 @@ def _discard_if_nothing_recorded(session_id: str, questions,
                                  answers_counted: bool = False) -> bool:
     """Delete a session that answered nothing and recorded nothing. True if gone.
 
-    Pressing Connect Headband creates the session, and it has to -- signals need
-    one to attach to, and creation moved off page-load precisely so the
-    button owns it. The cost is that every *failed* pairing attempt left a row
-    behind, and History showed each one as a practice session: on one afternoon,
-    four of five sessions had no questions and no samples of any kind.
+    Pressing Connect Headband creates a session, so every failed pairing
+    attempt leaves an empty row behind that would otherwise clutter History.
+    A row with nothing on either side of it isn't academic history worth
+    keeping.
 
-    That is not academic history being thrown away. `sessions`, `session_answers`
-    and `user_stats` are kept for a reason, but a row with nothing on either side
-    of it is a record of a button press.
+    Deletes on absence, so it's guarded like `sweep_orphan_charts`: a failed
+    read keeps the session rather than risk deleting one that had data. Any of
+    the four tables having a row is enough to keep it.
 
-    **Deletes on absence, so it is guarded like `sweep_orphan_charts`.** A read
-    that fails keeps the session: never delete because you could not confirm
-    there was nothing there. Any one of the four tables reporting a row is
-    enough to keep it, so a signals-only session -- a student who wore the
-    headband and answered nothing -- survives, which is the case this must not
-    get wrong.
-
-    **`session_answers` is checked, not just the counter.** `record_answer`
-    inserts the answer row and bumps `sessions.questions_answered` in two
-    separate statements with no transaction around them, so the counter can sit
-    at 0 while real answers exist -- the update failing, or the read it is
-    computed from failing, is enough. The counter is a denormalised cache; the
-    rows are the record. Trusting the cache meant a hiccup mid-lesson could end
-    with a student's answered session deleted for looking empty, which is the
-    one outcome a delete-on-absence job may not have.
+    Checks `session_answers` directly rather than trusting the counter:
+    `record_answer` writes the answer row and bumps `questions_answered` in two
+    separate statements, so the counter can lag behind real answers. Trusting
+    it could delete an answered session that merely looked empty.
     """
     if questions:
         return False
-    # `session_answers` is skipped only when the caller has *just* counted it
-    # and got zero from the database. That is not the same as trusting the
-    # counter -- which is the whole point of this function -- so a recount that
-    # fell back to the cache leaves the check in place.
+    # Skip the session_answers re-check only when the caller just counted it
+    # from the database and got zero -- a cache fallback still leaves the
+    # check in place.
     tables = ("cognitive_signals", "face_signals", "heart_signals") if answers_counted \
         else ("session_answers", "cognitive_signals", "face_signals", "heart_signals")
     for table in tables:
@@ -769,37 +624,25 @@ def _discard_if_nothing_recorded(session_id: str, questions,
 def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
     """Recompute the daily rollup for the school days this session touched.
 
-    Called as a session closes. Writing the rollup continuously is what keeps it
-    from ever being a race against the end-of-year delete -- generating it at
-    expiry would mean the one job that destroys data also being the first to
-    read it.
+    Called as a session closes, rather than at expiry -- otherwise the job that
+    deletes raw data would also be the first to read the summary of it.
 
-    **Never raises.** A session close that failed because a derived summary
-    could not be written would lose the student's `user_stats` update and their
-    session record, which is a worse outcome than a rollup that is one day
-    stale -- and the writer is idempotent, so the next close on that day
-    repairs it. The delete job's completeness check is the backstop that stops
-    a persistently broken rollup becoming data loss.
+    Never raises: a failure here shouldn't cost the student their session
+    record or stats update. The writer is idempotent, so the next close on
+    that day repairs it; the delete job refuses to remove a day with no
+    rollup, which backstops a persistently broken write.
 
-    Usually one day. A session that runs past local midnight touches two, and
-    recomputing both is cheaper than reasoning about which one moved.
+    Usually one day; a session spanning local midnight touches two.
     """
     tz = _school_timezone()
     try:
         now = _utc_now()
         day = _school_date(started_at, tz) or _school_date(now, tz)
         end_day = _school_date(ended_at, tz) or _school_date(now, tz)
-        # Two ways a session's stamps can be nonsense, and neither may end in
-        # doing nothing quietly.
-        #
-        # Forward: a corrupt `started_at` years back would step a day at a time
-        # to today. Inverted: `started_at` *after* `ended_at` -- clock skew, or
-        # a bad write -- makes the loop condition false from the start, so it
-        # ran zero times and logged nothing, which is the silent no-op this
-        # guard was written to prevent and did not.
-        #
-        # Both fall back to the closing day, which is the one a close can
-        # actually have changed.
+        # Guard against bad timestamps: a corrupt started_at years back would
+        # step a day at a time all the way to today, and started_at after
+        # ended_at (clock skew, bad write) would silently loop zero times.
+        # Both fall back to rolling up just the closing day.
         span = (end_day - day).days
         if span < 0 or span > 7:
             print(f"[rollup] {user_id[:8]}: implausible span {day}..{end_day} "
@@ -807,11 +650,9 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
             day = end_day
         failures = 0
         while day <= end_day:
-            # Per day, not per span. One try around the loop meant a failure on
-            # the first day of a two-day session also skipped the second -- and
-            # the second is the closing day, the one this call exists for. The
-            # days are independent recomputations; nothing about one failing
-            # says the next will.
+            # try/except per day, not around the whole loop -- a failure on
+            # day one of a two-day session must not skip day two, which is the
+            # closing day this call exists to roll up.
             try:
                 supabase.rpc("rollup_signal_day", {
                     "p_user_id": user_id,
@@ -825,42 +666,27 @@ def _rollup_session_days(user_id: str, started_at, ended_at) -> None:
         if failures:
             print(f"[rollup] {user_id[:8]}: {failures} day(s) not rolled up")
     except Exception as e:
-        # This one covers the date arithmetic and the timezone read, which are
-        # shared by every day and cannot be retried per day.
+        # Covers the date arithmetic and timezone read, shared across every
+        # day and not something a per-day retry can fix.
         print(f"[rollup] {user_id[:8]}: {e}")
 
 
 def _claim_session_close(session_id: str, ended_at: str) -> bool:
     """Stamp `ended_at` on a session that has none yet. True if this caller won.
 
-    Three sites close sessions and none of them held anything. `/end` read the
-    row, saw no `ended_at` and then wrote one, which is two statements: a
-    delayed `/end` arriving while the stale sweep or `class_live` was closing
-    the same session passed that check, and both closes ran. Both credited
-    `user_stats` with the session's **cumulative** counts, so every answer in it
-    landed twice in the lifetime totals -- inflating exactly the accuracy figure
-    a parent reads, with nothing raised anywhere.
+    Three sites can close a session, and two racing closes on the same session
+    must not both run -- both would credit `user_stats` with the session's
+    cumulative counts, double-counting every answer.
 
-    The claim is the conditional update itself. `is_("ended_at", "null")`
-    matches at most one row and Postgres serialises the two writers, so exactly
-    one of them updates anything.
+    The conditional update is the claim: `is_("ended_at", "null")` matches at
+    most one row, and Postgres serialises the two writers, so exactly one wins.
 
-    **An empty result means zero rows matched, and nothing else.** postgrest-py
-    defaults `update()` to `returning=representation` and nothing here overrides
-    it, so the updated row always comes back when one was updated. An earlier
-    version treated empty as *ambiguous* and confirmed it with a second SELECT,
-    on the theory that a client not asking for the representation would also
-    answer empty -- true of some clients, not of the one this pins.
+    An empty result means zero rows matched -- postgrest-py returns the updated
+    row by default, so nothing here needs a second SELECT to confirm it.
+    `test_postgrest_update_returns_the_updated_row` pins that assumption, since
+    a client-library change here would make every close silently look lost.
 
-    That assumption is the whole safety property, and getting it wrong is silent
-    and total: if the default ever flips, every close reads as lost and every
-    session silently loses its credit, its rollup and its archive. So it is
-    pinned by `test_postgrest_update_returns_the_updated_row`, which fails on a
-    dependency bump that changes it -- a loud failure in CI instead of a quiet
-    one in production, which is what the extra round trip was buying badly.
-
-    Never raises: it runs where a close does, and a session that cannot be
-    stamped must not take the caller down with it.
+    Never raises: a session that can't be stamped must not take its caller down.
     """
     try:
         claimed = supabase.table("sessions").update({"ended_at": ended_at}) \
@@ -874,36 +700,19 @@ def _claim_session_close(session_id: str, ended_at: str) -> bool:
 def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
     """What a closing session actually answered -- the rows, not just the counter.
 
-    `sessions.questions_answered` is a denormalised cache. `record_answer`
-    inserts the answer row and bumps the counter in two separate statements with
-    no transaction around them, so the counter can sit below the truth --
-    `_discard_if_nothing_recorded` already says so, and re-checks
-    `session_answers` before deleting a session that looks empty.
+    `sessions.questions_answered` is a denormalised cache, written in a
+    separate statement from the answer row, so it can lag behind the truth.
+    Counting from `session_answer_counts` (a single SQL query, no row cap)
+    avoids crediting a stale low number.
 
-    The **credit** was left trusting the same field the discard check distrusts.
-    So a session correctly saved from deletion by that re-check was then
-    credited a falsy count, `_credit_session_to_user_stats` returned early on
-    it, and the student's work survived in `session_answers` while never
-    reaching the lifetime totals a parent reads. Permanently: no later close
-    revisits a session that is already stamped, and nothing logged it.
+    Returns `(questions, correct, counted)`. `counted` says whether the numbers
+    came from the rows or fell back to the stored counter -- a *trusted* zero
+    means `session_answers` really is empty, so the discard check doesn't need
+    to ask again.
 
-    **Two integers from `session_answer_counts`, not the rows.**
-    This used to fetch up to 2000 `correct` values and sum them here, which
-    meant carrying a cap -- and a cap needs its own fallback, because a capped
-    count is *wrong* rather than merely slow, and crediting a wrong low number
-    is the exact failure this function exists to prevent. Counting in SQL has no
-    cap to reason about, so the constant, its branch and its log line are gone.
-
-    One query per close, not per answer.
-
-    Returns `(questions, correct, counted)`. `counted` is whether those numbers
-    came from the rows or fell back to the stored counter, which the caller
-    needs: a *trusted* zero means `session_answers` is empty and the discard
-    check need not go and ask the same question again.
-
-    Falls back to the stored counter on a failed read, and whenever the rows
-    come back *fewer* than the counter -- crediting less than a previous reading
-    of this session is the direction that loses a student's work.
+    Falls back to the stored counter on a failed read, or whenever the counted
+    rows come back *fewer* than the counter -- crediting less than a previous
+    reading would lose a student's work.
     """
     stored_q = session.get("questions_answered") or 0
     stored_c = session.get("correct_answers") or 0
@@ -932,56 +741,35 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
 def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
     """Everything a session close does, including stamping `ended_at`.
 
-    Three endpoints close sessions -- `/end`, the stale sweep in
-    `start_session`, and `class_live` -- and the sequence was hand-copied into
-    each of them. Every copy drifted, in a different direction, and none of the
-    drifts raised anything:
+    Three endpoints close sessions (`/end`, the stale sweep, `class_live`), and
+    they all go through this one function so the sequence can't drift between
+    them. Order matters: discard runs first, since a rollup and archive of an
+    about-to-be-deleted session is wasted work.
 
-    - the stale sweep credited `correct_answers` it had never selected, so
-      every session it closed added its questions to the lifetime total and
-      **zero** correct answers, quietly deflating the student's accuracy;
-    - `class_live` never ran the empty-session discard, so a failed pairing
-      closed by a teacher opening the Live view survived in History for ever;
-    - and the archive, then the rollup, then the credit each shipped as
-      "the third close site to be missed".
+    The stamp happens first and is the claim to do everything else -- two
+    closes racing on the same session must not both run the full sequence.
 
-    One copy, one order. The order is load-bearing: the discard runs first
-    because a rollup of nothing and an archive of four empty charts are work
-    done for a session that is about to stop existing.
-
-    **The stamp is the first step, and it is the claim.** It used to sit at each
-    call site, above the call, which left two things to get wrong per site and
-    both were: `class_live` stamped and closed *before* stopping the poller, so
-    a tick could still insert a signal row after the discard check had looked;
-    and nothing anywhere made the stamp conditional, so two closes racing each
-    other both ran the whole sequence. Owning it here makes "did I win" a
-    question with one answer.
-
-    Stopping the poller stays at the call sites -- it takes a different pair of
-    ids at each -- and it has to happen **before this call**, which is now the
-    whole of the ordering rule. `test_every_close_site_stops_the_poller_first`
-    pins it.
+    Stopping the poller stays at each call site, since the ids differ, but it
+    must happen *before* this call -- `test_every_close_site_stops_the_poller_first`
+    pins that ordering.
     """
     sid = session["id"]
     if not _claim_session_close(sid, ended_at):
-        # Somebody else stamped it first, or the row is gone. Everything below
-        # is theirs to do, and doing it twice is what counted a session's
-        # answers twice in the lifetime totals.
+        # Someone else already stamped it -- doing this again would double-
+        # count the session's answers in the lifetime totals.
         return {"discarded": False, "already_closed": True}
 
     total_q, correct, counted = _answer_counts(sid, session)
 
-    # `counted` says the zero came from the database rather than from the cache,
-    # so the discard check does not have to ask `session_answers` the same
-    # question a second time. It still asks when the recount fell back, because
-    # then nobody has actually looked.
+    # counted=True means the zero came from the database, so the discard check
+    # doesn't need to ask session_answers the same question again.
     if _discard_if_nothing_recorded(sid, total_q, answers_counted=counted):
         return {"discarded": True}
 
     _credit_session_to_user_stats(user_id, total_q, correct)
     _rollup_session_days(user_id, session.get("started_at"), ended_at)
-    # Off the request path and last: it reads three tables and makes four calls
-    # to object storage, which is not work to hold a request open for.
+    # Off the request path and last: reads three tables and hits object
+    # storage four times, not worth holding a request open for.
     chart_archive.schedule(supabase, sid, user_id)
     return {"discarded": False}
 
@@ -989,25 +777,18 @@ def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
 def _may_record(student_id: str) -> dict:
     """Consent **and** the retention window, which are different questions.
 
-    Deliberately not folded into `_consent`. That helper answers "what did this
-    family agree to", and it is read by the reporting surfaces, the consent
-    screen itself and the poller status -- none of which should change their
-    answer because the school year ended. Gating inside it would report every
-    channel as off on the last day of term, so a parent could not read the
-    history this phase explicitly keeps until the delete job runs, and a student
-    opening the consent screen in August would be shown three switches off that
-    nobody had touched.
-
-    So the window composes with consent at the recording sites instead. Both
-    fail closed and the reasons stay separate: `window_state` says why nothing
-    is being recorded when every flag is true.
+    Not folded into `_consent`: that helper answers "what did this family
+    agree to", and is read by reporting surfaces and the consent screen, none
+    of which should change their answer just because the school year ended.
+    So the window is composed with consent here instead, at the recording
+    sites, with `window_state` explaining why nothing records when consent
+    alone would allow it.
     """
     flags = _feature_flags()
-    # A live bypass substitutes a fully-consenting answer rather than skipping
-    # the checks below, so every other gate -- the window, the per-channel kill
-    # switches -- still applies. `consent_bypassed` rides along because a caller
-    # that reports *why* something is being recorded would otherwise say the
-    # student agreed, which is the one thing that is not true here.
+    # A live bypass substitutes a fully-consenting answer, but every other
+    # gate (window, per-channel switches) still applies. `consent_bypassed`
+    # rides along so a caller reporting *why* something recorded doesn't claim
+    # the student actually agreed.
     enforced = _consent_enforcement_active(flags)
     consent = _consent(student_id) if enforced else {
         **_CONSENT_ENABLED_ALL, "retrieved": True, "exists": False}
@@ -1018,13 +799,9 @@ def _may_record(student_id: str) -> dict:
             "window_starts_on": window["starts_on"],
             "window_ends_on": window["ends_on"],
             "consent_bypassed": not enforced,
-            # The per-channel flags a recording caller should read. Consent is
-            # left untouched above so a caller that needs the raw answer still
-            # has it -- these are the conjunction.
-            #
-            # The kill switches are ANDed, never ORed: a flag here can withhold
-            # recording and can never grant it, so turning one on cannot record
-            # anything a student declined.
+            # The per-channel flags a recording caller should read -- ANDed
+            # with consent, never ORed, so a flag can withhold recording but
+            # never grant it against a student's refusal.
             "record_eeg": (recording and flags["recording_eeg_enabled"]["enabled"]
                            and bool(consent.get("eeg_enabled"))),
             "record_headband_optical": (
@@ -1037,31 +814,25 @@ def _may_record(student_id: str) -> dict:
 def _as_sentence(text: str) -> str:
     """A reason string as a standalone sentence.
 
-    The reasons are written lowercase and unpunctuated because their main home
-    is an ingest response's `reason` field, sitting beside "eeg not consented".
-    An HTTP error detail is read on its own, so it needs a capital and a stop.
-    Named rather than inlined at its one call site: `x[0].upper() + x[1:]`
-    applied to shared text is the kind of thing that gets copied to a second
-    caller and then a third with a different idea of punctuation.
+    Reasons are written lowercase and unpunctuated for embedding in a `reason`
+    field, but an HTTP error detail needs a capital and a full stop.
     """
     if not text:
         return text
     return text[0].upper() + text[1:] + ("" if text.endswith((".", "!", "?")) else ".")
 
 
-# An unknown state has no meaning to report, and both callers treat that as
-# "nothing to say about the window" -- which is right: the denial itself comes
-# from `_WINDOW_DENIED`, and a state missing from the table is denied there.
+# An unknown state has nothing to report -- the denial itself already comes
+# from `_WINDOW_DENIED`.
 _NO_MEANING = _WindowMeaning(False, None, None)
 
 
 def _window_meaning(state: str) -> _WindowMeaning:
-    """What a window state means. One accessor; the callers pick a field.
+    """What a window state means. One accessor; callers pick a field.
 
-    The window reason wins over the consent one wherever both could apply: when
-    the year has not started, *no* channel is recording, and reporting "eeg not
-    consented" would send a parent to the consent screen to fix something that
-    is not broken there.
+    The window reason wins over the consent one: if the year hasn't started,
+    nothing is recording, and reporting "eeg not consented" would wrongly send
+    a parent to the consent screen.
     """
     return _WINDOW_STATES.get(state) or _NO_MEANING
 
@@ -1070,18 +841,9 @@ def _not_recording_reason(gate: dict, declined: str,
                           unavailable: str = "consent unavailable") -> str:
     """Why this channel is not recording. Window first, then consent.
 
-    Both sentences come from the caller whole, not as fragments to interpolate:
-    the sites word them differently ("eeg not consented" against "no consented
-    heart sensor"), and composing them here produced "no consented heart sensor
-    not consented".
-
-    `unavailable` is a parameter for the same reason `declined` is --
-    `/api/eeg/start` says "Could not check whether EEG recording is allowed, so
-    it was not started", which is a better sentence than "consent unavailable"
-    in front of someone who just pressed a button. It used to get that by
-    hand-rolling this precedence inline, which is one edit away from the four
-    sites disagreeing about whether a closed year outranks an unreadable
-    consent row.
+    Callers pass their own full sentences rather than fragments to compose --
+    the sites word them differently ("eeg not consented" vs "no consented
+    heart sensor"), so building it here avoided nonsense concatenations.
     """
     window = _window_meaning(gate.get("window_state")).reason
     if window:
@@ -1116,43 +878,28 @@ def _topic_breakdown(student_id: str):
 
 
 class ReportChannels(NamedTuple):
-    """Which optional channels a report may read, and whether we know.
+    """Which optional channels a report may read, and whether consent was readable.
 
-    Named rather than a bare tuple because the first version returned
-    `(heart, emotion)` while its parameters read `(want_emotion, want_heart)`,
-    and one call site unpacked it with `*reversed(...)`. That silently swapped
-    the flags: a student who allowed the headband and declined the camera had
-    `face_signals` read for them. Fields cannot be transposed by accident.
+    A named tuple, not a plain one, so fields can't get swapped by position
+    (heart vs. emotion) the way they once did by accident.
 
-    `consent_retrieved` is carried for the same reason `_consent` carries it --
-    "nobody consented" and "we could not find out" both yield False here, and
-    the reporting rules require a surface to tell them apart before it says a
-    channel was not requested.
+    `consent_retrieved` tells "nobody consented" apart from "we couldn't read
+    consent" -- callers need both before deciding a channel was declined.
 
-    The `*_revoked_at` timestamps ride along so a surface can say *when* a
-    channel was switched off rather than only that it is. "Not recorded --
-    turned off on 3 August" and a blank tile are very different things to put
-    in front of a parent, and the second one reads as a fault.
+    The `*_revoked_at` timestamps let a surface say *when* a channel was
+    switched off, so it can show "Off since 3 August" instead of a blank tile
+    that looks like a bug.
     """
     heart: bool
     emotion: bool
     consent_retrieved: bool
-    # Defaulted, so every existing construction site keeps working and a caller
-    # that does not care is not forced to thread them through.
+    # Defaulted so existing call sites keep working without threading these through.
     heart_revoked_at: str | None = None
     emotion_revoked_at: str | None = None
-    # EEG is **not** a read filter, unlike the two above, and that is why it is
-    # named for consent rather than for inclusion. There is no
-    # `p_include_cognitive` on the summary RPCs -- the cognitive channel is
-    # always read -- and withdrawal deliberately keeps what was already
-    # recorded, so a student who switched the headband off last week still has
-    # true averages from before then.
-    #
-    # It rides here so a tile can say "Off since 3 August" instead of "No
-    # sensor". Without it the three cognitive tiles were the only ones on the
-    # panel that could not tell a withdrawn channel from a sensor that never
-    # recorded, and `SignalPanel.eegReason` said so in its own comment while
-    # hardcoding `on: true`.
+    # EEG is not a read filter like the two above -- there's no p_include_cognitive
+    # on the summary RPCs, so the cognitive channel is always read, and withdrawal
+    # keeps past data rather than hiding it. This lets a tile say "Off since <date>"
+    # instead of "No sensor" for a channel that used to record.
     eeg: bool = True
     eeg_revoked_at: str | None = None
 
@@ -1161,50 +908,30 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
                          want_heart: bool = True) -> ReportChannels:
     """Which optional channels a report may read: consent AND what was asked for.
 
-    **Consent** decides whether a channel was ever recorded, and is not the
-    viewer's to override.
+    Consent decides what was ever recorded and is not the viewer's to override.
 
-    `want_*` is a viewer-side narrowing that no client sends any more. The
-    frontend switch that used to set it is retired: it was a read filter wearing
-    the vocabulary of consent, and stored consent now does the job it appeared
-    to do. What replaced it -- the teacher's "Hide sensor data" switch,
-    `frontend/src/lib/viewPrefs.js` -- is client-side and changes no request.
+    `want_*` is a leftover viewer-side narrowing no client sends any more (the
+    old frontend switch it served is retired; today's replacement, the
+    teacher's "Hide sensor data" toggle, is client-side and changes no
+    request). Kept because it's cheap and lets a caller ask for less than
+    consent allows -- it is not a privacy boundary.
 
-    The parameters stay because they cost nothing and a caller may legitimately
-    want less than consent allows; they default to True, so absent means "as
-    much as consent permits". They are not a privacy boundary and nothing should
-    be built on them as one.
-
-    Consent is authoritative and cannot be widened by a caller, which is why it
-    is resolved here rather than trusted from a query parameter. A revoked
-    channel has no rows to read anyway; gating the read as well means a stale
-    row from before a withdrawal cannot surface in a report.
-
-    Fails closed, like `_consent` itself: an unreadable consent row reports
-    nothing rather than everything.
+    Consent is resolved here, not trusted from a query parameter, so a
+    revoked channel's rows are never read even if stale ones exist. Fails
+    closed like `_consent`: an unreadable consent row reports nothing.
     """
     consent = _consent(student_id)
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
-    # Heart can come from either sensor, so it is off only when *both* are, and
-    # the honest date is the later of the two -- the moment it actually stopped
-    # being recorded, not the moment the first of the pair was switched off.
+    # Heart can come from either sensor, so it's off only when both are, and the
+    # honest revoked date is the later of the two -- when it actually stopped.
     heart_revoked = None
     if not heart:
         stamps = [consent.get("headband_optical_revoked_at"),
                   consent.get("camera_revoked_at")]
         stamps = [t for t in stamps if t]
-        # Ordered as instants, not as text -- `_parse_ts` for the reason it
-        # already documents. Both stamps come from `_utc_now().isoformat()`
-        # today, so lexical order happens to agree, but that is a property of
-        # the writer rather than of the column: `Z` denotes the same instant and
-        # sorts before every digit, so one value arriving that way hands back
-        # the earlier date. The cost is telling a parent recording stopped on
-        # the day the *first* of the two sensors went off, while the other was
-        # still running.
-        #
-        # An unparseable stamp sorts below every real one, so it can only win
-        # when it is all there is; `_parse_ts` logs it either way.
+        # Compared as instants via `_parse_ts`, not as text, so a differently
+        # formatted timestamp can't sort wrong. An unparseable stamp sorts last.
         heart_revoked = max(
             stamps,
             key=lambda t: _parse_ts(t) or datetime.min.replace(tzinfo=timezone.utc),
@@ -1215,10 +942,9 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
                           consent_retrieved=bool(consent.get("retrieved")),
                           heart_revoked_at=heart_revoked,
                           emotion_revoked_at=None if emotion else consent.get("camera_revoked_at"),
-                          # No `want_eeg`: the cognitive channel is read either
-                          # way, so this reports consent rather than narrowing
-                          # anything. Null while it is on, so no surface can put
-                          # a revocation date beside live data.
+                          # No `want_eeg`: the cognitive channel is always read, so
+                          # this just reports consent. Null while on, so a tile can't
+                          # show a revocation date next to live data.
                           eeg=eeg,
                           eeg_revoked_at=None if eeg else consent.get("eeg_revoked_at"))
 
@@ -1226,18 +952,15 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
     """Call a summary RPC with the facial opt-out threaded in.
 
-    A schema mismatch is an error: a database missing p_include_face for any
-    reason -- a bad rollback, an environment provisioned from an old dump --
-    would otherwise degrade to a silently wrong answer instead of failing.
+    Deliberately not wrapped in a try/except: a database missing p_include_face
+    (bad rollback, stale environment) should error loudly, not silently return
+    a wrong answer.
     """
     return supabase.rpc(name, {**params,
                                "p_include_heart": include_heart,
                                "p_include_emotion": include_emotion,
-                               # School timezone, not UTC: `_weekly_signal_report`
-                               # buckets its "this week" the same way, and these
-                               # RPCs backed the headline tiles on the same page
-                               # while still cutting off in UTC -- two numbers
-                               # computed against different week boundaries.
+                               # School timezone, not UTC, so this matches how
+                               # `_weekly_signal_report` buckets "this week".
                                "p_timezone": _retention_window().get("timezone") or "UTC"}).execute()
 
 
@@ -1250,18 +973,14 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                     eeg_revoked_at: str | None = None) -> dict:
     """Just the headline averages, aggregated in Postgres.
 
-    The full report pulls thousands of raw signal rows to compute a handful of
-    numbers, which is fine for one student on a detail page and wasteful on a
-    list that loads every visit. This returns the same headline figures without
-    transferring any rows -- see the student_signal_summary migration.
+    Cheaper than the full report for a list that loads every visit: it
+    aggregates in the database instead of pulling thousands of raw rows.
 
-    Both flags are passed down into the aggregate, so a declined channel has no
-    row read at all -- the same guarantee _weekly_signal_report makes, rather
-    than a null applied on the way out.
+    Both flags are passed into the aggregate so a declined channel is never
+    read, matching what `_weekly_signal_report` guarantees.
 
-    Carries dominant_emotion, which _signal_summaries does not: only the
-    single-student RPC computes it, because only the surfaces that read one
-    student at a time render it.
+    Carries `dominant_emotion`, which `_signal_summaries` does not -- only
+    this single-student RPC computes it.
     """
     row = None
     retrieved = True
@@ -1271,11 +990,8 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                            include_heart, include_emotion)
     except Exception as e:
         print(f"[signal_summary] {e}")
-        # The figures below are about to become defaults rather than
-        # measurements, and nothing downstream could tell the difference: the
-        # endpoint answers 200 either way, so a caller saw zero samples and a
-        # null average -- the same shape as a student who recorded nothing.
-        # Surfaces then reported an absence in data that failed to load.
+        # This endpoint still answers 200, so a failed read must not look like
+        # a student who recorded nothing -- `retrieved=False` is what tells them apart.
         retrieved = False
     else:
         rows = res.data or []
@@ -1286,12 +1002,9 @@ def _signal_summary(student_id: str, days: int = 7, include_heart: bool = True,
                              heart_revoked_at=heart_revoked_at,
                              eeg_enabled=eeg_enabled,
                              eeg_revoked_at=eeg_revoked_at)
-    # Set here rather than in _shape_summary, which is shared with the batch
-    # RPC: putting it there would add an always-null dominant_emotion to every
-    # child on the parent dashboard, reporting "no emotion recorded" for a
-    # figure that was never asked for. Explicitly None with the opt-out on for
-    # the same reason the SQL yields NULL there -- and on the deploy-window
-    # fallback path, where the old signature has no such column at all.
+    # Set here, not in `_shape_summary`, which the batch RPC also uses -- adding
+    # it there would put an always-null `dominant_emotion` on every child in a
+    # batch, claiming "no emotion" for a field never requested.
     summary["dominant_emotion"] = (row or {}).get("dominant_emotion") if include_emotion else None
     return summary
 
@@ -1301,17 +1014,15 @@ _EMPTY_SUMMARY = {"consent_retrieved": True,
                   "face_attention": None, "heart_rate_bpm": None,
                   "rmssd_ms": None, "sessions": 0,
                   "cognitive_samples": 0, "face_samples": 0, "heart_samples": 0,
-                  # `face_included` is kept alongside the two new flags rather
-                  # than replaced. Existing consumers branch on it, and removing
-                  # it would turn "the field is gone" into a falsy value at
-                  # every one of them -- silently reporting a channel as
-                  # excluded. It now means the emotion channel specifically.
+                  # `face_included` is kept alongside the newer flags because
+                  # existing consumers branch on it; removing it would read as
+                  # "channel excluded" everywhere it's checked. Now means emotion
+                  # specifically.
                   "face_included": True, "emotion_included": True,
                   "heart_included": True, "retrieved": True,
-                  # True, because absent means a payload from before this field
-                  # existed and the alternative -- defaulting to off -- would
-                  # tell every reader of an older payload that the headband had
-                  # been switched off, which is a claim about a decision nobody
+                  # True: an absent field means an old payload from before this
+                  # existed, and defaulting to off would tell every old reader
+                  # the headband was switched off -- a decision nobody
                   # made. Same reasoning as `face_included`'s fallback.
                   "eeg_enabled": True, "eeg_revoked_at": None}
 
@@ -1324,16 +1035,13 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
                    eeg_revoked_at: str | None = None) -> dict:
     """The summary payload.
 
-    `retrieved` is the third thing a caller has to be able to tell apart, after
-    "nothing was recorded" and "facial data was not requested": the aggregate
-    query itself failed. Both helpers below swallow that exception so one
-    broken read does not blank a dashboard -- but the payload they return is
-    all defaults, and answered with a 200, so without this flag a zero sample
-    count and a null average were indistinguishable from a quiet week. Every
-    surface that renders "no data" has to consult it before saying so.
+    `retrieved` tells a third state apart: "nothing recorded", "not requested",
+    or the aggregate query itself failed. Callers of this still answer 200 with
+    all-default fields on a failed read, so without this flag a zero count and
+    a failed read look identical. Any surface showing "no data" must check it.
 
-    True by default: it is the answer for every path that actually reached the
-    database, including one that legitimately came back with no rows.
+    Defaults True, since that's correct for every path that actually reached
+    the database, including a legitimate empty result.
     """
     if not row:
         return {**_EMPTY_SUMMARY, "face_included": include_emotion,
@@ -1347,50 +1055,36 @@ def _shape_summary(row, include_heart: bool = True, include_emotion: bool = True
         "stress": row.get("stress"),
         "engagement": row.get("engagement"),
         "face_attention": row.get("face_attention"),
-        # Absolute units, unlike every other figure here, which are 0..1 ratios.
-        # `toPct()` on the frontend must not be applied to them.
+        # Absolute units, unlike every other figure here (0..1 ratios) --
+        # the frontend's `toPct()` must not be applied to them.
         "heart_rate_bpm": row.get("heart_rate_bpm"),
         "rmssd_ms": row.get("rmssd_ms"),
         "sessions": row.get("sessions") or 0,
-        # Surfaced rather than dropped: an average of None next to a sample
-        # count of 0 means "nothing recorded", while None next to a nonzero
-        # count would mean "recorded but unusable". The SQL counts non-NULL
-        # measurements specifically so that distinction holds.
+        # A None average next to a 0 count means "nothing recorded"; a None
+        # average next to a nonzero count means "recorded but unusable".
         "cognitive_samples": row.get("cognitive_samples") or 0,
         "face_samples": row.get("face_samples") or 0,
         "heart_samples": row.get("heart_samples") or 0,
-        # With a channel excluded its average is null and its count 0 --
-        # identical to a student that sensor never read. Same distinction the
-        # weekly report draws with its own flags.
-        # Kept as an alias for emotion_included, and narrower than its name:
-        # it means the *emotion* channel, not "anything facial". Consumers
-        # branch on it, so removing it would turn "field absent" into a falsy
-        # value at each of them. Deprecated -- read emotion_included in new
-        # code, and do not fold a third channel into this one.
+        # Kept as an alias for emotion_included and means the emotion channel
+        # specifically, not "anything facial". Deprecated -- read
+        # emotion_included in new code.
         "face_included": include_emotion,
         "emotion_included": include_emotion,
         "heart_included": include_heart,
-        # A row got here, so the read succeeded by construction. Carried
-        # anyway rather than hardcoded True, so the field is present on every
-        # payload and a consumer never has to treat "absent" as a third state.
+        # A row got here, so the read succeeded. Still carried explicitly so
+        # this field is present on every payload.
         "retrieved": retrieved,
         # `retrieved` is about the aggregate query; this is about the consent
-        # read that decided which channels it could ask for. Both False means
-        # the channel flags are "we could not find out" rather than "declined",
-        # and the parent dashboard is the surface that renders that difference.
+        # read that decided which channels could be asked for. Both False means
+        # "we couldn't find out", not "declined".
         "consent_retrieved": consent_retrieved,
-        # When, not just whether. "Not recorded -- turned off on 3 August" is a
-        # different sentence from a blank tile, and the blank one reads as a
-        # fault. Null while the channel is on, so a surface cannot end up
-        # rendering a revocation date next to live data.
+        # When, not just whether. "Off since 3 August" reads very differently
+        # from a blank tile. Null while the channel is on.
         "emotion_revoked_at": emotion_revoked_at,
         "heart_revoked_at": heart_revoked_at,
-        # Consent, **not** an inclusion flag, and named so. The cognitive
-        # channel has no `p_include_*` parameter and is always read, and a
-        # withdrawal keeps what was already recorded -- so a student who
-        # switched the headband off last week has true averages here and a tile
-        # that should say "Off since <date>" rather than "No sensor". Calling
-        # this `eeg_included` would claim a read was skipped that was not.
+        # Consent, not an inclusion flag. The cognitive channel has no
+        # p_include_* param and is always read; withdrawal keeps past data, so
+        # a tile should say "Off since <date>", not "No sensor".
         "eeg_enabled": eeg_enabled,
         "eeg_revoked_at": eeg_revoked_at,
     }
@@ -1400,30 +1094,17 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
                       include_heart: bool = True,
                       include_emotion: bool = True,
                       channels_by_student: dict | None = None) -> dict[str, dict] | None:
-    """Headline averages for many students in one round-trip.
+    """Headline averages for many students in one round-trip, instead of one per child.
 
-    The single-student RPC removes the row transfer but still costs one
-    round-trip per child on a dashboard that loads every visit.
+    None means the read failed; {} means it succeeded with nothing to return.
+    Callers need the difference -- they fill in a default summary for any
+    missing child, and that default must say whether it stands in for a failed
+    query or a genuinely quiet child.
 
-    None means the read failed, as opposed to {} for a call that succeeded and
-    had nothing to return. The caller needs the difference: it fills in a
-    default summary for any child missing from the result, and that default has
-    to say whether it stands in for a failed query or for a child the aggregate
-    genuinely reported nothing about. Returning {} for both had the dashboard
-    tell a parent their child had recorded nothing whenever the RPC broke.
-
-    **`channels_by_student` is how the per-child consent fields get on.** The
-    batch RPC groups children by flag *pair*, so it cannot carry a per-child
-    revocation date or a per-child `consent_retrieved` -- and without this every
-    row came back with the `_shape_summary` defaults: consent retrieved, EEG on,
-    nothing revoked, whatever the family had actually decided. The one caller
-    patched all five back in by hand afterwards, in both of its branches, which
-    is not something a second caller would know to do. Pass the
-    `ReportChannels` map and they are stamped here instead.
-
-    Omitted, the defaults stand -- so a caller that has no consent map still
-    gets a well-formed payload rather than a crash, and the surfaces that
-    render "off since" simply have nothing to render.
+    `channels_by_student` carries the per-child consent fields the batch RPC
+    can't: it groups children by flag pair, so it has no way to return a
+    per-child revocation date or `consent_retrieved`. Pass the `ReportChannels`
+    map and this stamps them onto each row. Omitted, the defaults stand.
     """
     if not student_ids:
         return {}
@@ -1470,18 +1151,12 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     "not requested" rather than "nothing recorded".
     """
     tz = _school_timezone()
-    # The oldest instant any bucket below can need: midnight at the start of the
-    # earliest school day in range, expressed in UTC for the query.
-    #
-    # Not `now - days` in UTC, which is what this used to be: where the
-    # school is behind UTC the earliest school day starts *before* it -- so the
-    # oldest day on every chart was quietly missing its first few hours and
-    # averaged only the rest. Silent, and worst on the day a reader is most
-    # likely to compare against the one before it.
+    # Midnight at the start of the earliest school day in range, in UTC for the
+    # query. Using `now - days` in UTC instead would quietly clip the first few
+    # hours of the oldest day wherever the school is behind UTC.
     school_today = _utc_now().astimezone(tz).date()
-    # `datetime.min.time()`, not `time.min`: `time` here is the stdlib *module*
-    # (imported at the top for monotonic clocks), so `time.min` is an
-    # AttributeError rather than midnight.
+    # `datetime.min.time()`, not `time.min`: `time` here is the stdlib module
+    # (imported for monotonic clocks), so `time.min` doesn't exist.
     since = datetime.combine(school_today - timedelta(days=days - 1),
                              datetime.min.time(),
                              tzinfo=tz).astimezone(timezone.utc).isoformat()
@@ -1490,23 +1165,15 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         """Rows (newest first), whether the server withheld any, the total, and
         whether the read happened at all.
 
-        Truncation is detected from an exact count rather than from
-        len(rows) >= limit. PostgREST applies its own db-max-rows ceiling
-        (commonly 1000) on top of our .limit(), so a smaller server cap would
-        silently trim the result while len(rows) never reached _REPORT_ROW_CAP
-        -- leaving truncated=False and the whole guard disabled. Comparing
-        against the count the server reports works whichever limit binds.
+        Truncation is detected from the exact count, not `len(rows) >= limit`:
+        PostgREST's own row ceiling can trim below our `.limit()` and leave
+        `len(rows)` short of it, which would hide the truncation.
 
-        That count is worth returning as well as comparing: for sessions it is
-        the figure the report is actually about, and it is exact whether or not
-        the cap bound. None means the server reported no count.
+        The count is also useful on its own -- for sessions it's the real
+        figure the report is about, regardless of whether the cap bound.
 
-        The last element is the same distinction the summary payloads draw with
-        `retrieved`, reached the other way. This function swallows its exception
-        so one broken table does not blank a report -- but the empty list it
-        returns is indistinguishable from a student who recorded nothing, and
-        every figure downstream is then a default presented as a measurement.
-        The caller has to be told which it is holding.
+        The last element tells a failed read apart from a table that is simply
+        empty; both otherwise return the same empty list.
         """
         try:
             res = supabase.table(table).select("*", count="exact") \
@@ -1516,8 +1183,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             total = getattr(res, "count", None)
             if not isinstance(total, int):
                 total = None
-            # total=None means the client/server didn't report one; fall back
-            # to the length heuristic rather than claiming nothing was cut.
+            # No reported count: fall back to the length heuristic rather than
+            # claiming nothing was cut.
             was_cut = (total > len(rows)) if total is not None else len(rows) >= limit
             return rows, was_cut, total, True
         except Exception as e:
@@ -1525,71 +1192,49 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             return [], False, None, False
 
     cog, cog_cut, _, cog_ok = _fetch("cognitive_signals", "ts", _REPORT_ROW_CAP)
-    # ok=True with the opt-out on: nothing failed, there was simply nothing to
-    # ask for. `face_included` is what says the query never ran, and conflating
-    # the two would have the opt-out reported as a broken read.
+    # ok=True with the opt-out on: nothing failed, there was just nothing asked
+    # for. `face_included` says the query never ran.
     face, face_cut, _, face_ok = _fetch("face_signals", "ts", _REPORT_ROW_CAP) if include_emotion \
         else ([], False, None, True)
     heart, heart_cut, _, heart_ok = _fetch("heart_signals", "ts", _REPORT_ROW_CAP) if include_heart \
         else ([], False, None, True)
-    # Truncation kept, not discarded. A student over the cap was shown a count
-    # that silently stopped at it -- and with the other two tables under their
-    # own cap, `truncated` stayed False and nothing said so.
     sessions, ses_cut, ses_total, ses_ok = _fetch("sessions", "started_at", _SESSION_ROW_CAP)
 
-    # The row cap trims oldest-first, so on a heavy week the earliest days come
-    # back empty and would be reported as "no activity" rather than "not
-    # retrieved".
-    #
-    # Tracked per table, because the cap is per table. Taking the oldest
-    # timestamp across both and a single OR'd truncation flag got the mixed
-    # case wrong: when cognitive was cut and face was not, the older face rows
-    # held oldest_ts back, so no days were skipped and the trimmed cognitive
-    # days rendered as None -- displayed to parents as "no activity", the exact
-    # confusion this guard exists to prevent.
+    # The cap trims oldest-first, so the earliest days of a heavy week come
+    # back empty and would read as "no activity" instead of "not retrieved".
+    # Tracked per table -- combining into one OR'd flag lets rows from an
+    # uncut table mask a cut one and hide which days were actually trimmed.
     def _oldest(rows: list, ts_col: str) -> str:
         return min([str(r.get(ts_col, "")) for r in rows if r.get(ts_col)], default="")
 
     truncated = cog_cut or face_cut or heart_cut or ses_cut
-    # Compared against the school days built below, so they have to be school
-    # days too -- `_coverage` does `day < oldest_day` as a string, which is only
-    # chronological while both sides are the same calendar.
+    # Converted to school days because `_coverage` compares them as strings,
+    # which is only chronological within one calendar.
     cog_oldest_day = _school_day(_oldest(cog, "ts"), tz)
     face_oldest_day = _school_day(_oldest(face, "ts"), tz)
     ses_oldest_day = _school_day(_oldest(sessions, "started_at"), tz)
     heart_oldest_day = _school_day(_oldest(heart, "ts"), tz)
 
-    # Bucketed once, not re-derived per day. `_school_day` parses a timestamp
-    # and converts a zone; asking it for every row on each of `days` iterations
-    # is O(days x rows) where the string slice it replaced was free. At the row
-    # caps in play that is tens of thousands of parses per report, for an answer
-    # that cannot change between iterations.
+    # Bucketed once instead of per day: re-parsing every row's timestamp for
+    # each of `days` iterations is wasted work at these row caps.
     def _by_school_day(rows: list, ts_col: str) -> dict:
         out: dict[str, list] = {}
         for r in rows:
             out.setdefault(_school_day(r.get(ts_col), tz), []).append(r)
         return out
 
-    # The rollup, for days whose per-sample rows are gone. One query for the
-    # range, keyed on (day, channel).
+    # The rollup covers days whose per-sample rows have been deleted -- one
+    # query for the whole range, keyed on (day, channel). Its own `retrieved`
+    # flag matters because once the delete job runs, the rollup *is* the
+    # history: a failed read here means the week is unreadable, not empty.
     #
-    # Its own `retrieved` flag, like every other read here. Once the delete job
-    # has run the rollup *is* the history, so a failed read means the week is
-    # unreadable rather than empty -- the one claim it is least entitled to
-    # make, and exactly the confusion the reporting rules exist to stop.
-    # What the rollup contributes to the *week's* figures, gathered as the day
-    # loop resolves each day's source.
+    # These totals feed the week's averages so they stay consistent with
+    # `daily`, which already falls back to the rollup per day -- otherwise the
+    # chart and the headline numbers would disagree once old rows are deleted.
     #
-    # Without this the headline numbers and the chart beneath them disagree the
-    # moment the delete job runs: `daily` falls back to the rollup while
-    # `averages` and `highlights` are computed only from the rows still in the
-    # raw tables, so a week whose detail is gone shows a full chart above an
-    # empty summary -- two answers to one question on one screen.
-    #
-    # (sum, n) per metric rather than a mean of daily means: days differ in
-    # length, and averaging averages weights a four-sample day like a
-    # four-thousand-sample one. The rollup stores both, so the true sum is
-    # recoverable.
+    # (sum, n) per metric, not a mean of daily means: days differ in sample
+    # count, and averaging averages would weight a 4-sample day the same as a
+    # 4000-sample one.
     rolled_totals: dict[str, list] = {k: [0.0, 0] for k in
                                       ("focus", "stress", "engagement",
                                        "heart_rate_bpm", "rmssd_ms")}
@@ -1614,52 +1259,32 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     heart_by_day = _by_school_day(heart, "ts")
     sessions_by_day = _by_school_day(sessions, "started_at")
 
-    # Newest row that actually produced a *measurement*, not newest row.
+    # Newest row that actually produced a measurement, not just the newest row:
+    # cognitive and face rows can have their measurement columns nulled (poor
+    # electrode contact, a face window FER+ refused) while the session
+    # timeline still needs the row. Taking the newest row regardless made a
+    # "Most recent readings" panel show nothing while the weekly average beside
+    # it showed real data.
     #
-    # The heart line below has always worked this way and said why; cognitive
-    # and face did not, and they are the two tables that deliberately keep rows
-    # with the measurement columns nulled -- a headband recording with poor
-    # electrode contact, a face window FER+ refused. Those rows exist so the
-    # session's timeline survives, which is right, but taking the newest one as
-    # "the latest reading" meant a panel labelled *Most recent readings* showed
-    # nothing while the weekly average beside it showed 64%: two true numbers
-    # that read as a contradiction, and the empty one describing the last few
-    # minutes of bad contact rather than the session.
-    #
-    # Falls back to the newest row when none carries a measurement, so a channel
-    # that recorded only unusable windows still reports `sample_counts > 0` and
-    # the tile says "Calibrating" rather than "No sensor".
+    # Falls back to the newest row when none carries a measurement, so a
+    # channel with only unusable windows still shows "Calibrating" rather than
+    # "No sensor".
     latest_cognitive = next((r for r in cog if r.get("focus") is not None), None) \
         or (cog[0] if cog else None)
     latest_face = next((r for r in face if r.get("emotion") is not None), None) \
         or (face[0] if face else None)
-    # Newest *trusted* reading, matching every other heart figure in this
-    # payload. An untrusted latest would be the one number here not subject to
-    # the quality gate, and it is the one rendered largest.
+    # Trusted only, matching every other heart figure in this payload.
     latest_heart = next((r for r in heart if r.get("trusted") is True), None)
 
-    # Three states per table per day, not two. The cap trims oldest-first, so
-    # the oldest day that came back is the day it cut *into*: part of that day
-    # is here and the rest is not.
+    # Four states per table per day: ok+whole, ok+partial (the cap cut into
+    # this day), ok+missing (the cap stopped before this day), and failed
+    # (every day missing, not just the trimmed ones). A partial day is withheld
+    # rather than averaged from a fraction, which would silently bias it, or
+    # dropped, which would lose the days that did come back complete.
     #
-    # Calling that day retrieved published a figure computed from whatever
-    # fraction survived -- a biased average, and for sessions a flat undercount
-    # -- with nothing to distinguish it from an exact one. Calling it absent
-    # would throw the day away instead. It is neither, so the value is withheld
-    # and the retrieved flag says so, while the day stays in the series because
-    # something was read for it.
-    #
-    # A cap that happened to stop exactly on a day boundary leaves an oldest
-    # day that really is complete, and that is not distinguishable from here
-    # without another query. It resolves the conservative way: a complete day
-    # understated as partial, rather than a partial day published as complete.
-    #
-    # A failed query is the fourth state and the flattest of them: the table was
-    # not read for any day in the range, so every day is missing rather than
-    # merely trimmed. It has to be judged here rather than left to the cap
-    # logic, which sees only an empty result and a truncation flag of False --
-    # and would therefore call every day complete and publish the resulting
-    # empty averages and zero session counts as measurements.
+    # A cap that happens to land exactly on a day boundary looks the same as a
+    # partial day from here, so it's treated as partial too -- understating a
+    # complete day rather than risking publishing a partial one as whole.
     def _coverage(ok: bool, cut: bool, oldest_day: str, day: str) -> tuple[bool, bool]:
         """(nothing was retrieved for this day, this day is complete)."""
         if not ok:
@@ -1667,11 +1292,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         if not cut:
             return False, True          # nothing was trimmed, so every day is whole
         if not oldest_day:
-            # Trimmed, and nothing came back to say how far it reached -- a
-            # server cap of zero, or rows carrying no usable timestamp. Folded
-            # into "nothing was trimmed" before, which called every day whole
-            # and published the resulting empty averages as measurements, on
-            # the one input that says the least about what was retrieved.
+            # Trimmed with nothing to say how far it reached (zero cap, or rows
+            # with no usable timestamp) -- treat as missing rather than whole.
             return True, False
         if day < oldest_day:
             return True, False          # the cap stopped before this day entirely
@@ -1683,47 +1305,27 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_missing, cog_whole = _coverage(cog_ok, cog_cut, cog_oldest_day, day)
         face_missing, face_whole = _coverage(face_ok, face_cut, face_oldest_day, day)
         ses_missing, ses_whole = _coverage(ses_ok, ses_cut, ses_oldest_day, day)
-        # Per day, like the three above. `heart_ok and not heart_cut` was
-        # table-wide: one heart read over the row cap marked *every* day
-        # unretrieved, so the chart drew nothing even for days that came back
-        # complete. The cap binds per table, so the coverage has to be per day.
+        # Per day, not per table: `heart_ok and not heart_cut` used to mark
+        # every day unretrieved whenever the table as a whole hit its cap.
         heart_missing, heart_whole = _coverage(heart_ok, heart_cut, heart_oldest_day, day)
-        # Skip only when nothing we actually asked for could be retrieved. With
-        # face reporting off there is no face request to fail, so the day hinges
-        # on the other two -- otherwise an always-False face_missing would keep
-        # days that hold no retrievable data at all.
-        #
-        # Sessions count here too: they come from their own query under its own
-        # cap, so a day whose signals were trimmed can still have a session
-        # count that was retrieved intact. Dropping the day threw that away and
-        # reported the day as absent rather than partial.
-        # Heart included, or a day whose cognitive and session reads failed but
-        # whose heart read succeeded is dropped from `daily` entirely -- and the
-        # heart data that *was* retrieved never reaches the chart.
+        # Skip the day only when nothing asked for could be retrieved at all.
+        # Sessions have their own query and cap, so a day with trimmed signals
+        # can still have an intact session count -- dropping it would lose that.
         if (cog_missing and (face_missing or not include_emotion)
                 and (heart_missing or not include_heart) and ses_missing):
             continue
-        # Raw rows where they still exist, the rollup where they do not.
-        #
-        # Decided on what is present rather than by comparing the day against
-        # the retention window. The two agree -- the delete job only removes
-        # days outside the window -- but presence cannot drift from reality,
-        # where a second copy of the boundary arithmetic can, and would be
-        # wrong on exactly the day the window moved.
-        #
-        # A rollup also wins over a *partial* raw day: it is a complete summary,
-        # where a capped read is a fraction presented as a whole.
+        # Raw rows where they exist, the rollup where they don't. Decided by
+        # what's actually present rather than by comparing against the
+        # retention window, so this can't drift out of sync with a second copy
+        # of the boundary math. A rollup also wins over a partial raw day,
+        # since it's a complete summary and the raw read is not.
         def _rolled(channel, raw_rows, whole, read_ok):
             """The rollup row to use for this day, or None to use the raw rows.
 
-            `read_ok` is the difference between "the query ran and this day has
-            no rows" and "the query failed". Only the first is evidence that the
-            detail is gone. On a failure the rollup may be *stale* -- it is
-            written as sessions close, so today's lags the session in progress
-            -- and serving it as a complete day would present old numbers as
-            current, with `retrieved` saying they are sound. A capped read is
-            different again: there the rollup is strictly better, because a
-            complete summary beats a fraction presented as a whole.
+            Only used when the raw query actually ran (`read_ok`) -- a rollup
+            can be stale, since it's written when a session closes and today's
+            lags the one in progress, so a failed raw read must not silently
+            fall back to old numbers marked as current.
             """
             if not read_ok:
                 return None
@@ -1735,22 +1337,19 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         cog_roll = _rolled("cognitive", day_cog, cog_whole, cog_ok)
         face_roll = (_rolled("emotion", day_face, face_whole, face_ok)
                      if include_emotion else None)
-        # Trusted only, matching the week's averages. A day whose every sample
-        # was rejected is then a null beside a `heart_retrieved` of True --
-        # "measured, unusable" -- rather than a gap that reads as sensor-off.
+        # Trusted only, matching the week's averages, so a day where every
+        # sample was rejected reads as "measured, unusable" rather than
+        # sensor-off.
         day_heart = [r for r in heart_by_day.get(day, []) if r.get("trusted") is True]
         heart_roll = (_rolled("heart", heart_by_day.get(day, []), heart_whole, heart_ok)
                       if include_heart else None)
 
         daily.append({
             "date": day,
-            # Withheld unless the day is whole. A partly-retrieved day averages
-            # only the fraction that survived the cap, which reads exactly like
-            # a measurement of the whole day.
-            # `.get` on the rollup row, like every raw row here: a column
-            # missing from a summary must not 500 the whole report. This is the
-            # read that runs after the detail is gone, so it is the last thing
-            # that should be brittle about a shape.
+            # Withheld unless the day is whole, since a partial average from
+            # the cap's fraction would look like a measurement of the whole
+            # day. `.get` throughout so a missing rollup column can't 500 the
+            # report.
             "focus": (cog_roll.get("avg_focus") if cog_roll else
                       _avg([r.get("focus") for r in day_cog]) if cog_whole else None),
             "stress": (cog_roll.get("avg_stress") if cog_roll else
@@ -1758,32 +1357,23 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             "engagement": (cog_roll.get("avg_engagement") if cog_roll else
                            _avg([r.get("engagement") for r in day_cog]) if cog_whole else None),
             "attention": _avg([r.get("attention") for r in day_face]) if face_whole else None,
-            # None rather than 0, on the same reasoning as the metrics above: a
-            # day the cap kept us from reading did not have zero sessions, and
-            # `sessions_retrieved` is what tells the two apart. A count is the
-            # clearest case for withholding a partial day -- half a day's rows
-            # give exactly half the sessions, with no hint that it is half.
+            # None, not 0: a day the cap couldn't reach didn't have zero
+            # sessions. `sessions_retrieved` tells the two apart.
             "sessions": len(sessions_by_day.get(day, []))
                         if ses_whole else None,
-            # **Absolute units**, unlike every other series here, which are 0..1
-            # ratios rendered as percentages. A consumer applying the same
-            # scaling to these would draw a 72 bpm day at 7200% -- so they are
-            # named for the unit and the frontend gives them their own axis.
+            # Absolute units, unlike every other series here (0..1 ratios).
+            # Applying the same percentage scaling would draw 72 bpm as 7200%.
             "heart_rate_bpm": (heart_roll.get("avg_heart_rate_bpm") if heart_roll else
                                _avg([r.get("heart_rate_bpm") for r in day_heart])
                                if heart_whole else None),
             "rmssd_ms": (heart_roll.get("avg_rmssd_ms") if heart_roll else
                          _avg([r.get("rmssd_ms") for r in day_heart])
                          if heart_whole else None),
-            # False means "we did not fetch this day in full", which a null
-            # metric alone cannot distinguish from "nothing was recorded". It
-            # covers the days the cap never reached, the single day it cut
-            # into, and every day of a table whose query failed outright.
-            # None means "not requested" -- face reporting is off, so there was
-            # no retrieval to succeed or fail, and the consumers that count
-            # `=== false` must not treat the opt-out as a retrieval failure.
-            # A rollup-sourced day *was* retrieved, and completely: the summary
-            # covers the whole day even where the raw read was capped or gone.
+            # False = "not fully fetched" (cap never reached it, cap cut into
+            # it, or the query failed). None = "not requested" (face reporting
+            # off) -- consumers checking `=== false` must not treat the
+            # opt-out as a failure. A rollup-sourced day is always fully
+            # retrieved, even where the raw read was capped or gone.
             "cognitive_retrieved": True if cog_roll else cog_whole,
             "face_retrieved": (None if not include_emotion else
                                True if face_roll else face_whole),
@@ -1791,11 +1381,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                                 True if heart_roll else heart_whole),
             "sessions_retrieved": ses_whole,
 
-            # **Reduced fidelity, named.** A day averaged from its own samples
-            # and a day averaged once and then deleted answer the same question
-            # to different precision, and a chart that mixes them without saying
-            # so invites a comparison that is not sound. Per channel, because
-            # the delete job works per day and a mixed day is possible.
+            # Reduced fidelity, named: a rollup average and a raw average
+            # answer the same question at different precision, so a chart
+            # mixing them without saying so invites a bad comparison.
             "cognitive_from_rollup": bool(cog_roll),
             "face_from_rollup": bool(face_roll),
             "heart_from_rollup": bool(heart_roll),
@@ -1805,25 +1393,21 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # This keeps a thin day visibly thin after the detail is gone --
             # without it four samples and four thousand look identical.
             "cognitive_samples": (cog_roll.get("sample_count") or 0) if cog_roll else len(day_cog),
-            # Emotion rows, not face rows. `face_signals` has two producers --
-            # a gaze-only row is a real face row with no emotion in it -- and
-            # the rollup's emotion `sample_count` is narrowed to match. Both sides have to move together
-            # or this number means something different depending on whether the
-            # day happens to have been rolled up yet, which is exactly the
-            # comparison the block above exists to keep sound.
+            # Emotion rows, not face rows: `face_signals` has two producers, so
+            # a gaze-only row is a real face row with no emotion in it. The
+            # rollup's emotion `sample_count` is narrowed to match, or this
+            # number would mean something different depending on whether the
+            # day has been rolled up yet.
             "face_samples": ((face_roll.get("sample_count") or 0) if face_roll
                              else sum(1 for r in day_face
                                       if r.get("emotion") is not None)),
             "heart_samples": (heart_roll.get("sample_count") or 0) if heart_roll else len(day_heart),
         })
 
-        # Weighted by `trusted_sample_count`, which is the count the averages
-        # were taken over -- rows that produced a usable measurement, not rows
-        # that existed. `rmssd_ms` is the one approximation here: it is an
-        # enrichment that is null on roughly one accepted window in five, so its
-        # true weight is lower than the count used. It biases the week's RMSSD
-        # toward days that reported more of it, which is the right direction and
-        # not exact.
+        # Weighted by `trusted_sample_count` -- rows that produced a usable
+        # measurement, not rows that merely existed. `rmssd_ms` is an
+        # approximation here: it's null on roughly one accepted window in
+        # five, so its true weight is a bit lower than the count used.
         if cog_roll:
             n = cog_roll.get("trusted_sample_count") or 0
             for key, col in (("focus", "avg_focus"), ("stress", "avg_stress"),
@@ -1845,16 +1429,14 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             for label, count in (face_roll.get("emotion_counts") or {}).items():
                 rolled_emotions[label] = rolled_emotions.get(label, 0) + int(count)
 
-    # Only trusted heart samples are averaged. An untrusted one carries a rate;
-    # it is just not one worth putting in front of a parent, and the same rule
-    # runs in the SQL aggregate so the two surfaces cannot disagree.
+    # Only trusted heart samples are averaged -- an untrusted one has a rate,
+    # just not one worth showing a parent. The SQL aggregate applies the same rule.
     def _week(key, raw_values):
-        """The week's mean over raw samples *and* summarised days.
+        """The week's mean over raw samples and summarised days combined.
 
         Both contribute their true sum and count, so a week that is half raw
-        rows and half rollup -- the state during the term after which the delete
-        job first runs -- is one honest mean rather than whichever half the code
-        happened to look at.
+        rows and half rollup (as happens right after the delete job first
+        runs) still gets one honest mean.
         """
         total, n = rolled_totals[key]
         nums = [float(v) for v in raw_values if v is not None]
@@ -1866,24 +1448,18 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
                    if r.get("heart_rate_bpm") is not None and r.get("trusted") is True]
     rmssd_values = [r["rmssd_ms"] for r in heart
                     if r.get("rmssd_ms") is not None and r.get("trusted") is True]
-    # Which sensor produced them, so a reader can tell a headband week from a
-    # camera week -- accuracy differs materially between sources, and
-    # only the headband is validated at all.
-    # Trusted rows only, matching the averages. Listing a source whose every
-    # sample was rejected renders as "the headband was on and measured nothing"
-    # beside a null average -- the "measured, unusable" state claiming to be a
-    # working sensor.
-    # Summarised days included: once the raw rows are gone, the rollup's
-    # `heart_sources` is the only record that the sensor changed mid-week, and
-    # that is exactly what this column exists to explain.
+    # Which sensor produced these readings, so a reader can tell a headband
+    # week from a camera week -- accuracy differs materially, and only the
+    # headband is validated at all. Trusted rows only, matching the averages.
+    # Summarised days are included too: once raw rows are gone, the rollup's
+    # `heart_sources` is the only record that the sensor changed mid-week.
     heart_sources = sorted({r["source"] for r in heart
                             if r.get("source") and r.get("trusted") is True}
                            | rolled_sources)
 
-    # Seeded from the summarised days, then the raw rows counted on top. The
-    # rollup stores the distribution rather than the winner precisely so this
-    # stays answerable after the detail is deleted -- a dominant emotion is not
-    # recoverable from a label.
+    # Seeded from the rollup, then raw rows counted on top. The rollup stores
+    # the full distribution (not just the winner) so this stays answerable
+    # after the detail rows are deleted.
     emotion_counts: dict[str, int] = dict(rolled_emotions)
     for r in face:
         if r.get("emotion"):
@@ -1908,36 +1484,26 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         bits.append(f"average focus was {_as_pct(avg_focus)}%")
     if avg_stress is not None:
         bits.append(f"average stress was {_as_pct(avg_stress)}%")
-    # No attention sentence. `face_signals.attention` has no producer, so
-    # `avg_attention` is always None and this branch never fired -- but it was
-    # the line that would have put an unmeasured percentage into a prompt whose
-    # output a parent reads as advice. The average is still computed and still
-    # published in the payload; only the claims about it are gone.
+    # No attention sentence: `face_signals.attention` has no producer, so this
+    # would put an unmeasured percentage in front of a parent. The average is
+    # still computed and returned in the payload; only the sentence is gone.
     if bits:
         summary = "This week, " + ", ".join(bits) + "."
     else:
-        # An absence is only assertable about a table that was actually read.
-        # A failed query leaves exactly the empty result a quiet week does, so
-        # without splitting these the sentence reported "nothing was recorded"
-        # on the strength of a query that never returned -- the same mistake
-        # the opt-out branch below was written to avoid, reached by a different
-        # route. Each table lands in one list or the other, and only the read
-        # ones get an absence claimed about them.
+        # A failed query returns the same empty result as a quiet week, so
+        # "nothing was recorded" can only be claimed for a table that actually
+        # read successfully -- split into measured vs. unread here.
         measured, unread = [], []
         (measured if cog_ok else unread).append("EEG")
-        # Naming facial recognition at all would report on something that was
-        # never measured, since the caller opted out of reading it.
+        # Skip facial recognition entirely when the caller opted out -- it was
+        # never measured, so nothing should be claimed about it.
         if include_emotion:
             (measured if face_ok else unread).append("facial recognition")
         if include_heart:
             (measured if heart_ok else unread).append("heart rate")
 
         def _join(items: list[str], conjunction: str) -> str:
-            # "a, b or c" rather than "a or b or c", which reads badly once a
-            # third channel exists. Takes the conjunction because the two
-            # sentences want different ones -- "no X or Y were recorded" against
-            # "X and Y could not be loaded" -- and having the logic twice meant
-            # the second copy did not get the comma fix.
+            # "a, b or c" rather than "a or b or c" once there are 3+ items.
             if len(items) <= 1:
                 return "".join(items)
             return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
@@ -1956,67 +1522,52 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
         "since": since,
         "truncated": truncated,
         # Distinguishes "facial reporting is switched off for this view" from
-        # "the camera recorded nothing". Both leave every face field null.
+        # "the camera recorded nothing" -- both leave every face field null.
         #
-        # `face_included` is kept as an alias for `emotion_included` and is
-        # narrower than its name: it means the *emotion* channel, not "anything
-        # facial". Consumers branch on it, so removing it would turn "field
-        # absent" into a falsy value at each of them. Deprecated -- read
-        # emotion_included in new code, and do not fold a third channel into it.
+        # `face_included` is kept as an alias for `emotion_included`, narrower
+        # than its name (means the emotion channel only). Deprecated -- read
+        # emotion_included in new code.
         "face_included": include_emotion,
         "emotion_included": include_emotion,
         "heart_included": include_heart,
-        # False means the two flags above are "we could not find out", not "the
-        # student declined". Both suppress every optional channel and only one
-        # is a fault; a surface saying "not requested" about the first would be
-        # reporting a database outage as a preference.
+        # False means the two flags above are "we couldn't find out", not "the
+        # student declined" -- a surface must not report a database outage as
+        # a preference.
         "consent_retrieved": consent_retrieved,
         "emotion_revoked_at": emotion_revoked_at,
         "heart_revoked_at": heart_revoked_at,
-        # The tally, not just its argmax. Nothing on the frontend could render a
-        # pie before this: emotion reached it only as a scalar `dominant_emotion`,
-        # so a distribution had to be recomputed from raw rows or not shown. The
-        # loop above already counts these to pick the dominant one.
+        # The full tally, not just the winner, so the frontend can render a pie
+        # chart instead of only a single dominant_emotion label.
         "emotion_distribution": (dict(sorted(emotion_counts.items(),
                                              key=lambda kv: (-kv[1], kv[0])))
                                  if include_emotion else None),
         "heart_sources": heart_sources if include_heart else None,
-        # Which of the three reads actually happened. Everything else in this
-        # payload is a figure computed from whatever came back, and a query that
-        # failed contributes the same empty rows as a student who recorded
-        # nothing -- so a null average, a zero sample count and an absent day
-        # are all ambiguous without this. Per table, because the reads fail
-        # independently and one broken table should not retract the other two.
+        # Which of the three reads actually happened. A failed query returns
+        # the same empty rows as a student who recorded nothing, so a null
+        # average or zero count is ambiguous without this. Per table, since
+        # the reads fail independently.
         #
-        # face is None with the opt-out on, matching the per-day
-        # `face_retrieved`: there was no retrieval to succeed or fail, and a
-        # consumer checking `is False` must not read the opt-out as a failure.
+        # face is None with the opt-out on, matching per-day `face_retrieved`:
+        # there was no retrieval to succeed or fail.
         "retrieved": {
             "cognitive": cog_ok,
             "face": face_ok if include_emotion else None,
             "heart": heart_ok if include_heart else None,
             "sessions": ses_ok,
-            # The fallback source, reported like the others.
             "rollup": rollup_ok,
         },
         "sample_counts": {"cognitive": len(cog), "face": len(face),
-                          # Rows retrieved, not rows averaged. A week of nothing
-                          # but untrusted samples is then a nonzero count beside
-                          # a null average -- "measured, unusable" -- rather than
-                          # indistinguishable from a week the sensor was off.
+                          # Rows retrieved, not rows averaged -- a week of only
+                          # untrusted samples is a nonzero count beside a null
+                          # average ("measured, unusable"), not sensor-off.
                           "heart": len(heart), "sessions": len(sessions)},
-        # How many sessions there *were*, as opposed to how many rows came back
-        # under _SESSION_ROW_CAP. sample_counts is rows-retrieved throughout, so
-        # rendering its sessions figure as the report's headline showed a heavy
-        # week as exactly the cap -- while the parent dashboard, which counts in
-        # Postgres, showed the real number for the same child and week. Falls
-        # back to the row count when the server reported no exact count, which
-        # is the same fallback the truncation check makes.
+        # The real session total, as opposed to the row count under
+        # _SESSION_ROW_CAP -- a heavy week otherwise showed exactly the cap as
+        # its headline. Falls back to the row count if the server reported no
+        # exact count.
         #
-        # None when the read failed, rather than the len() of the empty list it
-        # returned: "0 sessions this week" is a claim, and there is nothing
-        # behind it on that path. `retrieved.sessions` says which it is, and the
-        # panel renders the null as a dash.
+        # None when the read failed, not len() of the empty list it returned:
+        # "0 sessions" is a claim, and there's nothing behind it on that path.
         "sessions_recorded": (ses_total if ses_total is not None else len(sessions)) if ses_ok else None,
         "averages": {
             "focus": avg_focus,
@@ -2051,10 +1602,8 @@ _prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
 
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
     try:
-        # Topic, difficulty, EEG state, and the manual Easier/Auto/Harder bias
-        # are all resolved in this one call now -- no second "regenerate at
-        # adjusted difficulty" LLM call needed, so each prefetched question
-        # only ever costs one topic/difficulty decision + one generation call.
+        # Topic, difficulty, EEG state, and the manual bias are all resolved in
+        # this one call -- one decision + one generation call per question.
         question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
             user_id, grade, session_id, bias
         )
@@ -2064,15 +1613,11 @@ def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None
     except Exception as e:
         print(f"[prefetch] failed for {user_id[:8]}: {e}")
     finally:
-        # Always decrement by exactly 1, whether this worker succeeded,
-        # raised, or found nothing to generate -- a set-membership flag here
-        # (rather than a real count) previously let the FIRST of several
-        # concurrent workers clear the "in flight" state for ALL of them,
-        # so _ensure_queue kept spawning more on top of ones still running.
-        # That compounds every time a question is served (not just on rapid
-        # clicks), eventually piling up far more concurrent Ollama calls than
-        # QUEUE_SIZE ever intended, which is what made generation grind to a
-        # halt after several questions even at a normal pace.
+        # Decrement by exactly 1 regardless of outcome. Using a count here
+        # (not a set-membership flag) matters: a flag would let the first of
+        # several concurrent workers clear "in flight" for all of them, so
+        # `_ensure_queue` kept spawning more on top of ones still running,
+        # piling up far more concurrent Ollama calls than QUEUE_SIZE intends.
         with _prefetch_lock:
             _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
 
@@ -2118,12 +1663,12 @@ class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
     grade_level:  str | None = None
     # Learning preferences. Bounded here as well as by the database's CHECK
-    # constraints, because a 422 names the field and a constraint violation
-    # surfaces as a 500 from the client library.
+    # constraints, since a 422 names the field but a constraint violation
+    # just surfaces as a 500.
     #
-    # `ge`/`le` rather than a literal set for the bias: it is a shift applied by
-    # `_shift_difficulty`, so the range is what matters, and the endpoint has no
-    # business knowing that DIFFS happens to have three entries.
+    # `ge`/`le`, not a literal set, since bias is a shift applied by
+    # `_shift_difficulty` -- the range is what matters, not how many values
+    # DIFFS happens to have.
     difficulty_bias:          int | None = Field(None, ge=-1, le=1)
     session_duration_minutes: int | None = Field(None, ge=5, le=180)
     practice_reminders:       bool | None = None
@@ -2163,10 +1708,8 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
 
 @app.get("/api/questions")
 def get_questions(limit: int = 100, subject: str | None = None, difficulty: str | None = None):
-    # Newest first. Without an order this returned whatever Postgres handed
-    # back, so the teacher dashboard's "Recent Questions" panel was showing an
-    # arbitrary five of however many it had pulled -- a list that looks
-    # chronological and is not.
+    # Newest first, so "Recent Questions" on the teacher dashboard is actually
+    # chronological rather than whatever order Postgres happens to return.
     q = supabase.table("questions").select("*").order("created_at", desc=True).limit(limit)
     if subject:    q = q.eq("subject", subject)
     if difficulty: q = q.eq("difficulty", difficulty)
@@ -2178,14 +1721,10 @@ def get_questions(limit: int = 100, subject: str | None = None, difficulty: str 
 def count_questions(subject: str | None = None, difficulty: str | None = None):
     """How many questions exist, without transferring them.
 
-    The teacher dashboard wanted a total and five recent rows, and got both by
-    fetching `?limit=1000` on every mount -- a megabyte or so of question text
-    to render one number and five list items. It was also *wrong* above 1000,
-    silently: the count was the length of a capped page, so a bank that grew
-    past the cap simply stopped counting and nothing said so.
-
     `count="exact"` makes PostgREST return the count in the Content-Range
-    header and no rows at all.
+    header with no rows -- avoids fetching a megabyte of question text just to
+    show one number, and avoids the old bug where the count silently stopped
+    growing once the bank passed the page limit.
     """
     try:
         q = supabase.table("questions").select("id", count="exact").limit(1)
@@ -2212,11 +1751,9 @@ def generate_question(
 ):
     effective_grade = grade or "5th Grade"
     if class_id:
-        # Its own catch rather than `_row_or_404`, because "absent" is a real
-        # answer here: this only refines a default grade, so an unknown class
-        # falls back to `effective_grade` instead of failing the request. That
-        # is the one `.single()` in this file that must not 404 -- and it was
-        # also unguarded, so a bad class_id 500'd rather than falling back.
+        # Own catch, not `_row_or_404`: an unknown class just falls back to
+        # `effective_grade` rather than failing the request, since this only
+        # refines a default.
         try:
             cls = supabase.table("classes").select("grade_level") \
                 .eq("id", class_id).single().execute()
@@ -2228,12 +1765,8 @@ def generate_question(
 
     manual_bias = max(-1, min(1, int(bias or 0)))
 
-    # Serve from prefetch queue if available. Topic, difficulty, this
-    # session's recent EEG state, and manual bias are all resolved together
-    # inside LLM_single_prompt_topic_and_difficulty_decider -- one topic/
-    # difficulty decision + one generation call, whether this question came
-    # from the queue (decided when it was prefetched) or is generated fresh
-    # below (decided right now).
+    # Serve from the prefetch queue if available, else generate now -- both
+    # paths resolve topic, difficulty, EEG state and bias in one call.
     with _prefetch_lock:
         queue    = _prefetch_cache.get(user_id, [])
         question = queue.pop(0) if queue else None
@@ -2265,36 +1798,23 @@ def generate_question(
 def start_session(payload: StartSessionRequest, request: Request):
     user = get_user(request)
 
-    # Close any previous open sessions for user before opening a new one.
-    # without this a student who closes the tab without actually ending the session
-    # leaves a stale open session behind.
-
-    # `started_at` too: the rollup below needs the day the session began, or a
-    # session that ran past local midnight only summarises the day it was swept.
-    # `questions_answered` too, and it is load-bearing: `_discard_if_nothing_recorded`
-    # below treats a falsy count as "answered nothing", so a column left out of
-    # this select arrives as None and a stale session full of answers would be
-    # deleted for having no signal rows beside it.
+    # Close any session the student left open (e.g. closed the tab without
+    # ending it), so it doesn't sit open forever.
     #
-    # `correct_answers` for the same class of reason, and it was missing: the
-    # close credits it to the lifetime totals, an unselected column arrives as
-    # None, and `or 0` turned that into an honest-looking zero. Every session
-    # this sweep closed -- which is every session of a student who shuts the tab
-    # -- added its questions to `total_questions` and nothing to `total_correct`,
-    # so a student's accuracy fell by exactly the work they did away from /end.
+    # Select `started_at`, `questions_answered`, `correct_answers` explicitly:
+    # a missing column reads back as None, and `_discard_if_nothing_recorded`
+    # and the lifetime-credit step below would treat that as "nothing done"
+    # or "zero correct" for a session that actually has real work in it.
     stale_open = supabase.table("sessions") \
         .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
-        # Also releases any pre-claim reservation left behind by a
-        # scan/connect that never reached /start -- a stale session left this
-        # way is exactly the "gave up mid-pairing" case that leaves one.
+        # Also releases any pre-claim EEG reservation left behind by a
+        # scan/connect that never reached /start.
         eeg_poller.stop(s["id"], user["id"])
         stale_ended = _utc_now().isoformat()
-        # Closed by timeout rather than by /end, and it still needs its rollup,
-        # its lifetime credit and its archive. This is the only close many
-        # sessions ever get -- it is the path a student who shuts the tab always
-        # takes -- so a step missing here is a step that never runs at all.
+        # This is often the only close a session gets, so it must still run
+        # the rollup, lifetime credit, and chart archive like a normal close.
         _close_session(user["id"], s, stale_ended)
 
 
@@ -2307,13 +1827,9 @@ def start_session(payload: StartSessionRequest, request: Request):
     }
     res = supabase.table("sessions").insert(obj).execute()
 
-    # Pre-warm question queue in background while student sees the setup screen.
-    #
-    # At the student's own bias, not 0. The page initialises its Easier/Auto/
-    # Harder control from the same preference, so a hardcoded 0 here prewarmed
-    # two questions at a difficulty the student had not asked for and served
-    # them first -- the setting appearing to do nothing for exactly as long as
-    # the queue lasted, which is the start of every session.
+    # Pre-warm the question queue while the student sees the setup screen, at
+    # their own difficulty bias -- not 0, or the first questions served would
+    # ignore the Easier/Auto/Harder setting the page already shows them.
     profile = _profile(user["id"])
     grade   = profile.get("grade_level") or "5th Grade"
     bias    = max(-1, min(1, int(profile.get("difficulty_bias") or 0)))
@@ -2324,15 +1840,9 @@ def start_session(payload: StartSessionRequest, request: Request):
 @app.post("/api/sessions/{session_id}/answer")
 def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...), request: Request = None):
     user = get_user(request)
-    # Ownership first, and before the write. This endpoint checked nothing: it
-    # inserted the answer row, *then* read the session, and never compared the
-    # owner at all -- so any signed-in student could post answers into any
-    # session id they held, moving another child's counters and, when that
-    # session closed, crediting the questions to whoever the row said. The three
-    # `/api/signals/*` endpoints have called this helper since they existed; the
-    # two that write academic history did not.
-    #
-    # One query, not two: this is the same read the counter bump below needs.
+    # Check ownership before writing anything, or any signed-in student could
+    # post answers into a session id they merely knew, moving another child's
+    # counters and, at close, crediting the questions to the wrong student.
     _session_or_403(session_id, user["id"])
     supabase.table("session_answers").insert({
         "session_id":     session_id,
@@ -2342,17 +1852,13 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
         "correct":        payload.correct,
         "answered_at":    datetime.utcnow().isoformat(),
     }).execute()
-    # Incremented in the database, not read-modify-written here. This was
-    # `read + 1` against a row fetched a moment earlier -- the same lost update
-    # `record_topic_attempt` was written to remove, one function away and left
-    # in place: two answers landing together both read the same count and the
-    # second write overwrote the first, so a student answered ten questions and
-    # the session recorded nine.
+    # Incremented in the database, not read-then-written here, or two answers
+    # landing together could both read the same count and one increment would
+    # be lost.
     #
-    # It never raises for the same reason the topic attempt does not. The answer
-    # row is already written and is the record; `questions_answered` is a
-    # denormalised cache that `_answer_counts` re-derives at close. Losing the
-    # bump costs a live figure until then, not the answer.
+    # Never raises: the answer row is already written and is the real record.
+    # `questions_answered` is just a live cache; `_answer_counts` recomputes it
+    # at close, so losing this bump only delays a live number, not the answer.
     try:
         supabase.rpc("bump_session_counters", {
             "p_session_id": session_id,
@@ -2364,11 +1870,9 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
                   f"-- apply 20260826000000; live counters will not move: {e}")
         else:
             print(f"[answer] could not bump counters for {session_id}: {e}")
-    # The topic the answer was attributed to, handed straight back. The page
-    # keys its Topic Accuracy panel by name, and without this it re-read the
-    # student's whole performance table after every single answer -- an extra
-    # round trip in the app's hottest loop, to learn something this request had
-    # just decided. `None` means nothing was attributed, which is not an error.
+    # Hand the attributed topic straight back so the page can update its Topic
+    # Accuracy panel without re-reading the whole performance table. `None`
+    # means nothing was attributed, not an error.
     topic = _record_topic_attempt(user["id"], payload.question_id, payload.correct)
     return {"ok": True, "topic": topic}
 
@@ -2376,33 +1880,19 @@ def record_answer(session_id: str = Path(...), payload: AnswerPayload = Body(...
 def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str | None:
     """Add one attempt to the student's per-topic record.
 
-    The topic is looked up from the **question row**, never taken from the
-    caller. The client already tells us whether it got the answer right, which
-    it has to; letting it also name the topic would let a page credit one
-    subject for work done in another, and this table is what the adaptive
-    engine reads to pick the next question.
+    The topic comes from the **question row**, never from the caller -- a
+    client could otherwise credit the wrong subject for its answer, and this
+    table is what the adaptive engine reads to choose the next question.
 
-    Never raises. It runs after the answer is safely recorded, and a student's
-    answer must not be lost because a topic lookup failed -- the row in
-    `session_answers` is the record that matters and it is already written.
+    Never raises: it runs after the answer row is already saved, and a topic
+    lookup failing must not make that answer look lost.
 
-    **One statement, in the database** (`record_topic_attempt`).
-    This used to be four sequential round trips on the hottest path in the
-    product -- question, topic, existing row, upsert -- and the last two were a
-    read-modify-write with nothing holding a lock between them, so two answers
-    landing together both read the same counts and the second write overwrote
-    the first. Attempts disappeared from the table the adaptive engine reads to
-    choose what to serve next, silently. `ON CONFLICT DO UPDATE` incrementing
-    the stored value is what removes that rather than narrowing it.
+    One statement in the database (`record_topic_attempt`), so two answers
+    landing at once can't read-modify-write the same counts and drop one.
 
-    Moving the join into SQL does not move the trust boundary: the topic still
-    comes off the question row, never from the caller.
-
-    Returns the topic **name** it attributed the answer to, or `None` -- for an
-    unknown question, a subject with no `math_topics` row, or any failure. The
-    caller hands it to the page so a single figure can move; without it the page
-    re-read the student's whole performance table after every answer, having
-    just told the backend exactly what changed.
+    Returns the topic **name**, or `None` for an unknown question, a topic
+    with no `math_topics` row, or any failure -- so the page can update its
+    Topic Accuracy panel without re-reading the whole table.
     """
     try:
         res = supabase.rpc("record_topic_attempt", {
@@ -2410,17 +1900,12 @@ def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str 
             "p_question_id": question_id,
             "p_correct":     bool(correct),
         }).execute()
-        # A scalar-returning function comes back as the bare value. `or None`
-        # would be wrong on an empty-string topic name; there is no such topic,
-        # but the three-state habit is cheaper than the exception to it.
         topic = getattr(res, "data", None)
         return topic if isinstance(topic, str) else None
     except Exception as e:                                     # noqa: BLE001
-        # PGRST202 here means the migration has not been applied yet, and that
-        # deserves its own sentence: every other failure on this path is a
-        # transient one that the next answer retries, while this one is every
-        # answer from now until someone applies it -- and the visible symptom
-        # is identical, which is per-topic attribution simply stopping.
+        # PGRST202 means the migration hasn't been applied -- every answer
+        # will fail this way until it is, unlike other errors which are
+        # one-off and retry on the next answer.
         if "PGRST202" in str(e):
             print(f"[answer] record_topic_attempt is missing from the database -- "
                   f"apply 20260825000000; no topic attribution until then: {e}")
@@ -2431,36 +1916,24 @@ def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str 
 @app.post("/api/sessions/{session_id}/end")
 def end_session(session_id: str = Path(...), request: Request = None):
     user = get_user(request)
-    # Before the poller stop, not after it. This endpoint verified nothing, so
-    # a student who knew another student's session id could end it -- stopping
-    # their poller mid-lesson and closing a session they were still working in.
-    # Stopping the poller is itself a write on somebody's session, so the check
-    # has to come first; the close still sees a stopped poller, which is the
-    # ordering `_close_session` requires.
+    # Check ownership before stopping the poller, or a student who merely knew
+    # another student's session id could end their lesson mid-way.
     data = _session_or_403(session_id, user["id"], "*")
     # Also releases user["id"]'s pre-claim reservation, if any.
     eeg_poller.stop(session_id, user["id"])  # auto-stop EEG poller
-    # Already closed, by the stale sweep or by a teacher opening the Live view.
-    # Both of those credit the lifetime totals, and this endpoint credits the
-    # session's *cumulative* counts rather than a delta -- so closing twice
-    # counted every answer twice, inflating the accuracy a parent reads.
-    #
-    # A cheap early out, **not the guard**: this read and the stamp below are
-    # two statements, so a close arriving between them passes it. The guard is
-    # the conditional stamp inside `_close_session`, which is why the same
-    # answer is returned from both places.
-    #
-    # Not an error: the student did nothing wrong, and their page has no way to
-    # know a teacher's view closed the session out from under it.
+    # May already be closed (by the stale sweep or a teacher's Live view). This
+    # is just a cheap early-out, not the real guard -- the read and the write
+    # below are two separate statements, so a close can still land in between.
+    # `_close_session`'s conditional stamp is the actual guard; without one
+    # here too, a session closed twice would credit its cumulative counts
+    # twice, inflating the accuracy a parent reads. Not an error: the student
+    # did nothing wrong.
     if data.get("ended_at"):
         return {"ok": True, "already_closed": True}
-    # Named, and `_utc_now` rather than the naive deprecated `datetime.utcnow`:
-    # this value is now read back by the rollup, which converts it to a school
-    # day, and a naive stamp has no zone to convert from.
-    #
-    # `ended`, not a fresh reading at each step: they differ only across local
-    # midnight, where a fresh one rolls up a day the stored session does not
-    # claim and skips the day it is actually recorded on.
+    # Use `_utc_now`, not naive `datetime.utcnow`: the rollup converts this
+    # stamp to a school day and needs a timezone to convert from. Reuse the
+    # same value below rather than reading the clock again, or a session that
+    # crosses local midnight could roll up the wrong day.
     ended = _utc_now().isoformat()
     result = _close_session(user["id"], data, ended)
     if result.get("already_closed"):
@@ -2479,11 +1952,9 @@ def list_sessions(request: Request):
 def _topic_performance_many(student_ids) -> dict[str, list]:
     """Per-topic performance for several students, in one query rather than N.
 
-    Bounded by topics x students, so unlike "the five most recent sessions per
-    child" this one batches soundly: there is no per-student limit to preserve.
-
-    Fails to an empty map. The caller renders a Topic Accuracy panel from it,
-    and an empty panel is what a student with no attempts already shows.
+    Fails to an empty map -- the caller renders a Topic Accuracy panel from
+    it, and an empty panel already means "no attempts", so this degrades
+    safely.
     """
     ids = _unique_ids(student_ids)
     if not ids:
@@ -2500,15 +1971,10 @@ def _topic_performance_many(student_ids) -> dict[str, list]:
 def _open_sessions_many(student_ids) -> dict[str, list]:
     """Every open session per student, newest first, in one query rather than N.
 
-    Bounded by the roster: a student has one open session in normal operation,
-    and `start_session` sweeps any others the moment they come back. Newest
-    first per student, so a caller taking `[0]` gets what the per-student
-    `.order(...).limit(1)` gave it.
-
-    Deliberately not caught. The live monitor is the caller, and a failed read
-    turned into an empty map would draw every student on the roster as not
-    working -- an absence asserted from data that never loaded, on the surface a
-    teacher uses to decide who needs help.
+    A student normally has at most one open session -- `start_session` sweeps
+    stray ones on return. Errors are deliberately not caught here: the live
+    monitor is the caller, and turning a failed read into an empty map would
+    make every student look idle to a teacher deciding who needs help.
     """
     ids = _unique_ids(student_ids)
     if not ids:
@@ -2522,31 +1988,18 @@ def _open_sessions_many(student_ids) -> dict[str, list]:
 def _stats_including_open_session(student_id: str) -> dict:
     """Lifetime totals, plus whatever the student has answered *so far today*.
 
-    `user_stats` is only written when a session closes, so a child answering
-    questions right now contributed nothing to it -- and a parent watching the
-    report during a lesson saw "0 questions, 0% accuracy" while six answers sat
-    in `session_answers`. The totals were not wrong so much as a session behind,
-    which on the surface a parent checks mid-lesson is the same thing.
+    `user_stats` only updates when a session closes, so a lesson in progress
+    would otherwise read as "0 questions" until it ends. This adds the open
+    session's live counts (`ended_at is null`, so it never double-counts one
+    already closed).
 
-    Open sessions only (`ended_at is null`), so this can never double-count one
-    the close path has already credited.
+    `retrieved` tells "answered nothing" apart from "the read failed" -- both
+    would otherwise show as four zeros, which reads as a real (if bad) academic
+    record to a parent. It's only False if the *lifetime* read fails; a failed
+    open-session read just skips the live delta and keeps the stored totals.
 
-    **`retrieved` separates "answered nothing" from "could not find out."** A
-    student with no `user_stats` row and a student whose read failed both left
-    here as four zeros, so a broken query reached a parent as "0 questions, 0%
-    accuracy" -- an absence asserted from data that never loaded, which is the
-    same failure the reporting helpers carry `retrieved` to avoid. The stored
-    totals are the *academic* record, so this matters more here than on a signal
-    tile: it is the number a parent judges a week of their child's work by.
-
-    False only when the lifetime read itself failed. A failed *open-session*
-    read leaves the stored totals true as far as they go -- this call only ever
-    adds to them -- so that stays `True` and simply omits the live delta.
-
-    **One student is a roster of one.** The arithmetic, the three-state rule and
-    the `retrieved` resolution live in the batch version below and are not
-    repeated here: they were written out twice, identically, which is the shape
-    that lets two copies drift while both look maintained.
+    See the batch version below for the actual logic -- this just calls it
+    with a list of one.
     """
     return _stats_including_open_session_many([student_id])[student_id]
 
@@ -2554,23 +2007,14 @@ def _stats_including_open_session(student_id: str) -> dict:
 def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict]:
     """The figures described above, for a roster, in two queries rather than 2N.
 
-    `class_students` and `my_children` both used to ask per student inside a
-    loop that already makes several reads each, which turned a class of thirty
-    into sixty extra round trips on a page a teacher opens constantly. This is
-    now the only implementation -- the single-student helper above calls it with
-    a list of one.
+    Same `retrieved` flag as the single-student version, resolved per student.
+    A failed lifetime read marks every student unretrieved rather than
+    reporting a roster of zeros, since the batch can't tell which rows it
+    would have got.
 
-    Same three-state rule and the same `retrieved` flag, resolved per student.
-    A failed lifetime read marks *every* student unretrieved rather than
-    reporting a roster of zeros -- the batch cannot tell which rows it would
-    have got, and guessing in the optimistic direction is what the flag exists
-    to prevent.
-
-    **One entry per id asked for, queried on the ids worth querying.** Those are
-    different lists: blanks and repeats are dropped before the reads, like the
-    sibling helpers, but the answer still has a key for every id handed in --
-    the single-student wrapper above indexes the result directly, so a filtered
-    id would turn a zeros row into a KeyError.
+    Always returns one entry per id passed in, even though blanks and repeats
+    are dropped before querying -- the single-student wrapper indexes the
+    result directly, so a missing key would be a KeyError.
     """
     if not student_ids:
         return {}
@@ -2596,7 +2040,7 @@ def _stats_including_open_session_many(student_ids: list[str]) -> dict[str, dict
             .select("user_id, questions_answered, correct_answers") \
             .in_("user_id", lookup).is_("ended_at", "null").execute().data or []
     except Exception as e:                                     # noqa: BLE001
-        # The stored totals stand on their own; this only ever adds to them.
+        # Stored totals are still valid on their own; this only ever adds to them.
         print(f"[stats] could not batch-read open sessions: {e}")
         return base
     for r in open_rows:
@@ -2642,18 +2086,12 @@ def student_performance(student_id: str, request: Request):
 def student_weekly_report(student_id: str, request: Request, days: int = 7, include_face: bool = True):
     """Aggregated EEG/facial signals for a student over the last `days`.
 
-    Role-neutral path: teachers and parents both read this for the students
-    they're entitled to see, so namespacing it under /api/teacher/ would be
-    misleading. Access is decided by relationship, not by role name.
+    Role-neutral: both teachers and parents read this for students they're
+    entitled to see, so it isn't namespaced under /api/teacher/. Access is
+    decided by relationship, not role.
 
-    include_face=false omits facial-recognition data from the report entirely.
-    It is a viewer preference and narrows only: stored consent decides what may
-    be read at all, and a caller cannot widen past it -- see
-    `_reportable_channels`. No client sends it any more -- the viewer-side
-    control it named (facePref.js) is retired, and stored consent does the
-    job it appeared to do. Kept anyway: the parameters cost nothing, and a
-    caller may legitimately want less than consent allows.
-    See _weekly_signal_report.
+    include_face=false narrows the report further, but never past what stored
+    consent already allows -- see `_reportable_channels`.
     """
     _verify_can_view_student(get_user(request), student_id)
     p = _profile(student_id)
@@ -2673,28 +2111,13 @@ def student_weekly_report(student_id: str, request: Request, days: int = 7, incl
 def student_signal_summary(student_id: str, request: Request, days: int = 7, include_face: bool = True):
     """Headline signal averages for a student, aggregated in Postgres.
 
-    Role-neutral, like the weekly report: gated on the viewer's relationship to
-    the student rather than on a role claim.
+    Role-neutral like the weekly report: gated on relationship, not role.
 
-    Exists because the teacher student list needs these four averages and
-    cannot get them honestly from the browser client. It used to read
-    cognitive_signals and face_signals directly under a 200-row cap. At the
-    poller's default 1 Hz that cap binds after about three minutes, so the
-    tiles labelled "last 7d" were in fact averaging the newest three minutes of
-    a single sitting -- and the sample counts, pinned at exactly 200, were
-    presented as a count of the week. A teacher and a parent looking at the
-    same student that week saw different numbers, which is precisely what
-    matching the window was meant to prevent.
-
-    Raising the cap is not the fix: seven days at 1 Hz is upwards of half a
-    million rows per student. The aggregate answers in one round-trip and
-    transfers no rows, which is what _signal_summary was added for.
-
-    The summary RPC is granted to service_role only, so this has to be a
-    server-side endpoint rather than an rpc() call from the browser. That gives
-    up nothing: _can_view_student's teacher branch -- owns a class the student
-    is a member of -- is the same relationship the "cog: teacher read" and
-    "face: teacher read" RLS policies encode, so the scope is unchanged.
+    The aggregate runs in the database rather than reading raw rows here,
+    because seven days at 1 Hz is up to half a million rows per student -- a
+    row cap would silently average only the newest few minutes and call it
+    "last 7d". The RPC is granted to service_role only, so this has to stay a
+    backend endpoint rather than a direct browser rpc() call.
     """
     _verify_can_view_student(get_user(request), student_id)
     channels = _reportable_channels(student_id, include_face)
@@ -2716,55 +2139,35 @@ def student_topic_breakdown(student_id: str, request: Request):
 
 # ─── at-home learning strategies ─────────────────────────────────────────
 
-# The model pass is opt-in. Off, the endpoint answers from the deterministic
-# rules below and never opens a socket -- which is what CI, and any deployment
-# without a local Ollama, should do. Enabling it changes only whether the
-# rule-based answer gets a chance to be replaced.
+# The model pass is opt-in. Off, the endpoint always answers from the
+# deterministic rules below and never opens a socket -- the right default for
+# CI and any deployment with no local Ollama.
 #
-# **This is the `feature_flags` row `strategy_llm_enabled`, not an env var.**
-# It moved so an admin can turn the model pass off without a redeploy -- which
-# is the point of the flag: the reason to reach for this switch is a model
-# behaving badly in front of students, and that is not a moment to be waiting on
-# a deploy. Read per request rather than at import for the same reason. The
-# default is False in `_FEATURE_FLAG_DEFAULTS`, matching what the env var
-# defaulted to, so nothing changed when it moved.
+# This lives in the `feature_flags` table (`strategy_llm_enabled`), not an env
+# var, so an admin can switch off a misbehaving model without a redeploy.
+# Read per request rather than at import for the same reason.
 STRATEGY_LLM_MODEL   = os.getenv("STRATEGY_LLM_MODEL", "llama3.1:8b")
-# Wall-clock budget for the whole model call. A hung Ollama server is not an
-# exception, so without an explicit timeout the endpoint would block one of a
-# small pool of worker threads indefinitely instead of falling back to the
-# rule-based answer the caller is guaranteed.
+# Wall-clock budget for the whole model call. A hung Ollama server won't raise
+# on its own, so without this the endpoint could block a worker thread forever
+# instead of falling back to the rule-based answer.
 #
-# Floored: at zero or below, future.result() times out before the model can
-# answer at all, so the pass is permanently switched off while STRATEGY_LLM_
-# ENABLED still says it is on -- and the only symptom is every reply being
-# "rule-based (model output rejected)".
+# Floored at 1s: at zero or below, the call times out before the model could
+# ever answer, silently disabling the model pass even though the flag says
+# it's on.
 STRATEGY_LLM_TIMEOUT = _env_number("STRATEGY_LLM_TIMEOUT", 20.0, float, minimum=1.0)
 
-# The model call runs here rather than on the request's own thread so the
-# deadline can actually be enforced.
+# The model call runs in its own pool so the timeout above can actually be
+# enforced. httpx's timeout applies per network operation, not to the whole
+# call, so a server that dribbles a byte at a time could stay alive well past
+# STRATEGY_LLM_TIMEOUT if we only relied on that. Waiting on a future here
+# bounds what the caller experiences regardless of what the transport does;
+# max_workers bounds how many such calls can run at once, and an abandoned
+# wait cancels its future (see _llm_strategies_bounded) so a stalled server
+# can't build an unbounded backlog of work that still runs later.
 #
-# Handing the timeout to the client is not enough on its own: httpx applies it
-# per operation (connect, then each read), not to the call as a whole, so a
-# server that dribbles a byte inside every window keeps the request alive well
-# past STRATEGY_LLM_TIMEOUT. Waiting on a future instead bounds what the caller
-# experiences, whatever the transport does.
-#
-# The client-side timeout stays on for the other half of the problem: once the
-# wait is abandoned the worker is still in there, and the per-operation deadline
-# is what eventually frees it. max_workers caps how many can pile up; past that,
-# submissions queue and time out on the same deadline, which degrades to the
-# rule-based answer rather than to unbounded threads.
-#
-# max_workers bounds the threads but not the queue behind them, so an abandoned
-# wait also cancels its future -- see _llm_strategies_bounded. Without that, a
-# stalled server turns every timed-out request into a work item that still runs
-# later, and the backlog is unbounded even though the thread count is not.
-#
-# None until the first model call. Built on demand rather than at import
-# because the model pass is opt-in and off by default: CI, and any deployment
-# without a local Ollama, would otherwise carry an executor nothing ever
-# submits to. Tests substitute this global directly, so _strategy_pool hands
-# back whatever is already here rather than insisting on building it itself.
+# Built on first use, not at import, since the model pass is off by default
+# and most deployments never need this pool. Tests substitute the global
+# directly, so this only builds one if none exists yet.
 _STRATEGY_LLM_POOL: ThreadPoolExecutor | None = None
 _strategy_pool_lock = threading.Lock()
 
@@ -2772,9 +2175,8 @@ _strategy_pool_lock = threading.Lock()
 def _strategy_pool() -> ThreadPoolExecutor:
     """The model-call pool, created on first use.
 
-    Locked, because two requests can reach a cold pool at once and the loser of
-    that race would otherwise hand back an executor that is not the one in the
-    global -- leaving its worker outside the max_workers ceiling and outside
+    Locked so two requests racing to create it can't each build their own
+    pool -- the loser's executor would sit outside max_workers and outside
     the shutdown below.
     """
     global _STRATEGY_LLM_POOL
@@ -2788,17 +2190,14 @@ def _strategy_pool() -> ThreadPoolExecutor:
 def _shutdown_strategy_pool():
     """Drop the queue on the way out. Called from _lifespan.
 
-    wait=False and cancel_futures=True rather than a clean join: the whole
-    point of the pool is that a worker can be stuck in a socket read against a
-    stalled Ollama for as long as the client timeout allows, and nobody is
-    waiting on that answer by the time the process is going down. Cancelling
-    discards the queued work; the running worker cannot be interrupted, and the
-    interpreter's own atexit join is what eventually collects it.
+    wait=False and cancel_futures=True rather than a clean join: a worker may
+    be stuck in a socket read against a stalled Ollama, and nothing is waiting
+    on that answer once the process is shutting down. Cancelling drops the
+    queued work; the running worker can't be interrupted and is collected by
+    the interpreter's own atexit join.
 
-    The global goes back to None so a pool shut down here is never handed to a
-    later caller -- submit() on a shut-down executor raises, which
-    _llm_strategies_bounded degrades to the rule-based answer, but a reload in
-    the same process should get a working pool rather than that fallback.
+    Resets the global to None so a later reload in the same process builds a
+    fresh, working pool rather than reusing a shut-down one.
     """
     global _STRATEGY_LLM_POOL
     with _strategy_pool_lock:
@@ -2809,90 +2208,69 @@ def _shutdown_strategy_pool():
 
 # How many requests may be *waiting* on the model at once, process-wide.
 #
-# Distinct from max_workers, which bounds the threads doing the generating.
-# This bounds the callers blocked on the result -- and those are the scarce
-# resource, because this endpoint is a sync def. FastAPI runs sync endpoints on
-# anyio's threadpool (40 slots by default), so every request sitting in
-# future.result() holds one of those slots for up to STRATEGY_LLM_TIMEOUT
-# seconds. The per-caller rate limit does not help here: it is per user id, so
-# ~40 distinct parents clicking Generate against a stalled Ollama could occupy
-# the entire threadpool for 20s at a time -- taking down every other sync
-# endpoint in the app, none of which has anything to do with this feature.
+# This is different from max_workers (which bounds the generating threads):
+# it bounds callers blocked in future.result(), because FastAPI runs sync
+# endpoints on anyio's shared threadpool (40 slots by default). Without a cap,
+# enough parents clicking Generate against a stalled Ollama could occupy the
+# whole threadpool and take down every other sync endpoint in the app.
 #
-# Past the cap the model pass is skipped rather than queued. That is not a
-# degradation the caller has to be protected from: the rule-based list is the
-# guaranteed answer and always the fallback, so the cost of being over the cap
-# is generic advice instead of tuned advice, which is exactly what a rejected
-# or timed-out model reply already costs.
+# Past the cap, the model pass is just skipped -- the rule-based list is
+# always the fallback, so this only costs generic advice instead of tuned
+# advice.
 #
-# Floored at 1: at zero or below the semaphore never admits anyone, so the
-# model pass would be permanently off while STRATEGY_LLM_ENABLED says it is on
-# -- the silent-disable failure _env_number's minimum exists to prevent.
+# Floored at 1, or the semaphore admits nobody and the model pass is silently
+# off no matter what the feature flag says.
 _STRATEGY_LLM_MAX_WAITERS = _env_number("STRATEGY_LLM_MAX_WAITERS", 4, int, minimum=1)
 _strategy_llm_waiters = threading.BoundedSemaphore(_STRATEGY_LLM_MAX_WAITERS)
 
 
-# Per-caller ceiling on the endpoint. It is the heaviest thing a parent can
-# trigger by clicking a button -- an aggregate over both signal tables, a topic
-# breakdown, and optionally a model call -- and the button is repeatable at
-# whatever rate they can click. The model call dominates, which is why the
-# limit stayed after _strategy_basis dropped the row transfer.
+# Per-caller ceiling on the endpoint. It's the heaviest thing a parent can
+# trigger by clicking a button, and the button is repeatable at whatever rate
+# they click it.
 #
-# In-process, so with multiple uvicorn workers the effective ceiling is this
-# many per worker. That is deliberate: the point is to blunt one caller looping
-# on the button, and a shared counter would mean a cache or a table to keep it
-# in. Move it to one if the ceiling ever needs to be exact.
+# In-process: with multiple uvicorn workers the effective ceiling is this many
+# per worker. That's fine -- the goal is just to blunt one caller looping on
+# the button, not to enforce an exact global count.
 #
-# Both floored, and they fail in opposite directions. A limit of zero or less
-# makes `len(hits) >= limit` true on the first request, so every caller gets
-# 429 and the feature is bricked over a tuning parameter -- the failure mode
-# _env_number exists to prevent for a typo, reached by a value that parses. A
-# window of zero or less makes every recorded hit already expired, so nothing
-# is ever counted and the ceiling silently is not there. Neither is a way to
-# turn the limiter off: there is no such setting, and if one is ever wanted it
-# should be explicit rather than an out-of-range number.
+# Both this and the window below are floored at their minimum, since a limit
+# of 0 would 429 every request and a window of 0 would never expire hits, i.e.
+# silently disable the limiter -- either way a typo bricks or removes the
+# feature instead of just tuning it.
 _STRATEGY_RATE_LIMIT  = _env_number("STRATEGY_RATE_LIMIT", 10, int, minimum=1)
 
-# Ingestion is the trust boundary, so it is bounded on both axes.
+# Ingestion is a trust boundary: the local sidecar posts these with the
+# student's own bearer token, so a compromised or buggy process on a laptop
+# must not be able to flood the table. Ownership and consent checks say
+# *whether* something may be recorded, not *how much* -- volume needs its own
+# limit.
 #
-# The local sidecar POSTs these with the student's own bearer token, which means
-# the client is not trusted: a compromised or merely buggy process on a
-# student's laptop must not be able to flood the table. `_verify_session_owner`
-# answers "whose session" and the consent check answers "may this be recorded";
-# neither bounds volume, and volume is its own denial-of-service.
-# The two bounds multiply, and the product is the number worth knowing: at the
-# defaults a student may post 120 batches of 500 a minute, so **60,000 samples
-# per minute**. Against a 1 Hz producer that is roughly a thousandfold of
-# headroom, which is deliberate -- the limit is sized to stop a runaway loop or
-# a hostile client, not to police a working sensor, and a legitimate backlog
-# flush after a dropped connection has to fit through it. Tighten the batch size
-# before the rate if that ever needs revisiting: a smaller batch costs a
-# well-behaved client nothing but round trips.
+# At the defaults a student may post 120 batches of 500 a minute, ~60,000
+# samples/min -- about a thousandfold of headroom over a 1 Hz sensor, on
+# purpose: this is sized to stop a runaway or hostile client, not to police a
+# working one, and still has to allow a legitimate backlog flush after a
+# dropped connection. Tighten the batch size before the rate if this ever
+# needs revisiting.
 _INGEST_MAX_BATCH   = _env_number("INGEST_MAX_BATCH", 500, int, minimum=1)
 _INGEST_RATE_LIMIT  = _env_number("INGEST_RATE_LIMIT", 120, int, minimum=1)
 _INGEST_RATE_WINDOW = _env_number("INGEST_RATE_WINDOW", 60.0, float, minimum=1.0)
 
 _ingest_hits: dict[str, list[float]] = {}
 _ingest_hits_lock = threading.Lock()
-# Same sweep as the strategy limiter, and needed more here: entries are
-# otherwise pruned only on that caller's *next* request, so every student who
-# posts once and stops leaves a list behind for the process lifetime. Ingest is
-# the higher-volume endpoint, so it accumulates callers fastest -- this was the
-# one place without eviction, which is the wrong way round.
+# Same sweep as the strategy limiter, but more needed: without it, a student
+# who posts once and stops leaves an entry behind for the process lifetime,
+# and ingest is the higher-volume endpoint so it accumulates fastest.
 _ingest_sweep_at = time.monotonic()
 _INGEST_SWEEP_EVERY = 60.0
 _INGEST_SWEEP_ABOVE = 1024
 
-# Which heart sources each sensor permits. One entry per *sensor*, so a student
-# who allowed the headband and declined the camera has consented to muse_optics
-# and muse_ppg and not to rppg. Rejecting per source rather than per channel is
-# the entire reason heart_signals carries `source` at all.
+# Which heart sources each sensor permits, one entry per sensor -- a student
+# who allowed the headband but declined the camera has consented to
+# muse_optics/muse_ppg and not to rppg.
 #
-# Keyed on `_may_record`'s composed `record_*` flags, not on the raw
-# `*_enabled` consent flags. Consent alone is not permission to record -- the
-# school year has to be open too -- and keying on the raw flags meant every
-# caller had to remember to check the window itself, which is exactly the
-# duplication that produced two hand-written copies of that check.
+# Keyed on `_may_record`'s composed `record_*` flags rather than the raw
+# consent flags, since consent alone isn't permission -- the school year also
+# has to be open -- and keying on raw flags would make every caller re-check
+# the window itself.
 _HEART_SOURCES_BY_RECORD_FLAG = {
     "record_headband_optical": ("muse_optics", "muse_ppg"),
     "record_camera":           ("rppg",),
@@ -2901,24 +2279,15 @@ _HEART_SOURCES_BY_RECORD_FLAG = {
 _STRATEGY_RATE_WINDOW = _env_number("STRATEGY_RATE_WINDOW", 60.0, float, minimum=1.0)
 _strategy_hits: dict[str, list[float]] = {}
 _strategy_hits_lock = threading.Lock()
-# When the sweep below last ran. Size alone was not a sufficient trigger: past
-# the threshold with that many *active* callers, every request scanned the
-# whole dict and deleted nothing, holding the lock to do it. Pairing size with
-# an interval keeps the sweep proportional to time rather than to traffic.
+# When the sweep below last ran. Pairs a size threshold with a time interval
+# so the sweep is proportional to time, not traffic -- size alone means every
+# request scans and holds the lock once the dict is big, even if nothing is
+# stale yet.
 #
-# Seeded from the clock the comparison uses, NOT from 0.0. time.monotonic()'s
-# reference point is undefined -- on Linux it is boot time -- so 0.0 is not a
-# "never swept" sentinel, it is a claim that the last sweep happened at boot.
-# On a host less than _STRATEGY_SWEEP_EVERY seconds old, `now - 0.0 >=
-# _STRATEGY_SWEEP_EVERY` is False, and the sweep is suppressed until the
-# machine has been up for the interval -- the reclaim silently not running
-# during exactly the window a fresh container spends starting up.
-#
-# It also made the sweep tests depend on the runner's uptime rather than on
-# anything they assert: green on a workstation up for days, red on a fresh CI
-# runner where monotonic() had only reached ~56s. Seeding here makes the
-# interval mean "since the last sweep, or since this process started", which is
-# what it was always meant to mean, on any host.
+# Seeded from time.monotonic() itself, not 0.0: monotonic()'s reference point
+# is undefined (boot time on Linux), so 0.0 would mean "last swept at boot",
+# suppressing the sweep on any host up for less than the interval -- exactly
+# the window a fresh container spends starting up.
 _strategy_sweep_at = time.monotonic()
 _STRATEGY_SWEEP_EVERY = 60.0
 _STRATEGY_SWEEP_ABOVE = 1024
@@ -2933,12 +2302,8 @@ def _rate_limit_strategies(user_id: str):
     global _strategy_sweep_at
     now = time.monotonic()
     with _strategy_hits_lock:
-        # The dict is keyed by caller, so it grows with everyone who has ever
-        # used the endpoint. Sweeping it only once it is large keeps the common
-        # path a single lookup rather than a scan of every known caller, and
-        # only once per interval keeps it that way when the dict is large
-        # because the callers are real -- where a size-only trigger scanned
-        # everything on every request and freed nothing.
+        # Only sweep once the dict is large and only once per interval, so the
+        # common path stays a single lookup instead of a scan on every request.
         if (len(_strategy_hits) > _STRATEGY_SWEEP_ABOVE
                 and now - _strategy_sweep_at >= _STRATEGY_SWEEP_EVERY):
             _strategy_sweep_at = now
@@ -2962,45 +2327,23 @@ def _rate_limit_strategies(user_id: str):
 
 _STRATEGY_COUNT = 5
 _STRATEGY_MAX_CHARS = 320
-# A floor as well as a ceiling. Without one, a truncated or degenerate reply
-# ("1. a\n2. b\n3. c") passed every check and was served to a parent as
-# model-refined advice. Nothing useful to someone helping a child with maths
-# fits in fewer characters than this, and the rule-based list is always there
-# to fall back to.
+# A floor, not just a ceiling: without one, a truncated or degenerate reply
+# ("1. a\n2. b\n3. c") passed every check and reached a parent as model advice.
 _STRATEGY_MIN_CHARS = 25
 
-# Clinical vocabulary that must not reach a parent from this endpoint. These
-# are learning-state indicators, not measurements of health, and a local model
-# asked for study tips will still occasionally volunteer a diagnosis. Output
-# containing any of these is discarded wholesale rather than edited: a sentence
-# that needed a word removed to be safe is not a sentence to hand a parent.
+# Clinical vocabulary that must not reach a parent from this endpoint -- a
+# local model asked for study tips will occasionally volunteer a diagnosis.
+# A match discards the whole reply rather than editing it: a sentence that
+# needs a word removed isn't safe to hand a parent either.
 #
-# Each term is stemmed only as far as its clinical sense reaches. The filter
-# rejects the whole reply, so an over-broad stem does not merely trim a word --
-# it silently switches the model pass off for every reply containing an
-# ordinary one, and the only symptom is `source` permanently reading
-# "rule-based (model output rejected)". Over-blocking and a genuinely unsafe
-# model are indistinguishable from outside, which is why the stems below are
-# written narrowly rather than defensively:
-#
-#   - "patient" is matched only in the forms that are unambiguously the *noun*:
-#     the plural, and the singular behind a determiner. `patient\w*` caught the
-#     adjective and "patiently"; even `patients?` still catches the adjective in
-#     "be patient when they get stuck" -- which is about as likely a sentence as
-#     exists in advice on helping a child with maths. The adjective is the
-#     common reading here and the noun is the clinical one, so the pattern has
-#     to tell them apart rather than stem across both. ("patience" was never
-#     caught -- it has no "t" after "patien" -- but "patiently" and the bare
-#     adjective both were.)
-#
-#     What this gives up: a bare predicative noun ("they are not patient" in
-#     the clinical sense) is not caught. That reading is vanishingly rare in
-#     study advice, and a reply actually framing a child as a medical patient
-#     will almost certainly trip one of the other terms in the same sentence.
-#     Over-blocking every "be patient" is the worse trade, because it is silent.
-#   - `meds` and `treatment\w*` are kept as they were -- unlike the adjective
-#     "patient", both carry the clinical sense in every reading that fits this
-#     prompt, so there is no ordinary use here for a narrower stem to protect.
+# Terms are stemmed narrowly, not defensively, because an over-broad stem
+# silently disables the model pass for every reply containing an ordinary
+# word -- indistinguishable from outside from a genuinely unsafe model.
+# "patient" in particular only matches the noun forms (plural, or singular
+# behind a determiner), not the common adjective in "be patient when they get
+# stuck" -- a bare predicative noun ("they are not patient") slips through,
+# but that reading is rare here and a real clinical framing will likely trip
+# another term in the same sentence anyway.
 _CLINICAL_TERMS = re.compile(
     r"\b(diagnos\w*|disorder\w*|disabilit\w*|adhd|autis\w*|dyslex\w*|dyscalcul\w*|"
     r"depress(?:ion|ive)|anxiet\w*|anxious|medicat\w*|meds|prescri\w*|psychiatr\w*|"
@@ -3015,31 +2358,16 @@ _CLINICAL_TERMS = re.compile(
 _LIST_MARKER = re.compile(r"^\s*(?:\d+\s*[\).:]|[-*•])\s*")
 
 # Markdown emphasis a model wraps an item in ("1. **Keep sessions short**").
-# Stripped rather than left alone: nothing renders markdown between here and
-# the parent, so the asterisks would reach them as literal punctuation.
+# Stripped rather than left alone, since nothing renders markdown between here
+# and the parent -- the asterisks would show up as literal punctuation.
 #
-# Both delimiters need a word-boundary guard, for the same reason: the pattern
-# deletes its delimiters rather than spacing them, so a pair that was never
-# emphasis in the first place fuses the text around it into a garbled word --
-# well formed, the right length, and past every other check on its way to a
-# parent.
-#
-# Underscores: an item naming topics in the form the tables store them came out
-# as "review anglerelationships and meanmedian" from "review
-# angle_relationships and mean_median".
-#
-# Asterisks: not "they do not occur inside words" -- they do not occur inside
-# *words*, but this is a maths app and "*" is the multiplication sign. Two
-# products in one line pair up exactly as two snake_case terms did: "practise
-# 7*8 and 9*6" became "practise 78 and 96". CommonMark does allow intraword "*"
-# emphasis, so the unguarded pattern was spec-faithful -- but spec-fidelity is
-# not what this is for, and a model writing arithmetic here is at least as
-# likely as one writing two topic ids.
-#
-# Genuine emphasis is unaffected in both cases: the delimiters of "**Keep
-# sessions short**" and "_problem felt hardest_" are flanked by whitespace or
-# the line ends, and a bolded whole item ("**2. Take a break**") still unwraps
-# before the list marker is read.
+# Both patterns need a word-boundary guard: without it, a "*" or "_" that was
+# never emphasis fuses the surrounding text into a garbled word. Underscores
+# in a snake_case topic name ("angle_relationships") would otherwise vanish
+# into "anglerelationships", and asterisks used as multiplication ("7*8 and
+# 9*6") would fuse into "78 and 96". Genuine emphasis ("**Keep sessions
+# short**") is unaffected, since its delimiters sit against whitespace or line
+# ends.
 _MD_ASTERISK = re.compile(r"(?<![\w*])(\*{1,3})(?=\S)(.+?)(?<=\S)\1(?![\w*])")
 _MD_UNDERSCORE = re.compile(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
 
@@ -3051,9 +2379,9 @@ def _strip_emphasis(line: str) -> str:
 def _weakest_topic(topics: list[dict]):
     """Lowest-accuracy topic the student has actually attempted.
 
-    Topics with no attempts are excluded: _topic_breakdown reports them at 0%,
-    which would otherwise always win and send a parent to revise a topic their
-    child has never been given.
+    Topics with no attempts are excluded, since _topic_breakdown reports them
+    at 0% and would otherwise always "win" and point a parent at a topic
+    their child has never even been given.
     """
     attempted = [t for t in topics if (t.get("attempted_questions") or 0) > 0]
     if not attempted:
@@ -3076,25 +2404,19 @@ def _weakest_topic_summary(topics: list[dict]) -> dict | None:
 def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     """The slice of a weekly report this endpoint actually reads.
 
-    Built from the aggregate RPC rather than _weekly_signal_report. Between
-    them _rule_based_strategies and _strategy_prompt use six numbers, and the
-    full report transfers up to _REPORT_ROW_CAP rows from each signal table
-    plus the sessions query to arrive at them -- the same waste _signal_summary
-    was added to remove from the parent dashboard, on the endpoint that is also
-    the heaviest thing a click can trigger.
+    Built from the aggregate RPC rather than _weekly_signal_report, which
+    would transfer up to _REPORT_ROW_CAP rows per signal table just to derive
+    the six numbers actually used here -- wasteful on the endpoint that is
+    also the heaviest thing a click can trigger.
 
-    Shaped like a report because the two consumers read report keys, and both
-    are also called directly on real reports by the weekly-report tests.
+    Shaped like a report because _rule_based_strategies and _strategy_prompt
+    both read report keys and are also tested directly against real reports.
 
-    One difference from the report's own figures, an improvement: sessions is
-    Postgres's count rather than a row count capped at _SESSION_ROW_CAP.
+    `averages` is built as an explicit list rather than copied wholesale, so a
+    field this response was never about can't reach `basis` by accident.
 
-    The `averages` below is an explicit list rather than a copy of the whole
-    averages dict, so a field this response was never about cannot reach
-    `basis` just by existing on the source object.
-
-    include_face is threaded down into the aggregate, so with the opt-out on no
-    facial row is read here either.
+    include_face is threaded into the aggregate, so opting out skips the
+    facial row read entirely, not just the output field.
     """
     channels = _reportable_channels(student_id, include_face)
     summary = _signal_summary(student_id, days, include_heart=channels.heart,
@@ -3105,24 +2427,15 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     return {
         "days": days,
         "face_included": summary["face_included"],
-        # Carried through to `basis` in the response. A failed aggregate leaves
-        # every average None, which the rules below already read as "no signal
-        # to act on" -- so the advice degrades to the generic list rather than
-        # being tuned to zeros, which is the right outcome. What was missing is
-        # saying so: without this, a caller comparing `basis.averages` against
-        # the week could not tell advice built from a quiet week from advice
-        # built from a query that never ran.
+        # A failed aggregate leaves every average None, which the rules below
+        # already read as "nothing to act on", so this just lets a caller tell
+        # a genuinely quiet week apart from a query that never ran.
         #
-        # Named signals_retrieved, NOT `retrieved`, even though that is the key
-        # the summary payload uses. This dict is deliberately shaped like a
-        # weekly report -- _rule_based_strategies and _strategy_prompt read
-        # report keys and are called on both -- and a real report's `retrieved`
-        # is a dict of three per-table booleans, not one. Two shapes under one
-        # key across two payloads with shared consumers is a wrong answer
-        # waiting for the first caller to write
-        # `report.get("retrieved", {}).get("cognitive")`. The response field
-        # below has always been called signals_retrieved; this just stops the
-        # collision existing internally as well.
+        # Named signals_retrieved, not `retrieved`: a real weekly report's
+        # `retrieved` is a dict of three per-table booleans, and this dict is
+        # deliberately shaped like a report for shared consumers -- reusing
+        # the same key name here would invite `report.get("retrieved", {})`
+        # style code that breaks on this shape.
         "signals_retrieved": summary["retrieved"],
         "averages": {
             "focus": summary["focus"],
@@ -3210,15 +2523,10 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"{str(weakest.get('topic_name')).replace('_', ' ')} at {weakest.get('accuracy')}%"
         if weakest else "no attempted topics yet"
     )
-    # No attention line. `face_attention` has never had a producer, so this read
-    # `- average facial attention unavailable` on every prompt ever sent -- an
-    # unmeasured metric named to a model whose output a parent reads as advice
-    # about their child. The rest of the surfaces that rendered it were removed
-    # for the same reason; this one was missed because it is a string rather
-    # than a component.
-    #
-    # Put it back when there is a labelled reference behind the column, in the
-    # same change that restores the tiles.
+    # No attention line: `face_attention` has no producer yet, so this would
+    # always say "unavailable" -- an unmeasured metric fed to a model whose
+    # output a parent reads as real advice. Add it back once the column is
+    # actually measured, alongside restoring the UI tiles for it.
     return (
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
@@ -3240,18 +2548,13 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
 def _parse_strategy_lines(raw: str) -> list[str]:
     """The list items of a model reply, in order.
 
-    Only lines that actually carried a list marker count. The prompt asks for a
-    numbered list and says no preamble, but nothing makes the model obey: taking
-    every non-empty line turned a lead-in like "Here are five strategies for
-    your child:" into strategy #1, handing a parent a numbered instruction the
-    model never wrote. Unmarked trailing chatter goes the same way, and a
-    strategy wrapped across two lines keeps only its marked first line rather
-    than splitting into two half-sentences.
+    Only lines with an actual list marker count -- taking every non-empty line
+    would turn a lead-in like "Here are five strategies:" into strategy #1,
+    and a strategy wrapped across two lines keeps only its first, marked line.
 
-    Emphasis is unwrapped before the marker is stripped, not after: a model that
-    bolds the whole item ("**1. Keep sessions short**") puts an asterisk in
-    front of the number, which the marker pattern would otherwise consume as a
-    bullet and leave the digits behind as text.
+    Emphasis is unwrapped before the marker is stripped: a bolded whole item
+    ("**1. Keep sessions short**") puts an asterisk in front of the number,
+    which would otherwise get consumed as part of the bullet.
     """
     lines = []
     for line in (raw or "").splitlines():
@@ -3269,19 +2572,17 @@ def _validated_strategies(raw: str) -> list[str] | None:
     partial acceptance: a reply that breaks one rule has shown it is not
     following the prompt, and the rest of it has not earned more trust.
     """
-    # Judged on the whole reply, not just the lines that survive parsing. A
-    # model that volunteered a diagnosis in a preamble is not one whose
-    # remaining items have earned trust for being well punctuated -- and
-    # checking post-parse would let exactly that text set the framing while
-    # passing the filter.
+    # Check the whole raw reply, not just the parsed lines -- a clinical term
+    # in a preamble should reject the reply even if the list items themselves
+    # look clean.
     if _CLINICAL_TERMS.search(raw or ""):
         return None
     lines = _parse_strategy_lines(raw)
     if len(lines) < 3:
         return None
-    # Bounded at both ends. The ceiling catches a model that ran on; the floor
-    # catches one that produced list scaffolding with nothing in it -- "1. a"
-    # is well-formed, survives every other check, and is not advice.
+    # Bounded at both ends: the ceiling catches a model that ran on, the floor
+    # catches empty list scaffolding like "1. a" that is well-formed but not
+    # actually advice.
     if any(not _STRATEGY_MIN_CHARS <= len(line) <= _STRATEGY_MAX_CHARS for line in lines):
         return None
     return lines[:_STRATEGY_COUNT]
@@ -3290,25 +2591,17 @@ def _validated_strategies(raw: str) -> list[str] | None:
 def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | None:
     """One local-model attempt, or None on any failure.
 
-    ollama is imported here rather than at module scope so this module stays
-    importable — and the endpoint stays usable on the rule-based path — in an
-    environment where the package is missing. requirements.txt pins it, so that
-    is a slimmed-down or partially-installed deployment rather than the normal
-    case; the routine failure this guards is the *server* being absent, which
-    surfaces as an exception from the call below.
+    `ollama` is imported here, not at module scope, so this module (and the
+    rule-based fallback) still works if the package is missing.
 
-    Goes through an explicit Client so the call carries a timeout at all. The
+    Uses an explicit Client so the call actually carries a timeout -- the
     module-level ollama.generate() has no deadline, and a server that accepts
-    the connection and then stalls never raises — so the promise that any
-    failure is a fallback rather than a 500 only holds with one attached.
+    the connection then stalls would otherwise never raise.
 
-    `timeout` is what remains of the caller's budget, which is not the same as
-    the budget itself once a submission has queued: the work item was created
-    when the caller started waiting, but it starts running whenever a worker
-    frees up. Charging it the full STRATEGY_LLM_TIMEOUT from there let it hold
-    a worker for nearly twice the setting, against a deadline the caller had
-    already given up on. Defaults to the full budget for a direct call, which
-    is not queued behind anything.
+    `timeout` is what remains of the caller's budget after any time spent
+    queued, not the full budget again -- charging it the full timeout once a
+    worker frees up let a queued call hold that worker for nearly twice
+    STRATEGY_LLM_TIMEOUT. Defaults to the full budget for a direct call.
     """
     try:
         from ollama import Client
@@ -3327,23 +2620,16 @@ def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | No
 def _llm_strategies_bounded(prompt: str) -> list[str] | None:
     """_llm_strategies under a deadline the caller actually feels, if admitted.
 
-    Admission first. See _STRATEGY_LLM_MAX_WAITERS: this endpoint is a sync
-    def, so a caller blocked on the model is holding one of anyio's threadpool
-    slots, and those are shared with every other sync endpoint in the app.
-    Bounding the workers and bounding the pool's queue -- both of which the
-    deadline logic below already does -- do not bound the *waiters*, and the
-    waiters are what the rest of the app contends with.
+    Checks _STRATEGY_LLM_MAX_WAITERS first: this endpoint is sync, so a
+    caller blocked on the model holds one of anyio's shared threadpool slots.
+    Bounding the workers alone doesn't bound how many callers are waiting.
     """
-    # Non-blocking: a caller who cannot get in must not queue on the semaphore
-    # too, which would reintroduce the wait this cap exists to prevent -- just
-    # one lock deeper, and without a deadline on it.
+    # Non-blocking: a caller who can't get in must not queue on the semaphore
+    # either, which would just reintroduce the same wait one lock deeper.
     if not _strategy_llm_waiters.acquire(blocking=False):
-        # Not an error, and deliberately not raised to the caller: the
-        # rule-based list is the guaranteed answer, so being over the cap costs
-        # generic advice rather than tuned advice. `source` reports it as
-        # "rule-based (model output rejected)" alongside a rejected reply,
-        # which is the same thing from the reader's point of view -- the model
-        # did not produce a usable answer for this request.
+        # Not an error: the rule-based list is always the guaranteed answer,
+        # so being over the cap just costs generic advice instead of tuned
+        # advice.
         print(f"[learning_strategies:llm] at capacity "
               f"({_STRATEGY_LLM_MAX_WAITERS} in flight); using the rule-based answer")
         return None
@@ -3356,31 +2642,22 @@ def _llm_strategies_bounded(prompt: str) -> list[str] | None:
 def _llm_strategies_admitted(prompt: str) -> list[str] | None:
     """The wait itself, once _llm_strategies_bounded has admitted the caller.
 
-    Split out so the semaphore's release is a plain finally around a single
-    call rather than wrapping every return path here.
+    Split out so the semaphore's release is a plain `finally` around one call.
 
-    See _STRATEGY_LLM_POOL: the client-side timeout is per operation, so this
-    is what holds when the transport keeps resetting it. Abandoning the wait
-    leaves a *started* worker running -- there is no way to interrupt a blocking
-    socket read -- but the caller is no longer behind it, and the answer they
-    get is the rule-based one that was always the fallback.
-
-    One deadline, shared by the wait and the work. The two used to be the same
-    *duration* measured from different moments: a submission that queued behind
-    a busy worker spent most of the caller's budget waiting, then started with
-    a fresh STRATEGY_LLM_TIMEOUT of its own -- so the pool could stay saturated
-    for close to twice the configured setting, generating against a deadline
-    nobody was waiting on any more.
+    One deadline shared by the wait and the work, not two of the same length
+    measured from different moments -- otherwise a submission that queued
+    behind a busy worker could spend most of its budget waiting, then start a
+    fresh timeout of its own, keeping the pool saturated for nearly twice
+    STRATEGY_LLM_TIMEOUT.
     """
     deadline = time.monotonic() + STRATEGY_LLM_TIMEOUT
 
     def _run():
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            # Started after the caller gave up. Nothing this could return would
-            # be used, so it does not open a socket at all -- the cancel below
-            # catches the queued items, and this catches the one that had
-            # already been handed to a worker.
+            # Started after the caller gave up, so skip opening a socket at
+            # all -- this catches the item already handed to a worker, and
+            # the cancel below catches the ones still queued.
             return None
         return _llm_strategies(prompt, remaining)
 
@@ -3391,22 +2668,17 @@ def _llm_strategies_admitted(prompt: str) -> list[str] | None:
         future = _strategy_pool().submit(_run)
         return future.result(timeout=STRATEGY_LLM_TIMEOUT)
     except FutureTimeoutError:
-        # Cancel, rather than just dropping the reference. Bounding the workers
-        # does not bound the queue behind them: with both busy on a stalled
-        # server, every further submission sits in the pool's work queue and
-        # still runs once a worker frees up. A sustained outage would otherwise
-        # accumulate a backlog of prompts nobody is waiting for any more, and
-        # then generate every one of them against the recovered server.
-        #
-        # Returns False for a task already running, which genuinely cannot be
-        # stopped -- but True for one that never started, which is exactly the
-        # case that piles up.
+        # Cancel rather than just drop the reference: bounding the worker
+        # threads doesn't bound the queue behind them, so a sustained outage
+        # would otherwise pile up abandoned prompts that all still run once
+        # the server recovers. cancel() only succeeds for a queued task that
+        # hasn't started yet, which is exactly what piles up.
         future.cancel()
         print(f"[learning_strategies:llm] abandoned after {STRATEGY_LLM_TIMEOUT}s")
         return None
     except Exception as e:
-        # _llm_strategies swallows its own failures, so reaching here means the
-        # pool itself refused the work (shutting down, for instance).
+        # _llm_strategies already swallows its own failures, so reaching here
+        # means the pool itself refused the work (e.g. shutting down).
         print(f"[learning_strategies:llm] {e}")
         return None
 
@@ -3420,20 +2692,15 @@ class LearningStrategyRequest(BaseModel):
 def student_learning_strategies(student_id: str, request: Request, payload: LearningStrategyRequest):
     """At-home practice strategies derived from a student's weekly report.
 
-    Role-neutral, like the weekly report it reads: gated on the viewer's
-    relationship to the student, not on a role claim.
+    Role-neutral like the weekly report it reads: gated on relationship, not
+    role.
 
     Always answers. The deterministic rules produce the response unless the
-    optional model pass is enabled *and* its output passes _validated_strategies,
-    and `source` says which of those happened.
+    optional model pass is enabled and its output passes
+    _validated_strategies; `source` says which happened.
 
-    Reads its signal figures through _strategy_basis, which aggregates in
-    Postgres -- the full weekly report pulls thousands of rows to produce the
-    handful of numbers the rules and the prompt use.
-
-    Rate limited per caller. The access check runs first so a caller with no
-    relationship to the student still gets 403 rather than having the answer
-    masked by a 429; the limit then guards the expensive part below.
+    The access check runs before the rate limit, so a caller with no
+    relationship to the student gets 403 rather than a 429 masking that.
     """
     viewer = get_user(request)
     _verify_can_view_student(viewer, student_id)
@@ -3451,8 +2718,8 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
         if refined:
             strategies, source = refined, "model-refined"
         else:
-            # Named distinctly from the plain rule-based case: "the model was
-            # asked and its answer was not usable" is worth seeing in the UI.
+            # Distinct from the plain rule-based case: "the model was asked
+            # and its answer was rejected" is worth showing in the UI.
             source = "rule-based (model output rejected)"
 
     return {
@@ -3463,17 +2730,14 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
         "basis": {
             "days": days,
             "face_included": payload.include_face,
-            # False means the averages beside it are defaults, not a quiet
-            # week, so these strategies are the generic list rather than one
-            # tuned to the student. Same distinction the summary endpoint
-            # makes; stated here because this response is what a parent acts
-            # on.
+            # False means the averages are defaults, not a genuinely quiet
+            # week -- so these strategies are the generic list, not one tuned
+            # to the student.
             "signals_retrieved": report.get("signals_retrieved", True),
             "averages": report.get("averages") or {},
             # Named fields rather than the whole _topic_breakdown row, which
-            # also carries topic_id, a stress reading and updated_at — none of
-            # which this response is about, and all of which would become part
-            # of its contract by accident.
+            # also carries topic_id, a stress reading and updated_at that
+            # aren't part of what this response should promise.
             "weakest_topic": _weakest_topic_summary(topics),
         },
     }
@@ -3488,24 +2752,19 @@ _LEADERBOARD_MAX = 100
 def leaderboard(request: Request, limit: int = 20):
     """Top students by correct answers.
 
-    This reads through the service-role client, so RLS does not apply and the
-    caller's `limit` is the only thing bounding how much of the user base comes
-    back -- with names attached. Unclamped, /api/leaderboard?limit=999999 was a
-    full directory of every user and their activity, for any signed-in caller.
+    Reads through the service-role client, bypassing RLS, so `limit` is the
+    only thing bounding how much of the user base comes back with names
+    attached -- it must stay clamped to _LEADERBOARD_MAX.
 
-    user_id is resolved but never returned. The page only needs to know which
-    row is the viewer's own, and handing out a UUID -> display_name map for
-    everyone on the board is what turned the (separately fixed) open read on
-    user_stats into something that could be tied back to named students.
+    user_id is resolved but never returned; the page only needs to know which
+    row is the viewer's own, not a UUID -> name map for everyone on the board.
     """
     user = get_user(request)
     res = supabase.table("user_stats") \
         .select("user_id, total_correct, total_questions, current_streak, best_streak") \
         .order("total_correct", desc=True).limit(max(1, min(limit, _LEADERBOARD_MAX))).execute()
     rows = res.data or []
-    # One read for the board, not one per row. `_LEADERBOARD_MAX` bounds this at
-    # a page of names rather than the whole user base, so the batch cannot grow
-    # past what the clamp above already allows.
+    # One read for the whole board, not one per row.
     profiles = _profiles_many(r.get("user_id") for r in rows)
     enriched = []
     for i, row in enumerate(rows):
@@ -3541,30 +2800,21 @@ def create_class(payload: CreateClassRequest, request: Request):
     }).execute()
     return res.data[0]
 
-# Registered **before** `/api/classes/{class_id}`, and it has to be: FastAPI
-# matches in registration order, so with the parameterised route first a GET
-# of /api/classes/summary binds `class_id="summary"` and answers 404 "Class
-# not found" -- a literal path quietly shadowed by a placeholder, which reads
-# as the endpoint not existing rather than as a routing mistake.
+# Must be registered **before** `/api/classes/{class_id}` -- FastAPI matches
+# in registration order, so a parameterised route first would bind
+# `class_id="summary"` and 404 instead of routing here.
 @app.get("/api/classes/summary")
 def class_summaries(request: Request):
     """Per-class headline averages for the teacher's dashboard, in three reads.
 
-    The page fetched `/api/classes`, then the **full roster of every class**,
-    and averaged two numbers out of each -- one request per class, every 60s
-    refresh, to render an accuracy figure and a streak figure per card. It also
-    meant every student's name, email and lifetime totals crossing the wire to
-    compute two integers.
+    Accuracy is averaged over students who have *attempted* something (a
+    student with no attempts isn't a 0% student, they're excluded), while the
+    streak is averaged over the whole roster. `None` accuracy means nobody
+    has attempted anything.
 
-    Same arithmetic, deliberately, because the cards render it unchanged:
-    accuracy is averaged over the students who have *attempted* something (a
-    student with no attempts is not a 0% student, they are not in the average),
-    while the streak is averaged over the whole roster. `None` accuracy means
-    nobody has attempted anything, which the card already draws as an em dash.
-
-    `retrieved` rides on each class for the same reason it does everywhere else
-    here: the page has to be able to tell "this class has no attempts yet" from
-    "we could not find out", and both otherwise arrive as a missing number.
+    `retrieved` rides on each class so the page can tell "no attempts yet"
+    apart from "the read failed", which would otherwise both look like a
+    missing number.
     """
     user = get_user(request)
     classes = supabase.table("classes").select("id") \
@@ -3591,8 +2841,8 @@ def class_summaries(request: Request):
     out = {}
     for cid in ids:
         roster = [stats.get(sid) or {} for sid in by_class.get(cid, [])]
-        # One unretrieved student makes the class figure unretrieved: it is an
-        # average, so a missing member does not make it partly right.
+        # One unretrieved student makes the whole class figure unretrieved --
+        # it's an average, so a missing member doesn't make it partly right.
         retrieved = all(s.get("retrieved", False) for s in roster) if roster else True
         attempted = [s for s in roster if (s.get("total_questions") or 0) > 0]
         avg_accuracy = round(sum(
@@ -3609,16 +2859,13 @@ def class_summaries(request: Request):
 def get_class(class_id: str, request: Request):
     """One class, for the pages that need its name and join code.
 
-    Owner-only, like the roster and live endpoints next to it -- this reads
-    through the service-role client, so _verify_class_owner is the whole check.
+    Owner-only. Reads through the service-role client, so
+    `_verify_class_owner` is the whole access check.
     """
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
-    # Named columns, not "*": a column added to classes later should not start
-    # reaching the browser because this line never mentioned it. Costs a second
-    # read of the row the helper already fetched -- the helper is the shared
-    # rule for who may see a class, and re-deriving it inline to save a
-    # round-trip is how the class_live guard drifted.
+    # Named columns, not "*", so a column added to `classes` later doesn't
+    # start reaching the browser just by existing.
     return _row_or_404(
         supabase.table("classes").select("id, name, join_code, grade_level")
                 .eq("id", class_id),
@@ -3634,10 +2881,9 @@ def update_class(class_id: str, payload: UpdateClassRequest, request: Request):
     fields = {k: v for k, v in payload.dict().items() if v is not None}
     if fields:
         supabase.table("classes").update(fields).eq("id", class_id).execute()
-    # The re-read, so the response is what was stored rather than what was
-    # asked for. 404 here means the row went away between the update and this
-    # line, which is a race rather than a bad id -- but "the class is not there"
-    # is still the truest thing to say about it.
+    # Re-read so the response reflects what was actually stored. A 404 here
+    # means the row was deleted between the update and this read -- rare, but
+    # "the class isn't there" is still the right thing to say.
     return _row_or_404(
         supabase.table("classes").select("*").eq("id", class_id), "Class")
 
@@ -3675,14 +2921,11 @@ def join_class(payload: JoinClassRequest, request: Request):
 def _verify_class_owner(class_id: str, user_id: str):
     """Only the teacher who owns a class may read its roster or live data.
 
-    These endpoints query through the service-role client, which bypasses RLS,
-    so the database will not stop a caller on its own -- the check has to happen
-    here or not at all.
+    These endpoints query through the service-role client, which bypasses
+    RLS, so this check is the only thing enforcing that.
     """
-    # `.single()` raises rather than returning empty when the row is missing.
-    # This endpoint was the first to be caught by that and carried its own
-    # `try`; `_row_or_404` is that guard, shared, after six other `.single()`
-    # calls turned out to be missing it.
+    # `.single()` raises rather than returning empty when the row is missing;
+    # `_row_or_404` is the shared guard for that.
     cls = _row_or_404(
         supabase.table("classes").select("teacher_id").eq("id", class_id), "Class")
     if cls["teacher_id"] != user_id:
@@ -3692,16 +2935,14 @@ def _verify_class_owner(class_id: str, user_id: str):
 def _can_view_student(viewer: dict, student_id: str) -> bool:
     """Whether `viewer` is allowed to see this student's data.
 
-    Four legitimate relationships: the student themselves, a teacher of a class
-    the student is enrolled in, a linked parent, or a platform administrator.
-    Everything reachable through this check is queried with the service-role
-    client, so RLS is not a backstop.
+    Four legitimate relationships: the student themselves, a teacher of a
+    class the student is enrolled in, a linked parent, or an admin. Reads go
+    through the service-role client, so RLS is not a backstop -- this check
+    is what enforces it.
 
-    Admin is checked here rather than by giving the admin endpoints their own
-    copy of each report query. Adding it to the shared helper is what makes
-    "an admin can open a student's report" one decision in one place, instead
-    of a parallel admin path per endpoint that drifts from this one -- the same
-    failure the `class_live` guard already demonstrated.
+    Admin is checked here rather than duplicated per admin endpoint, so
+    access stays one decision in one place instead of parallel checks that
+    can drift apart.
     """
     uid = viewer["id"]
     if uid == student_id:
@@ -3710,7 +2951,7 @@ def _can_view_student(viewer: dict, student_id: str) -> bool:
     if _is_admin(uid):
         return True
 
-    # Teacher of any class this student belongs to.
+    # Teacher of a class this student belongs to.
     try:
         classes = supabase.table("classes").select("id").eq("teacher_id", uid).execute().data or []
         class_ids = [c["id"] for c in classes]
@@ -3747,9 +2988,7 @@ def class_students(class_id: str, request: Request):
         .eq("class_id", class_id).execute()
     students = []
     roster = [m["student_id"] for m in (memberships.data or [])]
-    # Three reads for the whole roster, not three per student. The stats half
-    # was batched first and the profile lookup was left in the loop beside it,
-    # so a class of thirty still cost thirty round trips on this page.
+    # Three reads for the whole roster, not three per student.
     all_stats = _stats_including_open_session_many(roster)
     profiles = _profiles_many(roster)
     for m in (memberships.data or []):
@@ -3768,25 +3007,21 @@ def class_students(class_id: str, request: Request):
 
 # ─── consent: what may be recorded, per student ───────────────────────────
 #
-# Three channels, named for the sensor rather than the signal derived from it.
-# `camera` covers expression AND the rPPG heart-rate fallback: one device, one
-# decision, so a heart-rate failover can never quietly open a webcam the student
-# declined.
+# Three channels, named for the sensor rather than the signal it produces.
+# `camera` covers both expression and the rPPG heart-rate fallback, so a
+# heart-rate failover can never quietly open a webcam the student declined.
 #
-# Everything is off until a linked parent turns it on, and this is the only
-# write path -- signal_consent has no insert/update RLS policy for anyone, so
-# the anon key in the frontend bundle cannot reach it through PostgREST. The
-# rules below are therefore the enforcement, not a convenience layer over it.
+# Everything is off until a linked parent turns it on. This is the only write
+# path -- signal_consent has no insert/update RLS policy for anyone, so the
+# frontend's anon key cannot reach it through PostgREST. The checks below are
+# the actual enforcement, not a convenience layer over one.
 
 CONSENT_CHANNELS = ("eeg", "headband_optical", "camera")
 
-# What `_may_record` substitutes for a real consent read while the admin
-# consent bypass is live. Deliberately the same shape as `_CONSENT_DENIED` and
-# deliberately never returned by `_consent` itself: the bypass is a decision
-# about whether to *ask*, not a claim that anyone agreed, so it must not reach
-# the consent screen, the reporting surfaces or the poller status -- all of
-# which read `_consent` directly and should keep showing what the family
-# actually decided.
+# What `_may_record` substitutes while the admin consent bypass is live.
+# Never returned by `_consent` itself: the bypass decides whether to *ask*,
+# not whether anyone agreed, so the consent screen, reporting surfaces and
+# poller status must keep showing what the family actually decided.
 _CONSENT_ENABLED_ALL = {
     **{f"{c}_enabled": True for c in CONSENT_CHANNELS},
     **{f"{c}_revoked_at": None for c in CONSENT_CHANNELS},
@@ -3811,11 +3046,10 @@ _CONSENT_DENIED = {
 def _parse_ts(value) -> datetime | None:
     """Parse a PostgREST timestamp, tolerating the trailing-Z spelling.
 
-    Comparing these as strings happens to work for the formats in play, but only
-    while both sides stay normalized -- a Z-suffixed value and a +00:00 one
-    denote the same instant and sort differently. The comparison here decides
-    whether a student is shown a notice about their own consent, so it is worth
-    not resting on that.
+    A Z-suffixed value and a +00:00 one mean the same instant but sort
+    differently as strings, so both sides must be normalized before
+    comparing. This decides whether a student sees a notice about their own
+    consent.
     """
     if not value:
         return None
@@ -3824,10 +3058,9 @@ def _parse_ts(value) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
-        # These values are database-generated, so this should not fire. Logged
-        # because of which way it fails: an unparseable timestamp suppresses
-        # needs_student_ack, and the student is then not told a parent turned a
-        # sensor back on. Silence is the wrong direction here.
+        # Should not happen -- these come from the database. Log it: a silent
+        # failure here would suppress needs_student_ack, so a student would
+        # not learn a parent turned a sensor back on.
         print(f"[consent:parse_ts] unparseable timestamp {value!r}")
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
@@ -3836,15 +3069,12 @@ def _parse_ts(value) -> datetime | None:
 def _consent(student_id: str) -> dict:
     """Consent flags for a student. Absent row and failed read both deny.
 
-    Failing closed is the whole point: the reporting helpers elsewhere in this
-    module swallow their exceptions and answer with an empty payload, which is
-    the right call for a dashboard. It is the wrong call here -- defaulting to
-    "enabled" on a failed read would record data the student declined, and the
-    failure would be invisible because recording looks identical either way.
+    Fails closed on purpose -- unlike the reporting helpers below, which
+    swallow errors and return an empty payload. Defaulting to "enabled" here
+    would record data the student declined, invisibly.
 
-    `retrieved` distinguishes the two denials for callers that need to say why:
-    "nothing is recorded because nobody consented" and "we could not find out"
-    are not the same sentence to put in front of a parent.
+    `retrieved` tells apart "nobody consented" from "we couldn't find out",
+    which callers need to phrase differently to a parent.
     """
     try:
         rows = supabase.table("signal_consent").select("*") \
@@ -3853,8 +3083,8 @@ def _consent(student_id: str) -> dict:
         print(f"[consent:read] {student_id}: {e}")
         return {**_CONSENT_DENIED, "retrieved": False, "exists": False}
     if not rows:
-        # `exists` is not `retrieved`: no row and a failed read both deny, but
-        # only the first one means a write should insert rather than update.
+        # `exists` differs from `retrieved`: both a missing row and a failed
+        # read deny, but only a missing row means a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
 
@@ -3863,22 +3093,19 @@ def _consent(student_id: str) -> dict:
 # so neither RLS nor the ingest endpoint's gate applies to it. This is what
 # subjects it to the same consent rule as the push path.
 def _poller_may_record_eeg(student_id: str) -> bool:
-    """The poller's recurring permission check, and the log that says why not.
+    """The poller's recurring permission check, and the log line explaining a refusal.
 
-    The poller takes a bool, so it cannot distinguish a withdrawal from a closed
-    school year or from a failed read of either -- and its own line used to
-    assert "consent withdrawn" for all of them, which names a decision the
-    family may never have made. This is the site that knows, so this is the site
-    that records it, for the log here and for `start()`'s exception text.
+    A bool alone can't say *why* -- withdrawn consent, a closed school year, and
+    a failed read of either would otherwise all be logged as "consent
+    withdrawn", which names a decision the family may not have made.
     """
     gate = _may_record(student_id)
     if gate["record_eeg"]:
         return True
-    # "EEG", not "eeg": this string is also rendered as a standalone sentence in
-    # a 403 body, and `_as_sentence` capitalises the first letter without
-    # knowing which words are acronyms -- so a lowercase literal came out as
-    # "Eeg not consented." The ingest endpoints keep the lowercase form in their
-    # machine-ish `reason` field; this path is read by a person.
+    # "EEG" not "eeg": this also renders as a standalone sentence in a 403 body,
+    # and `_as_sentence` capitalises the first letter without knowing which
+    # words are acronyms. The ingest endpoints' machine-readable `reason` field
+    # keeps the lowercase form; this one is read by a person.
     reason = _as_sentence(_not_recording_reason(gate, "EEG not consented"))
     print(f"<<< [eeg-poller] {student_id[:8]}: {reason}", flush=True)
     return False
@@ -3887,22 +3114,12 @@ def _poller_may_record_eeg(student_id: str) -> bool:
 def _poller_may_record_eeg_reason(student_id: str) -> str:
     """Why `eeg_poller.start()`'s own recheck refused, for its exception text.
 
-    Reads `_may_record` again rather than reusing what the bool check just
-    computed. That is a second round trip, and it is the right trade: the only
-    caller is `start()` refusing, which is an error path taken once per attempt.
-
-    Passing the reason along instead needs somewhere to put it, and a cache
-    keyed by student is not that somewhere -- the poller's own recheck loop
-    refuses for the same student on its own schedule, so a value written by one
-    refusal can be read by another. A shared mutable answer to "why did *this*
-    call refuse" is a race whichever way it is keyed, for a sentence that only
-    ever reaches a log line and a 403 body.
-
-    The two reads can in principle disagree, and the disagreement is benign in
-    the direction that matters: `start()` has already refused on the bool, so
-    the worst case is a refusal explained by a reason that became true a moment
-    later. It never records against a refusal, and it never refuses a student
-    who is permitted.
+    Re-reads `_may_record` rather than caching what the bool check just
+    computed -- a shared cache keyed by student would race against the
+    poller's own recheck loop for other students. This only ever runs on a
+    refusal, so the extra read is cheap, and the two reads disagreeing is
+    harmless: worst case is a refusal explained by a reason that became true a
+    moment later.
     """
     gate = _may_record(student_id)
     return _as_sentence(_not_recording_reason(gate, "EEG not consented"))
@@ -3915,9 +3132,8 @@ eeg_poller.set_consent_reason_check(_poller_may_record_eeg_reason)
 def _IS_DUPLICATE_KEY(exc: Exception) -> bool:
     """Whether a write failed because the row already existed.
 
-    supabase-py surfaces PostgREST errors as an APIError whose shape has moved
-    between versions, so this checks the SQLSTATE (23505) and the message rather
-    than depending on a particular attribute being present.
+    supabase-py's APIError shape has changed between versions, so this checks
+    the SQLSTATE (23505) and the message rather than one specific attribute.
     """
     code = getattr(exc, "code", None) or (
         exc.args[0].get("code") if exc.args and isinstance(exc.args[0], dict) else None
@@ -3940,11 +3156,9 @@ def _is_linked_parent(viewer_id: str, student_id: str) -> bool:
 def _consent_actor(viewer: dict, student_id: str) -> str:
     """Who is writing: the student themselves, or a linked parent.
 
-    Deliberately narrower than _verify_can_view_student, which also admits
-    teachers. A teacher can see that a channel is off -- they need to, or a
-    blank tile reads as a broken query -- but consent over a child's body is not
-    theirs to change. Reading and writing are different relationships here, so
-    this does not reuse that helper.
+    Narrower than `_verify_can_view_student`, which also admits teachers. A
+    teacher may see that a channel is off, but consent over a child's body is
+    not theirs to change.
     """
     if viewer["id"] == student_id:
         return "student"
@@ -3956,16 +3170,14 @@ def _consent_actor(viewer: dict, student_id: str) -> str:
 def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> dict:
     """Per-channel payload: enabled, when it was revoked, and by which role.
 
-    `revoked_by` is a role, never an identity. A teacher needs to know a
-    decision was made and roughly by whom -- "student opted out" reads very
-    differently from "parent opted out" when you are looking at a blank tile --
-    but which guardian made it is none of their business.
+    `revoked_by` is a role, never an identity -- a teacher needs to know
+    roughly who made the decision ("student opted out" vs "parent opted out"),
+    but not which guardian.
 
     The role is derived per channel from that channel's own revoker, not from
-    the row's `updated_by`. The row has one `updated_by` and the channels are
-    revoked independently, so a student withdrawing the camera followed by a
-    parent enabling eeg would otherwise report the parent as having withdrawn
-    the camera.
+    the row's single `updated_by`: channels are revoked independently, so
+    `updated_by` alone would misattribute one channel's withdrawal to
+    whoever last touched a different one.
     """
     channels = {}
     for c in CONSENT_CHANNELS:
@@ -3974,15 +3186,11 @@ def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> 
         channels[c] = {
             "enabled": enabled,
             "revoked_at": row.get(f"{c}_revoked_at"),
-            # Independent of `enabled` and of `revoked_at`, and carried even
-            # when the channel is back on: erasure is a fact about the stored
-            # history, not about the current decision. A parent who erased and
-            # then re-consented has a channel that is on and a past that is
-            # gone, and a tile that showed only one of those would be wrong
-            # about the other.
+            # Independent of `enabled`/`revoked_at`, and kept even after the
+            # channel is re-enabled -- erasure is a fact about stored history,
+            # not about the current decision.
             "erased_at": (erasures or {}).get(c),
-            # Only meaningful while the channel is off; a role attached to an
-            # enabled channel would read as "turned on by", which it is not.
+            # Only meaningful while the channel is off.
             "revoked_by": (
                 None if enabled or not revoker
                 else ("student" if revoker == student_id else "parent")
@@ -3996,10 +3204,10 @@ def _shape_consent(row: dict, student_id: str, erasures: dict | None = None) -> 
         "channels": channels,
         "retrieved": row.get("retrieved", True),
         "updated_at": row.get("updated_at"),
-        # A parent turning something back ON has to be visible to the student:
-        # discovering a resumed sensor by noticing data reappear is a surprise,
-        # not consent. A parent turning one OFF raises nothing -- the student
-        # loses nothing they had, and can see the state in settings.
+        # A parent turning a channel back ON must be visible to the student --
+        # discovering it by noticing data reappear is not consent. Turning one
+        # OFF raises nothing; the student loses nothing and can see it in
+        # settings.
         "needs_student_ack": bool(
             enabled_at and (ack_at is None or ack_at < enabled_at)
         ),
@@ -4014,20 +3222,20 @@ class ConsentUpdate(BaseModel):
 
 class ErasureRequest(BaseModel):
     channel: str
-    # Erasure is unrecoverable and there is no undo anywhere in the system, so
-    # the request carries its own confirmation rather than relying on a dialog
-    # nobody can audit. A client that omits it gets a 422 naming the field.
+    # Erasure is unrecoverable with no undo anywhere in the system, so the
+    # request carries its own confirmation rather than trusting a dialog
+    # nobody can audit. Omitting it gets a 422 naming the field.
     confirm: bool = False
 
 
 def _erasures(student_id: str) -> dict:
     """`{channel: erased_at}` for channels whose history has been erased.
 
-    Fails **open** to an empty map, unlike `_consent()`, and the asymmetry is
-    the same one `_school_timezone()` makes. A consent read that fails must deny
-    or it records against a refusal; this one only decides whether a tile says
-    "erased" or "no sensor", so refusing to answer would blank a dashboard over
-    a fact that changes nothing about what may be collected.
+    Fails **open** to an empty map, unlike `_consent()` -- same asymmetry as
+    `_school_timezone()`. A failed consent read must deny, or it records
+    against a refusal. This only decides whether a tile says "erased" or "no
+    sensor", so failing here should not blank a dashboard over a fact that
+    changes nothing about what may be collected.
     """
     try:
         rows = supabase.table("signal_erasure").select("channel, erased_at") \
@@ -4051,9 +3259,8 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
 
     current = _consent(student_id)
     if not current["retrieved"]:
-        # Writing blind would mean deciding the student's current state from a
-        # read that failed. A 503 is recoverable; a wrongly-enabled channel is
-        # not.
+        # Writing blind would mean deciding the student's state from a failed
+        # read. A 503 is recoverable; a wrongly-enabled channel is not.
         raise HTTPException(503, "Could not read current consent; not changing it")
 
     now = _utc_now().isoformat()
@@ -4069,9 +3276,8 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         if requested == was:
             continue
 
-        # The asymmetry. A student may withdraw at any time and that decision
-        # stands until a parent revisits it; a student cannot re-enable, or the
-        # parent's control would be nominal.
+        # A student may withdraw at any time; only a parent may re-enable, or
+        # the parent's control would be nominal.
         if requested and actor == "student":
             raise HTTPException(
                 403,
@@ -4082,22 +3288,19 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         fields[f"{c}_revoked_at"] = None if requested else now
         fields[f"{c}_revoked_by"] = None if requested else user["id"]
         if not requested:
-            # Recorded as an event as well as as current state. `*_revoked_at`
-            # answers "is this off, and since when", and is correctly *nulled*
-            # when the channel comes back -- which makes it unusable as the
-            # source for "what happened": a parent re-enabling erased the
-            # withdrawal notice for every linked parent at once. Appended here,
-            # written below with the same request.
+            # Also recorded as an event: `*_revoked_at` is nulled when the
+            # channel comes back on, so it can't answer "what happened" on its
+            # own -- a re-enable would erase the withdrawal notice.
             withdrawn.append(c)
-        # The state this decision was made against, asserted on the write below.
+        # State this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
         if requested and actor == "parent":
             re_enabled = True
 
     if not fields:
-        # No-op. Deliberately does not restamp updated_by/updated_at: a parent
-        # re-saving unchanged settings would otherwise raise a notice at the
-        # student about a change that did not happen.
+        # No-op. Don't restamp updated_by/updated_at, or a parent re-saving
+        # unchanged settings would raise a notice about a change that never
+        # happened.
         return _shape_consent(current, student_id, _erasures(student_id))
 
     fields["updated_by"] = user["id"]
@@ -4107,17 +3310,15 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
 
     try:
         if not current["exists"]:
-            # No row yet. Insert rather than upsert so a row created by a
-            # concurrent request collides instead of being silently overwritten
-            # with a decision made against a state that no longer holds.
+            # Insert rather than upsert, so a row created by a concurrent
+            # request collides instead of silently overwriting it.
             try:
                 supabase.table("signal_consent") \
                     .insert({"user_id": student_id, **fields}).execute()
             except Exception as e:
-                # Same race as the conditional update below, so it gets the same
-                # answer. Without this the two paths report one lost race as a
-                # 500 and the other as a 409, and a client cannot tell that
-                # "reload and try again" is the right response to both.
+                # Same race as the conditional update below -- give it the
+                # same 409 rather than a 500, so a client always knows
+                # "reload and try again" is the right response.
                 if _IS_DUPLICATE_KEY(e):
                     raise HTTPException(
                         409, "Consent changed while you were editing it; reload and try again"
@@ -4126,19 +3327,18 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
             return _shape_consent(_consent(student_id), student_id, _erasures(student_id))
 
         # Conditional on every flag this call decided against. Read-then-write
-        # is not atomic, and the two racing writes here are a student's
-        # withdrawal and a parent's re-enable landing on the same channel -- so
-        # losing the race silently would mean recording against a refusal. If
-        # the state moved underneath us the update matches nothing, and the
-        # caller is told to look again rather than being told it worked.
+        # is not atomic, and the two writes that can race here are a student's
+        # withdrawal and a parent's re-enable on the same channel -- losing
+        # that race silently would record against a refusal. If the state
+        # moved underneath us, the update matches nothing and the caller is
+        # told to look again instead of being told it worked.
         q = supabase.table("signal_consent").update(fields).eq("user_id", student_id)
         for col, was in guards.items():
             q = q.eq(col, was)
         written = q.execute().data or []
     except HTTPException:
-        # The 409 raised for a lost insert race above. Without this the outer
-        # handler turns it back into a 500, which is the bug this whole branch
-        # exists to remove.
+        # The 409 from the lost insert race above -- re-raise so the outer
+        # handler doesn't turn it back into a 500.
         raise
     except Exception as e:
         print(f"[consent:write] {student_id}: {e}")
@@ -4187,22 +3387,20 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
                           request: Request):
     """Destroy one channel's stored signals for one student. Irreversible.
 
-    **A linked parent only** -- not the student, and not a teacher. The consent
-    model lets a student withdraw and only a parent re-enable, and that
-    asymmetry is safe because a parent can undo it. Nothing undoes this, so it
-    is not `_consent_actor`, which admits the student: withdrawal and erasure
-    are different decisions with different stakes and they get different gates.
+    **A linked parent only** -- not the student, and not a teacher. A student
+    can undo a withdrawal by asking a parent, but nothing undoes this, so it
+    doesn't use `_consent_actor`, which admits the student.
 
-    Deliberately **not** wired to a consent change. Withdrawal keeps history --
-    decided 2026-08-10 -- and making a revocation delete would turn the
-    reversible control into the irreversible one by a side effect nobody asked
-    for. This runs only when someone asks for it by name.
+    **Not** wired to a consent change: withdrawal keeps history, and tying a
+    revocation to a delete would turn a reversible control into an
+    irreversible one by a side effect nobody asked for. This runs only when
+    someone asks for it by name.
 
-    The database half is one transaction: rows, rollups, `chart_paths`, and the
-    tombstone that claims they are gone. The storage half runs after it commits
-    and is reported rather than awaited -- `charts_failed` on the response, and
-    a log line. Anything left in the bucket is orphaned but unservable, because
-    `chart_paths` no longer points at it.
+    The database half is one transaction: rows, rollups, `chart_paths`, and
+    the tombstone recording that it happened. Storage runs after that commits
+    and is reported, not awaited -- `charts_failed` on the response, plus a
+    log line. Anything left in the bucket afterward is orphaned but
+    unservable, since `chart_paths` no longer points at it.
     """
     user = get_user(request)
     if not _is_linked_parent(user["id"], student_id):
@@ -4217,15 +3415,10 @@ def erase_consent_channel(student_id: str, payload: ErasureRequest,
             "p_user_id": student_id,
             "p_channel": payload.channel,
             "p_erased_by": user["id"],
-            # The school's timezone, because the rollup rows this rebuilds are
-            # bucketed by school day. Rebuilding them against UTC would move
-            # every boundary and leave the survivors bucketed one way and the
-            # rest of the year the other.
-            # `.key`, not the ZoneInfo: RPC params are serialised with plain
-            # `json.dumps`, which raises on it. Inside this try, so the failure
-            # would have been swallowed into the 500 below rather than showing
-            # up as a type error -- every erasure failing identically, for a
-            # reason nothing in the response or the log would name.
+            # School timezone, because the rollup rows this rebuilds are
+            # bucketed by school day; UTC would move every boundary.
+            # `.key`, not the ZoneInfo object: RPC params go through plain
+            # `json.dumps`, which can't serialise a ZoneInfo.
             "p_timezone": _school_timezone().key,
         }).execute().data or {}
     except Exception as e:
@@ -4273,17 +3466,13 @@ _COGNITIVE_NUMERIC_KEYS = (
 class CognitiveSample(BaseModel):
     """One EEG reading, in either of two shapes.
 
-    The flat fields are **already-mapped rows**: 0..1 ratios, exactly what the
-    table stores. That is what a developer hand-posting a batch has, and it is
-    the shape this endpoint has always accepted.
+    The flat fields are **already-mapped rows**: 0..1 ratios, the shape a
+    developer hand-posting a batch would use.
 
-    `features`/`bands` are **sensor output**: the sidecar's own payload, on its
-    0..100 scale, passed through untouched. The push client sends this and does
-    no arithmetic at all, so the /100 conversion exists once, in
-    `signal_mapping`, reached identically by the poller and the push path. The
-    alternative -- having the sidecar divide before sending -- is precisely the
-    second copy of a unit conversion that module was extracted to prevent, and
-    the one that ends with one path storing percentages and the other ratios.
+    `features`/`bands` are **sensor output**: the sidecar's own payload, on
+    its 0..100 scale, passed through untouched. The push client sends this
+    and does no arithmetic, so the /100 conversion happens exactly once, in
+    `signal_mapping`, reached the same way by both the poller and push paths.
     """
     ts:         str | None = None
     focus:      float | None = None
@@ -4295,9 +3484,9 @@ class CognitiveSample(BaseModel):
     delta:      float | None = None
     gamma:      float | None = None
     raw:        dict  | None = None
-    # The sidecar-native alternative described above. Free-form keys, so a
-    # sidecar gaining a feature does not need this model changed in lockstep --
-    # but the *values* that reach numeric columns are checked, below.
+    # The sidecar-native alternative described above. Free-form keys, so a new
+    # sidecar feature doesn't need this model changed too -- but the values
+    # that reach numeric columns are still checked, below.
     features:   dict  | None = None
     bands:      dict  | None = None
 
@@ -4313,22 +3502,18 @@ class CognitiveSample(BaseModel):
     @field_validator("features", "bands")
     @classmethod
     def _numeric_values_must_be_storable(cls, v: dict | None) -> dict | None:
-        """Reject what the numeric columns cannot hold, here rather than at the
-        database.
+        """Reject what the numeric columns cannot hold, here rather than at the database.
 
-        A `float | None` annotation is **not** this check. Pydantic v2 defaults
-        to `allow_inf_nan=True`, and `json.loads` accepts the bare `NaN` and
-        `Infinity` literals, so a non-finite value passes a typed field just as
-        happily as it passed these dicts -- an earlier version of this docstring
-        claimed the flat fields were already safe and they were not. Both paths
-        are checked now, `_finite` below for the typed ones.
+        A `float | None` annotation alone is not enough: Pydantic v2 allows
+        NaN/Infinity by default, and `json.loads` accepts those literals too,
+        so a non-finite value can reach either the typed fields or these
+        dicts. `_finite` below checks the typed ones; this checks these.
 
-        What it costs to skip: `double precision` cannot hold either value, so
-        PostgREST rejects the *whole batch*, every valid sample in it included,
-        and answers with a 500 the client will retry. A trust boundary that
-        defers its checking to the database is not one.
+        Skipping this costs more than one bad sample: `double precision`
+        can't hold either value, so PostgREST rejects the whole batch,
+        including every valid sample in it, with a 500 the client retries.
 
-        Only the keys that become columns are checked. Anything else is
+        Only the keys that become columns are checked. Everything else is
         passed-through metadata bound for `raw`, a jsonb column that can hold
         it.
         """
@@ -4341,19 +3526,17 @@ class CognitiveSample(BaseModel):
                 n = float(v[key])
             except (TypeError, ValueError):
                 raise ValueError(f"{key!r} must be a number, got {v[key]!r}")
-            # NaN and inf survive `float()` and json.loads both, and NaN in
-            # particular is the value that gets stored as 100% focus if it ever
-            # reaches `_ratio` -- see the isfinite guard there.
+            # NaN survives both `float()` and json.loads, and would be stored
+            # as 100% focus if it ever reached `_ratio` -- see its isfinite guard.
             if not math.isfinite(n):
                 raise ValueError(f"{key!r} must be finite, got {v[key]!r}")
         return v
 
 class CognitiveBatch(BaseModel):
     session_id: str
-    # Bounded like the other two. It was the only ingest batch without a length
-    # cap, which mattered little while the sole writer was the in-process poller
-    # and matters now: under push the writer is an untrusted local process on a
-    # student's machine, and this endpoint is the trust boundary.
+    # Bounded like the other two ingest batches. Under push the writer is an
+    # untrusted local process on a student's machine, so this endpoint is the
+    # trust boundary and needs the cap.
     samples:    list[CognitiveSample] = Field(max_length=_INGEST_MAX_BATCH)
 
 class FaceSample(BaseModel):
@@ -4362,23 +3545,20 @@ class FaceSample(BaseModel):
     attention:           float | None = None
     gaze_x:              float | None = None
     gaze_y:              float | None = None
-    # Head pose, in degrees. Separate from gaze because they are separate
-    # measurements: gaze is the iris within the eye opening, these are where the
-    # head points, and only the pair says where a student is actually looking.
+    # Head pose, in degrees. Separate from gaze: gaze is the iris within the
+    # eye opening, this is where the head points, and only the pair together
+    # says where a student is actually looking.
     #
     # **Every column the mapper writes needs a field here.** Pydantic drops
-    # unrecognised keys silently, so a sidecar sending one this model does not
-    # declare has it discarded before the handler runs -- the column stays NULL
-    # for ever and reads as "not measured". That happened to these three: the
-    # whole chain from the landmarker to `map_face_to_face_signal` was wired and
-    # tested, and the feature still could not be stored on any deployment,
-    # because nothing exercised this boundary.
+    # unrecognised keys silently, so a sidecar field this model doesn't
+    # declare is discarded before the handler runs, and the column stays NULL
+    # forever, reading as "not measured".
     head_yaw:            float | None = None
     head_pitch:          float | None = None
     head_roll:           float | None = None
-    # One confidence now, and still qualified: the sibling it was named against
-    # (`identity_confidence`) is gone, but the name is what keeps the ambiguity
-    # from returning. See `signal_fusion.face_channel`.
+    # Qualified name on purpose: its old sibling `identity_confidence` is
+    # gone, but the name keeps that ambiguity from returning. See
+    # `signal_fusion.face_channel`.
     emotion_confidence:  float | None = None
     emotion_trusted:     bool  | None = None
     raw:                 dict  | None = None
@@ -4392,10 +3572,10 @@ class HeartSample(BaseModel):
     """One derived heart reading, from whichever sensor produced it.
 
     `source` is required and constrained in the database to
-    muse_optics | muse_ppg | rppg, because consent is per *sensor* and a row
-    that cannot say which sensor produced it cannot be consent-checked. Nothing
-    writes `rppg` today -- camera heart rate failed ECG validation -- but the
-    column stays honest about what the schema permits.
+    muse_optics | muse_ppg | rppg, because consent is per *sensor* -- a row
+    that can't say which sensor produced it can't be consent-checked. Nothing
+    writes `rppg` today (camera heart rate failed ECG validation), but the
+    column still reflects what the schema permits.
     """
     ts:                 str | None = None
     source:             str
@@ -4413,10 +3593,9 @@ class HeartSample(BaseModel):
                      "sqi", "stress_score")
     @classmethod
     def _finite(cls, v: float | None) -> float | None:
-        """Same check as `CognitiveSample._finite`, for the same reason: a
-        `float | None` annotation alone does not reject NaN/Infinity, and both
-        survive `double precision` just long enough to fail the insert and take
-        the whole batch down with them."""
+        """Same check as `CognitiveSample._finite`: a `float | None` annotation
+        alone doesn't reject NaN/Infinity, and both would fail the insert and
+        take the whole batch down with them."""
         if v is not None and not math.isfinite(v):
             raise ValueError("must be a finite number")
         return v
@@ -4429,18 +3608,17 @@ class HeartBatch(BaseModel):
 def _rate_limit_ingest(user_id: str):
     """Raise 429 once a caller has spent its allowance for the window.
 
-    Monotonic, like `_rate_limit_strategies`, so a clock adjustment cannot wipe
-    or extend the window. Kept separate from that limiter rather than shared:
-    the budgets are different by two orders of magnitude, and one dict would
-    make a student's steady 1 Hz ingest compete with their own occasional
-    strategy request.
+    Monotonic, like `_rate_limit_strategies`, so a clock adjustment can't wipe
+    or extend the window. Kept as a separate dict from that limiter: the
+    budgets differ by two orders of magnitude, and sharing one would make a
+    student's steady 1 Hz ingest compete with their own strategy requests.
     """
     global _ingest_sweep_at
     now = time.monotonic()
     with _ingest_hits_lock:
-        # Only once the dict is large, and only once per interval: a size-only
-        # trigger scans every known caller on every request and frees nothing
-        # when the dict is large because the callers are real.
+        # Sweep only once the dict is large and only once per interval -- a
+        # size-only trigger would scan every caller on every request and
+        # free nothing, since a large dict usually means real callers.
         if (len(_ingest_hits) > _INGEST_SWEEP_ABOVE
                 and now - _ingest_sweep_at >= _INGEST_SWEEP_EVERY):
             _ingest_sweep_at = now
@@ -4462,15 +3640,13 @@ def _rate_limit_ingest(user_id: str):
 def _permitted_heart_sources(gate: dict) -> set[str]:
     """The sources this student may currently be recorded from.
 
-    Takes a `_may_record` result and reads its `record_*` flags -- consent AND
-    the school year, already composed -- not the raw consent flags beside them.
-    Both call sites previously took the raw ones and then re-checked the window
-    by hand, which is two copies of a rule that `_may_record` had already
-    applied and returned.
+    Takes a `_may_record` result and reads its `record_*` flags -- consent
+    and the school year, already composed -- rather than the raw consent
+    flags beside them, so callers don't re-check the window by hand.
 
     A raw `_consent` dict has no `record_*` keys, so passing one yields the
-    empty set: nothing recorded. That is the safe direction for a mistake here,
-    and `test_a_raw_consent_dict_permits_nothing` pins it.
+    empty set: nothing recorded. Safe direction for a mistake, pinned by
+    `test_a_raw_consent_dict_permits_nothing`.
     """
     allowed: set[str] = set()
     for flag, sources in _HEART_SOURCES_BY_RECORD_FLAG.items():
@@ -4504,33 +3680,18 @@ eeg_poller.set_heart_consent_check(_heart_consent_for_poller)
 def _session_or_403(session_id: str, user_id: str, columns: str = "user_id") -> dict:
     """Fetch a session, refusing it unless the caller owns it. Returns the row.
 
-    Returning the row is what lets a caller that needs the session anyway --
-    `record_answer`, `end_session` -- check ownership without paying for a
-    second query, which is why they were written without a check at all.
+    Returns the row so callers that need the session anyway (`record_answer`,
+    `end_session`) can check ownership without a second query.
 
-    Access here is ownership and nothing weaker: a session is one student's, so
-    unlike `_verify_can_view_student` there is no teacher or parent to admit.
+    Ownership only -- a session is one student's, so unlike
+    `_verify_can_view_student` no teacher or parent is admitted.
 
-    `columns` must include `user_id`. It fails the safe way if it does not --
-    the comparison is against `.get("user_id")`, so an absent column is `None`,
-    which matches no caller and refuses everyone rather than admitting them.
+    `columns` must include `user_id`, but fails safe if it doesn't: an absent
+    column reads as `None`, matching no caller and refusing everyone.
 
-    **The missing-row case is an exception, not an empty result.** `.single()`
-    raises `APIError(PGRST116)` on zero rows, so the `if not sess.data` below is
-    not what answers a bogus session id -- without the `try` it escaped as an
-    unhandled 500, with a stack trace, for input any client can supply. The 404
-    was written and unreachable. `_verify_class_owner` makes the same lookup a
-    few hundred lines up and has carried the guard, and a comment saying why,
-    since long before this helper existed.
-
-    Reachable seven ways now rather than one: `record_answer`, `end_session`,
-    `/api/eeg/start`, `/api/eeg/stop` and the three `/api/signals/*` endpoints
-    all resolve a session through here.
-
-    `_row_or_404` deliberately does not distinguish "no such row" from "the read
-    failed". This is an access check: 404 for both tells a caller nothing about
-    a session they may not own, and a failed read must never become a way past
-    the ownership comparison below.
+    `_row_or_404` deliberately does not distinguish "no such row" from "the
+    read failed" -- both answer 404, since a failed read must never become a
+    way past the ownership check below.
     """
     row = _row_or_404(
         supabase.table("sessions").select(columns).eq("id", session_id),
@@ -4547,25 +3708,18 @@ def _verify_session_owner(session_id: str, user_id: str):
 @app.post("/api/signals/cognitive")
 def ingest_cognitive(payload: CognitiveBatch, request: Request):
     user = get_user(request)
-    # Before the session lookup, for the reason spelled out on /api/signals/face:
-    # the limiter needs only the caller's id, and running it second leaves a
-    # flooding client costing one `sessions` query per request. This endpoint
-    # was missing the limit entirely -- the only one of the three -- which was
-    # survivable while the in-process poller was its only writer and is not now
-    # that a process on the student's machine posts to it.
+    # Rate-limit before the session lookup -- the limiter needs only the
+    # caller's id, and checking it first spares a flooding client a `sessions`
+    # query per request.
     _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
 
-    # Consent, like the other two endpoints. The sidecar gates on it already,
-    # but a stale one that kept sending after a student withdrew would otherwise
-    # keep recording EEG, and the withdrawal would look respected from every
-    # surface that reads. This endpoint was the only one of the three without
-    # the check -- survivable when its sole writer was a poller this backend
-    # started, and not once the writer is a process on the student's machine.
-    # `_consent` fails closed, so an unreadable consent row records nothing.
-    # ...and outside the school year nothing records whatever consent says.
-    # Both fail closed, and the reason says which one refused: "the year has
-    # ended" sends nobody to the consent screen to fix a setting that is fine.
+    # Consent check: the sidecar gates on it too, but a stale process that
+    # kept sending after a withdrawal would otherwise keep recording EEG with
+    # the withdrawal looking respected everywhere else. `_may_record` fails
+    # closed on both the consent read and the school-year check, and the
+    # reason says which one refused -- "the year has ended" shouldn't send
+    # anyone to the consent screen to fix a setting that's fine.
     consent = _may_record(user["id"])
     if not consent["record_eeg"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
@@ -4573,46 +3727,37 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 
     # Accepted in either mode -- rejecting it under `pull` would break mixed
     # local dev -- but warned about when this session is *actually* being
-    # double-written: a live poller for it is writing the same table from the
-    # same sidecar, so every EEG sample lands twice. Valid rows, wrong counts,
-    # no error, and no dedupe key to catch it the way `heart_signals` has.
+    # double-written: a live poller for it writes the same table from the
+    # same sidecar, so every EEG sample lands twice with no dedupe key to
+    # catch it.
     #
-    # The condition is a live poller for this session, not `INGEST_MODE ==
-    # "pull"`. The mode was only a proxy, and a wrong one in both directions: it
-    # fired on the hand-posted dev batch the openness exists for, and -- with a
-    # once-per-process flag -- that benign first post spent the warning, so a
-    # genuine double-write later in the same process was never reported.
+    # Keyed on a live poller for this session, not on `INGEST_MODE`, which
+    # was only a proxy: it fired on the harmless hand-posted dev batch, and a
+    # once-per-process flag meant a real double-write later in that process
+    # went unreported.
     #
-    # Per session rather than per process: the sessions are the thing at risk,
-    # there are few of them, and this still logs once each rather than at the
-    # sample rate.
-    # One call, one lock: checking liveness and claiming the warning separately
-    # let two concurrent batches both pass the check and log twice. It also puts
-    # the eviction next to `stop()`, which is the only thing that can bound it.
+    # Checked and claimed in one call so two concurrent batches can't both
+    # pass and log twice; the eviction lives next to `stop()`, the only thing
+    # that can bound it.
     if eeg_poller.claim_double_write_warning(payload.session_id):
         print(f"[ingest] session {payload.session_id[:8]} is being written by both "
               f"the poller and /api/signals/cognitive. Every EEG sample is landing "
               f"twice and cognitive_signals has no dedupe key to catch it.",
               flush=True)
     def _row(s: CognitiveSample) -> dict:
-        # Sensor output goes through the shared mapper, which owns the 0..100 ->
-        # 0..1 conversion and the `stress = 1 - calm` inversion. Flat samples are
-        # already in table units and are stored as given.
+        # Sensor output goes through the shared mapper, which owns the
+        # 0..100 -> 0..1 conversion and the `stress = 1 - calm` inversion.
+        # Flat samples are already in table units and are stored as given.
         if s.features is not None or s.bands is not None:
-            # Un-nested into the shape the mapper reads, rather than handed to
-            # it as one `raw` blob. The mapper takes `device_id`, `channels`,
-            # `state` and `ingestion` off the *top level* and merges `raw`
-            # underneath. Left nested, every one of those lookups found nothing
-            # and the envelope was stored as opaque client data instead of in
-            # the fields that name it.
+            # Un-nested into the shape the mapper reads, rather than handed
+            # over as one `raw` blob -- the mapper reads `device_id`,
+            # `channels`, `state` and `ingestion` off the top level.
             #
-            # Note what this does *not* buy. `_raw` documents that derived keys
-            # beat client-supplied ones, and on this path that is vacuous: the
-            # values promoted here are the client's own, so it wins either way.
-            # It cannot be otherwise -- the sidecar is the only thing that knows
-            # its device_id, and this endpoint has nothing of its own to prefer.
-            # The defences on the push path are session ownership and consent,
-            # not key precedence; `raw` is descriptive, not attested.
+            # This doesn't give derived keys precedence over client-supplied
+            # ones the way `_raw` does elsewhere: here the promoted values
+            # are the client's own either way, since the sidecar is the only
+            # thing that knows its device_id. Session ownership and consent
+            # are the real defence here, not key precedence.
             raw = dict(s.raw or {})
             envelope = {k: raw.pop(k, None)
                         for k in ("device_id", "channels", "state", "ingestion")}
@@ -4620,8 +3765,7 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
                 {"timestamp": s.ts or _utc_now().isoformat(),
                  "features": s.features or {}, "bands": s.bands or {},
                  **envelope,
-                 # Whatever the client sent that is not part of the envelope.
-                 # Still merged, still losing to a derived key of the same name.
+                 # Whatever the client sent outside the envelope fields.
                  "raw": raw},
                 payload.session_id, user["id"])
         return {
@@ -4633,10 +3777,9 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
         }
 
-    # `None` from the mapper is a no-signal tick: a disconnected headband
-    # reporting zeroed scores, which is not a reading of zero. Dropped rather
-    # than stored, and counted, so a caller can tell "sent 50, recorded 0"
-    # from "sent nothing" -- the same distinction the heart endpoint reports.
+    # `None` from the mapper means a disconnected headband reporting zeroed
+    # scores, not a real reading of zero. Dropped and counted, so a caller
+    # can tell "sent 50, recorded 0" from "sent nothing".
     rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
     if rows: supabase.table("cognitive_signals").insert(rows).execute()
     return {"ok": True, "inserted": len(rows),
@@ -4645,25 +3788,22 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
     user = get_user(request)
-    # Before the session lookup, not after: the limiter needs only the caller's
-    # id, and running it second meant a flooding client still cost one `sessions`
-    # query per request -- the exact cost the limit exists to avoid.
+    # Rate-limit before the session lookup, for the same reason as the
+    # cognitive endpoint above.
     _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
 
-    # Last line of defence. The sidecar already gates on consent, but a stale one
-    # that kept sending after a student withdrew would otherwise keep recording,
-    # and the withdrawal would look respected from every surface that reads.
-    # `_consent` fails closed, so an unreadable consent row records nothing.
+    # Last line of defence: the sidecar gates on consent too, but a stale
+    # process that kept sending after a withdrawal would otherwise keep
+    # recording. `_may_record` fails closed, so an unreadable consent row
+    # records nothing.
     consent = _may_record(user["id"])
     if not consent["record_camera"]:
         return {"ok": True, "inserted": 0, "dropped": len(payload.samples),
                 "reason": _not_recording_reason(consent, "camera not consented")}
 
-    # Through the shared mapper, not inline. Two copies of this had already
-    # drifted -- the mapper dropped gaze_x/gaze_y that this endpoint wrote --
-    # which is exactly the divergence the module was extracted to prevent, and
-    # it went unnoticed because nothing called it.
+    # Through the shared mapper, not inline, so the field list can't drift
+    # from what the mapper actually reads.
     rows = [r for r in (
         signal_mapping.map_face_to_face_signal(
             {"timestamp": s.ts or _utc_now().isoformat(),
@@ -4689,19 +3829,17 @@ def ingest_heart(payload: HeartBatch, request: Request):
     """Derived heart readings, from whichever sensor produced them.
 
     Consent is checked **per sample**, against the sensor named in `source`,
-    because one channel can arrive from two sensors under two separate
-    permissions. Samples from a declined sensor are dropped and counted rather
-    than failing the batch: a mixed batch is a legitimate thing for a client to
-    send, and rejecting the whole thing would take the consented samples with it.
+    since one channel can arrive from two sensors under two separate
+    permissions. Samples from a declined sensor are dropped and counted
+    rather than failing the whole batch, which would also reject the
+    consented samples in it.
 
     The count comes back so a caller can tell "recorded nothing" from "sent
-    nothing" -- the same distinction the reporting rules exist to preserve, on
-    the write side.
+    nothing".
     """
     user = get_user(request)
-    # Before the session lookup, not after: the limiter needs only the caller's
-    # id, and running it second meant a flooding client still cost one `sessions`
-    # query per request -- the exact cost the limit exists to avoid.
+    # Rate-limit before the session lookup, for the same reason as the other
+    # ingest endpoints.
     _rate_limit_ingest(user["id"])
     _verify_session_owner(payload.session_id, user["id"])
 
@@ -4710,11 +3848,9 @@ def ingest_heart(payload: HeartBatch, request: Request):
     kept = [s for s in payload.samples if s.source in allowed]
     dropped = len(payload.samples) - len(kept)
 
-    # Three outcomes, not two. "every sensor was declined" and "we could not
-    # find out" both record nothing, and only one of them is a fault worth
-    # chasing -- the same distinction `_consent` carries `retrieved` for, and
-    # the same one the reporting rules insist on. Without it a consent table
-    # that is down looks exactly like a student who said no.
+    # "every sensor was declined" and "we could not find out" both record
+    # nothing, but only one is a fault worth chasing -- without this
+    # distinction a down consent table looks exactly like a student saying no.
     reason = None
     if not allowed:
         reason = _not_recording_reason(consent, "no consented heart sensor")
@@ -4737,46 +3873,36 @@ def ingest_heart(payload: HeartBatch, request: Request):
 
     written = 0
     if rows:
-        # ON CONFLICT DO NOTHING against (session_id, source, ts). A retried
-        # batch is then idempotent instead of doubling every average it touches
-        # -- a failure with no symptom except a wrong number.
+        # ON CONFLICT DO NOTHING on (session_id, source, ts), so a retried
+        # batch is idempotent instead of doubling every average it touches.
         #
-        # `inserted` counts what the database actually wrote, not what was sent.
-        # Taking it from `len(rows)` reported a replay as having inserted its
-        # whole batch while inserting nothing, which is a worse lie than the
-        # double-count this key exists to prevent: it tells a retrying client
-        # its retry worked.
+        # `inserted` counts what the database actually wrote, not what was
+        # sent -- taking it from `len(rows)` would report a replay as having
+        # inserted a batch it actually inserted none of.
         resp = supabase.table("heart_signals").upsert(
             rows, on_conflict="session_id,source,ts", ignore_duplicates=True
         ).execute()
-        # Depends on PostgREST returning a representation, which postgrest-py
-        # requests by default. Under `return=minimal` this would report
-        # inserted: 0, duplicates: N on every *successful* write -- the same
-        # silent miscount the count exists to fix, inverted. The fake client in
-        # the tests cannot catch that, so it is written down here: if the
-        # default is ever changed, this arithmetic has to change with it.
+        # Relies on PostgREST returning a representation (postgrest-py's
+        # default). Under `return=minimal` this would misreport every
+        # successful write as inserted: 0. If that default ever changes,
+        # this arithmetic has to change with it.
         written = len(resp.data or [])
     return {"ok": True, "inserted": written, "dropped": dropped,
             "duplicates": len(rows) - written, "reason": reason}
 
 @app.get("/api/signals/session/{session_id}")
 def session_signals(session_id: str, request: Request, since: str | None = None):
-    # This returns raw EEG and facial-emotion samples for a session, so resolve
-    # whose session it is and apply the same access rule as the student-scoped
-    # endpoints rather than trusting any authenticated caller.
+    # Returns raw EEG and facial-emotion samples for a session, so resolve
+    # whose session it is and check access rather than trusting any
+    # authenticated caller.
     #
-    # No include_face, deliberately. The facial-recognition opt-out covers the
-    # reporting surfaces -- the weekly report, the signal summaries and the
-    # children endpoint, all of which render the switch -- and session review,
-    # this endpoint's only caller, does not. See the scope note in
-    # frontend/src/lib/viewPrefs.js; adding the parameter here without putting
-    # the switch on that page would make the control silently change a view it
-    # is absent from.
+    # No include_face, deliberately: the facial-recognition opt-out covers
+    # only the reporting surfaces that render the switch. This endpoint's
+    # only caller, session review, doesn't -- see the scope note in
+    # frontend/src/lib/viewPrefs.js.
     user = get_user(request)
-    # `_row_or_404`, not a third copy of its body. Ownership is not the rule
-    # here -- a teacher and a parent may both read this -- so it resolves the
-    # row and `_verify_can_view_student` decides, which is why this does not go
-    # through `_session_or_403`.
+    # `_row_or_404`, not `_session_or_403`: a teacher and a parent may both
+    # read this, so `_verify_can_view_student` decides access, not ownership.
     sess = _row_or_404(
         supabase.table("sessions").select("user_id").eq("id", session_id), "Session")
     _verify_can_view_student(user, sess["user_id"])
@@ -4788,10 +3914,10 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
         cog = cog.gt("ts", since); fac = fac.gt("ts", since); hrt = hrt.gt("ts", since)
     cog_data = cog.order("ts").limit(20000).execute().data or []
     fac_data = fac.order("ts").limit(20000).execute().data or []
-    # Third array, same shape of read. `source` rides along on every row because
-    # accuracy differs materially by sensor and the session can fail over
-    # mid-way -- a reader comparing two halves of one trace has to be able to
-    # see the sensor changed rather than inferring a physiological event.
+    # `source` rides along on every heart row: accuracy differs by sensor and
+    # a session can fail over mid-way, so a reader comparing two halves of
+    # one trace needs to see the sensor changed, not infer a physiological
+    # event.
     hrt_data = hrt.order("ts").limit(20000).execute().data or []
     answers  = supabase.table("session_answers").select("*").eq("session_id", session_id).order("answered_at").execute().data or []
     return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
@@ -4861,24 +3987,19 @@ _SIGNAL_CHANNELS = ("cognitive", "face", "heart", "answer")
 def _latest_signals_many(session_ids) -> dict[str, dict[str, dict]]:
     """The newest cognitive, face, heart and answer row for many sessions, once.
 
-    `{session_id: {channel: row}}`, with a channel absent when that session has
-    no row on it.
+    `{session_id: {channel: row}}`, with a channel absent when that session
+    has no row on it. One call to `latest_signals_for_sessions`, which does
+    the `DISTINCT ON` selection in SQL for the whole roster, rather than four
+    queries per session in a loop -- this page polls every second.
 
-    This was four queries per session, fanned into a four-worker pool, called
-    once per student in a loop -- so a class of thirty cost 120 queries a poll
-    at four in flight, on a page that polls every second. It is now one call to
-    `latest_signals_for_sessions`, which does the same
-    `DISTINCT ON` selection in SQL for the whole roster.
+    **Don't widen the fan-out into a worker pool instead.** Fanning this
+    outer loop into a shared pool deadlocks: the waiters and the work they
+    wait on end up sharing the same few slots. `_admin_live_pool` is separate
+    for exactly this reason.
 
-    **Widening the fan-out was the wrong fix and worth not re-attempting.** The
-    pool was the ceiling rather than the loop, and fanning the outer loop into
-    that same pool deadlocks -- the waiters and the work they wait on share four
-    slots. `_admin_live_pool` exists because of exactly that trap.
-
-    Deliberately not caught. `class_live` is the caller and a failed read turned
-    into an empty map would draw every student as idle -- an absence asserted
-    from data that never loaded, on the surface a teacher uses to decide who
-    needs help.
+    Errors are not caught here. `class_live` is the caller, and a failed
+    read silently turned into an empty map would draw every student as idle
+    -- the surface a teacher uses to decide who needs help.
     """
     ids = _unique_ids(session_ids)
     if not ids:
@@ -4901,16 +4022,13 @@ def _latest_signals_many(session_ids) -> dict[str, dict[str, dict]]:
 def class_live(class_id: str, request: Request):
     """Live signals for the students of a class the caller owns.
 
-    No include_face, deliberately, for the reason session_signals gives above:
-    the facial-recognition opt-out covers the reporting surfaces, which render
-    the switch, and the live monitor does not. It is built around whether the
-    camera is currently working -- the attention gauge, the current emotion and
-    a camera-on badge -- which a reporting-window preference has no sensible
-    reading on. See the scope note in frontend/src/lib/viewPrefs.js.
+    No include_face, deliberately, for the reason `session_signals` gives
+    above: the facial opt-out covers reporting surfaces, and this is a live
+    view of whether the camera is currently working, which a reporting-window
+    preference has no sensible reading on. See the scope note in
+    frontend/src/lib/viewPrefs.js.
     """
     user = get_user(request)
-    # Was: `owner != user AND role != "teacher"` -- which only rejected callers
-    # who were neither, so ANY teacher could read ANY class's live signals.
     _verify_class_owner(class_id, user["id"])
 
     LIVE_WINDOW_SEC = _LIVE_WINDOW_SEC
@@ -4921,14 +4039,10 @@ def class_live(class_id: str, request: Request):
 
     members = supabase.table("class_memberships").select("student_id").eq("class_id", class_id).execute().data or []
     roster = [m["student_id"] for m in members]
-    # Two reads for the roster, not two per student. This endpoint is polled
-    # while a class is working, so a class of thirty was sixty round trips
-    # every few seconds before the per-session signal reads even started.
+    # Batched reads for the whole roster, not per student -- this endpoint
+    # polls every few seconds while a class is working.
     profiles = _profiles_many(roster)
     open_by_student = _open_sessions_many(roster)
-    # Three reads for the roster, and the third covers every open session's four
-    # channels at once -- it used to be four per student, in a loop, on a page
-    # that polls every second.
     latest_by_session = _latest_signals_many(
         s["id"] for rows in open_by_student.values() for s in rows[:1])
     out = []
@@ -4952,10 +4066,9 @@ def class_live(class_id: str, request: Request):
             latest_cog  = c[0] if c else None
             latest_face = f[0] if f else None
             # Newest row, trusted or not -- unlike the weekly aggregate, which
-            # takes the newest *trusted* one. A live card showing nothing while
-            # a sensor is producing untrusted readings is indistinguishable from
-            # a sensor that stopped, and the row carries `trusted` so the card
-            # can say which of the two it is.
+            # takes the newest *trusted* one. A blank card here would be
+            # indistinguishable from a stopped sensor, so the row carries
+            # `trusted` and lets the card say which it is.
             latest_heart = h[0] if h else None
 
             candidates = []
@@ -4967,28 +4080,18 @@ def class_live(class_id: str, request: Request):
             last_activity = max(candidates) if candidates else sess.get("started_at")
 
             if last_activity and last_activity < stale_cutoff:
-                # First, and this site had it last. `sid`, not the teacher
-                # reading this view -- the reservation, like the poller,
-                # belongs to the student whose stale session this is.
+                # `sid` is the student, not the teacher viewing this page --
+                # the reservation and the close both belong to whoever the
+                # stale session is about.
                 #
-                # Before the close, not after it: a poller left running past the
-                # stamp can insert a `cognitive_signals` row for this session
-                # *after* `_discard_if_nothing_recorded` has looked, so an empty
-                # pairing is deleted with a row pointing at it -- and the rollup
-                # is computed from a day that gains a sample a tick later. The
-                # other two close sites always stopped it first; this one was
-                # the copy that inverted the order.
+                # Stop the poller before closing: a poller left running past
+                # this point could insert a row for the session after
+                # `_discard_if_nothing_recorded` has already looked, leaving
+                # an empty pairing deleted with a row still pointing at it.
                 eeg_poller.stop(sid2, sid)
-                # `sid` is the student, not the teacher whose request this is:
-                # everything the close writes belongs to whoever the data is
-                # about.
-                #
-                # This is the site that has been missed most often -- the
-                # lifetime credit, the rollup and the archive each shipped
-                # without it, and it never ran the empty-session discard at
-                # all, so a failed pairing closed by a teacher opening this view
-                # stayed in the student's History for ever. Going through the
-                # shared helper is what stops it drifting a fourth time.
+                # Goes through the shared `_close_session` helper so the
+                # empty-session discard, credit, rollup and archive all run --
+                # see the close-site ordering rule in CLAUDE.md.
                 _close_session(sid, sess, now.isoformat())
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
@@ -5001,10 +4104,10 @@ def class_live(class_id: str, request: Request):
             "active_session":   active,
             "latest_cognitive": latest_cog,
             "latest_face":      latest_face,
-            # `source` rides along so the card can show which sensor is live.
-            # Accuracy differs materially between them, and a teacher watching a
-            # trace change shape should be able to see that the sensor changed
-            # rather than read it as the student changing.
+            # `source` rides along so the card can show which sensor is
+            # live: accuracy differs by sensor, and a teacher watching a
+            # trace change shape should see the sensor changed, not read it
+            # as the student changing.
             "latest_heart":     latest_heart,
         })
     return out
@@ -5016,31 +4119,25 @@ def _poller_status(user_id: str) -> dict:
     """`eeg_poller.status`, plus why it is not running when the answer is known.
 
     "Stopped because the student withdrew consent" and "stopped because the
-    headband dropped" are different sentences, and the frontend rendered both
-    as a poller that simply is not running.
+    headband dropped" are different sentences; the frontend rendered both as
+    just "not running".
 
-    Derived from current consent rather than remembered on the poller. A
-    remembered `stopped_reason` was the first attempt: it needed the dead
-    poller to stay in `_active` to be readable, which is the unbounded-by-uptime
-    shape this module keeps having to fix, and it could go stale the moment a
-    parent re-enabled the channel. Consent is the authority on this, so ask it.
+    Derived from current consent rather than remembered on the poller: a
+    remembered reason needed the dead poller to stay around to be readable,
+    and could go stale the moment a parent re-enabled the channel. Consent is
+    the authority here, so ask it directly.
     """
     status = eeg_poller.status(user_id)
     if status.get("running"):
         return status
-    # The window first, and for the same reason the ingest reasons order it
-    # that way: outside the school year *nothing* is recording, so reporting
-    # "consent_withdrawn" -- or worse, nothing at all -- describes a decision
-    # the family never made. A poller that is not running with consent intact
-    # and no reason attached is precisely the silent quiet week this module's
-    # reporting rules exist to stop, and a closed year was reaching it that way.
+    # Window checked first: outside the school year nothing records, so
+    # reporting "consent_withdrawn" here would describe a decision the family
+    # never made.
     #
-    # `_may_record` rather than a window read and a consent read placed in the
-    # right order by hand: it is the same conjunction the recording sites use,
-    # and re-deriving it here is how the two would come to disagree about which
-    # answer wins. It carries the raw consent flags alongside the composed
-    # ones, which is what lets this still report a withdrawal *by name* rather
-    # than only "not recording".
+    # `_may_record`, not a hand-ordered window read plus consent read, so
+    # this can't disagree with the recording sites about which answer wins.
+    # It carries the raw consent flags too, which is what lets this report a
+    # withdrawal by name rather than only "not recording".
     gate = _may_record(user_id)
     stopped = _window_meaning(gate["window_state"]).stopped_reason
     if stopped:
@@ -5048,9 +4145,8 @@ def _poller_status(user_id: str) -> dict:
                 "window_starts_on": gate["window_starts_on"],
                 "window_ends_on": gate["window_ends_on"]}
     if not gate.get("retrieved"):
-        # Unknown, not "withdrawn". The reporting three-state rule again: a
-        # failed read is not a refusal, and saying so wrongly to a parent is
-        # worse than saying nothing.
+        # Unknown, not "withdrawn": a failed read is not a refusal, and
+        # saying so wrongly to a parent is worse than saying nothing.
         return {**status, "stopped_reason": "consent_unknown"}
     if not gate.get("eeg_enabled"):
         return {**status, "stopped_reason": "consent_withdrawn",
@@ -5061,18 +4157,13 @@ def _poller_status(user_id: str) -> dict:
 def _refuse_under_push(what: str) -> None:
     """409 rather than the 503 the liveness probe would raise.
 
-    Under push ingestion this backend has no route to a sidecar, so "EEG service
-    not running on port 8001" is true and entirely misleading: it reads as a
-    fault when the deployment simply does not work that way.
+    Under push ingestion this backend has no route to a sidecar, so "EEG
+    service not running on port 8001" is true but misleading -- it reads as
+    a fault when the deployment just works differently.
 
-    Every endpoint in the family that raises goes through here, /api/eeg/start
-    included -- a hand-written inline copy is exactly the drift this helper
-    exists to stop. The `/api/signals/*` pointer moved in here because it is the answer
-    everywhere: it is where the data goes in this deployment, whatever the
-    caller was trying to do.
-
-    Called *before* `eeg_client.is_alive()` everywhere, or the misleading
-    message wins the race to the client.
+    Every endpoint that would otherwise raise that 503 calls this first, so
+    the message can't drift between endpoints. Must run *before*
+    `eeg_client.is_alive()`, or the misleading message wins the race.
     """
     if eeg_poller.INGEST_MODE == "push":
         raise HTTPException(
@@ -5087,22 +4178,20 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
                       session_id: str | None = None):
     """Claim device_id's pre-claim reservation, then run the bridge call.
 
-    session_id, when the caller sends one, records which pairing attempt owns
-    the reservation so that closing *that* session releases it and closing a
-    different one does not. Optional on purpose: an older frontend sends
-    nothing and gets the previous release-everything behaviour rather than a
-    reservation nothing can clear.
+    `session_id`, when sent, records which pairing attempt owns the
+    reservation, so closing that session releases it and closing a
+    different one does not. Optional: an older frontend that sends nothing
+    gets the old release-everything behaviour instead of an unreleasable
+    reservation.
 
-    Shared by muse/refresh and muse/connect -- the two actions that *start* a
-    pairing attempt, and so are what reserve_device exists to protect.
-    muse/disconnect does not go through here; see its own comment for why it
-    checks ownership instead of claiming it.
+    Shared by muse/refresh and muse/connect, the two actions that *start* a
+    pairing attempt. muse/disconnect checks ownership instead of claiming it
+    -- see its own comment.
 
-    reserve_device claims before knowing whether fn will actually succeed, so
-    every path that ends the request without a working bridge call releases
-    what it just claimed -- scoped to *this* device_id, not every reservation
-    the caller holds, so a failure here can't drop a different, still-valid
-    reservation the same user holds on another station.
+    Claims before knowing whether `fn` will succeed, so every path that ends
+    the request without a working bridge call releases what it just
+    claimed, scoped to this device_id only -- a failure here must not drop a
+    different reservation the same user holds elsewhere.
     """
     if not eeg_poller.reserve_device(user_id, device_id, session_id):
         raise HTTPException(403, "Station in use by another user")
@@ -5121,22 +4210,17 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     """Trigger a Bluetooth scan for nearby Muse headbands."""
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
-    # Before _reserve_and_call, not after -- unlike the can_use_device it
-    # replaced, reserve_device *mutates* the reservation registry. Under push
-    # there is no /api/eeg/start to ever consult or clear it (start() raises
-    # PushModeError before touching _reservations), so a reservation claimed
-    # here would sit until its own TTL with no legitimate way to release it
-    # early -- and a hosted push deployment has many students potentially
-    # sharing one DEFAULT_DEVICE_ID, so that is a real cross-student 403, not
-    # a hypothetical one. Station contention is a pull-deployment concept
-    # (one backend, shared physical stations) and meaningless under push, so
-    # refusing first costs nothing real.
+    # Refuse before _reserve_and_call, since reserve_device mutates the
+    # reservation registry and under push there is no /api/eeg/start to ever
+    # release it -- a reservation claimed here would sit until its TTL with
+    # no legitimate way to clear it early, on a device potentially shared by
+    # many students. Station contention is a pull-deployment concept and
+    # meaningless under push, so refusing first costs nothing real.
     _refuse_under_push("scan for headbands")
-    # A station with a live poller is that poller's owner's in-progress
-    # session -- another user rescanning it is per-victim griefing, not just
-    # an unwanted side effect. reserve_device also claims the pre-claim
-    # pairing window: a scan is the first interaction with an unclaimed
-    # station, so it is where that station's TTL'd reservation starts.
+    # A station with a live poller belongs to that poller's owner; another
+    # user rescanning it disrupts their session. reserve_device also claims
+    # the pre-claim pairing window here, since a scan is the first
+    # interaction with an unclaimed station.
     return _reserve_and_call(user["id"], device_id, eeg_client.muse_refresh, device_id,
                              session_id=(body or {}).get("session_id"))
 
@@ -5158,29 +4242,20 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     """Tell the native bridge to disconnect from the current headband."""
     user = get_user(request)
     device_id = (body or {}).get("device_id") or eeg_client.DEFAULT_DEVICE_ID
-    # can_use_device, not reserve_device -- deliberately the one control
-    # endpoint that does not claim a fresh reservation. Disconnect is a
-    # teardown action, not the start of a pairing attempt: calling it against
-    # a station nobody currently owns has no victim and no intent to pair, so
-    # there is nothing there worth protecting with a 30s exclusive hold. Using
-    # reserve_device here would mean a
-    # disconnect against a free station claimed it anyway, indefinitely
-    # renewable by repeating the call -- a station made unusable by the same
-    # kind of action the reservation system exists to keep available. can_use_device still
-    # blocks a stranger from disconnecting someone else's live-polled or
-    # actively-reserved station, which is the actual griefing case this
-    # endpoint has to guard against.
+    # can_use_device, not reserve_device: disconnect is a teardown action,
+    # not the start of a pairing attempt, so calling it against a station
+    # nobody owns has nothing worth protecting with an exclusive hold.
+    # Claiming a reservation here would let a disconnect against a free
+    # station lock it up indefinitely by repeating the call. can_use_device
+    # still blocks a stranger from disconnecting someone else's live or
+    # reserved station, the actual case worth guarding against.
     if not eeg_poller.can_use_device(user["id"], device_id):
         raise HTTPException(403, "Station in use by another user")
-    # Releases the caller's *own* reservation on this device, if they hold
-    # one -- harmless (a no-op) if they don't, same as /api/eeg/stop. A
-    # student who scanned/connected and then disconnects instead of pairing
-    # is giving up on this station exactly as explicitly as calling /stop
-    # would be; without this the station stayed locked to them for up to
-    # RESERVATION_TTL_SECONDS after they had visibly moved on. Scoped by
-    # device_id, unlike /stop's release -- disconnect always names one, so
-    # there is no reason to drop a different reservation this caller might
-    # be holding elsewhere.
+    # Releases the caller's own reservation on this device if they hold one
+    # (a no-op otherwise, same as /api/eeg/stop) -- a student who
+    # scanned/connected and then disconnects is done with this station just
+    # as explicitly as calling /stop, and without this it stayed locked to
+    # them until its TTL expired.
     eeg_poller.release_reservation(user["id"], device_id)
     _refuse_under_push("disconnect a headband")
     if not eeg_client.is_alive():
@@ -5194,17 +4269,12 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
 def eeg_devices(request: Request):
     """List the sidecar's registered devices (stations), for the frontend picker.
 
-    Enumeration-only, gated on being logged in (not can_use_device): it
-    returns device_id/kind/running/connection_state_name for every station,
-    with no biometric values or per-user ownership -- the picker needs the
-    full list to choose from, and "station X is in use" is the extent of
-    what leaks. Considered non-sensitive.
+    Enumeration-only, gated on being logged in (not can_use_device): returns
+    device_id/kind/running/connection_state_name for every station, with no
+    biometric values or per-user ownership. The picker needs the full list,
+    and "station X is in use" is the extent of what leaks.
     """
     get_user(request)
-    # The fourth and last endpoint in this family to learn the mode. /start,
-    # /status and /health each needed it for the same reason, found in three
-    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
-    # student sees, but leaving it is how it gets found a fourth time.
     if eeg_poller.INGEST_MODE == "push":
         return {"available": None, "ingest_mode": "push", "devices": []}
     if not eeg_client.is_alive():
@@ -5216,22 +4286,18 @@ def eeg_devices(request: Request):
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
     user = get_user(request)
-    # The last of the five in this family to learn the mode. /start, /status,
-    # /health and /devices each needed it for the same reason, found across
-    # separate rounds; this one is dev-only behind VITE_EEG_DEBUG so nothing a
-    # student sees, but leaving it is how it gets found again.
     if eeg_poller.INGEST_MODE == "push":
         return {"available": None, "ingest_mode": "push"}
     if not eeg_client.is_alive():
         return {"available": False, "ingest_mode": "pull"}
-    # A station with a live poller is that poller's owner's in-progress
-    # biometric data, not shared classroom data -- don't let another user
-    # read it just because they know the device_id.
+    # A station with a live poller holds that poller owner's in-progress
+    # biometric data -- don't let another user read it just by knowing the
+    # device_id.
     if not eeg_poller.can_use_device(user["id"], device_id):
         return {"available": False, "reason": "in_use_by_other"}
     # Same as eeg_health: a missing/misconfigured token makes get_state and
-    # get_muse_status raise (by design), which would otherwise surface here as a
-    # bare 500. Report it instead so the two EEG endpoints behave alike.
+    # get_muse_status raise by design, which would otherwise surface as a
+    # bare 500. Report it instead.
     try:
         snapshot = eeg_client.get_state(device_id, timeout=1.5)
         muse     = eeg_client.get_muse_status(device_id)
@@ -5244,29 +4310,23 @@ def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
 def eeg_health():
     """Tells the frontend whether the EEGResearch sidecar service is reachable.
 
-    Under push ingestion there is nothing to be reachable *from here*, and this
-    is the poll that runs from page load -- the status one is gated on a session
-    existing. Reporting a flat `available: False` put "EEG service not reachable
-    on port 8001. Make sure the EEGResearch backend is running." on the first
-    screen a student sees, which is the sentence the mode check was added to
-    stop showing. Fixing it at /start and /status alone just moved it here.
+    Under push ingestion there is nothing reachable from here, and this poll
+    runs from page load, unlike /status which waits for a session. A flat
+    `available: False` here would put "EEG service not reachable" on the
+    first screen a student sees.
     """
     if eeg_poller.INGEST_MODE == "push":
-        # `available` is None rather than False for the same reason as /status:
-        # "not probed in this deployment" is not "probed and down".
+        # None, not False, for the same reason as /status: "not probed in
+        # this deployment" differs from "probed and down".
         return {"available": None, "ingest_mode": "push", "url": None}
     alive = eeg_client.is_alive()
     if not alive:
         return {"available": False, "ingest_mode": "pull",
                 "url": eeg_client.EEG_API_URL}
-    # is_alive() hits the sidecar's unauthenticated /healthz, so a reachable
-    # sidecar tells us nothing about auth. get_muse_status() needs the learner
-    # token and raises (by design -- see eeg_client.get_state) when it is
-    # missing or misconfigured. That is a configuration error, not an outage,
-    # but this is a health check: it must report the problem, not 500 on it.
-    # Return unavailable with the reason so the frontend degrades exactly as it
-    # does for an outage while a developer sees the cause instead of a bare
-    # stack trace in the logs.
+    # is_alive() only hits the sidecar's unauthenticated /healthz, so a
+    # reachable sidecar says nothing about auth. get_muse_status() needs the
+    # learner token and raises by design when it's missing or misconfigured
+    # -- a config error, not an outage, so report it rather than 500.
     try:
         muse = eeg_client.get_muse_status()
     except RuntimeError as e:
@@ -5276,25 +4336,22 @@ def eeg_health():
 @app.post("/api/eeg/start")
 def eeg_start(payload: EegSessionRequest, request: Request):
     user = get_user(request)
-    # The shared helper rather than a third hand-written copy of the same two
-    # checks. Both copies here had the unreachable-404 bug, and re-deriving an
-    # access rule per endpoint is what let the `class_live` guard drift.
+    # Shared helper rather than a hand-written copy of the same two checks
+    # -- re-deriving an access rule per endpoint is what let the
+    # `class_live` guard drift.
     sess = _session_or_403(payload.session_id, user["id"], "user_id, ended_at")
     if sess.get("ended_at"):
         raise HTTPException(400, "Session already ended")
-    # Answered before the liveness check, deliberately -- see the helper.
     _refuse_under_push("start a poller")
-    # And before the poller exists at all. Historical rows stay; nothing new is
-    # written until consent is given. `_consent` fails closed, so an unreadable
-    # row refuses rather than records.
+    # Checked before the poller exists at all. Historical rows stay; nothing
+    # new is written until consent is given. `_may_record` fails closed, so
+    # an unreadable row refuses rather than records.
     consent = _may_record(user["id"])
     if not consent["record_eeg"]:
-        # 403 for all of these, and the body says which. Not 409: that one
-        # means "this deployment does not work that way", and a closed school
-        # year is a fact about the school, not about the deployment.
-        #
-        # Same helper as the three ingest endpoints, so the precedence -- window
-        # ahead of consent -- is decided once. Only the wording is local.
+        # 403, not 409: 409 means "this deployment doesn't work that way",
+        # and a closed school year is a fact about the school, not the
+        # deployment. Same helper as the ingest endpoints, so the
+        # window-before-consent precedence is decided once.
         raise HTTPException(403, _as_sentence(_not_recording_reason(
             consent,
             "EEG recording is switched off for this student.",
@@ -5302,34 +4359,29 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     if not eeg_client.is_alive():
         raise HTTPException(503, "EEG service is not running on port 8001")
     device_id = payload.device_id or eeg_client.DEFAULT_DEVICE_ID
-    # Without this, an unknown/typo'd device_id spawns a poller that dies on
-    # the sidecar's 404 -- but eeg_poller.start() has already returned
-    # running: True by then, so the user sees "connected" and silently gets
-    # no data. known_ids empty (list_devices() unreachable/erroring even
-    # though is_alive() just succeeded) falls back to the old permissive
-    # behavior rather than blocking a legitimate start on a transient glitch.
+    # Without this, a typo'd device_id spawns a poller that dies on the
+    # sidecar's 404 -- but eeg_poller.start() has already returned
+    # running: True, so the user sees "connected" and silently gets no
+    # data. An empty known_ids (list_devices() erroring even though
+    # is_alive() just succeeded) falls back to allowing the start rather
+    # than blocking on a transient glitch.
     known_ids = {d.get("device_id") for d in eeg_client.list_devices()}
     if known_ids and device_id not in known_ids:
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
     try:
         out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
     except eeg_poller.ConsentError as e:
-        # `_may_record` passed a moment ago and `start()` checks again, so this
-        # is the gap between them: a withdrawal, or the school year ending,
-        # between the two. Rare, and it surfaced as a raw 500 -- an outcome that
-        # reads as a broken server for what is actually the system working.
-        #
-        # Also the unwired-check case, which raises the same class. That is a
-        # misconfigured deployment rather than a decision about this student, so
-        # it must not be reported as one: the message comes from the exception.
+        # `_may_record` passed a moment ago and `start()` checks again, so
+        # this is the gap between them (a withdrawal, or the year ending, in
+        # between) or an unwired consent check on this deployment. Either
+        # way the message comes from the exception rather than being
+        # reported as a decision about this student.
         raise HTTPException(403, str(e))
     except eeg_poller.DeviceClaimedError:
-        # Covers two distinct causes with one message deliberately: a live
-        # poller already recording for someone else, or someone else's
-        # reservation from an in-progress scan/connect that hasn't reached
-        # /start yet. Both resolve the same way from here -- wait for
-        # the other user to finish or disconnect -- so a caller does not need
-        # to know which one it hit.
+        # Covers two causes with one message: a live poller already
+        # recording for someone else, or someone else's reservation from an
+        # in-progress scan/connect. Both resolve the same way -- wait for
+        # the other user -- so the caller doesn't need to know which.
         raise HTTPException(
             409,
             "This headband is already in use by another user. Ask them to "
@@ -5340,14 +4392,9 @@ def eeg_start(payload: EegSessionRequest, request: Request):
 @app.post("/api/eeg/stop")
 def eeg_stop(payload: EegSessionRequest, request: Request):
     user = get_user(request)
-    # 404 for a session that does not exist, where this used to fold that into
-    # the 403. Nothing chose that -- it fell out of `not sess.data or ...` in a
-    # single condition -- and `/api/eeg/start` two endpoints up already answered
-    # 404 for the same case, so the two disagreed about the same lookup.
     _session_or_403(payload.session_id, user["id"])
-    # eeg_poller.stop releases user["id"]'s reservation too, unconditionally
-    # -- not just when a live poller existed. A user who only got as far as
-    # scan/connect (a pre-claim reservation, never promoted to a poller)
+    # Releases user["id"]'s reservation too, unconditionally -- not just
+    # when a live poller existed. A user who only got as far as scan/connect
     # still holds a claim on the station, and /stop is the signal they're
     # done with it.
     out = eeg_poller.stop(payload.session_id, user["id"])
@@ -5357,42 +4404,30 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
 def eeg_status(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
     user = get_user(request)
     # Under push ingestion this backend has no route to a sidecar, so
-    # `is_alive()` is false forever -- and the frontend polls this every 3
-    # seconds and renders it as "EEG service is down". The student would get the
-    # carefully-worded 409 from /start once and then a continuous contradiction
-    # of it. Same argument as checking the mode before the liveness probe there;
-    # /start was simply the only place it got applied.
+    # `is_alive()` is false forever, and this endpoint is polled every 3
+    # seconds -- without the mode check it would render as a continuous
+    # "EEG service is down" after /start's carefully-worded 409.
     push = eeg_poller.INGEST_MODE == "push"
-    # **Before** the muse probe, not after it. The check was here but the probe
-    # ran first, so the rule this endpoint was fixed to follow was defeated by
-    # statement order:
-    #
-    #   - `get_muse_status` calls `_learner_headers()`, which raises when
-    #     EEG_API_TOKEN is unset -- the normal state of a hosted push
-    #     deployment -- and it raises *outside* the client's try block, so the
-    #     endpoint 500s. Polled every 3 s, the headband block then never
-    #     updates for the whole lesson.
-    #   - With a token set it is worse in a different way: a 2 s blocking probe
-    #     to a host that does not exist, per student, every 3 s, each holding an
-    #     anyio threadpool slot.
-    #
-    # Blank only the muse block, not the whole response -- the caller's own
-    # poller status is always theirs to see regardless of device_id.
+    # Must run **before** the muse probe. `get_muse_status` calls
+    # `_learner_headers()`, which raises when EEG_API_TOKEN is unset (the
+    # normal state under push) outside any try block, so the endpoint would
+    # 500 every 3 seconds. With a token set it's a 2 s blocking probe to a
+    # host that doesn't exist, per student, holding an anyio threadpool slot
+    # each time. Blanks only the muse block, not the whole response -- the
+    # caller's own poller status is theirs regardless of device_id.
     if push:
-        # None, not False, for the same reason as `service` below: "not probed
-        # in this deployment" is a different claim from "probed and absent".
+        # None, not False: "not probed in this deployment" differs from
+        # "probed and absent".
         muse = {"available": None, "reason": "push_ingestion"}
     elif eeg_poller.can_use_device(user["id"], device_id):
         muse = eeg_client.get_muse_status(device_id)
     else:
         muse = {"available": False, "reason": "in_use_by_other"}
     return {
-        # None, not False: "we do not probe a sidecar in this deployment" is not
-        # the same claim as "we probed and it is down", and a consumer that
-        # branches on falsiness would render both identically.
+        # None, not False, for the same reason as `muse` above -- a
+        # consumer branching on falsiness would render both the same.
         "service": None if push else eeg_client.is_alive(),
-        # Carried so a client can say *why* rather than inferring it from a
-        # null, which is the distinction the reporting rules exist to keep.
+        # Carried so a client can say *why* rather than inferring it from a null.
         "ingest_mode": eeg_poller.INGEST_MODE,
         "muse":    muse,
         "poller":  _poller_status(user["id"]),
@@ -5424,36 +4459,27 @@ def link_child(payload: LinkChildRequest, request: Request):
 def unlink_child(child_id: str, request: Request):
     """Remove one parent-child link.
 
-    There was no route for this, so a link was permanent once made: a parent
-    who pasted the wrong UUID, or whose child left the household, had a
-    standing relationship that `_verify_can_view_student` reads as entitlement
-    to that child's reports and that `signal_consent` reads as the right to
-    re-enable a sensor the child switched off. A relationship nobody can end is
-    the wrong shape for the one relationship in this product that grants the
-    most access.
+    A parent who pasted the wrong UUID, or whose child left the household,
+    otherwise has a standing relationship that `_verify_can_view_student`
+    reads as entitlement to that child's reports and `signal_consent` reads
+    as the right to re-enable a sensor the child switched off. That
+    relationship needed a way to end.
 
-    Scoped by `parent_id` as well as `child_id`, so this can only ever delete
-    the caller's own link. Scoped by the child alone it would take every
-    parent's link to that child -- an endpoint one parent could use to cut
-    another off from their own child. The row id is never taken from the client
-    for the same reason `/charts` derives its object path rather than reading it
-    back out of `chart_paths`.
+    Scoped by `parent_id` as well as `child_id`, so this can only delete the
+    caller's own link -- scoped by child alone, it would let one parent cut
+    another off from their own child.
 
-    **Consent and recorded signals are untouched.** Unlinking is not erasure and
-    not a withdrawal: `signal_consent` still holds what the family decided, and
-    a re-link restores the view of a history that was never destroyed. Erasure
-    is `POST /api/consent/{id}/erase`, which is deliberately a separate request
-    a parent has to make by name -- wiring destruction to this would make the
-    reversible control the irreversible one by a side effect nobody asked for,
-    which is the same rule `test_changing_consent_never_erases` pins one table
-    over.
+    **Consent and recorded signals are untouched.** Unlinking is not erasure
+    or a withdrawal: `signal_consent` still holds what the family decided,
+    and a re-link restores the view of a history that was never destroyed.
+    Erasure is `POST /api/consent/{id}/erase`, a separate request a parent
+    must make by name, so this can never destroy data as a side effect.
     """
     user = get_user(request)
     res = supabase.table("parent_child_links").delete()         .eq("parent_id", user["id"]).eq("child_id", child_id).execute()
-    # 404 on a link that was not there, rather than a cheerful ok. The two are
-    # different facts about the caller's account, and a parent who unlinked the
-    # wrong child needs to be able to tell "that is done" from "that was never
-    # yours".
+    # 404 on a link that wasn't there, rather than a cheerful ok -- a parent
+    # who unlinked the wrong child needs to tell "that is done" from "that
+    # was never yours".
     if not res.data:
         raise HTTPException(404, "Not linked to this child")
     return {"ok": True, "child_id": child_id}
@@ -5463,15 +4489,14 @@ def unlink_child(child_id: str, request: Request):
 def my_unacknowledged_parent_links(request: Request):
     """Links to this student that they have not been told about yet.
 
-    A parent creates a link knowing only a user id; nothing asked the child and
-    nothing told them, and from that moment the parent may read their reports
-    and switch a sensor back on that the child switched off. This is the read
-    behind the banner that closes that gap.
+    A parent creates a link knowing only a user id -- nothing asks the child
+    or tells them, and from that moment the parent may read their reports and
+    re-enable a sensor the child switched off. This is the read behind the
+    banner that closes that gap.
 
-    **Notify, not block.** No endpoint waits on the acknowledgement -- an
-    acknowledgement *gate* would put a child between a parent and reports they
-    are entitled to, and this product's students are children, some of whom
-    would simply never clear it.
+    **Notify, not block.** No endpoint waits on the acknowledgement -- a gate
+    would put a child between a parent and reports they're entitled to, and
+    some children would simply never clear it.
 
     Fails **open**, to an empty list. It decides whether an advisory banner is
     drawn and nothing else, so the reporting-surface direction is the right one
@@ -5548,28 +4573,24 @@ CONSENT_CHANNEL_LABELS = {
 def parent_consent_notices(request: Request):
     """Channels a linked child has switched off since this parent last looked.
 
-    The consent model notified in one direction only: a parent re-enabling a
-    channel raises `needs_student_ack`, and nothing told a *parent* their child
-    had turned one off. They found out by opening Settings and reading "Off
-    since <date>" on a panel they had no reason to visit -- which means the one
-    event that changes what is being measured was the one nobody was told about.
+    The consent model only notified in one direction: a parent re-enabling a
+    channel raises `needs_student_ack`, but nothing told a parent their child
+    had turned one off. This is the read behind the notice that closes that gap.
 
-    Read from `consent_withdrawals`, **not** from `signal_consent`'s
-    `*_revoked_at`. Those columns are nulled when a channel is re-enabled --
-    correctly, since they answer "is this off, and since when" -- so deriving
-    the notice from them meant any parent restoring a channel erased the notice
-    for every linked parent, and a withdraw/restore cycle inside one
-    dashboard-load interval made the feature silently no-op.
+    Read from `consent_withdrawals`, **not** `signal_consent`'s
+    `*_revoked_at` -- those columns are correctly nulled when a channel is
+    re-enabled, so deriving the notice from them would let restoring a
+    channel silently erase the notice for every linked parent.
 
-    Keyed on `parent_child_links.parent_ack_at`, per (parent, child): keeping it
-    on `signal_consent` would have let the first of two linked parents to
+    Keyed on `parent_child_links.parent_ack_at`, per (parent, child): keeping
+    it on `signal_consent` would let the first of two linked parents to
     acknowledge clear the notice for the second.
 
-    Fails **open**, to an empty list with `retrieved: false`, like the link
-    notice: it decides whether an advisory banner is drawn and nothing else, so
-    a blip must not tell a parent their child withdrew something. `_consent()`
-    itself still fails closed, because that one decides whether data may be
-    recorded -- different questions about the same subject.
+    Fails **open** to an empty list with `retrieved: false`, like the link
+    notice: this only decides whether an advisory banner is drawn, so a blip
+    must not falsely tell a parent their child withdrew something.
+    `_consent()` itself still fails closed, since that one decides whether
+    data may be recorded -- a different question.
     """
     user = get_user(request)
     try:
@@ -5581,9 +4602,9 @@ def parent_consent_notices(request: Request):
         return {"notices": [], "retrieved": True}
 
     ids = [l["child_id"] for l in links]
-    # The oldest watermark across this parent's links, so one query covers every
-    # child and the per-child comparison happens below. Bounded, because a
-    # long-unacknowledged parent could otherwise pull a term of events.
+    # One query covers every linked child; the per-child comparison happens
+    # below. Bounded, since a long-unacknowledged parent could otherwise
+    # pull a whole term of events.
     try:
         rows = supabase.table("consent_withdrawals")             .select("user_id, channel, withdrawn_at")             .in_("user_id", ids)             .order("withdrawn_at", desc=True)             .limit(_MAX_WITHDRAWAL_NOTICES).execute().data or []
     except Exception as e:
@@ -5598,10 +4619,10 @@ def parent_consent_notices(request: Request):
         cid = r["user_id"]
         stamp = r["withdrawn_at"]
         since = since_by_child.get(cid)
-        # Newer than this parent's acknowledgement, or any withdrawal at all
-        # when they have never acknowledged. Both sides are ISO-8601 UTC out of
-        # PostgREST, so lexical comparison is ordering -- and this is a fail-open
-        # advisory banner, not one of the consent gates `_parse_ts` protects.
+        # Newer than this parent's last ack, or any withdrawal if they never
+        # acknowledged. Both sides are ISO-8601 UTC from PostgREST, so
+        # lexical comparison works -- and this is a fail-open advisory
+        # banner, not one of the gates `_parse_ts` protects.
         if since and stamp <= since:
             continue
         # One line per channel, newest first. A channel switched off twice is
@@ -5619,9 +4640,9 @@ def parent_consent_notices(request: Request):
             "child_id":   cid,
             "child_name": (names.get(cid) or {}).get("display_name") or "Your child",
             "channels":   channels,
-            # The watermark the client hands back on acknowledgement. Sent by
-            # the server rather than recomputed by the client, so "what you were
-            # shown" is one value both sides agree on.
+            # Watermark the client hands back on acknowledgement -- sent by
+            # the server, not recomputed client-side, so both sides agree on
+            # "what you were shown".
             "through":    max(c["at"] for c in channels),
         })
     return {"notices": notices, "retrieved": True}
@@ -5632,21 +4653,18 @@ def ack_parent_consent_notices(payload: ConsentNoticeAck, request: Request):
     """The parent has seen these notices, up to the point they were shown.
 
     **Stamps the watermark the client was given, not `now()`.** Stamping the
-    current time acknowledges withdrawals the parent never saw: one landing
-    between the read that drew the banner and the click that dismissed it was
-    marked as seen and never shown again -- silently, permanently, on the
-    notification whose entire job is to not let that happen.
+    current time would acknowledge withdrawals the parent never saw -- one
+    landing between the read that drew the banner and the click that
+    dismissed it would be marked seen and never shown again.
 
-    Per child, for the same reason the column lives on the link row: acking one
-    child's notice must not clear another's.
+    Per child, since the column lives on the link row: acking one child's
+    notice must not clear another's.
 
-    Scoped by `parent_id` on every write, and the link id is never taken from
-    the client -- which would let a caller clear somebody else's notice. A
-    `child_id` the caller is not linked to simply matches no row.
+    Scoped by `parent_id` on every write, and the link id is never taken
+    from the client, which would let a caller clear somebody else's notice.
 
     Not a 404 when nothing changed, unlike `/api/consent/ack`: double-clicking
-    the button is ordinary, and there is nothing wrong with a second
-    acknowledgement of the same watermark.
+    is ordinary, and re-acknowledging the same watermark is harmless.
     """
     user = get_user(request)
     try:
@@ -5662,41 +4680,29 @@ def ack_parent_consent_notices(payload: ConsentNoticeAck, request: Request):
 def my_children(request: Request, include_face: bool = True):
     """A parent's linked children with their headline signal averages.
 
-    include_face=false carries the facial-recognition opt-out down into the
-    aggregate, so the dashboard honours the same control as the child's report.
-    Without it, switching facial reporting off on a report and navigating back
-    put facial attention straight back on screen.
+    include_face=false carries the facial-recognition opt-out into the
+    aggregate, so the dashboard honours the same control as the child's
+    report. Without it, switching facial reporting off on a report and
+    navigating back put facial attention straight back on screen.
 
     Stored consent is resolved per child on top of that, so one sibling's
-    refusal cannot suppress another's data and no child's declined channel is
-    read because a sibling permitted it.
+    refusal cannot suppress another's data, and no child's declined channel
+    is read because a sibling permitted it.
     """
     user = get_user(request)
     links = supabase.table("parent_child_links").select("child_id, created_at") \
         .eq("parent_id", user["id"]).execute()
-    # One round-trip for every child's signal averages, rather than one per
-    # child inside the loop below. Note the rest of this loop is still a query
-    # per child (stats, sessions, performance, profile); this fixes the query
-    # added here, not the endpoint's overall shape.
-    # Grouped by consent, because consent is per child and the batch RPC takes
-    # one flag pair for the whole call. Passing a single pair would mean either
-    # reading a channel a child declined, or hiding one a sibling permitted --
-    # and the first of those is the one that matters.
-    #
-    # At most four groups exist (heart x emotion) and in practice one, since
-    # siblings are usually configured the same way, so this is normally still a
-    # single round-trip. Correctness first: a fifth query is cheaper than
-    # reading a channel a child refused.
-    # Resolved once per child and reused below. This endpoint is already a
-    # query per child; reading consent twice for each would make it N+2 for
-    # nothing.
+    # Grouped by consent flags, since the batch RPC takes one flag pair per
+    # call -- a single pair would mean reading a channel a child declined, or
+    # hiding one a sibling permitted. At most four groups exist (heart x
+    # emotion) and usually just one, since siblings are typically configured
+    # alike.
     child_ids = [lnk["child_id"] for lnk in (links.data or [])]
     channels_by_child = {cid: _reportable_channels(cid, include_face)
                          for cid in child_ids}
-    # Keyed on the flags alone, not the whole ReportChannels. `consent_retrieved`
-    # does not change what the RPC is asked for, so including it would split two
-    # children with identical flags into separate round-trips and break the
-    # "at most four groups" bound this relies on.
+    # Keyed on the flags alone, not the whole ReportChannels: `consent_retrieved`
+    # doesn't change what the RPC is asked for, so including it would split
+    # two children with identical flags into separate round-trips.
     by_channels: dict[tuple[bool, bool], list[str]] = {}
     for cid, ch in channels_by_child.items():
         by_channels.setdefault((ch.heart, ch.emotion), []).append(cid)
@@ -5708,20 +4714,16 @@ def my_children(request: Request, include_face: bool = True):
                                  channels_by_student=channels_by_child)
         if part is None:
             # One failed group fails the whole call, discarding groups that
-            # succeeded. Deliberate, and the conservative choice rather than an
-            # oversight: `summaries_retrieved` is one flag for the endpoint, so
-            # a partial result would have to report the succeeded children as
-            # retrieved and the failed ones as empty -- and "empty" is exactly
-            # the word that must not stand in for "we could not read it". Every
-            # child falling back to an explicitly-unretrieved payload is the
-            # honest answer until the flag is per child.
+            # succeeded. Deliberate: `summaries_retrieved` is one flag for
+            # the endpoint, so a partial result would have to report failed
+            # children as "empty" -- exactly the word that must not stand in
+            # for "we couldn't read it".
             summaries = None
             break
         summaries.update(part)
-    # None is the failed read; {} is a read that returned nothing. Both leave
-    # every child falling back below, and the fallback has to say which one it
-    # is standing in for -- otherwise a broken RPC reaches a parent as "your
-    # child recorded nothing this week".
+    # None is a failed read; {} is a read that found nothing. Both fall back
+    # below, and the fallback has to say which -- otherwise a broken RPC
+    # reaches a parent as "your child recorded nothing this week".
     summaries_retrieved = summaries is not None
     summaries = summaries or {}
     children = []
@@ -5733,11 +4735,10 @@ def my_children(request: Request, include_face: bool = True):
     for lnk in (links.data or []):
         cid = lnk["child_id"]
         stats = all_stats.get(cid) or {}
-        # Still per child, and deliberately: "the five most recent per child"
-        # has no batch form in PostgREST -- one `in_` query returns the newest
-        # five *overall*, which is one child's five when they have been the busy
-        # one. A parent has a handful of children, so this is a handful of reads;
-        # the same shape on a class roster would not be acceptable.
+        # Still per child, deliberately: "the five most recent per child" has
+        # no batch form in PostgREST -- one `in_` query returns the newest
+        # five overall, which could be one busy child's five. A parent has a
+        # handful of children, so this stays cheap; a class roster would not.
         sess_res = supabase.table("sessions").select("*").eq("user_id", cid).order("started_at", desc=True).limit(5).execute()
         p = profiles.get(cid) or {}
         children.append({
@@ -5748,16 +4749,13 @@ def my_children(request: Request, include_face: bool = True):
             "stats":       stats,
             "sessions":    sess_res.data or [],
             "performance": all_perf.get(cid) or [],
-            # Headline signal averages only. Deliberately not the full weekly
-            # report: that pulls thousands of raw rows per child, and this runs
-            # on a dashboard that loads every visit.
-            # The five per-child consent fields are stamped inside
-            # `_signal_summaries` now, because the batch RPC groups children by
-            # flag *pair* and cannot carry a per-child revocation date or a
-            # per-child `consent_retrieved` -- a child whose consent read failed
-            # shares a group with one who genuinely declined. They were patched
-            # back in here, in both branches, which is not something a second
-            # caller would know to do.
+            # Headline averages only, deliberately not the full weekly
+            # report: that pulls thousands of raw rows per child, and this
+            # runs on a dashboard that loads every visit.
+            # The per-child consent fields are stamped inside
+            # `_signal_summaries`, since the batch RPC groups children by
+            # flag pair and can't carry a per-child revocation date or
+            # `consent_retrieved` on its own.
             "signal_summary": summaries[str(cid)]
                               if str(cid) in summaries
                               else _shape_summary(None,
@@ -5776,31 +4774,29 @@ def my_children(request: Request, include_face: bool = True):
 # ─── admin ───────────────────────────────────────────────────────────────
 #
 # Everything below is gated on `_require_admin`, which reads `profiles.role`
-# -- the same column as every other role gate, and emphatically not
-# `user_metadata.role`, which the client sets at sign-up and can rewrite through
-# `supabase.auth.updateUser` without this backend ever seeing it.
+# -- the same column as every other role gate, and never `user_metadata.role`,
+# which the client can rewrite through `supabase.auth.updateUser` without
+# this backend seeing it.
 #
-# `admin` is a role rather than a side table because the column is now
+# `admin` is a role rather than a side table because the column is
 # server-controlled on both edges: the client cannot write it, and sign-up
-# cannot ask for it. It is set from the dashboard SQL editor, like
+# cannot request it. It's set from the dashboard SQL editor, like
 # `retention_window`'s row.
 
 
 def _is_admin(user_id: str) -> bool:
     """Whether this user is a platform administrator.
 
-    One source of truth, and it is `profiles.role` -- the same column every
-    other role gate reads through `_role`. A separate membership table was the
-    first design here and it was two answers to one question: a row present with
-    the role absent, or the reverse, has no correct interpretation.
+    One source of truth: `profiles.role`, the same column every other role
+    gate reads through `_role`. A separate membership table would give two
+    answers to one question if the two ever disagreed.
 
-    Safe as a role only because of two things holding together: UPDATE/INSERT
-    on the column is revoked from the client roles, and `handle_new_user`
-    stops accepting 'admin' from the sign-up form. Without both, this reads a
-    value the caller chose.
+    Safe as a role only because UPDATE/INSERT on the column is revoked from
+    client roles, and `handle_new_user` refuses 'admin' from the sign-up
+    form. Without both, this would read a value the caller chose.
 
-    Fails **closed** through `_role`, which degrades to 'student' on a failed
-    read. This stands in front of the switch that decides whether consent is
+    Fails **closed** through `_role`, which degrades to 'student' on a
+    failed read -- this gates the switch that decides whether consent is
     enforced, so an unreadable profile must not admit anyone.
     """
     return _role(user_id) == ADMIN_ROLE
@@ -5809,8 +4805,8 @@ def _is_admin(user_id: str) -> bool:
 def _require_admin(request: Request) -> dict:
     """The caller, if they are an admin. 401 without a token, 403 without a row.
 
-    Returns the user so callers do not resolve it twice -- the id is needed for
-    `updated_by`/`changed_by` on every write below.
+    Returns the user so callers don't resolve it twice -- the id is needed
+    for `updated_by`/`changed_by` on every write below.
     """
     user = get_user(request)
     if not _is_admin(user["id"]):
@@ -5820,16 +4816,16 @@ def _require_admin(request: Request) -> dict:
 
 class FeatureFlagUpdate(BaseModel):
     enabled: bool
-    # Only read when disabling `consent_enforcement_enabled`. Bounded rather
-    # than free: the point of the bypass is that it cannot be left on, and a
-    # window measured in days is indistinguishable from leaving it on.
+    # Only read when disabling `consent_enforcement_enabled`. Bounded, since
+    # the point of the bypass is that it can't be left on -- a window
+    # measured in days is indistinguishable from leaving it on.
     bypass_minutes: int | None = None
 
 
-# The bypass may be set for at most this long in one go. Re-arming is a
-# deliberate act that lands in the audit log, which is the property worth
-# keeping -- a long window produces one log line and a week of unenforced
-# consent, a short one produces a line every time someone chooses to continue.
+# Longest the bypass may be set for in one go. Re-arming is a deliberate act
+# that lands in the audit log -- a long window produces one log line and a
+# week of unenforced consent; a short one produces a line every time someone
+# chooses to continue.
 _MAX_BYPASS_MINUTES = 240
 
 
@@ -5866,9 +4862,9 @@ def _flag_rows() -> list:
             "bypass_until": flags[key]["bypass_until"],
             "description": row.get("description"),
             "updated_at": row.get("updated_at"),
-            # True when the row is missing and the default is answering. A
-            # dashboard that cannot tell those apart would show a flag as set
-            # by someone when nobody has ever set it.
+            # True when the row is missing and the default is answering --
+            # otherwise a dashboard would show a flag as set by someone when
+            # nobody has ever set it.
             "is_default": key not in rows,
         })
     return out
@@ -5885,9 +4881,9 @@ def admin_flags(request: Request):
 def admin_set_flag(key: str, request: Request, payload: FeatureFlagUpdate):
     """Set one flag, audit the change, and drop the cache.
 
-    Refuses a key that is not declared: `_feature_flags` ignores unknown rows,
-    so writing one would create a switch that reads back as set and controls
-    nothing.
+    Refuses a key that isn't declared: `_feature_flags` ignores unknown
+    rows, so writing one would create a switch that reads back as set and
+    controls nothing.
     """
     user = _require_admin(request)
     if key not in _FEATURE_FLAG_DEFAULTS:
@@ -5896,9 +4892,9 @@ def admin_set_flag(key: str, request: Request, payload: FeatureFlagUpdate):
     bypass_until = None
     if key == CONSENT_ENFORCEMENT_FLAG and not payload.enabled:
         minutes = payload.bypass_minutes
-        # Required rather than defaulted. A default here would be this file
-        # choosing how long consent goes unenforced, which is exactly the
-        # decision that should have to be made out loud, every time.
+        # Required rather than defaulted -- a default here would be this
+        # file choosing how long consent goes unenforced, a decision that
+        # should be made out loud every time.
         if minutes is None:
             raise HTTPException(
                 422, "bypass_minutes is required when disabling consent enforcement")
@@ -5930,10 +4926,9 @@ def admin_set_flag(key: str, request: Request, payload: FeatureFlagUpdate):
             "changed_by": user["id"],
         }).execute()
     except Exception as e:
-        # Never raises. The flag is already set; turning a successful change
-        # into a 500 would invite a retry that changes nothing and audits
-        # nothing. The gap is visible in the history instead of hidden by a
-        # rollback that did not happen.
+        # Never raises: the flag is already set, and turning a successful
+        # change into a 500 would invite a retry that changes nothing and
+        # audits nothing.
         print(f"[admin:audit] {key} change not recorded: {e}")
 
     return {"flags": _flag_rows(),
@@ -5952,9 +4947,9 @@ def admin_flag_history(key: str, request: Request, limit: int = 20):
             .limit(limit).execute().data or []
     except Exception as e:
         print(f"[admin:history] {e}")
-        # Degrades rather than raising, like the reporting helpers -- and says
-        # so, because an empty history and an unreadable one are different
-        # claims about whether anyone has touched this flag.
+        # Degrades rather than raising, like the reporting helpers -- and
+        # says so, since an empty history and an unreadable one are
+        # different claims about this flag.
         return {"key": key, "changes": [], "retrieved": False}
 
     names = _display_names({r.get("changed_by") for r in rows if r.get("changed_by")})
@@ -5981,9 +4976,9 @@ def _display_names(user_ids) -> dict:
         return {}
 
 
-# The env-var flags this dashboard can show but not change. Named here rather
-# than discovered, because `os.environ` also holds the service-role key: a
-# dashboard that enumerated the environment would eventually render a secret.
+# The env-var flags this dashboard can show but not change. Named here
+# rather than discovered: `os.environ` also holds the service-role key, and
+# enumerating the environment would eventually render a secret.
 _DEPLOYMENT_FLAGS = (
     ("INGEST_MODE", "pull", "Whether the backend polls the sidecar, or the sidecar posts here."),
     ("EEG_API_URL", None, "Where the EEG sidecar is expected, under pull ingestion."),
@@ -6000,16 +4995,14 @@ _DEPLOYMENT_FLAGS = (
 def admin_env_flags(request: Request):
     """The process's env-var switches, read-only.
 
-    Here so one screen answers "how is this deployment configured" rather than
-    half of it living in a `.env` nobody can see from the browser. Every entry
-    is marked `editable: false` in the payload rather than left for the UI to
-    remember -- a switch that looks like the others and silently does nothing is
-    worse than one that is absent.
+    Lets one screen answer "how is this deployment configured" instead of
+    half of it living in a `.env` nobody can see from the browser. Every
+    entry is marked `editable: false` in the payload, not left for the UI to
+    remember.
 
-    Several of these belong to the *sidecar's* environment, not this process, so
-    a null here means "not set for the backend", which is the normal state. It
-    is a hint about the deployment, not an authority on what the sidecar is
-    doing.
+    Several of these belong to the sidecar's environment, not this process,
+    so a null here means "not set for the backend" -- a hint about the
+    deployment, not an authority on what the sidecar is actually doing.
     """
     _require_admin(request)
     return {"flags": [{
@@ -6050,18 +5043,18 @@ def admin_get_retention_window(request: Request):
 def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate):
     """Replace the school-year row. The SQL editor's job, with a form on it.
 
-    Validates here rather than relying on the table's CHECKs, so a bad edit is a
-    422 naming the field instead of a 500 out of the client library. The CHECKs
-    stay as the second line -- this endpoint is not the only thing that can
-    write that row.
+    Validates here rather than relying on the table's CHECKs, so a bad edit
+    is a 422 naming the field instead of a 500 from the client library. The
+    CHECKs stay as a second line of defence, since this isn't the only thing
+    that can write that row.
     """
     user = _require_admin(request)
 
     try:
         ZoneInfo(payload.timezone)
     except Exception:
-        # The one field whose typo is invisible: an unknown zone makes
-        # `_retention_window` deny all recording, and it is edited twice a year.
+        # An unknown zone makes `_retention_window` deny all recording, and
+        # this field is edited only twice a year -- a typo here is easy to miss.
         raise HTTPException(422, f"Unknown timezone {payload.timezone!r}")
 
     starts, ends = payload.starts_on, payload.ends_on
@@ -6092,31 +5085,22 @@ def admin_set_retention_window(request: Request, payload: RetentionWindowUpdate)
 
 
 # How recently a channel must have written to count as flowing, and how long
-# before it counts as stale. Shared with `class_live`, which is the other page
-# answering this question about the same sessions -- two sets of numbers would
-# let one page call a session live while the other called it stale.
+# before it counts as stale. Shared with `class_live`, the other page
+# answering this question about the same sessions -- two sets of numbers
+# would let one page call a session live while the other called it stale.
 _LIVE_WINDOW_SEC = 90
 _STALE_AFTER_SEC = 600
 
 # This endpoint is platform-wide where `class_live` is one class, and the
-# dashboard polls it every few seconds. A school does not have 200 simultaneous
-# sessions, so reaching this cap means something is wrong -- which is why the
-# payload says it was reached rather than quietly truncating.
+# dashboard polls it every few seconds. A school doesn't have 200
+# simultaneous sessions, so reaching this cap means something is wrong,
+# hence the payload reports it rather than quietly truncating.
 _ADMIN_LIVE_SESSION_CAP = 200
 
-# **Nothing submitted here may wait on anything else in here.** The reads are
-# submitted flat and gathered afterwards, and that is the rule to preserve: a
-# task that blocks on another task in its own pool puts the waiter and the work
-# it waits for in the same fixed queue, which is a deadlock rather than a
-# slowdown.
-#
-# This pool once had a second reason to exist -- `class_live` had a four-worker
-# `_live_signals_pool` of its own, and `_latest_session_signals` blocked on
-# futures it had submitted to it, so fanning this endpoint's outer loop into
-# that pool would have deadlocked exactly as described. That pool is gone:
-# `class_live` now reads every open session's channels in one SQL call
-# (`latest_signals_for_sessions`) and needs no threads at all.
-# The rule above outlived the pool that taught it.
+# **Nothing submitted here may wait on anything else in here.** Reads are
+# submitted flat and gathered afterwards -- a task that blocks on another
+# task in its own pool puts the waiter and the work it waits for in the same
+# fixed queue, which deadlocks rather than slows down.
 _ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
 _admin_live_pool_lock = threading.Lock()
 
@@ -6132,8 +5116,8 @@ def _admin_live_pool() -> ThreadPoolExecutor:
 
 def _shutdown_admin_live_pool():
     """Drop the queue on the way out. Same shape as `_shutdown_strategy_pool`
-    -- see it for why wait=False/cancel_futures=True and the global reset,
-    rather than a clean join -- and called from `_lifespan` alongside it."""
+    -- see it for why wait=False/cancel_futures=True -- called from
+    `_lifespan` alongside it."""
     global _ADMIN_LIVE_POOL
     with _admin_live_pool_lock:
         pool, _ADMIN_LIVE_POOL = _ADMIN_LIVE_POOL, None
@@ -6141,10 +5125,10 @@ def _shutdown_admin_live_pool():
         pool.shutdown(wait=False, cancel_futures=True)
 
 
-# What a channel read answers with when the query itself failed. Distinct from
-# `None`, which this module uses for "nothing has ever arrived" -- reporting an
-# unreadable channel as never-reported is the absence-as-data failure, one layer
-# further in.
+# What a channel read answers with when the query itself failed. Distinct
+# from `None`, which means "nothing has ever arrived" -- reporting an
+# unreadable channel as never-reported would be the same absence-as-data
+# failure one layer further in.
 _TS_UNREADABLE = object()
 
 
@@ -6153,11 +5137,10 @@ def _latest_signal_ts(session_ids: list[str]) -> dict:
 
     `{session_id: {"eeg": ts|None|_TS_UNREADABLE, "camera": ...}}`.
 
-    **Selects `ts` alone**, so the readings never leave the database rather than
-    being fetched and then dropped on the way out. `class_live` needs the rows
-    themselves and `_latest_signals_many` fetches them; this endpoint needs only
-    whether something arrived, and asking for less is a stronger version of the
-    same privacy property than filtering afterwards.
+    **Selects `ts` alone**, so the readings never leave the database rather
+    than being fetched and dropped on the way out. `class_live` needs the
+    rows themselves; this endpoint needs only whether something arrived, and
+    asking for less is a stronger privacy property than filtering afterward.
 
     Two channels, not four: `_latest_signals_many` also reads `heart_signals`
     and `session_answers`, which this endpoint discarded.
@@ -6198,15 +5181,15 @@ def _latest_signal_ts(session_ids: list[str]) -> dict:
 def admin_live_signals(request: Request):
     """Whether signals are *arriving* for each open session. Not what they say.
 
-    The content is dropped here, in the endpoint, rather than left for the
-    frontend not to render: this exists to answer "is the data flowing", and an
-    admin has no relationship to these students that would entitle them to the
-    readings. Only the newest timestamp per channel survives the row-to-dict
-    step -- no band powers, no emotion label, no bpm.
+    The content is dropped here, in the endpoint, not left for the frontend
+    not to render: this answers "is the data flowing", and an admin has no
+    relationship to these students entitling them to the readings. Only the
+    newest timestamp per channel survives -- no band powers, no emotion
+    label, no bpm.
 
-    Same thresholds and the same per-session helper as `class_live`, which is
-    the other page that answers this question. A second set of numbers would
-    make one of the two pages wrong about the same session.
+    Same thresholds and per-session helper as `class_live`, the other page
+    answering this question -- a second set of numbers would make one of the
+    two pages wrong about the same session.
     """
     _require_admin(request)
 
@@ -6228,9 +5211,9 @@ def admin_live_signals(request: Request):
     def _channel(raw):
         """A channel's liveness, from its newest timestamp alone.
 
-        Three sources of "not flowing" and they are kept apart, because a
-        reader acts differently on each: a sensor that stopped, a session that
-        never had one, and a read that failed.
+        Three sources of "not flowing" are kept apart, since a reader acts
+        differently on each: a sensor that stopped, a session that never had
+        one, and a read that failed.
         """
         if raw is _TS_UNREADABLE:
             return {"flowing": False, "stale": False, "seen": None}
@@ -6240,9 +5223,9 @@ def admin_live_signals(request: Request):
         return {"flowing": ts >= live_cutoff,
                 "stale": ts < stale_cutoff,
                 "seen": True,
-                # The one value that leaves this endpoint. It is what lets the
-                # dashboard pulse on a *new* sample rather than re-pulsing on
-                # every poll, and it says nothing about the reading.
+                # The one value that leaves this endpoint -- lets the
+                # dashboard pulse on a *new* sample rather than every poll,
+                # and says nothing about the reading itself.
                 "last_ts": raw}
 
     out = []
@@ -6264,9 +5247,9 @@ def admin_live_signals(request: Request):
 def admin_health(request: Request):
     """One place to see whether the moving parts are moving.
 
-    Three states per check -- `ok`, `degraded`, `unknown` -- and a failed read
-    is `unknown`, never `ok`. Same rule as the reporting helpers: a check that
-    could not run has not earned the right to say everything is fine.
+    Three states per check -- `ok`, `degraded`, `unknown` -- and a failed
+    read is `unknown`, never `ok`: a check that couldn't run hasn't earned
+    the right to say everything is fine.
     """
     _require_admin(request)
 
@@ -6274,9 +5257,8 @@ def admin_health(request: Request):
 
     mode = eeg_poller.INGEST_MODE
     if mode == "push":
-        # Not a fault. Under push the sidecar is on a student's laptop and this
-        # process has no route to it, so "unreachable" would be true and
-        # misleading -- the same reason the /api/eeg/* endpoints answer None.
+        # Not a fault. Under push the sidecar is on a student's laptop with
+        # no route from here, so "unreachable" would be true and misleading.
         checks.append({"key": "eeg_sidecar", "status": "unknown",
                        "detail": "Not probed: this deployment uses push ingestion."})
     else:
@@ -6300,10 +5282,10 @@ def admin_health(request: Request):
         "detail": window["state"],
     })
 
-    # Newest rollup row, as a proxy for "the summary writer is running". Not a
-    # scheduler status -- there is no such table -- so an old one means nobody
-    # closed a session recently, which on a quiet day is not a fault. Reported
-    # as a date for a person to judge, not as a verdict.
+    # Newest rollup row, as a proxy for "the summary writer is running". Not
+    # a scheduler status -- an old one just means nobody closed a session
+    # recently, which is not a fault on a quiet day. Reported as a date for
+    # a person to judge, not as a verdict.
     try:
         rows = supabase.table("signal_daily_rollup").select("day") \
             .order("day", desc=True).limit(1).execute().data or []
@@ -6314,9 +5296,8 @@ def admin_health(request: Request):
         checks.append({"key": "last_rollup", "status": "unknown",
                        "detail": "Could not read the rollup table"})
 
-    # One call, not one per field: it is a clock comparison against a cached
-    # read, so two calls could straddle the expiry and report a status and a
-    # detail that disagree.
+    # One call, not one per field -- two calls could straddle the cache
+    # expiry and report a status and a detail that disagree.
     enforced = _consent_enforcement_active()
     checks.append({
         "key": "consent_enforcement",
@@ -6332,8 +5313,9 @@ def admin_health(request: Request):
 def admin_consent_summary(request: Request):
     """Counts only. How many students, how many have said yes to each channel.
 
-    Deliberately aggregate: an admin needs to know whether the consent flow is
-    working, which is a number, not a list of children and what they agreed to.
+    Deliberately aggregate: an admin needs to know whether the consent flow
+    is working, which is a number, not a list of children and what they
+    agreed to.
     """
     _require_admin(request)
     try:
@@ -6354,9 +5336,8 @@ def admin_consent_summary(request: Request):
         "eeg": _n("eeg"),
         "headband_optical": _n("headband_optical"),
         "camera": _n("camera"),
-        # A parent re-enabled a channel and the student has not acknowledged it
-        # yet. Worth surfacing because it is the one consent state that needs
-        # someone to do something.
+        # A parent re-enabled a channel and the student hasn't acknowledged
+        # it yet -- the one consent state that needs someone to act.
         "awaiting_student_ack": sum(
             1 for c in consents
             if c.get("parent_enabled_at") and not c.get("student_ack_at")),
@@ -6367,22 +5348,20 @@ def admin_consent_summary(request: Request):
 def admin_student_search(request: Request, q: str = "", limit: int = 10):
     """Find a student by name or email, to jump to their existing report.
 
-    Returns identifiers and nothing else -- the report itself is served by the
-    endpoints that already exist, behind the relationship check that now admits
-    admins.
+    Returns identifiers and nothing else -- the report itself is served by
+    the endpoints that already exist, behind the relationship check that
+    admits admins.
     """
     _require_admin(request)
     term = (q or "").strip()
     if len(term) < 2:
-        # Not an error: an empty box is the normal state of a search field. A
-        # one-character term would return most of the school, which is not a
-        # search result.
+        # Not an error: an empty box is the normal state of a search field.
+        # A one-character term would return most of the school.
         return {"students": [], "query": term}
     limit = max(1, min(limit, 25))
 
-    # PostgREST `or` with `ilike`. The term is escaped for the filter's own
-    # syntax -- a comma or parenthesis would otherwise be read as structure
-    # rather than as text, which is this filter language's injection shape.
+    # PostgREST `or` with `ilike`. Escaped for the filter's own syntax: a
+    # comma or parenthesis would otherwise be read as structure, not text.
     safe = term.replace("\\", "\\\\").replace("%", "\\%").replace(",", "").replace("(", "").replace(")", "")
     try:
         rows = supabase.table("profiles") \

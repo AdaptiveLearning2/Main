@@ -1,14 +1,13 @@
-"""POS pulse extraction.
+"""Tests for POS pulse extraction.
 
-No camera and no fixture yet — these are synthetic RGB sequences with a known
-pulse and known nuisances. That is enough to pin the arithmetic and, more
-usefully, to prove the property POS exists for: rejecting illumination change
-that the green channel alone cannot.
+No camera and no fixture yet, so these use synthetic RGB sequences with a
+known pulse and known nuisances. That's enough to check the arithmetic and to
+prove what POS exists for: rejecting illumination change that the green
+channel alone can't.
 
-Physiological accuracy is *not* established here and cannot be by synthetic
-data. That needs the camera-plus-ECG capture described in the plan's
-verification step, and until it happens nothing in this module should feed a
-recorded value.
+Physiological accuracy is not established here and can't be by synthetic
+data -- that needs a real camera-plus-ECG capture, and until that happens
+nothing in this module should feed a recorded value.
 """
 
 from __future__ import annotations
@@ -22,9 +21,8 @@ from src.app.services.pos_rppg import WINDOW_SECONDS, pos_pulse
 FPS = 30.0
 
 # Relative pulse amplitude per channel. Haemoglobin absorbs green most, red
-# least, which is the asymmetry POS relies on -- an achromatic (1,1,1) signature
-# would be indistinguishable from a lighting change and unrecoverable in
-# principle, not just by this implementation.
+# least -- the asymmetry POS relies on. An achromatic (1,1,1) signature would
+# be indistinguishable from a lighting change and unrecoverable in principle.
 PULSE_RGB = np.array([0.10, 0.60, 0.30])
 
 
@@ -34,9 +32,9 @@ def _face_rgb(bpm: float, seconds: float = 20.0, fps: float = FPS,
               seed: int = 0) -> np.ndarray:
     """Mean-RGB over a face region, as a camera would report it.
 
-    Defaults are deliberately hostile in one respect: `pulse_amplitude` 0.005 is
-    a 0.5% modulation, which is the real order of magnitude. A test written with
-    a 10% pulse would pass on almost any method.
+    `pulse_amplitude` defaults to 0.005 (0.5% modulation), the real order of
+    magnitude -- a test written with a 10% pulse would pass on almost any
+    method.
     """
     rng = np.random.default_rng(seed)
     t = np.arange(int(seconds * fps)) / fps
@@ -46,13 +44,14 @@ def _face_rgb(bpm: float, seconds: float = 20.0, fps: float = FPS,
     frames = skin * (1.0 + pulse_amplitude * np.outer(pulse, PULSE_RGB))
 
     if illumination:
-        # Achromatic: scales all three channels together, exactly what a screen
-        # redraw, a flickering light or the student rocking slightly does.
+        # Achromatic: scales all three channels together, like a screen
+        # redraw, a flickering light, or the student rocking slightly.
         #
-        # Default 1.4 Hz -- deliberately *inside* the 0.6-5 Hz pulse band. A slow
-        # drift would be the easy case: `ppg_processing` bandpasses it away
-        # before the rate derivation ever sees it, and green-only would pass
-        # too. In-band interference is the case that needs the projection.
+        # Default 1.4 Hz is deliberately inside the 0.6-5 Hz pulse band. A
+        # slow drift would be the easy case, since `ppg_processing`
+        # bandpasses it away before the rate derivation sees it, and
+        # green-only would pass too. In-band interference is the case that
+        # needs the projection.
         drift = 1.0 + illumination * np.sin(2 * np.pi * illumination_hz * t)
         frames = frames * drift[:, None]
 
@@ -63,7 +62,7 @@ def _face_rgb(bpm: float, seconds: float = 20.0, fps: float = FPS,
 
 
 def _bpm(pulse: np.ndarray, fps: float = FPS) -> float | None:
-    """Rate via the one derivation this codebase has, not a second one."""
+    """Rate via the codebase's one derivation, not a second one."""
     return estimate_window(pulse, fps).bpm
 
 
@@ -75,8 +74,8 @@ def test_rejects_input_that_is_not_rgb():
 
 
 def test_too_short_an_input_yields_silence_not_an_error():
-    """A session's first second has fewer frames than one window. That is
-    ordinary, not exceptional, so it returns zeros rather than raising."""
+    """A session's first second has fewer frames than one window. That's
+    ordinary, not exceptional, so it should return zeros, not raise."""
     short = _face_rgb(70.0, seconds=WINDOW_SECONDS / 2)
     out = pos_pulse(short, FPS)
     assert out.shape == (len(short),)
@@ -85,8 +84,8 @@ def test_too_short_an_input_yields_silence_not_an_error():
 
 def test_output_is_zero_mean():
     """Overlap-add subtracts each window's mean, so no DC survives into the
-    result. A DC offset would not break the autocorrelation downstream, but it
-    would make the waveform useless for anything that plots it."""
+    result. A DC offset wouldn't break the autocorrelation downstream, but
+    it would make the waveform useless for anything that plots it."""
     out = pos_pulse(_face_rgb(72.0), FPS)
     assert abs(out.mean()) < 0.01 * out.std()
 
@@ -105,24 +104,22 @@ def test_recovers_a_known_rate_from_a_half_percent_pulse(bpm):
 
 
 def test_survives_in_band_illumination_larger_than_the_pulse():
-    """The reason for the projection, stated as a test.
-
-    A 5% achromatic flicker at 84/min against a 0.5% pulse at 72 -- the
-    interference is ten times the signal and sits inside the pulse band, so no
-    filter can remove it. POS can, because the flicker has no component in the
-    plane it projects onto."""
+    """A 5% achromatic flicker at 84/min against a 0.5% pulse at 72 -- the
+    interference is ten times the signal and sits inside the pulse band, so
+    no filter can remove it. POS can, because the flicker has no component
+    in the plane it projects onto."""
     rgb = _face_rgb(72.0, pulse_amplitude=0.005, illumination=0.05,
                     illumination_hz=1.4)
     assert _bpm(pos_pulse(rgb, FPS)) == pytest.approx(72.0, abs=3.0)
 
 
 def test_a_slow_drift_is_the_easy_case_and_does_not_test_the_projection():
-    """Recorded because the first version of this suite used a 0.11 Hz drift and
-    proved nothing: `ppg_processing` bandpasses 0.6-5 Hz, so slow achromatic
-    drift never reaches the rate derivation at all. Green-only passed it too.
+    """An earlier version of this suite used a 0.11 Hz drift and proved
+    nothing: `ppg_processing` bandpasses 0.6-5 Hz, so slow achromatic drift
+    never reaches the rate derivation. Green-only passed it too.
 
-    Kept as an explicit statement of what is *not* being demonstrated, so the
-    in-band test above is not mistaken for a weaker claim."""
+    Kept as an explicit statement of what this does *not* demonstrate, so
+    the in-band test above isn't mistaken for a weaker claim."""
     rgb = _face_rgb(72.0, pulse_amplitude=0.005, illumination=0.05,
                     illumination_hz=0.11)
     green_only = rgb[:, 1] - rgb[:, 1].mean()
@@ -130,12 +127,10 @@ def test_a_slow_drift_is_the_easy_case_and_does_not_test_the_projection():
 
 
 def test_the_green_channel_alone_fails_where_pos_succeeds():
-    """Establishes that the previous test is measuring POS and not the ease of
-    the synthetic signal.
-
-    Green-only is the naive alternative and the one worth ruling out
-    explicitly: with the interference inside the pulse band it has no way to
-    tell a heartbeat from a flicker, and locks onto the stronger one."""
+    """Confirms the previous test measures POS and not just the ease of the
+    synthetic signal. Green-only is the naive alternative worth ruling out:
+    with interference inside the pulse band it has no way to tell a
+    heartbeat from a flicker, and locks onto the stronger one."""
     rgb = _face_rgb(72.0, pulse_amplitude=0.005, illumination=0.05,
                     illumination_hz=1.4)
 

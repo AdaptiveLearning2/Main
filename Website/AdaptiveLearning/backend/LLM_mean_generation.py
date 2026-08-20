@@ -19,6 +19,7 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
@@ -179,6 +180,15 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "mean", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        # The student is shown question_text but scored on the field
+        # above; nothing used to check they agree. See
+        # question_consistency for the measured failure.
+        inconsistent = question_consistency.dataset_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
         # If we reach here â†’ SUCCESS

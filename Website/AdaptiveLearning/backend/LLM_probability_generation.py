@@ -19,6 +19,7 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
 
 #current probability scenarions: probability_of, not_probability_of, dice, 
@@ -254,6 +255,15 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "probability", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        # `not_probability_of` scores 1 - p, so a positively-worded question
+        # tagged with it is answered with the complement. Measured: a text
+        # asking for P(EDM) over 69 bands was answered 18/23, i.e. 54/69.
+        inconsistent = question_consistency.negation_mismatch(
+            question_data.get("question_text"), question_data.get("scenario"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
         # If we reach here â†’ SUCCESS

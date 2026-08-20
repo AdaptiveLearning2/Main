@@ -19,6 +19,7 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
 
 def format_number(x):
@@ -215,6 +216,15 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "median", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        # The student is shown question_text but scored on the field
+        # above; nothing used to check they agree. See
+        # question_consistency for the measured failure.
+        inconsistent = question_consistency.dataset_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
     
         parts = question_data['variables']

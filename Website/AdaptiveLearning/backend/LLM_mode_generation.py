@@ -19,6 +19,7 @@ from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
 #POSSIBLY: manually generate solution using numbers from question_text.
 #This way I can count the # of modes present and ensure solution matches
@@ -229,6 +230,15 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "mode", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        # The student is shown question_text but scored on the field
+        # above; nothing used to check they agree. See
+        # question_consistency for the measured failure.
+        inconsistent = question_consistency.dataset_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
         # If we reach here â†’ SUCCESS

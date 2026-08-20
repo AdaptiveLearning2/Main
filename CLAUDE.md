@@ -208,26 +208,6 @@ Both shapes have since bitten, and the corrections are the load-bearing half:
   only caller — the retry button is the other, and a retry is exactly when someone changes class
   rather than waiting.
 
-### Charts are `AccessibleChart`, and nothing else may render one
-
-`components/charts/AccessibleChart.jsx` owns the `role="img"` + `sr-only` table structure for every
-Recharts chart in the app. **The table must be a sibling of the `role="img"` element, never a
-child**: WAI-ARIA's presentational-children rule prunes every descendant role from an `img`, so a
-nested table is invisible to real assistive technology — and Testing Library reads DOM attributes
-rather than the accessibility tree, so it reports it present either way. A hand-assembled call site
-has nothing to fail against, in the browser or in CI, which is why this is a component rather than a
-documented recipe.
-
-`columns` drives the summary sentence *and* the table from one spec. As two literals they disagreed
-twice in one change — a key named `bpm` where the rows carried `heart_rate_bpm`, and raw 0..1 ratios
-described with a `%` unit — and neither surface could contradict the other, because both were wrong
-at once.
-
-`AccessibleChart.test.jsx` enforces it by walking the source: a `.jsx` naming any Recharts chart
-component without going through `AccessibleChart` fails, by file name. Matched on the chart
-components rather than on `ResponsiveContainer`, since a chart given explicit width and height needs
-no container. It cannot see a hand-written `<svg>`; that is the honest limit.
-
 **`react/jsx-uses-vars` is the only rule from `eslint-plugin-react` that is on, and it has to stay
 on.** `no-unused-vars` cannot see JSX, so without it every identifier used *only* inside markup —
 `motion` from framer-motion, an `icon: Icon` prop rendered as `<Icon />` — is reported as an unused

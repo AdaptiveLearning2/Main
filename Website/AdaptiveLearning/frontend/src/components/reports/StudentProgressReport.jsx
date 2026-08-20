@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
+import { useLatestRequest } from '../../hooks/useLatestRequest'
 // Persisted so the choice survives navigation between students -- switching
 // facial reporting off and having it silently come back on the next page is
 // the kind of thing that makes a privacy control untrustworthy. Shared with the
@@ -72,10 +73,10 @@ export default function StudentProgressReport({
   const [strategySignals, setStrategySignals] = useState(null)
   const [strategyError, setStrategyError]     = useState(null)
   const [strategyLoading, setStrategyLoading] = useState(false)
-  // Identifies the generation request whose result is still wanted. Bumped by
-  // both a new generation and the facial toggle, so a response that lands after
-  // either cannot overwrite what replaced it.
-  const strategyRequestId = useRef(0)
+  // Bumped by both a new generation and the facial toggle, so a response that
+  // lands after either cannot overwrite what replaced it. Same guard as
+  // Sessions.jsx's roster read -- see hooks/useLatestRequest.
+  const beginStrategyRequest = useLatestRequest()
 
   // Academic stats and the name. Deliberately not re-run when the facial
   // toggle flips: none of this depends on it, and re-fetching three endpoints
@@ -143,7 +144,7 @@ export default function StudentProgressReport({
 
 
   async function generateStrategies() {
-    const requestId = ++strategyRequestId.current
+    const isCurrent = beginStrategyRequest()
     setStrategyLoading(true)
     setStrategyError(null)
     try {
@@ -157,14 +158,14 @@ export default function StudentProgressReport({
         method: 'POST',
         body: {},
       })
-      if (requestId !== strategyRequestId.current) return
+      if (!isCurrent()) return
       setStrategies(res.strategies || [])
       setStrategySource(res.source || null)
       // Absent on payloads predating the field, which came from a working
       // read by definition -- null leaves the panel's default claim intact.
       setStrategySignals(res.basis?.signals_retrieved ?? null)
     } catch (err) {
-      if (requestId !== strategyRequestId.current) return
+      if (!isCurrent()) return
       setStrategies(null)
       setStrategySource(null)
       setStrategySignals(null)
@@ -172,7 +173,7 @@ export default function StudentProgressReport({
     } finally {
       // Only the newest request owns the spinner; a superseded one clearing it
       // would stop the indicator for the generation still running.
-      if (requestId === strategyRequestId.current) setStrategyLoading(false)
+      if (isCurrent()) setStrategyLoading(false)
     }
   }
 

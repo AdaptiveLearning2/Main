@@ -116,6 +116,27 @@ describe('the student search', () => {
     expect(screen.getByText(/showing results for/)).toHaveTextContent('ada')
   })
 
+  it('takes the stale results out of reach until the new answer lands', async () => {
+    // Dimming alone was not enough. These rows belong to the PREVIOUS query, so
+    // a click during the debounce opens a student the reader did not search for
+    // -- and the rows move under the cursor the moment the new answer arrives.
+    // Disclosure says which query they answer; this stops them being acted on.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    const link = screen.getByText('Ada Lovelace').closest('a')
+    expect(link).not.toHaveAttribute('aria-disabled')
+
+    await user.type(box(), 'm')
+
+    // Still readable, deliberately -- but not clickable and not tabbable.
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(link).toHaveAttribute('aria-disabled', 'true')
+    expect(link).toHaveAttribute('tabindex', '-1')
+    expect(link.closest('ul')).toHaveClass('pointer-events-none')
+    expect(link.closest('ul')).toHaveAttribute('aria-busy', 'true')
+  })
+
   it('drops the list when the term falls back below two characters', async () => {
     // And does not leave the previous query's hits standing under a term that
     // is no longer being searched for.

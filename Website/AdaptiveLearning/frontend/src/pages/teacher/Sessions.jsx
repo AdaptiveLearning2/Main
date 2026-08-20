@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import { useLatestRequest } from '../../hooks/useLatestRequest'
 
 function fmtTime(s) {
   if (!s) return '—'
@@ -75,16 +76,13 @@ export default function Sessions() {
   // list under the new class's name, with the dropdown still reading the one
   // you picked.
   //
-  // A generation rather than a cleanup flag, because there are two callers: the
-  // effect below and the retry button. A flag owned by the effect leaves the
-  // retry unguarded, and a retry is exactly when someone is most likely to
-  // change class rather than wait.
-  const rosterGen = useRef(0)
+  // Shared with StudentProgressReport's strategy request, which needs the same
+  // guard for the same reason -- see hooks/useLatestRequest.
+  const beginRosterRead = useLatestRequest()
 
   const loadSessions = useCallback(() => {
     if (!classId) return
-    const mine = ++rosterGen.current
-    const current = () => mine === rosterGen.current
+    const current = beginRosterRead()
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
       if (!current()) return
       setStudents(kids || [])
@@ -114,7 +112,7 @@ export default function Sessions() {
       console.error('Failed to load the class roster:', e)
       setFailed(true); setLoading(false)
     })
-  }, [classId])
+  }, [classId, beginRosterRead])
 
   useEffect(() => { loadClasses() }, [loadClasses])
   useEffect(() => { loadSessions() }, [loadSessions])

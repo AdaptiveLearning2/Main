@@ -38,7 +38,6 @@ export default function FlowDot({ channel, label }) {
   // last *rendered*, and only `pulsedFor` can answer that.
   const [pulsedFor, setPulsedFor] = useState(lastTs)
   const [pulsingFor, setPulsingFor] = useState(null)
-  const pulse = pulsingFor !== null
 
   // Started during render, not in an effect: it is derived entirely from a prop
   // changing, and doing it here means the dot lights on the same commit that
@@ -75,7 +74,7 @@ export default function FlowDot({ channel, label }) {
   return (
     <div className="flex items-center gap-2" title={title}>
       <span className="relative flex h-3 w-3 items-center justify-center">
-        {pulse && flowing && (
+        {pulsingFor !== null && flowing && (
           <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
         )}
         <span className={`relative inline-flex rounded-full h-3 w-3 ${tone}`} />

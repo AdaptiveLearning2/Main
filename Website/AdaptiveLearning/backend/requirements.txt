@@ -1,4 +1,5 @@
-# Pinned to the versions verified working on 2026-07-22 (Python 3.12).
+# Pinned to the versions verified working on 2026-07-22 (Python 3.12); the same
+# pins were re-verified with the full test suite on Python 3.14.7 on 2026-08-20.
 #
 # Previously unpinned, so every fresh venv resolved to whatever was current --
 # which is how the pydantic and sympy mismatches during setup happened. Direct

@@ -84,6 +84,25 @@ there is also a `.venv` at the repo root with a different OpenCV. `pip install -
 has to run *from* `EEGResearch`, or pip resolves `.` to the repo root and reports "neither setup.py
 nor pyproject.toml found".
 
+
+**Both venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13). Every direct
+dependency in both trees already ships a `cp314`/`win_amd64` wheel or a version-agnostic
+`py3-none-any` one — `mediapipe`, `opencv-contrib-python`/`opencv-python` (the `<5` pin still
+resolves), `onnxruntime`, `numpy`, `scipy`, `jax`/`jaxlib`, `h5py`, `av` all installed clean.
+`EEGResearch/.venv` (`pip install -e ".[dev,face,gaze]"`) passed all 557 tests; the root venv
+passed all 814 backend tests, and `keras`/`jax` load fine once `KERAS_BACKEND` is set the way
+`rppg/models.py` already sets it at import. **Run `pytest` from the repo root, not from
+`EEGResearch`** — `Settings` loads `.env` relative to cwd, and a locally edited
+`EEGResearch/.env` (e.g. `FACE_EMOTION_ENABLED=false` left over from a camera-off `start.ps1`
+run) silently overrides field defaults for any test that constructs `Settings()` without passing
+that key, which reads as a code regression and isn't one.
+
+One pre-existing gap, unrelated to the version bump: neither venv has ever carried `setuptools`
+(Python's `venv` module stopped bundling it), so `import rppg` / `import heartpy` fail on a
+missing `pkg_resources` if run directly against either persistent venv. Not a regression — the
+`open-rppg` measurements in `EEGResearch/docs/RPPG_DEPENDENCY_COST.md` were always done in a
+throwaway `pip install --target ... "setuptools<81"` env for exactly this reason, never against
+the root venv.
 Individually, from each directory:
 
 ```bash

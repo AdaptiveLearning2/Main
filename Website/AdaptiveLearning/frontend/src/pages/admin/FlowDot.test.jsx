@@ -54,6 +54,27 @@ describe('the pulse', () => {
     expect(ping()).toBeNull()
   })
 
+  it('does not fire when a timestamp goes missing and comes back unchanged', () => {
+    // The backend answers `last_ts: null` for a channel it could not read --
+    // `/api/admin/live-signals` has an explicit `seen: null` state for exactly
+    // that -- so a poll can go value, null, same-value on a session with
+    // nothing new in it.
+    //
+    // Comparing against the *previous rendered* value calls that a change,
+    // twice, and lights the dot on the way back. The comparison has to be
+    // against the last timestamp actually pulsed for, which the 600ms timer
+    // must not clear.
+    const { rerender } = render(<FlowDot channel={flowing('2026-08-18T10:00:00Z')} label="EEG" />)
+    rerender(<FlowDot channel={flowing('2026-08-18T10:00:01Z')} label="EEG" />)
+    advance(600)
+    expect(ping()).toBeNull()
+
+    rerender(<FlowDot channel={flowing(null)} label="EEG" />)
+    rerender(<FlowDot channel={flowing('2026-08-18T10:00:01Z')} label="EEG" />)
+
+    expect(ping()).toBeNull()
+  })
+
   it('restarts the 600ms when a timestamp arrives mid-pulse', () => {
     // Rather than inheriting the remainder of the previous one, which would cut
     // the second sample's pulse short and make a busy channel look intermittent.

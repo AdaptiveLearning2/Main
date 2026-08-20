@@ -98,7 +98,21 @@ function StudentSearch() {
   const q = term.trim()
   const enough = q.length >= 2
   const searching = enough && hits.q !== q
-  const results = enough && hits.q === q ? hits.students : []
+  // The last results we have, kept on screen while a newer query is in flight.
+  //
+  // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
+  // the 300ms debounce had even started -- so typing a name flashed the results
+  // away and back on each letter. The concern that produced it is real (hits
+  // for one term sitting under another), and it is answered by saying so and by
+  // taking the rows out of reach, rather than by showing nothing: `searching`
+  // is up throughout, the label names the query the rows actually belong to,
+  // and the list is dimmed *and* non-interactive until the new answer lands.
+  // Dimming alone left a stale row clickable, which is a worse trade than the
+  // flash it replaced -- see the `pointer-events-none` note below.
+  //
+  // Cleared only when the query gets too short to search, which is the one case
+  // where there is no newer answer coming.
+  const results = enough ? hits.students : []
 
   useEffect(() => {
     if (!enough) return
@@ -126,13 +140,28 @@ function StudentSearch() {
           className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-400"
         />
       </div>
-      {searching && <p className="mt-2 text-xs text-gray-400">Searching…</p>}
+      {searching && (
+        <p className="mt-2 text-xs text-gray-400">
+          Searching…{results.length > 0 && <> showing results for &ldquo;{hits.q}&rdquo;</>}
+        </p>
+      )}
       {results.length > 0 && (
-        <ul className="mt-3 space-y-2">
+        // Superseded results stay on screen but stop being clickable. Dimming
+        // alone still let a stale row be opened: these are the *previous*
+        // query's students, so a click during the debounce navigates to
+        // someone the reader did not search for -- and the rows move under the
+        // cursor the moment the new answer lands. `pointer-events-none` covers
+        // the mouse and `tabIndex={-1}` the keyboard, which the dim never did.
+        <ul
+          aria-busy={searching}
+          className={`mt-3 space-y-2 transition-opacity ${searching ? 'opacity-50 pointer-events-none' : ''}`}
+        >
           {results.map(s => (
             <li key={s.id}>
               <Link
                 to={`/teacher/students/${s.id}/report`}
+                tabIndex={searching ? -1 : undefined}
+                aria-disabled={searching || undefined}
                 className="flex items-center justify-between gap-3 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl px-4 py-2.5 hover:border-slate-400 transition"
               >
                 <span className="min-w-0">

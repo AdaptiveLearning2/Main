@@ -4,6 +4,7 @@ import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
+import { useLatestRequest } from '../../hooks/useLatestRequest'
 
 function fmtTime(s) {
   if (!s) return '—'
@@ -45,8 +46,19 @@ export default function Sessions() {
     apiFetch('/api/classes').then(rows => {
       setClasses(rows || [])
       setFailed(false)
-      if (rows?.length) setClassId(rows[0].id)
-      else setLoading(false)
+      if (rows?.length) {
+        // Raised here, not only by the selector. Picking a class programmatically
+        // is the other way `loadSessions` gets triggered, and on a *retry*
+        // `loading` is already false -- so between this line and that response
+        // the page had no rows, no error and no skeleton, and drew "No sessions
+        // yet" over a class whose roster was still on its way. The first load
+        // never showed it, because `loading` starts true; only the retry path
+        // did, which is why it survived the tests.
+        setLoading(true)
+        setClassId(rows[0].id)
+      } else {
+        setLoading(false)
+      }
     }).catch(e => {
       console.error('Failed to load classes:', e)
       setFailed(true); setLoading(false)
@@ -58,9 +70,21 @@ export default function Sessions() {
   // event handler rather than an effect. That keeps the roster read off the
   // `set-state-in-effect` backlog without letting one class's sessions sit on
   // screen under another class's name while the new ones load.
+  // Which roster read is the live one. This fetch fans out per student, so it
+  // is the slowest on the page by some margin -- and switching class while one
+  // is in flight let the *previous* class's response land last and repaint the
+  // list under the new class's name, with the dropdown still reading the one
+  // you picked.
+  //
+  // Shared with StudentProgressReport's strategy request, which needs the same
+  // guard for the same reason -- see hooks/useLatestRequest.
+  const beginRosterRead = useLatestRequest()
+
   const loadSessions = useCallback(() => {
     if (!classId) return
+    const current = beginRosterRead()
     apiFetch(`/api/classes/${classId}/students`).then(async (kids) => {
+      if (!current()) return
       setStudents(kids || [])
       const map = {}
       let missed = 0
@@ -75,15 +99,20 @@ export default function Sessions() {
           missed += 1
         }
       }))
+      // Checked again after the fan-out, not only before it: the per-student
+      // reads are where the time goes, so this is the window a class switch
+      // actually lands in.
+      if (!current()) return
       setSessionsByStudent(map)
       setPartial(missed)
       setFailed(false)
       setLoading(false)
     }).catch(e => {
+      if (!current()) return
       console.error('Failed to load the class roster:', e)
       setFailed(true); setLoading(false)
     })
-  }, [classId])
+  }, [classId, beginRosterRead])
 
   useEffect(() => { loadClasses() }, [loadClasses])
   useEffect(() => { loadSessions() }, [loadSessions])

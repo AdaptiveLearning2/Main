@@ -89,10 +89,14 @@ describe('isValidTimezone', () => {
 
 describe('the timezone field', () => {
   it('refuses to save a zone the platform cannot resolve', async () => {
-    // The backend denies rather than falling back to UTC -- deliberately,
-    // because a fallback moves every term boundary by hours while looking like
-    // it worked. That makes this field a platform-wide off switch, so the form
-    // has to catch it rather than the status line afterwards.
+    // `admin_set_retention_window` validates with `ZoneInfo` and 422s *before
+    // persisting*, so a bad zone is never stored and recording never stops.
+    // This check exists to say so before the round trip, not to stand between a
+    // typo and an outage -- which makes agreeing with the backend its whole job.
+    //
+    // (An earlier version of this comment said the field was a platform-wide
+    // off switch. That was wrong about the backend, and is corrected here
+    // rather than deleted, because the same claim reached a PR description.)
     render(<AdminSchoolYear />)
     const field = await screen.findByLabelText(/timezone/i)
 

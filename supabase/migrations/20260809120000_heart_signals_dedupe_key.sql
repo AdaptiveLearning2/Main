@@ -1,10 +1,10 @@
 -- A retried ingest batch must not double-count every average.
 --
--- Phase 2 created `heart_signals` and deliberately left duplicate handling
--- open, because the answer depends on whether `ts` is genuinely unique per
--- source and that was not knowable before the producer existed. It is now: the
--- derivation emits one sample per analysis window per source, and `ts` is the
--- window's end. Two samples from the same source cannot legitimately share it.
+-- `heart_signals` deliberately left duplicate handling open, because the
+-- answer depends on whether `ts` is genuinely unique per source and that was
+-- not knowable before the producer existed. It is now: the derivation emits
+-- one sample per analysis window per source, and `ts` is the window's end.
+-- Two samples from the same source cannot legitimately share it.
 --
 -- So the key is (session_id, source, ts) and the endpoint inserts with
 -- ON CONFLICT DO NOTHING. A retry is then idempotent rather than additive,
@@ -25,7 +25,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "heart_session_source_ts_key"
 
 -- `face_signals` has the same exposure and is deliberately NOT changed here.
 --
--- It has had a live ingest endpoint since PR #49, so unlike heart_signals it
+-- It has had a live ingest endpoint for a while now, so unlike heart_signals it
 -- may already hold rows -- possibly duplicates. A `CREATE UNIQUE INDEX` over
 -- them would fail the migration in production while passing CI, which applies
 -- migrations to an empty stack and would therefore prove nothing. Deleting the
@@ -44,7 +44,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "heart_session_source_ts_key"
 -- Non-empty: decide what the duplicates mean before removing anything, because
 -- by then they are real recorded data about a real student.
 --
--- (No `source` column on that table: `face_signals` is emotion only, and after
--- Phase 4 the camera is the sole producer.)
+-- (No `source` column on that table: `face_signals` is emotion only, and the
+-- camera is the sole producer.)
 
 NOTIFY pgrst, 'reload schema';

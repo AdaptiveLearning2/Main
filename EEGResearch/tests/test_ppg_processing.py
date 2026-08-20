@@ -256,7 +256,7 @@ def test_ambiguous_windows_after_motion_are_rejected():
 
 
 def test_the_first_window_after_motion_is_wrong_and_is_never_published():
-    """The limitation, and what now contains it (#105).
+    """The limitation, and what contains it.
 
     The window starting the moment the wearer sat down reads ~127 bpm against a
     true ~90, on all four channels and with a healthy margin. That is still
@@ -333,17 +333,13 @@ def test_a_steady_rate_costs_exactly_one_window_of_latency():
 
 
 def test_re_acquisition_is_corroborated_too():
-    """The path that needs the rule most, and the one it originally missed.
+    """The path that needs the rule most.
 
     A lock is dropped because two windows disagreed with it -- which is what a
     mid-lesson motion event looks like, a student shifting or adjusting the
     headband. So the window doing the re-acquiring is drawn from exactly the
-    population this rule exists to distrust, and adopting it directly put the
-    weakest test on the most exposed path: the pre-#105 bug relocated rather
-    than fixed.
-
-    Found in review of #109 by reproduction rather than by reading, and every
-    other test in this file passed against the broken version.
+    population this rule exists to distrust, and adopting it directly would put
+    the weakest test on the most exposed path.
     """
     slow = np.column_stack([_pulse(70.0, seed=i) for i in range(4)])
     fast = np.column_stack([_pulse(140.0, harmonic=0.4, seed=i) for i in range(4)])

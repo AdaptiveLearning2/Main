@@ -1,4 +1,4 @@
--- Head pose on `face_signals` (Phase 11, step 2b).
+-- Head pose on `face_signals`.
 --
 -- `gaze_x`/`gaze_y` are the iris's offset *within the eye opening*, so they say
 -- where the eyes point relative to the head and nothing about where the head

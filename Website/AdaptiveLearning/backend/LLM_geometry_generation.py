@@ -1,7 +1,4 @@
-﻿#area, perimeter - circle, triangle, rectangle. (possibly add rhombus, trapezoid, parallelogram)
-#volume - cylinder, sphere, rectangle, cube, pyramid
-
-#need to specify questions do not involve angles 
+﻿# Generates area/perimeter/volume geometry questions via LLM and solves them with sympy.
 import os
 import re
 import random
@@ -19,8 +16,8 @@ import lesson_plan_context
 import grade_levels
 import grade_appropriateness
 
-#current geometry scenarions: perimeter, area, volume, missing_side, pythagorean_theorem
-#APPROXIMATING 3.14 for pi for simplicity/consistancy
+# Scenarios: perimeter, area, volume, missing_side, pythagorean_theorem.
+# pi is approximated as 3.14 for simplicity/consistency.
 def extract_json(text):
     start = text.find("{")
     if start == -1:
@@ -41,38 +38,36 @@ simple_pi = sympify(3.14)
 
 def normalize_solution(sol):
     if isinstance(sol, list):
-        return sol[0]   # or pick valid one
+        return sol[0]
     return sol
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
-        return str(x)          # "3/4"
+        return str(x)
     if isinstance(x, sp.Integer):
-        return int(x)          # 5
+        return int(x)
     if isinstance(x, sp.Float):
         return float(x)
     if isinstance(x, sp.Expr):
-        return str(x)          # "5*x", "3+4"
+        return str(x)
     return str(x)
 
 def format_two_decimals(x):
     if isinstance(x, list):
         x = x[0]
     val = float(x.evalf()) if hasattr(x, "evalf") else float(x)
-    # check if it's effectively an integer
     if val.is_integer():
-        return str(int(val))   # "5"
+        return str(int(val))
     else:
-        return f"{val:.2f}"    # "3.50"
+        return f"{val:.2f}"
 
-#Helpers
 def to_num(x):
     return sympify(x)
 
 def preprocess_variables(vars_dict):
     return {k : sympify(v) for k, v in vars_dict.items()}
 
-#Area/Perimeter
+# Area/Perimeter
 def solve_triangle_perimeter(s1, s2, s3):
     return s1 + s2 + s3
 
@@ -91,7 +86,7 @@ def solve_circle_circumference(r):
 def solve_circle_area(r):
     return simple_pi * r * r
 
-#Volume
+# Volume
 def solve_rect_volume(l,w,h):
     return l*w*h
 
@@ -107,12 +102,12 @@ def solve_pyramid_volume(b,h):
 def solve_sphere_volume(r):
     return Rational(4/3) * simple_pi * r**3
 
-#Pythagorean Theorem
+# Pythagorean Theorem
 def solve_pythag(a, b):
     c = (a**2) + (b**2)
     return sqrt(c)
 
-#Find missing side 
+# Find missing side
 def rect_area_missing_side(area, s1):
     x = symbols('x')
     solution = solve(Eq(x * s1, area), x)
@@ -142,8 +137,6 @@ def circle_circumference_missing_side(circ):
     x = symbols('x')
     solution = solve(Eq(2*simple_pi*x, circ), x)
     return solution
-
-#IDEA: Randomize scenario, have a separate prompt for each. May be easier for LLM to handle
 
 geometry_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
@@ -470,9 +463,6 @@ GRADE_COMPLEXITY = {
 # and conflating them would make either change look like it needs the other.
 
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_geometry_question(global_questions, prev_questions, difficulty, grade,max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -480,7 +470,7 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         else:
             prompt = geometry_prompt
 
-        #select a scenario from the tier matching this question's difficulty and grade.
+        # select a scenario from the tier matching this question's difficulty and grade
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(difficulty, grade_band)
 
@@ -506,13 +496,12 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
-        # print("RAW RESPONSE:")
         print(response.response)
 
         raw = extract_json(response.response)
@@ -529,7 +518,6 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -542,13 +530,11 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
                                         attempt + 1):
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     scenario = question_data["scenario"]
     vars = question_data["variables"]
     vars = preprocess_variables(vars)
@@ -591,102 +577,18 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         case "triangle_perimeter_missing_side" :
             solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
 
-    # solution = str(solution) if solution else None
-
-
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should be placed before or after the JSON response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique numbers only. NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations.
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - Fractions or values with up to two decimal places are allowed as long as they are unique and not equivalent to other values.
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-        
-        
-    #     # print("RAW RESPONSE:")
-    #     print(answer_response.response)
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
-    # incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
-    # solution = format_two_decimals(solution) if solution is not None else None
-    # solution = serialize_sympy(solution)
-    # answers = [serialize_sympy(ans) for ans in incorrect_answers] + [solution]
-    
-    # normalize correct answer 
     solution = normalize_solution(solution)
     solution_float = float(solution)
     solution = format_two_decimals(solution)
-    # generate incorrect answers using float
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float)
-    # ensure everything is JSON-safe strings or floats
     answers = [round(float(ans), 2) for ans in incorrect_answers] + [solution]
-
 
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "geometry",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

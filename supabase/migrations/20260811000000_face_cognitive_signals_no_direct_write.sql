@@ -1,7 +1,7 @@
 -- face_signals and cognitive_signals stop being directly writable by
--- authenticated. Closes #47.
+-- authenticated.
 --
--- 20260805110000 left both tables' full DML grant in place, reasoning that RLS
+-- Both tables' full DML grant was left in place previously, reasoning that RLS
 -- was already constraining every table's "own" policy to the caller's own row
 -- and TRUNCATE was the only real hole. That reasoning holds for tables like
 -- user_math_performance, where "it is my row" is the entire write rule. It does
@@ -31,10 +31,10 @@ REVOKE ALL ON TABLE "public"."face_signals" FROM "authenticated";
 GRANT SELECT ON TABLE "public"."cognitive_signals" TO "authenticated";
 GRANT SELECT ON TABLE "public"."face_signals" TO "authenticated";
 
--- 20260805110000 left authenticated's sequence USAGE grant in place
--- "deliberately: it needs USAGE to insert into the tables above that have
--- serial keys" -- true when it wrote that, and no longer true for these two
--- now that authenticated cannot INSERT into either table at all. Not a hole
+-- authenticated's sequence USAGE grant was left in place deliberately: it
+-- needed USAGE to insert into the tables above that have serial keys -- true
+-- then, and no longer true for these two now that authenticated cannot
+-- INSERT into either table at all. Not a hole
 -- on its own (PostgREST has no path to a bare nextval() call, same footnote
 -- as the TRUNCATE one above), but a grant with no remaining justification is
 -- exactly what the next ACL audit shouldn't have to puzzle out.

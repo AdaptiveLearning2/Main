@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Confirm the face-mesh index table against a real face (Phase 11, step 1).
+"""Confirm the face-mesh index table against a real face.
 
 `face_landmarks.MEDIAPIPE_INDICES` maps mesh indices onto named face parts, and
 **it has never been checked against hardware**: MediaPipe 1.0.0 ships no

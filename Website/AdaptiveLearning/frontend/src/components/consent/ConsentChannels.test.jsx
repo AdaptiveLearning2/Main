@@ -219,7 +219,7 @@ describe('copy', () => {
   })
 })
 
-// ── erasure (#106) ──────────────────────────────────────────────────────────
+// ── erasure ──────────────────────────────────────────────────────────────
 //
 // A separate decision from consent, with a separate endpoint and a separate
 // gate: a student may withdraw, only a linked parent may erase, and nothing

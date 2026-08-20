@@ -44,8 +44,8 @@ difficulty increase and can never cause one, and it cannot trigger an ease-off
 by itself either.
 
 It should not graduate to a primary adaptation signal without validation on the
-actual user group. `EMOTION_MIN_CONFIDENCE` below is inherited from PR #49 and
-is a guess, not a measurement; treat it as one.
+actual user group. `EMOTION_MIN_CONFIDENCE` below is unvalidated on this user
+group and is a guess, not a measurement; treat it as one.
 
 Absent is not calm
 ------------------
@@ -67,8 +67,8 @@ EEG_FOCUSED_FOCUS_MIN = 0.7
 EEG_FOCUSED_CALM_MIN = 0.5
 EEG_STRESSED_CALM_MAX = 0.35
 
-# Facial. Inherited from PR #49 and unvalidated on this user group -- see the
-# module docstring. Only ever used to withhold an increase.
+# Facial. Unvalidated on this user group -- see the module docstring. Only
+# ever used to withhold an increase.
 EMOTION_MIN_CONFIDENCE = 0.50
 NEGATIVE_EMOTIONS = frozenset({"sad", "fear", "anger", "disgust"})
 
@@ -197,14 +197,13 @@ def face_channel(
     sure we are of the expression -- sat beside it, and an earlier revision
     passed the wrong one here: a clearly identified face with a garbage FER+
     label withheld a difficulty increase, while a well-classified expression on
-    a poorly identified face was thrown away. Both silent. The migration that
-    added the column predicted exactly this ("an unqualified name leaves a
-    reader a 50/50 guess about which one it gates"), so the parameter is named
-    for the column rather than the concept.
+    a poorly identified face was thrown away. Both silent. An unqualified name
+    leaves a reader a 50/50 guess about which one it gates, so the parameter is
+    named for the column rather than the concept.
 
-    #86 retired that column, so the specific confusion is gone and the name is
-    what stops it returning. Why it was retired rather than implemented is a
-    scope decision, recorded in CLAUDE.md and `20260812000000` -- not repeated
+    `identity_confidence` is retired, so the specific confusion is gone and the
+    qualified name is what stops it returning. Why it was retired rather than
+    implemented is a scope decision, recorded in CLAUDE.md -- not repeated
     here, or at the three other sites that only need to know the name is
     deliberate.
 

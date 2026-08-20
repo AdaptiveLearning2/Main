@@ -8,17 +8,9 @@ import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 
-// "Notifications" is gone rather than fixed. It offered three switches -- a new
-// student enrolling, a weekly report every Monday, alerts on generation
-// failures -- and none of them had anything behind them: there is no push
-// infrastructure in this product, no service worker, no VAPID key and no
-// scheduled fan-out. The switches held React state and were forgotten on
-// navigation.
-//
-// The same call was already made once, for the student's `practice_reminders`:
-// it stopped describing notifications and became what it actually is, a banner.
-// A switch that persists nothing is worse than an absent feature, because it
-// tells a teacher a thing is on.
+// No "Notifications" tab: there is no push infrastructure in this product --
+// no service worker, no VAPID key, no scheduled fan-out -- so a switch here
+// would persist nothing while telling a teacher a thing is on.
 const TABS = ['General', 'Security', 'Appearance']
 
 export default function TeacherSettings() {

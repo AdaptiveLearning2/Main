@@ -79,7 +79,7 @@ export default function StudentProgressReport({
 
   // Academic stats and the name. Deliberately not re-run when the facial
   // toggle flips: none of this depends on it, and re-fetching three endpoints
-  // to change one query parameter is the regression #36 shipped.
+  // to change one query parameter would be wasted work.
   useEffect(() => {
     Promise.all([
       apiFetch(`/api/stats/student/${studentId}`),
@@ -129,7 +129,7 @@ export default function StudentProgressReport({
       // Tracked separately from "no report": a failed request renders
       // identically to a quiet week otherwise, and telling a viewer the student
       // had no activity when the request just failed is worse than saying
-      // nothing. Same distinction #16 established for ClassDetail.
+      // nothing.
       .catch(err => {
         if (cancelled) return
         setSignalReport(null)

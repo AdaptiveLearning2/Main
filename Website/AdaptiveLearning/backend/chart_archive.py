@@ -1,4 +1,4 @@
-"""Render a closed session's charts and put them in private storage (Phase 8).
+"""Render a closed session's charts and put them in private storage.
 
 `chart_render.py` (part 1) turns a payload into SVG. This is the half that
 decides *what* payload, *when*, and *where it goes* -- and, mostly, what must
@@ -247,7 +247,7 @@ def signed_chart_urls(client, chart_paths, user_id: str,
       nobody wore a headband.
 
     A chart absent from `chart_paths` altogether is absent from both, meaning
-    it was never attempted -- every session closed before Phase 8 shipped.
+    it was never attempted -- every session closed before archiving shipped.
     """
     urls: dict[str, str | None] = {}
     missing: list[str] = []
@@ -318,7 +318,7 @@ def remove_objects(client, paths) -> tuple[int, list]:
 
 # ── sweeping objects whose session is gone ──────────────────────────────────
 #
-# Storage does not cascade (#107). Deleting a `sessions` row -- or a `profiles`
+# Storage does not cascade. Deleting a `sessions` row -- or a `profiles`
 # row, which cascades to sessions -- leaves the SVGs behind, and `main.py` has no
 # delete endpoint to hook, so today those deletes come from the dashboard or a
 # direct connection. A sweep is the only shape that catches them.

@@ -189,7 +189,7 @@ def _row_or_404(query, what: str) -> dict:
 
 # The four values `profiles.role` may hold. `admin` is the only one a person
 # cannot choose for themselves at sign-up -- `handle_new_user` whitelists the
-# other three (20260824020000).
+# other three.
 ADMIN_ROLE = "admin"
 SELF_SERVICE_ROLES = ("student", "teacher", "parent")
 
@@ -199,11 +199,11 @@ def _role(uid: str) -> str:
 
     `user_metadata.role` is set by the client at sign-up and can be rewritten
     at any time with `supabase.auth.updateUser({data: {role: 'teacher'}})`,
-    which talks to GoTrue and never passes through this process. Three
-    endpoints used to gate on it, so a student could self-elevate and create
-    classes. `20260824010000` revokes UPDATE/INSERT on `profiles.role` from
-    `anon` and `authenticated`, which is what makes this column the answer
-    rather than a second copy of the same client-supplied claim.
+    which talks to GoTrue and never passes through this process. Gating on it
+    would let a student self-elevate and create classes. UPDATE/INSERT on
+    `profiles.role` is revoked from `anon` and `authenticated`, which is what
+    makes this column the answer rather than a second copy of the same
+    client-supplied claim.
 
     Fails **closed**, to the least-privileged role: `_profile` already degrades
     to a student-shaped dict on a failed read, and 'student' is the value that
@@ -215,7 +215,7 @@ def _role(uid: str) -> str:
 def _placeholder_profile(uid: str) -> dict:
     """What a caller gets when a profile cannot be read, or has no row.
 
-    The preference defaults are repeated from 20260822000000's column defaults
+    The preference defaults are repeated from the column defaults
     deliberately. This stands in for a *failed read*, and the caller cannot tell
     it from a real profile -- so omitting them would hand the page `undefined`
     for three controls and it would render them unset, which reads as "the
@@ -716,7 +716,7 @@ def _discard_if_nothing_recorded(session_id: str, questions,
     """Delete a session that answered nothing and recorded nothing. True if gone.
 
     Pressing Connect Headband creates the session, and it has to -- signals need
-    one to attach to, and #27 moved creation off page-load precisely so the
+    one to attach to, and creation moved off page-load precisely so the
     button owns it. The cost is that every *failed* pairing attempt left a row
     behind, and History showed each one as a practice session: on one afternoon,
     four of five sessions had no questions and no samples of any kind.
@@ -887,7 +887,7 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
     reaching the lifetime totals a parent reads. Permanently: no later close
     revisits a session that is already stamped, and nothing logged it.
 
-    **Two integers from `session_answer_counts` (20260826000000), not the rows.**
+    **Two integers from `session_answer_counts`, not the rows.**
     This used to fetch up to 2000 `correct` values and sum them here, which
     meant carrying a cap -- and a cap needs its own fallback, because a capped
     count is *wrong* rather than merely slow, and crediting a wrong low number
@@ -1226,15 +1226,9 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
 def _summary_rpc(name: str, params: dict, include_heart: bool, include_emotion: bool):
     """Call a summary RPC with the facial opt-out threaded in.
 
-    This used to retry without p_include_face when the database had no matching
-    signature, covering the window between deploying the code and applying
-    20260801000000_signal_summary_include_face.sql. That migration is applied,
-    so the branch was unreachable and is gone (#48).
-
-    A schema mismatch is therefore an error again, which is the point: while the
-    fallback existed, a database missing p_include_face for any *other* reason
-    -- a bad rollback, an environment provisioned from an old dump -- degraded
-    to a silently wrong answer instead of failing.
+    A schema mismatch is an error: a database missing p_include_face for any
+    reason -- a bad rollback, an environment provisioned from an old dump --
+    would otherwise degrade to a silently wrong answer instead of failing.
     """
     return supabase.rpc(name, {**params,
                                "p_include_heart": include_heart,
@@ -1811,10 +1805,9 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             # This keeps a thin day visibly thin after the detail is gone --
             # without it four samples and four thousand look identical.
             "cognitive_samples": (cog_roll.get("sample_count") or 0) if cog_roll else len(day_cog),
-            # Emotion rows, not face rows. `face_signals` has two producers
-            # since Phase 11 step 2 -- a gaze-only row is a real face row with
-            # no emotion in it -- and `20260819000000` narrowed the rollup's
-            # emotion `sample_count` to match. Both sides have to move together
+            # Emotion rows, not face rows. `face_signals` has two producers --
+            # a gaze-only row is a real face row with no emotion in it -- and
+            # the rollup's emotion `sample_count` is narrowed to match. Both sides have to move together
             # or this number means something different depending on whether the
             # day happens to have been rolled up yet, which is exactly the
             # comparison the block above exists to keep sound.
@@ -1874,8 +1867,8 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
     rmssd_values = [r["rmssd_ms"] for r in heart
                     if r.get("rmssd_ms") is not None and r.get("trusted") is True]
     # Which sensor produced them, so a reader can tell a headband week from a
-    # camera week -- accuracy differs materially between sources, and after
-    # Phase 4 only the headband is validated at all.
+    # camera week -- accuracy differs materially between sources, and
+    # only the headband is validated at all.
     # Trusted rows only, matching the averages. Listing a source whose every
     # sample was rejected renders as "the headband was on and measured nothing"
     # beside a null average -- the "measured, unusable" state claiming to be a
@@ -2124,8 +2117,8 @@ class LinkChildRequest(BaseModel):
 class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
     grade_level:  str | None = None
-    # Learning preferences. Bounded here as well as by the CHECK constraints in
-    # 20260822000000, because a 422 names the field and a constraint violation
+    # Learning preferences. Bounded here as well as by the database's CHECK
+    # constraints, because a 422 names the field and a constraint violation
     # surfaces as a 500 from the client library.
     #
     # `ge`/`le` rather than a literal set for the bias: it is a shift applied by
@@ -2293,7 +2286,7 @@ def start_session(payload: StartSessionRequest, request: Request):
         .select("id, started_at, questions_answered, correct_answers") \
         .eq("user_id", user["id"]).is_("ended_at", "null").execute().data or []
     for s in stale_open:
-        # Also releases any pre-claim reservation (#34) left behind by a
+        # Also releases any pre-claim reservation left behind by a
         # scan/connect that never reached /start -- a stale session left this
         # way is exactly the "gave up mid-pairing" case that leaves one.
         eeg_poller.stop(s["id"], user["id"])
@@ -2393,7 +2386,7 @@ def _record_topic_attempt(user_id: str, question_id: str, correct: bool) -> str 
     answer must not be lost because a topic lookup failed -- the row in
     `session_answers` is the record that matters and it is already written.
 
-    **One statement, in the database** (`record_topic_attempt`, 20260825000000).
+    **One statement, in the database** (`record_topic_attempt`).
     This used to be four sequential round trips on the hottest path in the
     product -- question, topic, existing row, upsert -- and the last two were a
     read-modify-write with nothing holding a lock between them, so two answers
@@ -2445,7 +2438,7 @@ def end_session(session_id: str = Path(...), request: Request = None):
     # has to come first; the close still sees a stopped poller, which is the
     # ordering `_close_session` requires.
     data = _session_or_403(session_id, user["id"], "*")
-    # Also releases user["id"]'s pre-claim reservation (#34), if any.
+    # Also releases user["id"]'s pre-claim reservation, if any.
     eeg_poller.stop(session_id, user["id"])  # auto-stop EEG poller
     # Already closed, by the stale sweep or by a teacher opening the Live view.
     # Both of those credit the lifetime totals, and this endpoint credits the
@@ -3096,12 +3089,9 @@ def _strategy_basis(student_id: str, days: int, include_face: bool) -> dict:
     One difference from the report's own figures, an improvement: sessions is
     Postgres's count rather than a row count capped at _SESSION_ROW_CAP.
 
-    It also used to differ by omitting identity_confidence -- a face-identity
-    score this response was never about, which had reached `basis` only because
-    an earlier version passed the whole averages dict along. The `averages`
-    below is an explicit list rather than a copy, which is what fixed that; the
-    column itself was retired in #86, so the point is now historical and the
-    list is the right shape regardless.
+    The `averages` below is an explicit list rather than a copy of the whole
+    averages dict, so a field this response was never about cannot reach
+    `basis` just by existing on the source object.
 
     include_face is threaded down into the aggregate, so with the opt-out on no
     facial row is read here either.
@@ -4403,9 +4393,9 @@ class HeartSample(BaseModel):
 
     `source` is required and constrained in the database to
     muse_optics | muse_ppg | rppg, because consent is per *sensor* and a row
-    that cannot say which sensor produced it cannot be consent-checked. After
-    Phase 4 nothing writes `rppg` -- camera heart rate failed ECG validation --
-    but the column stays honest about what the schema permits.
+    that cannot say which sensor produced it cannot be consent-checked. Nothing
+    writes `rppg` today -- camera heart rate failed ECG validation -- but the
+    column stays honest about what the schema permits.
     """
     ts:                 str | None = None
     source:             str
@@ -4688,7 +4678,7 @@ def ingest_face(payload: FaceBatch, request: Request):
         for s in payload.samples
     ) if r is not None]
     # Insert, not upsert: `face_signals` has no dedupe key yet. See
-    # 20260809120000 for why that is deferred rather than undecided, and the
+    # CLAUDE.md for why that is deferred rather than undecided, and the
     # query to run before adding one.
     if rows: supabase.table("face_signals").insert(rows).execute()
     return {"ok": True, "inserted": len(rows)}
@@ -4825,7 +4815,7 @@ def session_charts(session_id: str, request: Request):
 
     | Field | Meaning |
     | --- | --- |
-    | `archived: false` | the archive never ran -- closed before Phase 8, or the job failed |
+    | `archived: false` | the archive never ran -- session closed before archiving shipped, or the job failed |
     | `charts[name]: null` | that channel produced nothing to draw |
     | `name in unavailable` | a path was recorded and the object could not be read |
 
@@ -4877,7 +4867,7 @@ def _latest_signals_many(session_ids) -> dict[str, dict[str, dict]]:
     This was four queries per session, fanned into a four-worker pool, called
     once per student in a loop -- so a class of thirty cost 120 queries a poll
     at four in flight, on a page that polls every second. It is now one call to
-    `latest_signals_for_sessions` (20260827000000), which does the same
+    `latest_signals_for_sessions`, which does the same
     `DISTINCT ON` selection in SQL for the whole roster.
 
     **Widening the fan-out was the wrong fix and worth not re-attempting.** The
@@ -4978,7 +4968,7 @@ def class_live(class_id: str, request: Request):
 
             if last_activity and last_activity < stale_cutoff:
                 # First, and this site had it last. `sid`, not the teacher
-                # reading this view -- the reservation (#34), like the poller,
+                # reading this view -- the reservation, like the poller,
                 # belongs to the student whose stale session this is.
                 #
                 # Before the close, not after it: a poller left running past the
@@ -5076,10 +5066,8 @@ def _refuse_under_push(what: str) -> None:
     fault when the deployment simply does not work that way.
 
     Every endpoint in the family that raises goes through here, /api/eeg/start
-    included. It kept its own inline copy for one commit on the grounds that its
-    wording was older, which left two hand-written versions of one refusal and a
-    docstring claiming they were shared -- exactly the drift this helper exists
-    to stop. The `/api/signals/*` pointer moved in here because it is the answer
+    included -- a hand-written inline copy is exactly the drift this helper
+    exists to stop. The `/api/signals/*` pointer moved in here because it is the answer
     everywhere: it is where the data goes in this deployment, whatever the
     caller was trying to do.
 
@@ -5101,12 +5089,12 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
 
     session_id, when the caller sends one, records which pairing attempt owns
     the reservation so that closing *that* session releases it and closing a
-    different one does not (#88). Optional on purpose: an older frontend sends
+    different one does not. Optional on purpose: an older frontend sends
     nothing and gets the previous release-everything behaviour rather than a
     reservation nothing can clear.
 
     Shared by muse/refresh and muse/connect -- the two actions that *start* a
-    pairing attempt, and so are what reserve_device (#34) exists to protect.
+    pairing attempt, and so are what reserve_device exists to protect.
     muse/disconnect does not go through here; see its own comment for why it
     checks ownership instead of claiming it.
 
@@ -5114,9 +5102,7 @@ def _reserve_and_call(user_id: str, device_id: str, fn, *args,
     every path that ends the request without a working bridge call releases
     what it just claimed -- scoped to *this* device_id, not every reservation
     the caller holds, so a failure here can't drop a different, still-valid
-    reservation the same user holds on another station (the bug two review
-    rounds fixed one call site at a time before this was pulled out into one
-    place).
+    reservation the same user holds on another station.
     """
     if not eeg_poller.reserve_device(user_id, device_id, session_id):
         raise HTTPException(403, "Station in use by another user")
@@ -5148,7 +5134,7 @@ def eeg_muse_refresh(request: Request, body: dict = Body(default={})):
     _refuse_under_push("scan for headbands")
     # A station with a live poller is that poller's owner's in-progress
     # session -- another user rescanning it is per-victim griefing, not just
-    # an unwanted side effect. reserve_device (#34) also claims the pre-claim
+    # an unwanted side effect. reserve_device also claims the pre-claim
     # pairing window: a scan is the first interaction with an unclaimed
     # station, so it is where that station's TTL'd reservation starts.
     return _reserve_and_call(user["id"], device_id, eeg_client.muse_refresh, device_id,
@@ -5177,10 +5163,10 @@ def eeg_muse_disconnect(request: Request, body: dict = Body(default={})):
     # teardown action, not the start of a pairing attempt: calling it against
     # a station nobody currently owns has no victim and no intent to pair, so
     # there is nothing there worth protecting with a 30s exclusive hold. Using
-    # reserve_device here (an earlier version of this fix did) meant a
+    # reserve_device here would mean a
     # disconnect against a free station claimed it anyway, indefinitely
     # renewable by repeating the call -- a station made unusable by the same
-    # kind of action #34 exists to keep available. can_use_device still
+    # kind of action the reservation system exists to keep available. can_use_device still
     # blocks a stranger from disconnecting someone else's live-polled or
     # actively-reserved station, which is the actual griefing case this
     # endpoint has to guard against.
@@ -5341,7 +5327,7 @@ def eeg_start(payload: EegSessionRequest, request: Request):
         # Covers two distinct causes with one message deliberately: a live
         # poller already recording for someone else, or someone else's
         # reservation from an in-progress scan/connect that hasn't reached
-        # /start yet (#34). Both resolve the same way from here -- wait for
+        # /start yet. Both resolve the same way from here -- wait for
         # the other user to finish or disconnect -- so a caller does not need
         # to know which one it hit.
         raise HTTPException(
@@ -5361,7 +5347,7 @@ def eeg_stop(payload: EegSessionRequest, request: Request):
     _session_or_403(payload.session_id, user["id"])
     # eeg_poller.stop releases user["id"]'s reservation too, unconditionally
     # -- not just when a live poller existed. A user who only got as far as
-    # scan/connect (#34's pre-claim reservation, never promoted to a poller)
+    # scan/connect (a pre-claim reservation, never promoted to a poller)
     # still holds a claim on the station, and /stop is the signal they're
     # done with it.
     out = eeg_poller.stop(payload.session_id, user["id"])
@@ -5795,9 +5781,9 @@ def my_children(request: Request, include_face: bool = True):
 # `supabase.auth.updateUser` without this backend ever seeing it.
 #
 # `admin` is a role rather than a side table because the column is now
-# server-controlled on both edges: the client cannot write it (20260824010000)
-# and sign-up cannot ask for it (20260824020000). It is set from the dashboard
-# SQL editor, like `retention_window`'s row.
+# server-controlled on both edges: the client cannot write it, and sign-up
+# cannot ask for it. It is set from the dashboard SQL editor, like
+# `retention_window`'s row.
 
 
 def _is_admin(user_id: str) -> bool:
@@ -5808,10 +5794,10 @@ def _is_admin(user_id: str) -> bool:
     first design here and it was two answers to one question: a row present with
     the role absent, or the reverse, has no correct interpretation.
 
-    Safe as a role only because of the two migrations that made it one:
-    `20260824010000` revokes UPDATE/INSERT on the column from the client roles,
-    and `20260824020000` stops `handle_new_user` accepting 'admin' from the
-    sign-up form. Without both, this reads a value the caller chose.
+    Safe as a role only because of two things holding together: UPDATE/INSERT
+    on the column is revoked from the client roles, and `handle_new_user`
+    stops accepting 'admin' from the sign-up form. Without both, this reads a
+    value the caller chose.
 
     Fails **closed** through `_role`, which degrades to 'student' on a failed
     read. This stands in front of the switch that decides whether consent is
@@ -6129,7 +6115,7 @@ _ADMIN_LIVE_SESSION_CAP = 200
 # futures it had submitted to it, so fanning this endpoint's outer loop into
 # that pool would have deadlocked exactly as described. That pool is gone:
 # `class_live` now reads every open session's channels in one SQL call
-# (`latest_signals_for_sessions`, 20260827000000) and needs no threads at all.
+# (`latest_signals_for_sessions`) and needs no threads at all.
 # The rule above outlived the pool that taught it.
 _ADMIN_LIVE_POOL: ThreadPoolExecutor | None = None
 _admin_live_pool_lock = threading.Lock()

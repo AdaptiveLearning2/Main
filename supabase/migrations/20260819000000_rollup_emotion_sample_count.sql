@@ -1,7 +1,7 @@
 -- The emotion channel's sample_count stops counting gaze-only rows.
 --
--- `face_signals` gained a second producer in Phase 11 step 2: the face-mesh
--- landmarker writes `gaze_x`/`gaze_y`, and `push_client` enqueues a row when
+-- `face_signals` gained a second producer: the face-mesh landmarker writes
+-- `gaze_x`/`gaze_y`, and `push_client` enqueues a row when
 -- *either* measurement succeeds. So a window where the landmarker read a gaze
 -- and FER+ refused is a real face row with a null emotion -- and the emotion
 -- channel's `sample_count`, which was `count(*)` over the whole table, counted
@@ -124,9 +124,9 @@ BEGIN
                   GROUP BY emotion) e),
            -- `emotion IS NOT NULL` for the sample count, unlike the other two
            -- channels, which count every row in their table. `face_signals`
-           -- became the only table with **two** producers when Phase 11 step 2
-           -- gave `gaze_x`/`gaze_y` one, so `count(*)` here stopped meaning
-           -- "emotion samples" and started meaning "face rows" -- inflated by
+           -- is the only table with **two** producers, now that `gaze_x`/
+           -- `gaze_y` has one, so `count(*)` here would mean "face rows"
+           -- rather than "emotion samples" -- inflated by
            -- every window where the landmarker succeeded and FER+ refused.
            --
            -- That matters because this is the copy that outlives

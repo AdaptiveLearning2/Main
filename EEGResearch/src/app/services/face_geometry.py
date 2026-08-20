@@ -1,8 +1,8 @@
-"""Head pose and gaze direction from face landmarks (Phase 11, geometry half).
+"""Head pose and gaze direction from face landmarks.
 
 This is the measurable half. It turns a set of named 2D landmarks into a head
 rotation and an eye-gaze offset, and it stops there -- **it does not score
-attention**. That separation is deliberate and is the plan's own guard: the
+attention**. That separation is deliberate: the
 geometry has a right answer and can be checked against one, while the inference
 from "looking 20 degrees left" to "not attending" is a judgement about a child,
 least valid for exactly this product's users. Keeping them apart means the
@@ -18,8 +18,8 @@ a separate change (MediaPipe Face Mesh is the candidate -- Apache 2.0, models
 downloadable without an agreement, which is the constraint that blocked
 RhythmMamba, since the sidecar installs on a student's laptop).
 
-Why not `cv2.solvePnP`, which the plan suggested
-------------------------------------------------
+Why not `cv2.solvePnP`
+-----------------------
 solvePnP needs a camera matrix, and we do not have one. A student's webcam
 intrinsics are unknown and vary by device, so the focal length would have to be
 guessed -- and a wrong focal length does not produce an obvious failure, it

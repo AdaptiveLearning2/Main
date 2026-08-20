@@ -1,29 +1,20 @@
 // Where each role's app actually starts.
 //
 // `RoleGuard` sends a user who reached a route they may not see back to their
-// own home. It used to compute that as `role === 'teacher' ? '/teacher' :
-// '/dashboard'`, which is a **loop** for a parent: `/dashboard` is student-only,
-// so the guard rejects it and sends them to `/dashboard` again. Anyone who
-// followed a stale teacher link, or typed `/`, bounced until the browser gave
-// up. The two-branch shape hid it -- there are three roles.
-//
-// Kept here rather than inline in the guard because `/` needs the same answer,
-// and a second copy of this map is how the two come to disagree.
+// own home, computed from a role-to-route map rather than a two-branch
+// ternary -- a two-branch check for three-plus roles produces a loop for
+// whichever role isn't named, bouncing between "refused" and "sent right
+// back". Kept here rather than inline in the guard because `/` needs the
+// same answer, and a second copy of this map is how the two come to
+// disagree.
 export const HOME_BY_ROLE = {
   student: '/dashboard',
   teacher: '/teacher',
   parent:  '/parent',
-  // The fourth role, from the admin console (#125). It arrived while this
-  // module was on another branch, so nothing conflicted and nothing flagged it
-  // -- an admin hitting `/` got `homeFor` = null, fell through to `/dashboard`,
-  // and was refused by the student guard onto the "no role assigned" screen.
-  // Wrong rather than looping, which is the null-not-a-default rule below doing
-  // its job; this is the entry that makes it right.
-  //
-  // `/admin` is guarded by AdminGuard on `profiles.role`, while the `role` this
-  // map is keyed by comes from `user_metadata.role`. The two agree for an admin
-  // whose metadata says so, and where they disagree AdminGuard is the one that
-  // decides access -- this only decides where to *send* someone.
+  // `/admin` is guarded by AdminGuard on `profiles.role`, while the `role`
+  // this map is keyed by comes from `user_metadata.role`. The two agree for
+  // an admin whose metadata says so, and where they disagree AdminGuard is
+  // the one that decides access -- this only decides where to *send* someone.
   admin:   '/admin',
 }
 

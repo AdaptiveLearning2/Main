@@ -51,8 +51,7 @@ function renderReport(props = {}) {
 }
 
 it('requests the weekly report once per render, not twice', async () => {
-  // Two effects both fetching the report on mount is the duplicate-request bug
-  // in #36; one of them also read includeFace without declaring it.
+  // Guards against two effects both fetching the report on mount.
   renderReport()
   await screen.findByText('Recent Sessions')
   expect(urlsFor('/weekly-report')).toHaveLength(1)
@@ -103,11 +102,9 @@ describe('at-home strategies', () => {
   it('POSTs a JSON body, not an empty request', async () => {
     // The endpoint's only parameter is a Pydantic model with no default of
     // its own, so FastAPI requires a body even though every field inside the
-    // model defaults -- a bodyless POST 422s. This regression shipped once
-    // already: the old includeFace body was deleted with the viewer-side
-    // control and nothing took its place. apiFetch is mocked here, so this
-    // cannot exercise real serialization -- it only asserts the call itself
-    // still carries a body for lib/api.js's `if (body)` to serialize.
+    // model defaults -- a bodyless POST 422s. apiFetch is mocked here, so
+    // this cannot exercise real serialization -- it only asserts the call
+    // itself still carries a body for lib/api.js's `if (body)` to serialize.
     renderReport({ showStrategies: true })
     await screen.findByText('Recent Sessions')
     await userEvent.click(screen.getByRole('button', { name: /generate strategies/i }))
@@ -135,10 +132,8 @@ describe('at-home strategies', () => {
 
 
 it('asks for the report without a viewer-side flag', async () => {
-  // The old control sent `include_face`, so the client could narrow what the
-  // server read. Consent decides that now, server-side, and it is not the
-  // viewer's to override -- a second axis on the same question is what made
-  // the old control expensive to reason about.
+  // Consent decides what the server reads, server-side, and it is not the
+  // viewer's to override with a client-side `include_face` flag.
   renderReport()
 
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))

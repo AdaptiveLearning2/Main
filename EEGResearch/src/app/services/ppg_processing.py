@@ -464,7 +464,7 @@ class HeartRateTracker:
         self.anchor_min_confidence = anchor_min_confidence
         self._rejections = 0
         # A candidate anchor that has not yet been seen twice. Nothing is
-        # published from it until it is (#105).
+        # published from it until it is.
         self._pending: float | None = None
 
     def update(self, channels: np.ndarray, fs: float, seconds_since_previous: float) -> HeartEstimate:
@@ -491,9 +491,8 @@ class HeartRateTracker:
                     # two windows disagreed with it, which is what a mid-lesson
                     # motion event looks like -- so the window doing the
                     # re-acquiring is drawn from exactly the population this
-                    # rule exists to distrust. Adopting `fresh` directly put
-                    # the *weakest* test on the *most* exposed path, and was
-                    # the pre-#105 bug relocated rather than fixed.
+                    # rule exists to distrust. Adopting `fresh` directly would
+                    # put the *weakest* test on the *most* exposed path.
                     self._pending = fresh.bpm
                     return HeartEstimate(
                         None, fresh.confidence, fresh.channels,
@@ -511,7 +510,7 @@ class HeartRateTracker:
             self.bpm = est.bpm
             return est
 
-        # ── unanchored: nothing is published until two windows agree (#105) ──
+        # ── unanchored: nothing is published until two windows agree ──
         #
         # The first window of a session, and the first after a lock is dropped,
         # is the one with no context -- and it is also the one most likely to be

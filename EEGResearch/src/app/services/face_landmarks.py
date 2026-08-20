@@ -1,4 +1,4 @@
-"""Named face landmarks from MediaPipe Face Mesh (Phase 11, step 1).
+"""Named face landmarks from MediaPipe Face Mesh.
 
 `face_geometry` takes named landmarks and returns head pose and gaze. This is
 what produces the names. It is deliberately the only file that knows a mesh

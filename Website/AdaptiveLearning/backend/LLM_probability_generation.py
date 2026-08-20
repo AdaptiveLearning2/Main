@@ -1,7 +1,4 @@
-﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
-# 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
-# 3. Generate 4 unique answer options, including correct answer, using LLM.
-# 4. Send question and answer options to frontend to display to user.
+﻿# Generates a probability question via LLM and solves it with sympy.
 
 import os
 import re
@@ -22,7 +19,7 @@ import grade_appropriateness
 import question_consistency
 
 
-#current probability scenarions: probability_of, not_probability_of, dice, 
+# Scenarios: probability_of, not_probability_of, dice.
 def extract_json(text):
     start = text.find("{")
     if start == -1:
@@ -41,13 +38,13 @@ def extract_json(text):
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
-        return str(x)          # "3/4"
+        return str(x)
     if isinstance(x, sp.Integer):
-        return int(x)          # 5
+        return int(x)
     if isinstance(x, sp.Float):
         return float(x)
     if isinstance(x, sp.Expr):
-        return str(x)          # "5*x", "3+4"
+        return str(x)
     return str(x)
 
 def solve_probability(scenario, items, target):
@@ -61,7 +58,6 @@ def solve_probability(scenario, items, target):
     return solution
 
 
-#need to check if these are right
 def solve_probability_of(items, target):
     total = sum(items.values())
     
@@ -84,11 +80,6 @@ def solve_not_probability_of(items, target):
 
 def solve_dice(sides, target):
     return Rational(len(target), sides)
-
-
-
-
-
 
 prob_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
@@ -183,21 +174,15 @@ GRADE_COMPLEXITY = {
 }
 
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
-
-#LLM seems to have poor randomization of scenarios, for now selecting randomized scenario for it.
+# The LLM has poor randomization of scenarios on its own, so the scenario is picked here instead.
 def generate_probability_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
-
-
     for attempt in range(max_retries):
         if attempt > 0:
             prompt = prob_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
         else:
             prompt = prob_prompt
 
-        #select a scenario from the tier matching this question's difficulty.
+        # select a scenario from the tier matching this question's difficulty
         scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
@@ -223,13 +208,12 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
-        #print("RAW RESPONSE", response.response)
         raw = extract_json(response.response)
 
         if not raw:
@@ -244,7 +228,6 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["scenario", "question_text", "target"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -266,13 +249,11 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     scenario = question_data["scenario"]
     target = question_data["target"]
 
@@ -290,90 +271,16 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
 
     solution = solve_probability(scenario, items, target)
 
-    # solution = str(solution) if solution else None
-
-
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique numbers only. NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations.
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - Fractions or values with up to two decimal places are allowed as long as they are unique and not equivalent to other values.
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     #print("RAW ANSWER", answer_response.response)
-        
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-   
     incorrect_answers = inc_gen.generate_incorrect_rational(solution) if solution is not None else []
     solution = serialize_sympy(solution) if solution is not None else None
     answers = [serialize_sympy(ans) for ans in incorrect_answers] + [solution]
 
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "probability",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

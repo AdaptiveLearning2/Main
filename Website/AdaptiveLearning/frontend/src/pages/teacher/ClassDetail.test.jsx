@@ -3,8 +3,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import ClassDetail from './ClassDetail'
 
-// Regression guards for the crashes fixed in PR #16, plus the load-error state
-// added alongside them. All three were reachable from a real API response.
+// Guards against crashes reachable from a real API response, plus the
+// load-error state that covers them.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
@@ -74,10 +74,10 @@ const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
 
 it('still reports a genuinely missing class as not found', async () => {
   // BOTH routes 404, which is what a missing class actually produces -- the
-  // roster runs the same owner check. An earlier version of this fixture had
-  // /students resolve [] here, a state the backend cannot reach, and it hid a
-  // live regression: the roster's rejection reached Promise.all first and the
-  // page reported a failed request instead of a missing class.
+  // roster runs the same owner check. Resolving /students to [] here would be
+  // a state the backend cannot reach, and would hide the roster's rejection
+  // reaching Promise.all first and reporting a failed request instead of a
+  // missing class.
   apiFetch.mockReset()
   apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()

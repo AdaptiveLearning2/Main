@@ -386,7 +386,7 @@ def test_a_zero_frame_rate_is_reported_rather_than_hidden():
     assert record["rejected_by"] == "frame_rate_too_low"
 
 
-# ── gaze (Phase 11, step 2) ─────────────────────────────────────────────────
+# ── gaze ─────────────────────────────────────────────────────────────────
 #
 # `face_signals.gaze_x` and `gaze_y` shipped in 20260625000000 with nothing
 # writing them. These cover the record layer; the geometry has its own tests and
@@ -440,11 +440,11 @@ def test_before_the_first_reading_is_not_a_refusal():
 
 
 def test_attention_stays_null_and_is_nobody_s_to_fill():
-    """Phase 11 step 3, and blocked on a labelled reference rather than on
-    code. It renders to a parent as a percentage, which reads as objective, and
-    "attention" inferred from head direction is least valid for exactly this
-    product's users. The key is emitted so a consumer can tell "no producer"
-    from "a key I forgot to read"."""
+    """Blocked on a labelled reference rather than on code. It renders to a
+    parent as a percentage, which reads as objective, and "attention" inferred
+    from head direction is least valid for exactly this product's users. The
+    key is emitted so a consumer can tell "no producer" from "a key I forgot
+    to read"."""
     record = build_face_record(EmotionResult("happy", 0.82, True),
                                gaze=Gaze(0.42, -0.03, 2), gaze_enabled=True)
 
@@ -476,7 +476,7 @@ def test_gaze_alone_still_produces_a_face_block():
     assert payload["face"]["emotion"] is None
 
 
-# ── head pose (Phase 11, step 2b) ───────────────────────────────────────────
+# ── head pose ────────────────────────────────────────────────────────────
 #
 # `gaze_x`/`gaze_y` are eye-in-head. Without pose they say nothing about where
 # the head points, so a student turned away with centred eyes reads identically

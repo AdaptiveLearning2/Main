@@ -411,7 +411,7 @@ _active: Dict[str, _Poller] = {}
 _warned_double_write: set[str] = set()
 _lock = threading.Lock()
 
-# Pre-claim pairing window (#34). can_use_device's own docstring used to say a
+# Pre-claim pairing window. can_use_device's own docstring used to say a
 # station with no live poller is "open to anyone" -- true and necessary, since
 # a user has to scan and connect before their own poller can exist, but it left
 # a gap: two users targeting the same unclaimed station could each read its
@@ -424,7 +424,7 @@ _lock = threading.Lock()
 # /start never called) would otherwise brick a physical station for anyone
 # else, which is exactly the contention pairing exists to resolve. 30s is a
 # reasoned default, not a measured one -- long enough to cover a ~12s
-# Bluetooth scan (PR #8) plus a subsequent connect attempt, short enough that
+# Bluetooth scan plus a subsequent connect attempt, short enough that
 # an abandoned pairing reopens the station well within a lesson. It is
 # sliding (refreshed on every reserve_device call from the same user), so an
 # active pairing flow that runs longer than one window doesn't expire out
@@ -436,7 +436,7 @@ RESERVATION_TTL_SECONDS = 30.0
 # ownership question, and checking them under different locks would let one
 # race past the other.
 #
-# session_id is what makes a release scopable (#88). It is **optional and
+# session_id is what makes a release scopable. It is **optional and
 # stays optional**: the pairing flow is allowed to run before a session
 # exists, and a caller that does not know one is not a caller to refuse. None
 # means "unattributable", which release_reservation treats as the old
@@ -486,7 +486,7 @@ def reserve_device(user_id: str, device_id: str,
     """Claim or refresh device_id's pre-claim reservation for user_id.
 
     session_id records *which* pairing attempt this is, so that ending one
-    session releases only the reservations that session created (#88). It is
+    session releases only the reservations that session created. It is
     optional because the pairing endpoints are reachable without one, and a
     missing session_id degrades to the old behaviour rather than refusing.
 
@@ -499,8 +499,8 @@ def reserve_device(user_id: str, device_id: str,
     stronger, later-stage claim start() enforces) or another user's
     reservation on it hasn't expired. The check and the claim happen under
     one lock so two users calling this for the same unclaimed device can't
-    both observe "free" before either commits -- the exact race #34 exists to
-    close.
+    both observe "free" before either commits -- the exact race this
+    reservation exists to close.
     """
     with _lock:
         owner = _live_poller_owner(device_id)
@@ -536,10 +536,10 @@ def release_reservation(user_id: str, device_id: str | None = None,
 
     With session_id (and no device_id): drop the reservations *this session*
     created, plus any the same user holds that are not attributed to a session
-    at all. This is what stop() uses, and it is the fix for #88 -- a user
-    genuinely can hold more than one reservation at once
+    at all. This is what stop() uses -- a user genuinely can hold more than one
+    reservation at once
     (test_the_same_users_failed_attempt_on_one_device_spares_their_other builds
-    exactly that), so closing one session used to release a different, live
+    exactly that), so closing one session must not release a different, live
     session's station up to RESERVATION_TTL_SECONDS early.
 
     **Unattributed entries are still dropped, deliberately.** Sparing them
@@ -557,8 +557,8 @@ def release_reservation(user_id: str, device_id: str | None = None,
     default so a caller that genuinely has no session in scope releases too
     much rather than too little. The failure direction matters: releasing early
     can only make a station available sooner than ideal, never deny one to its
-    rightful holder, and that asymmetry is what made the #88 tradeoff
-    acceptable while it stood.
+    rightful holder, and that asymmetry is what makes this tradeoff
+    acceptable.
     """
     with _lock:
         if device_id is not None:
@@ -782,7 +782,7 @@ def stop(session_id: str, user_id: str | None = None) -> dict:
             p.stop()
     release_for = user_id or (p.user_id if p else None)
     if release_for is not None:
-        # Scoped to this session (#88): a stale-session sweep must not release
+        # Scoped to this session: a stale-session sweep must not release
         # the station a *different*, still-live session of the same user is
         # mid-pairing with. Reservations this session never created, and that
         # carry a session_id of their own, are left alone.

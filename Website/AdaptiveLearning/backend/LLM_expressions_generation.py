@@ -14,13 +14,12 @@ from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
     implicit_multiplication_application
-) #treat 2x as 2*x for sympy parsing
+) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
 
-# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def is_numeric(expr):   
@@ -188,9 +187,6 @@ COMPLEXITY_BY_GRADE = {
 solution = -1
 
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
 def generate_expression_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -198,8 +194,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         else:
             prompt = expr_prompt
 
-
-        #randomize scenario selection (within what this grade band may see) to ensure variety.
+        # randomize scenario selection (within what this grade band may see) to ensure variety
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(grade_band)
 
@@ -227,9 +222,9 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
         raw = extract_json(response.response)
@@ -246,7 +241,6 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -259,15 +253,13 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
                                         attempt + 1):
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     parts = question_data['variables']
-    equation_stra = "".join(parts) #turn individual variables/operations into a single string to be parsed by sympy
+    equation_stra = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
     equation_stra = equation_stra.replace("âˆ’", "-")
     expr = parse_expr(equation_stra, transformations=transformations)
 
@@ -278,84 +270,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             solution = expr
         case "simplify":
             solution = sp.simplify(expr)
-    
-    #print("Solution:", solution)
-    # solution = str(solution) if solution is not None else None
 
-    # for attempt in range(max_retries):
-
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique numbers only. NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations. 
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     answer_response = None
-
-    #     if solution is not None:
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-
-    #     if answer_response is None:
-    #         print("Answer generation failed")
-    #         continue
-
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
-    #NOT SURE IF NEED TO SPLIT, Going to try w/out for now to test. 
-    # if scenario == "simplify":
-    #     incorrect_answers = inc_gen.generate_incorrect_simplified_answers(float(solution)) if solution is not None else [] #for answers like 2x
-    # else:
-    #     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
-    
     if scenario == "simplify":
         incorrect_answers = inc_gen.generate_symbolic_incorrect_answers(solution)
     else:
@@ -368,19 +283,10 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "expressions",
         "answer_options": answers,
         "correct_answer": str(normalize_answer(solution))
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

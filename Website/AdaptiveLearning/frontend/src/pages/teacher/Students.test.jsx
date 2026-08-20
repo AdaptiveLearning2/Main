@@ -6,21 +6,11 @@ import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 
 // This page reads topic performance from the browser client, and its academic
 // totals and signal averages from the backend -- /api/stats/student/{id} and
-// /api/students/{id}/signal-summary respectively.
-//
-// The totals used to come straight from `user_stats` through PostgREST, which
-// only gains a row when a session *closes* -- so a student answering questions
-// right now showed "0 questions" here while the parent's report, going through
-// the endpoint, showed the real figure for the same child at the same moment.
-//
-// The averages used to come from a direct cognitive_signals / face_signals read
-// capped at 200 rows. At the poller's 1 Hz default that cap binds after about
-// three minutes, so tiles labelled "last 7d" were averaging the newest three
-// minutes of one sitting and reporting a reading count pinned at exactly 200 as
-// a count of the week -- while the parent dashboard, aggregating the same week
-// in Postgres, showed different numbers for the same student. The tests below
-// cover the endpoint that replaced it, and that the facial switch still stops
-// the facial data being asked for rather than merely hiding it.
+// /api/students/{id}/signal-summary respectively -- so totals reflect a session
+// still in progress and week-long averages are not capped to a few minutes of
+// one sitting, matching what the parent dashboard reports for the same
+// student. The tests below cover those endpoints, and that the facial switch
+// still stops the facial data being asked for rather than merely hiding it.
 
 vi.mock('../../lib/api', () => {
   const apiCalls = []
@@ -84,9 +74,9 @@ const MEMBERSHIPS = {
   error: null,
 }
 
-// Seven days at 1 Hz across a few sittings. Deliberately far above the 200-row
-// cap the browser read used to impose, so a count rendered from rows rather
-// than from the aggregate cannot accidentally match.
+// Seven days at 1 Hz across a few sittings. Deliberately far above any small
+// row cap, so a count rendered from rows rather than from the aggregate
+// cannot accidentally match.
 const WEEK_OF_SAMPLES = 51840
 
 const SUMMARY = {
@@ -151,10 +141,9 @@ describe('signal averages', () => {
   })
 
   it('reports the whole window, not a row cap', async () => {
-    // The regression this endpoint exists for. The browser read it replaced was
-    // capped at 200 rows, so a busy week rendered "200 EEG readings · last 7d"
-    // -- a cap presented as a measurement of the week, and a number the parent
-    // dashboard contradicted for the same student.
+    // Guards against a row cap being presented as a measurement of the week
+    // -- e.g. rendering "200 EEG readings · last 7d" for a busier week, a
+    // number that would contradict the parent dashboard for the same student.
     render(<Students />)
     await expandAda()
     await waitFor(() =>
@@ -388,23 +377,20 @@ describe('the "nothing recorded" note', () => {
 
 
 it('hides the sensor tiles without changing what it asks for', async () => {
-  // The teacher's remaining switch is a display filter. The old one narrowed
-  // the query, so every cached row and in-flight read had to be superseded when
-  // it flipped; this one does not, which is why it is client-side.
-  //
-  // Consent still decides what the server will return, and a channel that is
-  // off for consent reasons still says so when the filter is off -- the filter
-  // hides data, it never manufactures a reason. See lib/viewPrefs.js.
+  // The teacher's switch is a display filter, purely client-side: it does not
+  // narrow the query. Consent still decides what the server will return, and
+  // a channel that is off for consent reasons still says so when the filter
+  // is off -- the filter hides data, it never manufactures a reason. See
+  // lib/viewPrefs.js.
   expect(readHideSensorData()).toBe(false)
   writeHideSensorData(true)
   expect(readHideSensorData()).toBe(true)
 })
 
 it('actually hides the sensor tiles on screen when the switch is flipped, and leaves the rest', async () => {
-  // The switch used to update state and localStorage and nothing else -- the
-  // stat tiles below it were never gated on it, so flipping it visibly did
-  // nothing. This is the regression test for that: it renders the tiles, not
-  // just the preference.
+  // Guards against the switch updating state and localStorage while the tiles
+  // stay ungated on it, which would make flipping the switch visibly do
+  // nothing: this renders the tiles, not just the preference.
   render(<Students />)
   await expandAda()
 

@@ -1,4 +1,4 @@
--- The end-of-year delete (Phase 9, last piece).
+-- The end-of-year delete.
 --
 -- Per-sample rows expire; the year does not. `signal_daily_rollup` and the
 -- weekly report's fallback path (both already shipped) are what make this
@@ -13,8 +13,8 @@
 --
 -- Not handled here: Supabase Storage. Object deletion does not cascade from a
 -- row delete, and `sessions.chart_paths` -- the column that would say which
--- objects to remove -- is Phase 8 and does not exist yet. When it lands, this
--- job grows a step; until then there are no archived charts to orphan.
+-- objects to remove -- does not exist yet. When it lands, this job grows a
+-- step; until then there are no archived charts to orphan.
 
 -- ── which days are expired ──────────────────────────────────────────────────
 --
@@ -61,7 +61,7 @@ GRANT EXECUTE ON FUNCTION "public"."expired_signal_cutoff"() TO "service_role";
 -- **Refuses to delete a day that has no rollup row**, per student per channel.
 -- This is the single most important line in the file. Without it a bug in the
 -- rollup writer becomes silent permanent data loss on a fixed date -- the one
--- failure mode in this phase with no recovery, since the rows it would take are
+-- failure mode here with no recovery, since the rows it would take are
 -- the only copy. With it, a broken writer degrades to data that simply does not
 -- expire, which is visible, fixable, and reversible.
 --

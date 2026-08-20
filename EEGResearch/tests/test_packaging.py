@@ -111,8 +111,8 @@ def test_there_is_exactly_one_cv2_provider():
 def test_no_rppg_library_is_depended_on():
     """The pulse extraction is ours. Every packaged deep-learning rPPG carries
     weights trained on a dataset behind a per-requester agreement, and the
-    classical ones fail on licence or packaging -- see the plan's Phase 4
-    dependency section before adding one."""
+    classical ones fail on licence or packaging -- check that before adding
+    one."""
     project = _pyproject()["project"]
     everything = " ".join(
         project["dependencies"]

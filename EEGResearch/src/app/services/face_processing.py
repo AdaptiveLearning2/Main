@@ -234,11 +234,11 @@ def build_face_record(
     * `None` + a reason   -- measured and refused (no eye, closed eye, no face)
     * a number            -- a reading
 
-    **`attention` is deliberately null and has no producer.** That is Phase 11
-    step 3, and it is blocked on a labelled reference rather than on code: an
-    attention score inferred from head direction is least valid for exactly this
-    product's users, and unlike a FER+ label it renders as a percentage, which
-    reads as objective. Nothing may fill it without that measurement.
+    **`attention` is deliberately null and has no producer.** It is blocked on
+    a labelled reference rather than on code: an attention score inferred from
+    head direction is least valid for exactly this product's users, and unlike
+    a FER+ label it renders as a percentage, which reads as objective. Nothing
+    may fill it without that measurement.
 
     It rides with the gaze keys rather than always being present, because it
     would be derived from gaze and head pose -- so it belongs to that channel

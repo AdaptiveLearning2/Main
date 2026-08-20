@@ -9,8 +9,7 @@ Provenance, checked 2026-08-07
 ------------------------------
 Apache 2.0, published by the ONNX Model Zoo, commercial use permitted with
 attribution. This is the one third-party model in the facial pipeline that
-survived review; the rPPG networks did not, which is why `pos_rppg` exists. See
-the plan's Phase 4 dependency section.
+survived review; the rPPG networks did not, which is why `pos_rppg` exists.
 
 What the original did and why none of it survives
 -------------------------------------------------

@@ -1,7 +1,4 @@
-﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
-# 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
-# 3. Generate 4 unique answer options, including correct answer, using LLM.
-# 4. Send question and answer options to frontend to display to user.
+﻿# Generates a "mode" question via LLM and computes the mode(s) with sympy/Counter.
 
 from collections import Counter
 import os
@@ -21,9 +18,6 @@ import grade_levels
 import grade_appropriateness
 import question_consistency
 
-#POSSIBLY: manually generate solution using numbers from question_text.
-#This way I can count the # of modes present and ensure solution matches
-#that amount w/ randomly selected numbers. 
 def extract_json(text):
     start = text.find("{")
     if start == -1:
@@ -129,7 +123,6 @@ def generate_incorrect_answers(solution, values):
     return generated_answers
 
 def normalize_answer(ans):
-    #always return list
     if isinstance(ans, list):
         return [str(x) for x in ans]
     return [str(ans)]
@@ -169,9 +162,6 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_mode_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -199,9 +189,9 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
@@ -219,7 +209,6 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -241,101 +230,24 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     parts = question_data['variables']
     solution = mode(parts)
 
-    #solution = normalize_answer(solution_list)
-
-    #print("Solution:", solution)
-    # solution = str(solution) if solution else None
-
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique, whole numbers numbers only. These numbers MUST come from the numeric values specified in the question that are not the solution.
-    #     - NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations.
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
     incorrect_answers = generate_incorrect_answers(solution, parts)
     solution = serialize_answer(solution)
     answers = [serialize_answer(ans) for ans in incorrect_answers] + [solution]
-    
+
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "mode",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

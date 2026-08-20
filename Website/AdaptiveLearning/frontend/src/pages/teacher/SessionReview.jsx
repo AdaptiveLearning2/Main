@@ -55,14 +55,10 @@ function ArchivedChart({ url, label }) {
 
 export default function SessionReview() {
   const { sessionId } = useParams()
-  // Where "Back" goes, from where the teacher came. Both links were hardcoded
-  // to `/teacher/live`, so opening a session from the Sessions history sent
-  // them to Live Monitoring on the way out -- a different page, with their
-  // place in the list lost. `StudentReport.jsx` already carries this pattern.
-  //
-  // Falls back to Live rather than to `history.back()`: a teacher who arrived
-  // by pasting a link has no history to go back to, and Live is where the
-  // session ids are most likely to have come from.
+  // Where "Back" goes, from where the teacher came. Falls back to Live rather
+  // than `history.back()`: a teacher who arrived by pasting a link has no
+  // history to go back to, and Live is where the session ids are most likely
+  // to have come from.
   const location = useLocation()
   const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
@@ -181,15 +177,10 @@ export default function SessionReview() {
       }
     })
 
-  // Each heart reading lands on **one** row: the row nearest to it.
-  //
-  // This used to iterate the rows instead, giving every row its nearest reading
-  // within 15s. Cognitive arrives at 4Hz, so a single heart reading was copied
-  // onto up to 120 consecutive rows and drew as half a minute of dead-flat
-  // line -- exactly the "carrying a reading across a gap" artefact the window
-  // was added to prevent, produced by the window itself. A session with one
-  // accepted window (poor electrode contact, say) looked like a heart that did
-  // not vary rather than a heart measured once.
+  // Each heart reading lands on **one** row: the row nearest to it. Cognitive
+  // arrives at 4Hz, so matching every row to its nearest reading within 15s
+  // would copy a single heart reading onto up to 120 consecutive rows and draw
+  // it as half a minute of dead-flat line.
   //
   // One reading, one point. `dot` on the lines below is what makes a lone
   // reading visible, since a single point with no neighbours draws no segment.
@@ -218,9 +209,7 @@ export default function SessionReview() {
     // Two readings can choose the same row -- `heart_signals` is unique per
     // (session, source, ts), so a headband and a camera reading the same
     // instant are two rows with one timestamp, and the union above collapses
-    // them to one point. The write used to be unconditional, so the second
-    // silently replaced the first and the chart showed one of the two sensors
-    // with nothing saying a reading had been dropped.
+    // them to one point.
     //
     // Closest wins, first wins a tie, and the loser is counted rather than
     // vanishing. Not merged or averaged: two sensors' calibrations combined
@@ -297,24 +286,21 @@ export default function SessionReview() {
 
   const hasChart = series.length >= 2
 
-  // The archive's four states, kept apart rather than collapsed into "is there
-  // a picture". Only the first two are facts about the session; the other three
-  // are facts about the archive, and a surface that reports them as "recorded
-  // nothing" is the absence-as-data failure the payload was shaped to prevent.
+  // The archive's five states, kept apart rather than collapsed into "is there
+  // a picture". Only the first two are facts about the session; the other
+  // three are facts about the archive, and reporting them as "recorded
+  // nothing" would assert an absence from data that never arrived.
   //
   //   url          -- archived and still readable
   //   'empty'      -- the archive ran and this channel drew nothing
   //   'unavailable'-- a path was recorded and the object could not be read
-  //   'unarchived' -- the archive never ran (closed before Phase 8)
+  //   'unarchived' -- the archive never ran for this session
   //   'failed'     -- we asked and the request did not come back
   //   'pending'    -- we have not finished asking
   //
-  // The last two used to share one 'unknown' state, and that state's copy was
-  // the *same sentence* as 'unarchived' -- "No signal samples for this
-  // session." So a backend hiccup, a stale 403, or simply the moment before the
-  // request lands all told a teacher the session recorded nothing, which is an
-  // absence asserted from data that never arrived: the one thing every other
-  // surface here is shaped to avoid. Five states, five sentences.
+  // Each state gets its own sentence below, so a backend hiccup, a stale
+  // permission error, or the moment before the request lands can never read
+  // as "there was nothing".
   const archivedChart = (name) => {
     if (archiveErr) return 'failed'
     if (!archive) return 'pending'
@@ -324,13 +310,9 @@ export default function SessionReview() {
     return url || 'empty'
   }
 
-  // One sentence for the states that are not a URL, so each empty block says
-  // the same true thing rather than each inventing its own wording.
-  // One sentence per state, and no two of them the same. `unarchived` and the
-  // old `unknown` shared this string, which made "we could not find out" read
-  // as "there was nothing" -- and left a teacher no way to tell a session that
-  // predates chart archiving from one whose charts simply failed to load, where
-  // the useful next action is to try again.
+  // One sentence per non-URL state, and no two of them the same, so a teacher
+  // can tell a session with nothing recorded from one whose charts simply
+  // failed to load, where the useful next action is to try again.
   const NO_CHART_COPY = {
     empty: 'Nothing was recorded on this channel.',
     unavailable: 'The archived chart for this session could not be loaded.',

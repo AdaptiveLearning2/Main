@@ -1,4 +1,4 @@
--- The school-year retention window (Phase 9).
+-- The school-year retention window.
 --
 -- An explicit term window rather than a rolling age: recording begins on the
 -- first day of school and per-sample rows are deleted on the last day. Both

@@ -89,13 +89,10 @@ WARMUP_SECONDS = 8.0
 #
 # `perf_counter`, not `monotonic`, and on Windows that is the whole ballgame:
 # `time.monotonic()` there has a resolution of **15.625 ms**, so at any frame
-# rate worth having it does not measure the interval, it quantises it.
-#
-# This was found by misreading its output. A webcam capture showed intervals
-# clustered at 31 ms and 47 ms and the pattern was diagnosed as the capture loop
-# beating against the camera's native cadence. 31 and 47 are 2 and 3 ticks of a
-# 15.625 ms clock. There was no beat; there was a clock that could not express
-# anything in between, and every frame interval was rounded to a multiple of it.
+# rate worth having it does not measure the interval, it quantises it -- every
+# interval rounds to a multiple of the clock (e.g. 31 ms and 47 ms are 2 and 3
+# ticks of it), which can look like a beat between the loop and the camera when
+# it is really just quantisation.
 #
 # `perf_counter` resolves 100 ns, is monotonic by contract, and costs the same.
 # It is only unsuitable for wall-clock questions, which nothing here asks --
@@ -250,16 +247,13 @@ class FaceCaptureAdapter:
         if not heart_enabled and not emotion_enabled and not gaze_enabled:
             # Opening a camera to compute nothing is never what was meant, and
             # the failure would be silent: frames read, nothing produced,
-            # indistinguishable from a student out of shot. The plan's rule is
-            # that emotion off with a healthy headband means the camera is not
-            # open at all -- this makes that unrepresentable rather than
-            # merely intended.
+            # indistinguishable from a student out of shot. Emotion off with a
+            # healthy headband means the camera should not be open at all --
+            # this makes that state unrepresentable rather than merely intended.
             #
-            # `gaze_enabled` counts, and had to be added here: the guard
-            # predates the channel, so a gaze-only camera -- emotion off, no
-            # 35 MB FER+ model to install -- was refused at construction while
-            # `build_camera_payload` carried a comment calling it a coherent
-            # deployment. One of the two was wrong; this was.
+            # `gaze_enabled` counts too: a gaze-only camera (emotion off, no
+            # 35 MB FER+ model to install) is a coherent deployment and must
+            # not be refused at construction.
             raise ValueError(
                 "refusing to open a camera with heart, emotion and gaze all disabled"
             )

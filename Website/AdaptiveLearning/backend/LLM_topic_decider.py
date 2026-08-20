@@ -1,4 +1,3 @@
-#Ideally - this will be called from LLMTest2 to randomly select a topic. Then can call methods from other files for specific question generation.
 import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS #pip install flask-cors
@@ -16,12 +15,9 @@ import concurrent.futures
 from supabase_auth import datetime
 import LLM_algebra_generation, LLM_ordering_generation, LLM_rationals_generation, LLM_mean_generation, LLM_median_generation
 import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation, LLM_angle_relationship_generation, LLM_expressions_generation
-#python -m flask --app LLM_topic_decider run
+# python -m flask --app LLM_topic_decider run
 
-#connect with supabase 
-load_dotenv() 
-# url = os.getenv("VITE_SUPABASE_URL")
-# key = os.getenv("VITE_SUPABASE_ANON_KEY")
+load_dotenv()
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
@@ -65,9 +61,6 @@ def _safe_topic(topic, grade):
     allowed = _allowed_topics(grade)
     return topic if topic in allowed else random.choice(allowed)
 
-
-#Possibly worthwhile to store history in supabase.
-#Possibly reset history per session.
 
 def get_user_performance(user_id):
     # Fetched fresh every call (not cached) so this reflects the student's
@@ -255,13 +248,13 @@ def get_session_signal_state(session_id, user_id=None):
     )
 
 
-#Store 40 questions globally, 10 per topic 
+# 40 questions globally, 10 per topic
 user_histories = {}
 
 def get_user_history(user_id):
     if user_id not in user_histories:
         user_histories[user_id] = {
-            "global": deque(maxlen=40), #stores last 40 questions regardless of topic, can use to ensure no repeats
+            "global": deque(maxlen=40), # last 40 questions regardless of topic, used to avoid repeats
             "geometry": deque(maxlen=10),
             "algebra": deque(maxlen=10),
             "expressions": deque(maxlen=10),
@@ -353,7 +346,6 @@ def _attach_stored_id(question, difficulty):
     return question
 
 
-#Possibility - can just select topic/difficulty manually if LLM generation is too slow.
 def calculate_topic_and_difficulty(user_id, grade):
     accuracy_response = get_user_performance(user_id)
 
@@ -405,13 +397,8 @@ def parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt):
     return topic_response, difficulty_response
 
 
-#Change: use two separate prompt to try to improve speed and get more "adaptive" results. 
-#Prompt 1: Take in user performance data/recent history, select topic. 
-#Prompt 2: Select difficulty. 
-
-#PROBABLY: need to provide previous and current user performance data so LLM can see differences.  
-#Also should provide last topic selection? not sure since history should cover that. 
-def LLM_topic_and_difficulty_separate_decider(user_id, grade): 
+# Two separate prompts (topic, then difficulty) run in parallel for speed and more "adaptive" results.
+def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     accuracy_response = get_user_performance(user_id)
 
     json_response = accuracy_response.data or []
@@ -537,7 +524,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
                 difficulty_data = None
                 continue
 
-        # Validate required keys
         topic_required_keys = ["topic", "selection_method"]
         difficulty_required_keys = ["difficulty"]
         if not all(k in topic_data for k in topic_required_keys):
@@ -550,7 +536,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
             difficulty_data = None
             continue
 
-        # If we reach here → SUCCESS
         break
 
     if topic_data and difficulty_data:
@@ -572,7 +557,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     return question
 
 
-#Theres probably a cleaner way to do this - have a list of topics and then loop through to find the right one, rather than hardcoding every option. But this works for now.
 def question_generation(topic, difficulty, user_id, grade):
     history = get_user_history(user_id)
     recent_global = list(history["global"])[-5:]
@@ -763,13 +747,11 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
                 print(response.response)
                 continue
 
-        # Validate required keys
         required_keys = ["topic", "difficulty"]
         if not all(k in topic_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", topic_data)
             topic_data = None
             continue
-        # If we reach here → SUCCESS
         break
 
     if topic_data:
@@ -838,7 +820,6 @@ def randomize_selection(accuracy_response, grade):
     # for the grade rule; see its docstring.
     topic = random.choice(_allowed_topics(grade))
 
-    #get accuracy from supabase, select difficulty level accordingly
     for row in accuracy_response.data or []:
         if row.get("math_topics", {}).get("topic_name") == topic:
             correct = row.get("correct_questions") or 0
@@ -860,112 +841,6 @@ def randomize_selection(accuracy_response, grade):
     return topic, difficulty
 
 
-#select from 11 math topics
-#POSSIBLY can have LLM select topic first given things like stress/accuracy
-
-#TO-DO: Implement LLM-based topic selection, provide (optional) accuracy/stress values from frontend. 
-# def randomize_question():
-#     num = random.randint(0, 9) #get int from 0-9 inclusive
-#     print("num", num)
-#     match num:
-#         case 0:
-#             # Ordering, need to call generate question 
-#             response = LLM_ordering_generation.generate_ordering_question(history["global"], history["ordering"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "ordering"})
-#             history["ordering"].append({
-#                     "text": response["question_text"],
-#                     "topic": "ordering"}) 
-
-#         case 1:
-#             # Rationals
-#             response = LLM_rationals_generation.generate_rational_question(history["global"], history["rationals"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "rationals"})
-#             history["rationals"].append({
-#                     "text": response["question_text"],
-#                     "topic": "rationals"})
-#         case 2: 
-#             #expressions
-#             response = LLM_expressions_generation.generate_expression_question(history["global"], history["expressions"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "expressions"})
-#             history["expressions"].append({
-#                     "text": response["question_text"],
-#                     "topic": "expressions"})
-#         case 3: 
-#             #algebra
-#             response = LLM_algebra_generation.generate_algebra_question(history["global"], history["algebra"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "algebra"})
-#             history["algebra"].append({
-#                     "text": response["question_text"],
-#                     "topic": "algebra"})
-#         case 4: 
-#             #geometry
-#             response = LLM_geometry_generation.generate_geometry_question(history["global"], history["geometry"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "geometry"})
-#             history["geometry"].append({
-#                     "text": response["question_text"],
-#                     "topic": "geometry"})
-#         case 5:
-#             #angle relationship
-#             response = LLM_angle_relationship_generation.generate_angle_relationship_question(history["global"], history["angle_relationships"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "angle_relationships"})
-#             history["angle_relationships"].append({
-#                     "text": response["question_text"],
-#                     "topic": "angle_relationships"})
-#         case 6:
-#             #mean
-#             response = LLM_mean_generation.generate_mean_question(history["global"], history["mean"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mean"})
-#             history["mean"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mean"})
-#         case 7: 
-#             #median
-#             response = LLM_median_generation.generate_median_question(history["global"], history["median"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "median"})
-#             history["median"].append({
-#                     "text": response["question_text"],
-#                     "topic": "median"})
-#         case 8:
-#             #mode
-#             response = LLM_mode_generation.generate_mode_question(history["global"], history["mode"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mode"})
-#             history["mode"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mode"})
-#         case 9:
-#             #probability
-#             response = LLM_probability_generation.generate_probability_question(history["global"], history["probability"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "probability"})
-#             history["probability"].append({
-#                     "text": response["question_text"],
-#                     "topic": "probability"})
-
-#     print(response)
-#     return response
-
-
-
-
 app= Flask(__name__)
 CORS(app)
 @app.route("/")
@@ -977,5 +852,3 @@ def display_question():
 
     response = LLM_topic_decider(user_id)
     return jsonify(response)
-
-#New display_question function, request id from frontend then calls LLM_topic_decider

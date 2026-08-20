@@ -2,8 +2,8 @@ import { render, screen, cleanup, within } from '@testing-library/react'
 import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios -- that is what cognitive_signals and
-// face_signals store. Rendering them unscaled printed focus 0.72 as "1%", so
-// every metric on this panel came out ~100x too small (PR #22).
+// face_signals store. Guards against rendering them unscaled, which would
+// print focus 0.72 as "1%" and every metric ~100x too small.
 
 const report = {
   days: 7,
@@ -185,7 +185,7 @@ describe('LiveSignalSummary', () => {
     render(<LiveSignalSummary report={report} />)
     expect(metric('Focus').getByText('72%')).toBeInTheDocument()
     expect(metric('Stress').getByText('31%')).toBeInTheDocument()
-    // No Identity Confidence tile: #86 retired the column it read.
+    // No Identity Confidence tile: the column it read was retired.
     expect(screen.queryByText('Identity Confidence')).not.toBeInTheDocument()
   })
 
@@ -275,14 +275,10 @@ describe('facial reporting switched off', () => {
   const faceOff = { ...report, face_included: false }
 
   it('labels the weekly face tiles as off rather than missing', () => {
-    // "Off" alone could not say which of three things happened. One string
-    // cannot answer for three channels, and the one it used to give -- "the
-    // viewer switched facial reporting off" -- is no longer even a state that
-    // exists. With no revocation date in the payload it degrades to "Not
-    // recorded", which is still not "no data". Dominant Emotion goes through
-    // the same offLabel/valueOrReason path as Face Attention now, rather than
-    // a binary faceOn ? value : "Reporting off" that could not tell a genuine
-    // withdrawal from a failed consent read.
+    // "Off" alone cannot say which of three states happened, so this goes
+    // through the shared offLabel/valueOrReason path for every face tile.
+    // With no revocation date in the payload it degrades to "Not recorded",
+    // which is still not "no data".
     render(<WeeklySignalReport report={faceOff} />)
     expect(metric('Dominant Emotion').getByText('Not recorded')).toBeInTheDocument()
     expect(screen.getByText(/facial recognition data was not included/i)).toBeInTheDocument()

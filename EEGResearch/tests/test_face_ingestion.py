@@ -707,7 +707,7 @@ def test_enabling_the_heart_channel_is_never_quiet(caplog):
     )
 
 
-# ── gaze (Phase 11, step 2) ─────────────────────────────────────────────────
+# ── gaze ─────────────────────────────────────────────────────────────────
 
 class FakeLandmarker:
     """Stands in for MediaPipe. Returns whatever named landmarks it is given."""

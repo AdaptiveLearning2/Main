@@ -1,10 +1,9 @@
--- Archived session charts: the bucket and the column that indexes it
--- (Phase 8, part 2).
+-- Archived session charts: the bucket and the column that indexes it.
 --
 -- At session close the backend renders the session's charts to standalone SVG
--- (`chart_render.py`, part 1) and uploads them here. They are the human-readable
--- record of the year: when Phase 9's delete job removes per-sample rows on
--- `ends_on`, these objects and `signal_daily_rollup` are what survive.
+-- (`chart_render.py`) and uploads them here. They are the human-readable
+-- record of the year: when the end-of-year delete job removes per-sample rows
+-- on `ends_on`, these objects and `signal_daily_rollup` are what survive.
 
 -- ── the bucket ──────────────────────────────────────────────────────────────
 --
@@ -19,7 +18,7 @@
 -- object to anyone holding the URL, and a URL travels: once one is pasted into
 -- a message, no policy added later can un-share it. These objects are charts of
 -- a named child's cognitive and physiological signals. Access is a short-lived
--- signed URL issued by the backend after `_verify_can_view_student` (part 3).
+-- signed URL issued by the backend after `_verify_can_view_student`.
 --
 -- `file_size_limit` is a hard bound on a path with no other one. The renderer
 -- produces a few kB and the read that feeds it is capped, but the limit is what
@@ -60,8 +59,8 @@ ON CONFLICT ("id") DO NOTHING;
 -- Column-null is a fourth state and means the same as an absent key: nothing
 -- has been written for this session. That is why the column has no default --
 -- `'{}'::jsonb` would claim every historical session was archived and found
--- nothing, which is the report-an-absence-as-data failure this project has
--- spent nine phases avoiding.
+-- nothing, which is the report-an-absence-as-data failure this project takes
+-- care to avoid throughout.
 ALTER TABLE "public"."sessions"
     ADD COLUMN IF NOT EXISTS "chart_paths" jsonb;
 

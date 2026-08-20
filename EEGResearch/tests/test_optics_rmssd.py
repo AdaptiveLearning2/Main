@@ -51,13 +51,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def _window(samples, fs, span_seconds=RATE_WINDOW_SECONDS):
     """`samples` as a healthy link delivers them: nothing lost, no long gap.
 
-    **By keyword, and every field named.** This file was written against a
-    five-field `OpticsWindow` and merged against a seven-field one -- #83 added
-    `received_rate_hz` and `completeness` as fields 3 and 4 while this branch was
-    open, so the five positional arguments here silently became `channels`,
-    `fs`, `received_rate_hz`, `completeness`, `span_seconds`. It failed loudly
-    only because the two fields left over had no defaults; had they, this file
-    would have gone green describing a 25Hz link at 2% completeness.
+    **By keyword, and every field named.** `OpticsWindow` has grown fields over
+    time (`received_rate_hz` and `completeness` were inserted as fields 3 and
+    4), and positional arguments here would silently shift onto the wrong
+    fields whenever that happens again -- `channels`, `fs`, `received_rate_hz`,
+    `completeness`, `span_seconds` instead of the five originally intended.
+    That only fails loudly when the shifted-onto fields have no defaults; had
+    they, this file would have gone green describing a 25Hz link at 2%
+    completeness.
     `unusable_reason` *does* have a default, so the next field inserted into the
     middle of this record gets exactly that outcome. Naming the fields is what
     turns that from a wrong number into an error.

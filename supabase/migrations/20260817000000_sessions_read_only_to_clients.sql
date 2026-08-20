@@ -1,9 +1,9 @@
 -- `sessions` is written by the backend only, so stop granting clients writes.
 --
--- Found while reviewing the archived-chart endpoint (Phase 8, part 3). That
--- endpoint now derives the object path instead of trusting `chart_paths`, which
--- is the fix; this is the second layer, and it closes a wider hole than the one
--- that led here.
+-- Found while reviewing the archived-chart endpoint, which now derives the
+-- object path instead of trusting `chart_paths`. That endpoint fix is one
+-- layer; this is the second, and it closes a wider hole than the one that
+-- led here.
 --
 -- The state this replaces: `sessions` carried `authenticated=arwd` -- SELECT,
 -- INSERT, UPDATE, DELETE -- alongside a `sessions: own` policy with no `FOR`

@@ -17,7 +17,7 @@ terms belong to their authors, and because a binary nobody can regenerate is
 worse than a script.
 
 **This does not make camera rPPG work.** Accuracy against a reference is
-Phase 12's first blocker and is untouched by any of this -- it needs a
+the first blocker and is untouched by any of this -- it needs a
 synchronised video and ECG capture. All this establishes is that the *plumbing*
 is affordable.
 

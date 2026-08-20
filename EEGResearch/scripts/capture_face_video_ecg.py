@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Capture face frames for an ECG-referenced rPPG measurement (Phase 12).
+"""Capture face frames for an ECG-referenced rPPG measurement.
 
 **This is the one script here that writes images of a face to disk**, and it
-exists because Phase 12 cannot be answered without them. `capture_face_rgb.py`
+exists because a video/ECG comparison cannot be answered without them. `capture_face_rgb.py`
 reduces each frame to three numbers, which is why its fixture is committable —
 and why it cannot evaluate a learned model, which needs the pixels that
 reduction throws away.

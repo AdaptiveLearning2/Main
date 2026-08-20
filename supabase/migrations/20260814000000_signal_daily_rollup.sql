@@ -1,4 +1,4 @@
--- The daily rollup (Phase 9).
+-- The daily rollup.
 --
 -- One row per student per day per channel, written **as sessions close**, not
 -- generated at expiry. Writing it continuously means it is never a race against

@@ -4,12 +4,9 @@ import { vi } from 'vitest'
 import RoleGuard from './RoleGuard'
 import { homeFor, HOME_BY_ROLE } from '../../lib/homeRoute'
 
-// The guard sends a user who reached a route they may not see back to their own
-// home. That destination used to be `role === 'teacher' ? '/teacher' :
-// '/dashboard'`, which is an infinite loop for a parent: `/dashboard` is
-// student-only, so the guard rejects it and computes `/dashboard` again. A
-// parent following a stale link, or landing on `/`, bounced until the browser
-// stopped it.
+// The guard sends a user who reached a route they may not see back to their
+// own home, computed from a role-to-route map so no role's redirect can
+// point back at a route that same role is guarded away from.
 
 let auth = { user: { id: 'u1' }, role: 'student', loading: false }
 vi.mock('../../context/AuthContext', () => ({ useAuth: () => auth }))
@@ -35,8 +32,8 @@ function renderAt(path, guardRoles) {
 beforeEach(() => { auth = { user: { id: 'u1' }, role: 'student', loading: false } })
 
 it('sends a parent to the parent home, not the student one', async () => {
-  // The regression. Before the fix this rendered "student home", and in the
-  // real router that route is itself guarded -- so it bounced back here.
+  // Guards against a redirect landing a parent on a route that is itself
+  // guarded away from them, which would bounce right back here.
   auth = { user: { id: 'p1' }, role: 'parent', loading: false }
 
   renderAt('/dashboard', ['student'])
@@ -90,21 +87,19 @@ it('waits for auth instead of guessing while it loads', () => {
 })
 
 it('has no home for a role it does not know', () => {
-  // Was `admin`, which is now a real role with a real home (#125). An example
-  // that quietly becomes valid is worse than no example: this assertion would
-  // have gone on passing for `undefined` alone while claiming to cover the
-  // unknown-role case, which is the case the null-not-a-default rule exists for.
+  // Uses a role that is not in the map at all, rather than relying on
+  // `undefined` alone: an example that could quietly become a valid role is
+  // worse than no example, for the unknown-role case this null-not-a-default
+  // rule exists for.
   expect(homeFor('librarian')).toBeNull()
   expect(homeFor(undefined)).toBeNull()
   expect(homeFor(null)).toBeNull()
 })
 
 it('knows where each real role lives', () => {
-  // Every role the app actually has, so a fifth one added to the routes without
-  // an entry here fails rather than sending that user to a route their guard
-  // will refuse. `admin` is the one that got in without this: it arrived on a
-  // branch that never touched this file, so nothing conflicted and nothing
-  // flagged it, and an admin hitting `/` landed on "no role assigned".
+  // Every role the app actually has, so a role added to the routes without an
+  // entry here fails rather than sending that user to a route their guard
+  // will refuse.
   expect(homeFor('student')).toBe('/dashboard')
   expect(homeFor('teacher')).toBe('/teacher')
   expect(homeFor('parent')).toBe('/parent')

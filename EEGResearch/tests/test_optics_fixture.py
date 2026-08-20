@@ -306,7 +306,7 @@ def _tracked_bpms(numpy, frames):
 
 
 def test_the_derived_rate_rises_after_exertion():
-    """The half `test_the_pulse_rises_after_exertion` does not cover (#71).
+    """The half `test_the_pulse_rises_after_exertion` does not cover.
 
     That test takes a spectral peak per channel over the whole recording, so it
     proves the *recording* contains an exertion rise -- worth knowing, since it
@@ -320,8 +320,8 @@ def test_the_derived_rate_rises_after_exertion():
     **Compared over the first 60s of recovery, not the whole file.** The
     recovery fixture is 150s of a heart returning to rest, so its median sits
     near the resting rate by construction -- roughly 68 against rest's 69. That
-    is the statistic, not the derivation: issue #71 read a whole-recording
-    median as evidence the rise was not tracked. Matching the rest fixture's own
+    is the statistic, not the derivation: a whole-recording median is not
+    evidence of whether the rise was tracked. Matching the rest fixture's own
     60s window is the like-for-like comparison, and there the derivation does
     follow it.
     """
@@ -352,9 +352,8 @@ def test_the_derived_rate_rises_after_exertion():
     )
 
 
-# Fixed by #105: the tracker holds an unanchored candidate until a second
-# window agrees, so the 127.5 bpm window is never published. Before that this
-# was a strict xfail carrying the measurement; the assertion is unchanged.
+# The tracker holds an unanchored candidate until a second window agrees, so
+# the 127.5 bpm window is never published.
 def test_the_first_window_after_exertion_is_a_plausible_rate():
     """What the recording can support, and what the derivation publishes.
 

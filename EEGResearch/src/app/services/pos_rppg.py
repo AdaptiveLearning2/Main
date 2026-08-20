@@ -22,8 +22,7 @@ codebase and this feeds it.
 
 Why an algorithm rather than a package
 --------------------------------------
-Seven rPPG packages were surveyed before writing this (see the plan's Phase 4
-dependency section). Every deep-learning one carries weights trained on a
+Seven rPPG packages were surveyed before writing this. Every deep-learning one carries weights trained on a
 physiological dataset gated behind a per-requester agreement, and the classical
 ones fail on packaging or licence: `yarppg` has no POS, `rPPG-Toolbox` is under
 RAIL, whose §3.2.a.ii restricts inferring and *storing* health data — which is

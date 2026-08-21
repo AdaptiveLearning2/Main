@@ -7,7 +7,7 @@ import {
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
-import { asPercent, describeSlices } from '../../components/charts/describeSeries'
+import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 
 // Fixed per label, so a colour means the same thing between two sessions --
@@ -120,6 +120,7 @@ function SessionReviewBody({ sessionId }) {
         // id, so there is no previous session's archive to clear. Left in, it
         // read as protection this no longer needs and the next reader would
         // have had to work out which mechanism was load-bearing.
+
         // Only when every channel is empty. That is precisely the expired
         // case -- `expire_signal_rows` takes all three channels for a day at
         // once and leaves the objects -- so a session that still has rows
@@ -331,12 +332,24 @@ function SessionReviewBody({ sessionId }) {
   // `bpm` at first, which made a visibly-drawn heart line read as "not
   // recorded" in both the sentence and the table -- and RMSSD was absent from
   // the table entirely while being plotted beside it.
+  // The columns are the series this chart draws. `focus`, `engagement` and
+  // `stress` always have a `<Line>`; the two heart series are gated on
+  // `hasHeart`, so their columns are too.
+  //
+  // Left unconditional, the sentence was fine — `describeSeries` drops a series
+  // with no readings — but the table still emitted "Heart rate: not recorded"
+  // and "RMSSD: not recorded" on every row of a session that never had a
+  // headband, which is noise in the one surface that cannot be skimmed past.
+  // Same class as the `engagement` column removed from `SignalPanel`, one file
+  // over: that fix was applied where it was found rather than generalised.
   const TIMELINE_COLUMNS = [
-    { key: 'focus',          label: 'Focus',      unit: '%',    scale: asPercent },
-    { key: 'stress',         label: 'EEG stress', unit: '%',    scale: asPercent },
-    { key: 'engagement',     label: 'Engagement', unit: '%',    scale: asPercent },
-    { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
-    { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
+    { key: 'focus',      label: 'Focus',      unit: '%', scale: asPercent },
+    { key: 'stress',     label: 'EEG stress', unit: '%', scale: asPercent },
+    { key: 'engagement', label: 'Engagement', unit: '%', scale: asPercent },
+    ...(hasHeart ? [
+      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
+      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
+    ] : []),
   ]
 
   const hasChart = series.length >= 2
@@ -638,9 +651,7 @@ function SessionReviewBody({ sessionId }) {
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                summary={describeSlices('Emotion mix', emotionSlices, 'samples')}
-                rows={emotionSlices} rowKey="name" rowLabel="Emotion"
-                columns={[{ key: 'value', label: 'Samples' }]}>
+                {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
                   <PieChart>
                     <Pie data={emotionSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -669,9 +680,7 @@ function SessionReviewBody({ sessionId }) {
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
-                summary={describeSlices('Heart-rate stress', stressSlices, 'windows')}
-                rows={stressSlices} rowKey="name" rowLabel="Band"
-                columns={[{ key: 'value', label: 'Windows' }]}>
+                {...sliceSpec('Heart-rate stress', stressSlices, 'windows', { rowLabel: 'Band' })}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>

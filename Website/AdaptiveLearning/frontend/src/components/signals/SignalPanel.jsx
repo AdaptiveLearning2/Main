@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
-import { describeSlices } from '../charts/describeSeries'
+import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
 
 // One string cannot answer for three channels any more, so this is a function
@@ -568,9 +568,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
           <AccessibleChart className="h-52"
-            summary={describeSlices('Emotion mix', emotionSlices, 'samples')}
-            rows={emotionSlices} rowKey="name" rowLabel="Emotion"
-            columns={[{ key: 'value', label: 'Samples' }]}>
+            {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
             <PieChart>
                   <Pie data={emotionSlices} dataKey="value" nameKey="name"
                        innerRadius="45%" outerRadius="75%" paddingAngle={2}>

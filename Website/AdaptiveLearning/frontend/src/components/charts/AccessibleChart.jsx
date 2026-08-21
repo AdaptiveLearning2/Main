@@ -17,13 +17,16 @@ import { describeChart } from './describeSeries'
  */
 const MAX_TABLE_ROWS = 60
 
+/** Every `limit`th row, evenly spaced, or the rows unchanged if they fit.
+ *
+ * Returns just the rows: whether sampling happened is `out.length < rows.length`
+ * at the one place that asks, so a returned flag would be a second answer to a
+ * question the data already answers — and one that could disagree with it.
+ */
 function sample(rows, limit) {
-  if (!rows || rows.length <= limit) return { rows: rows || [], sampled: false }
+  if (!rows || rows.length <= limit) return rows || []
   const step = (rows.length - 1) / (limit - 1)
-  return {
-    rows: Array.from({ length: limit }, (_, i) => rows[Math.round(i * step)]),
-    sampled: true,
-  }
+  return Array.from({ length: limit }, (_, i) => rows[Math.round(i * step)])
 }
 
 /**
@@ -55,7 +58,7 @@ function sample(rows, limit) {
  *
  * @param headline  the sentence's opening clause; series ranges are appended.
  * @param summary   an explicit summary, for charts whose data is not a series
- *                  (`describeSlices` builds the categorical one).
+ *                  (`sliceSpec` builds the whole categorical spec — spread it).
  * @param rows      the chart's data, also the table's.
  * @param columns   `[{key, label, unit, scale}]` — one spec, both surfaces.
  * @param height    passed to `ResponsiveContainer`; `"100%"` needs a sized parent.
@@ -64,10 +67,10 @@ export default function AccessibleChart({
   headline, summary, rows, rowKey, rowLabel, columns,
   height = '100%', className = 'h-full', children,
 }) {
-  const table = useMemo(() => {
-    if (!columns || !rowKey) return null
-    return { ...sample(rows, MAX_TABLE_ROWS), rowKey, rowLabel, columns }
-  }, [rows, rowKey, rowLabel, columns])
+  const tableRows = useMemo(
+    () => (columns && rowKey ? sample(rows, MAX_TABLE_ROWS) : null),
+    [rows, rowKey, columns],
+  )
 
   // Memoised for the same reason as the table: this walks every row once per
   // series, and it runs on every render of a page that polls.
@@ -78,13 +81,12 @@ export default function AccessibleChart({
 
   return (
     <div className={className}>
-      {table && (
+      {tableRows && (
         <ChartDataTable
-          caption={table.sampled
-            ? `${text} Table shows ${table.rows.length} rows sampled evenly across ${rows.length}.`
+          caption={tableRows.length < rows.length
+            ? `${text} Table shows ${tableRows.length} rows sampled evenly across ${rows.length}.`
             : text}
-          rows={table.rows} rowKey={table.rowKey} rowLabel={table.rowLabel}
-          columns={table.columns}
+          rows={tableRows} rowKey={rowKey} rowLabel={rowLabel} columns={columns}
         />
       )}
       <div className="h-full" role="img" aria-label={text}>

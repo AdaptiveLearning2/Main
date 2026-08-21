@@ -142,7 +142,13 @@ it('is the only place that renders a Recharts chart', () => {
       // appearing anywhere: `// TODO: move this to AccessibleChart` in a
       // comment would otherwise excuse the file it is written in, which is
       // exactly the file most likely to carry that comment.
-      const imported = /^\s*import\s+AccessibleChart\s+from\s+['"][^'"]*AccessibleChart['"]/m
+      // The optional `, { … }` matters: `import AccessibleChart, { foo } from`
+      // is a shape this codebase already uses elsewhere, and a regex requiring
+      // a bare default import would fail to match it — flagging a fully
+      // compliant file as an offender. A guard that produces false accusations
+      // gets switched off, which costs more than the gap it was closing.
+      const imported =
+        /^\s*import\s+AccessibleChart\s*(?:,\s*\{[^}]*\})?\s+from\s+['"][^'"]*AccessibleChart['"]/m
       return CHART_IMPORTS.test(src) && !imported.test(src)
     })
     .map(f => f.slice(root.length + 1).split(sep).join('/'))

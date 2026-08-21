@@ -22,8 +22,17 @@ export const asPercent = v => v * 100
  */
 export function readValue(row, col) {
   const raw = row?.[col.key]
-  if (typeof raw !== 'number') return null
-  return col.scale ? col.scale(raw) : raw
+  // `Number.isFinite`, not `typeof === 'number'`: `NaN` and `±Infinity` are
+  // both numbers and both render as themselves, so a cell would read "NaN%" and
+  // the sentence "Focus NaN% to NaN%". Nothing produces them today — the
+  // mappers null out what they cannot measure — but this is the shared contract
+  // every chart's text passes through, and "no reading" is the state it already
+  // has a word for.
+  if (!Number.isFinite(raw)) return null
+  const scaled = col.scale ? col.scale(raw) : raw
+  // Checked again after the scale, since a scale is caller-supplied and can
+  // produce one from a perfectly good input.
+  return Number.isFinite(scaled) ? scaled : null
 }
 
 /** A one-sentence summary of one series, or null when it has no readings.
@@ -59,7 +68,33 @@ export function describeChart(headline, rows, columns) {
  * that failed to load, and a caller that renders this only when it has slices
  * still gets the honest string if that guard ever moves.
  */
-export function describeSlices(label, slices, noun) {
+export function describeSlices(label, slices, noun, nameKey = 'name', valueKey = 'value') {
   if (!slices || slices.length === 0) return `${label}: nothing recorded.`
-  return `${label}: ${slices.map(s => `${s.name} ${s.value} ${noun}`).join(', ')}.`
+  return `${label}: ${slices.map(s => `${s[nameKey]} ${s[valueKey]} ${noun}`).join(', ')}.`
+}
+
+/** A categorical chart's whole spec — sentence, rows, and table columns.
+ *
+ * Spread straight into `AccessibleChart`. The point is that the noun is written
+ * **once**: it names what the values count in the sentence ("neutral 40
+ * samples") and it heads the table column ("Samples"). As two literals they
+ * were free to drift, and one pair already had — `Analytics` built its sentence
+ * from `topicData.map(d => ({ name: d.topic, value: d.count }))` while its
+ * table read `topicData` with key `count`, so the same numbers reached the two
+ * surfaces down two different paths for no reason. That is the shape the whole
+ * one-spec rule exists to remove, surviving in the one place the rule had not
+ * been applied.
+ *
+ * Not memoised: no page that draws a categorical chart polls. `Live` is the one
+ * that re-renders on a timer and it draws a line, not a pie.
+ */
+export function sliceSpec(label, rows, noun,
+                          { nameKey = 'name', valueKey = 'value', rowLabel = 'Name' } = {}) {
+  return {
+    summary: describeSlices(label, rows, noun, nameKey, valueKey),
+    rows,
+    rowKey: nameKey,
+    rowLabel,
+    columns: [{ key: valueKey, label: noun.charAt(0).toUpperCase() + noun.slice(1) }],
+  }
 }

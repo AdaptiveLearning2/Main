@@ -36,6 +36,17 @@
  */
 import { readValue } from './describeSeries'
 
+/** One cell's text.
+ *
+ * Through `readValue`, so the scale applied here is the same one the summary
+ * sentence used — the two disagreeing is the bug the shared spec exists to make
+ * impossible.
+ */
+function cellText(row, col) {
+  const v = readValue(row, col)
+  return v === null ? 'not recorded' : `${Math.round(v)}${col.unit ?? ''}`
+}
+
 export default function ChartDataTable({ caption, rows, rowKey, rowLabel, columns }) {
   return (
     <table className="sr-only">
@@ -51,15 +62,7 @@ export default function ChartDataTable({ caption, rows, rowKey, rowLabel, column
           <tr key={r[rowKey] ?? i}>
             <th scope="row">{r[rowKey]}</th>
             {columns.map(c => (
-              <td key={c.key}>
-                {/* Through `readValue`, so the scale applied here is the same
-                    one the summary sentence used -- the two disagreeing is the
-                    bug this spec exists to make impossible. */}
-                {(() => {
-                  const v = readValue(r, c)
-                  return v === null ? 'not recorded' : `${Math.round(v)}${c.unit ?? ''}`
-                })()}
-              </td>
+              <td key={c.key}>{cellText(r, c)}</td>
             ))}
           </tr>
         ))}

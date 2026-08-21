@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
-import { describeSlices } from '../../components/charts/describeSeries'
+import { sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../../components/ui/LoadError'
 
@@ -108,10 +108,8 @@ export default function TeacherAnalytics() {
           ) : (
             <AccessibleChart
               height={280} className=""
-              summary={describeSlices('Questions per topic',
-                topicData.map(d => ({ name: d.topic, value: d.count })), 'questions')}
-              rows={topicData} rowKey="topic" rowLabel="Topic"
-              columns={[{ key: 'count', label: 'Questions' }]}>
+              {...sliceSpec('Questions per topic', topicData, 'questions',
+                            { nameKey: 'topic', valueKey: 'count', rowLabel: 'Topic' })}>
               <BarChart data={topicData} margin={{ top: 0, right: 0, left: -20, bottom: 50 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" className="dark:stroke-gray-700" />
                 <XAxis dataKey="topic" tick={{ fontSize: 11, fill: '#94a3b8' }} angle={-35} textAnchor="end" interval={0} />
@@ -134,9 +132,7 @@ export default function TeacherAnalytics() {
           ) : (
             <AccessibleChart
               height={200} className=""
-              summary={describeSlices('Difficulty split', diffData, 'questions')}
-              rows={diffData} rowKey="name" rowLabel="Difficulty"
-              columns={[{ key: 'value', label: 'Questions' }]}>
+              {...sliceSpec('Difficulty split', diffData, 'questions', { rowLabel: 'Difficulty' })}>
               <PieChart>
                 <Pie data={diffData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
                   {diffData.map((d, i) => <Cell key={i} fill={PIE_COLORS[d.name]} />)}

@@ -83,8 +83,8 @@ describe('isValidTimezone', () => {
 
 describe('the timezone field', () => {
   it('refuses to save a zone the platform cannot resolve', async () => {
-    // The backend denies an unresolvable zone rather than falling back to
-    // UTC, so the form must catch it before saving, not after.
+    // The backend 422s an unresolvable zone before persisting it, so this
+    // check exists to catch the typo before the round trip, not after.
     render(<AdminSchoolYear />)
     const field = await screen.findByLabelText(/timezone/i)
 

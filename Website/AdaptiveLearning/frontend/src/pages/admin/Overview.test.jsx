@@ -83,6 +83,55 @@ describe('the student search', () => {
     expect(searchCalls()).toHaveLength(1)
   })
 
+  it('keeps the last results on screen while a newer query is in flight', async () => {
+    // Blanking on `hits.q !== q` emptied the list on *every keystroke*, before
+    // the 300ms debounce had even started -- so typing a name flashed the
+    // results away and back on each letter. The staleness is said out loud
+    // instead, which is what the concern behind the blanking actually needed.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+
+    // One more character: a new query is now pending and the old hits are stale.
+    await user.type(box(), 'm')
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText(/Searching/)).toBeInTheDocument()
+  })
+
+  it('names the term the visible results actually answer', async () => {
+    // Showing them is only safe if it is clear they are not for what is in the
+    // box -- otherwise it is the "hits under a newer term" the blanking was
+    // trying to avoid.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    await user.type(box(), 'm')
+
+    expect(screen.getByText(/showing results for/)).toHaveTextContent('ada')
+  })
+
+  it('takes the stale results out of reach until the new answer lands', async () => {
+    // Dimming alone was not enough. These rows belong to the PREVIOUS query, so
+    // a click during the debounce opens a student the reader did not search for
+    // -- and the rows move under the cursor the moment the new answer arrives.
+    // Disclosure says which query they answer; this stops them being acted on.
+    const user = setup()
+    await user.type(box(), 'ada')
+    await settle()
+    const link = screen.getByText('Ada Lovelace').closest('a')
+    expect(link).not.toHaveAttribute('aria-disabled')
+
+    await user.type(box(), 'm')
+
+    // Still readable, deliberately -- but not clickable and not tabbable.
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(link).toHaveAttribute('aria-disabled', 'true')
+    expect(link).toHaveAttribute('tabindex', '-1')
+    expect(link.closest('ul')).toHaveClass('pointer-events-none')
+    expect(link.closest('ul')).toHaveAttribute('aria-busy', 'true')
+  })
+
   it('drops the list when the term falls back below two characters', async () => {
     const user = setup()
     await user.type(box(), 'ada')

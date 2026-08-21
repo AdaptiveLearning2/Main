@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
 import { isValidTimezone, knownTimezones } from '../../lib/timezone'
@@ -20,6 +20,13 @@ const STATE_COPY = {
 const ZONES = knownTimezones()
 
 export default function AdminSchoolYear() {
+  // Above the early returns below, or it would be a conditional hook.
+  const zoneOptions = useMemo(() => (
+    <datalist id="school-timezone-options">
+      {ZONES.map(z => <option key={z} value={z} />)}
+    </datalist>
+  ), [])
+
   // The user's unsaved edits, or `null` for "showing what the server said".
   const [draft, setDraft] = useState(null)
 
@@ -147,11 +154,10 @@ export default function AdminSchoolYear() {
                 : 'border-rose-400 dark:border-rose-600'
             }`}
           />
-          {/* Suggestions only, not the validator — an empty list here just
-              means no autocomplete, not a broken field. */}
-          <datalist id="school-timezone-options">
-            {ZONES.map(z => <option key={z} value={z} />)}
-          </datalist>
+          {/* Suggestions only, not the validator — an empty list just means no
+              autocomplete, not a broken field. Memoized so the ~420 options
+              aren't rebuilt on every keystroke. */}
+          {zoneOptions}
           {!tzValid && (
             <p className="mt-1 text-xs font-bold text-rose-600 dark:text-rose-400">
               Not a timezone this platform can resolve. Saving it would stop

@@ -107,3 +107,64 @@ it('retries the class list when that is the read that failed', async () => {
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
   expect(screen.getByText('Ada')).toBeInTheDocument()
 })
+
+it('does not flash "no sessions yet" between a successful retry and the roster', async () => {
+  // The retry path only. `loading` starts true, so the *first* load never showed
+  // this -- which is why it survived. On a retry `loading` is already false, and
+  // `loadClasses` picking a class programmatically left the page with no rows,
+  // no error and no skeleton for as long as the roster took to arrive.
+  const classes = new Error('down')
+  wire({ classes })
+
+  draw()
+  await screen.findByText(ERROR)
+
+  // The class list now works; the roster is held open so the gap is observable.
+  let releaseRoster
+  apiFetch.mockImplementation(async (path) => {
+    if (path === '/api/classes') return CLASSES
+    if (path.endsWith('/students')) return new Promise(r => { releaseRoster = r })
+    return []
+  })
+
+  await userEvent.click(screen.getByRole('button', { name: /try again/i }))
+
+  // The roster has not landed. Whatever is on screen must not be an assertion
+  // that this class has no sessions.
+  await waitFor(() => expect(releaseRoster).toBeTypeOf('function'))
+  expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
+
+  releaseRoster(ROSTER)
+  await waitFor(() => expect(screen.queryByText(EMPTY)).not.toBeInTheDocument())
+})
+
+it('does not let a slow class roster repaint the list under a newer class', async () => {
+  // This fetch fans out per student, so it is the slowest on the page by some
+  // margin -- switching class while one is in flight let the *previous* class's
+  // response land last and repaint the list, with the dropdown still reading
+  // the class you picked. The same bug class this file was patched for, one
+  // function further down.
+  const releases = {}
+  apiFetch.mockImplementation(async (path) => {
+    if (path === '/api/classes') return [{ id: 'c1', name: 'Year 7' }, { id: 'c2', name: 'Year 8' }]
+    if (path.endsWith('/students')) {
+      const id = path.split('/')[3]
+      return new Promise(r => { releases[id] = r })
+    }
+    return [SESSION]
+  })
+
+  draw()
+  await waitFor(() => expect(releases.c1).toBeTypeOf('function'))
+
+  await userEvent.selectOptions(screen.getByRole('combobox'), 'c2')
+  await waitFor(() => expect(releases.c2).toBeTypeOf('function'))
+
+  // The newer class answers first, then the older one lands.
+  releases.c2([{ user_id: 'z', name: 'Zola' }])
+  await screen.findByText('Zola')
+
+  releases.c1([{ user_id: 'a', name: 'Ada' }])
+  await waitFor(() => expect(screen.getByText('Zola')).toBeInTheDocument())
+  expect(screen.queryByText('Ada')).not.toBeInTheDocument()
+})

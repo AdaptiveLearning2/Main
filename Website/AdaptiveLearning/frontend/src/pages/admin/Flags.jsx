@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import useValueChange from '../../hooks/useValueChange'
 import { AlertTriangle, History, Lock } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import useAdminResource from '../../hooks/useAdminResource'
@@ -79,11 +80,7 @@ function ConsentPanel({ flag, active, onSet, busy }) {
   // Clear the checkbox when enforcement resumes, so it doesn't carry over
   // into a later bypass. Done during render, not in an effect, so it never
   // paints still ticked for a frame.
-  const [wasActive, setWasActive] = useState(active)
-  if (active !== wasActive) {
-    setWasActive(active)
-    if (active) setAck(false)
-  }
+  useValueChange(active, next => { if (next) setAck(false) })
 
   const until = flag?.bypass_until ? new Date(flag.bypass_until) : null
 

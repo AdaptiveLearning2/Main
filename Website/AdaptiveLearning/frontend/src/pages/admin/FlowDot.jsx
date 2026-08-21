@@ -16,23 +16,40 @@ import { useEffect, useState } from 'react'
  */
 export default function FlowDot({ channel, label }) {
   const { flowing, stale, seen, last_ts: lastTs } = channel || {}
-  const [pulse, setPulse] = useState(false)
+  // Two states, and they are genuinely different questions:
+  //
+  //   pulsedFor   the newest timestamp we have *ever* lit for. Never cleared.
+  //   pulsingFor  the one currently lit, or null. Cleared by the timer below.
+  //
+  // Collapsing them into one -- and driving it from a generic
+  // previous-value hook -- looked like a simplification and was a bug. The
+  // timer nulls the live one, so after a pulse ends there is nothing left
+  // recording what was already shown: a timestamp that goes transiently
+  // missing and comes back *unchanged* reads as a change, and the dot flashes
+  // "fresh data" on an admin live monitor for data that is not new. A
+  // previous-value hook cannot see that, because the value did change --
+  // twice, back to where it started.
+  //
+  // So the comparison is against what was last *pulsed*, not against what was
+  // last *rendered*, and only `pulsedFor` can answer that.
   const [pulsedFor, setPulsedFor] = useState(lastTs)
+  const [pulsingFor, setPulsingFor] = useState(null)
 
-  // Start the pulse during render, not in an effect, so the dot lights on
-  // the same commit that delivers the new timestamp.
+  // Started during render, not in an effect, so the dot lights on the same
+  // commit that delivers the new timestamp.
   if (lastTs && lastTs !== pulsedFor) {
     setPulsedFor(lastTs)
-    setPulse(true)
+    setPulsingFor(lastTs)
   }
 
-  // Ending the pulse needs a timer, so that part is an effect. Keyed on
-  // `pulsedFor` too, so a new timestamp mid-pulse restarts the full 600ms.
+  // Ending the pulse needs a timer, so that part is an effect. It depends on
+  // `pulsingFor`, so a timestamp arriving mid-pulse restarts the 600ms rather
+  // than inheriting the remainder.
   useEffect(() => {
-    if (!pulse) return
-    const t = setTimeout(() => setPulse(false), 600)
+    if (!pulsingFor) return
+    const t = setTimeout(() => setPulsingFor(null), 600)
     return () => clearTimeout(t)
-  }, [pulse, pulsedFor])
+  }, [pulsingFor])
 
   let tone = 'border-2 border-gray-300 dark:border-gray-600 bg-transparent'
   let title = `${label}: no data has ever arrived for this session`
@@ -50,7 +67,7 @@ export default function FlowDot({ channel, label }) {
   return (
     <div className="flex items-center gap-2" title={title}>
       <span className="relative flex h-3 w-3 items-center justify-center">
-        {pulse && flowing && (
+        {pulsingFor !== null && flowing && (
           <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
         )}
         <span className={`relative inline-flex rounded-full h-3 w-3 ${tone}`} />

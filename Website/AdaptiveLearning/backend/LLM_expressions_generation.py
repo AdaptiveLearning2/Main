@@ -14,13 +14,12 @@ from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
     implicit_multiplication_application
-) #treat 2x as 2*x for sympy parsing
+) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
 
-# Enable implicit multiplication (2x â†’ 2*x)
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def is_numeric(expr):   
@@ -109,25 +108,20 @@ Return ONLY valid JSON with no text before or after the JSON object.
 """
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared with the other generation files so they can't drift apart.
+    # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
-# Scenario 3 ("simplify", e.g. "2x + 3x") is algebraic notation -- combining
-# like terms with a variable -- and used to be pickable via random.randint(1,3)
-# for every grade with no gating at all, so a 1st grader could land on it.
-# Withheld until "upper" (grades 7-8) regardless of difficulty, since
-# pre-algebra notation isn't in reach before then. This means grade 6
-# ("middle" band, though the topic-selection rule elsewhere in this codebase
-# treats grade 6 as pre-algebra-ready) won't see "simplify" from this topic
-# either -- a deliberate simplification rather than adding a fifth grade
-# bucket just for this one scenario.
-# Scenario 2 ("order_of_operations") is withheld from "early" as well, on top
-# of scenario 3. Order of operations is CCSS 5.OA.1 -- a grade-5 concept --
-# and the scenario is *defined* by mixing precedence levels, so it cannot be
-# expressed within the early band's addition-and-subtraction-only rule. It
-# was measurably harmful, not just conceptually wrong: see EARLY_BAND_EXAMPLE.
+# Scenario 3 ("simplify", e.g. "2x + 3x") uses algebraic notation, so it's
+# withheld until "upper" (grades 7-8) regardless of difficulty -- pre-algebra
+# notation isn't in reach before then. Grade 6 ("middle" band) also misses out
+# on it, even though the topic-selection rule elsewhere treats grade 6 as
+# pre-algebra-ready; that's a deliberate simplification rather than adding a
+# fifth grade bucket for one scenario.
+# Scenario 2 ("order_of_operations") is withheld from "early" too. It's a
+# grade-5 concept (CCSS 5.OA.1) defined by mixing precedence levels, which
+# can't be expressed within the early band's addition-and-subtraction-only
+# rule -- see EARLY_BAND_EXAMPLE for what happened when it wasn't withheld.
 def _pick_scenario(grade_band):
     if grade_band == "early":
         return 1
@@ -136,14 +130,12 @@ def _pick_scenario(grade_band):
     return random.randint(1, 3)
 
 
-# Every scenario example in expr_prompt above is written for older students --
-# scenario 1's is "36/3+(8*2)-(15-7)+4" -- and a few-shot example beats a
-# textual constraint. Measured on llama3.1:8b against the seeded lesson plans
-# (2026-08-18, grade 1 / easy): 2 of 8 questions came back with parentheses,
-# and a separate run produced "Evaluate (3+2)*4-1.", despite
-# COMPLEXITY_BY_GRADE forbidding both in the same prompt. So the early band
-# gets a worked example in the shape it is actually allowed, and
-# `grade_appropriateness` rejects the ones that still slip through.
+# The scenario examples in expr_prompt above are all written for older
+# students (e.g. "36/3+(8*2)-(15-7)+4"), and a few-shot example beats a text
+# rule. Measured on llama3.1:8b with the lesson plans seeded (2026-08-18,
+# grade 1 / easy): 2 of 8 questions came back with parentheses despite
+# COMPLEXITY_BY_GRADE forbidding them. So the early band gets its own worked
+# example below, and `grade_appropriateness` catches whatever still slips through.
 EARLY_BAND_EXAMPLE = """
 EXAMPLE OF A CORRECT QUESTION FOR THIS GRADE LEVEL -- follow this shape, NOT
 the scenario examples above, which are written for much older students:
@@ -157,11 +149,9 @@ The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
 "/", and no parentheses of any kind.
 """
 
-# Grade-band-first: which OPERATIONS are even available changes by grade,
-# not just how many of them or how big the numbers are. Multiplication/
-# division and parentheses used to be available at every grade the moment
-# difficulty ticked up to "medium", regardless of whether that grade has
-# been taught multiplication yet.
+# Which operations are available changes by grade, not just how many of them
+# or how big the numbers are -- multiplication, division, and parentheses
+# should only appear once a grade has actually been taught them.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-9.",
@@ -188,9 +178,6 @@ COMPLEXITY_BY_GRADE = {
 solution = -1
 
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction. 
 def generate_expression_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -198,8 +185,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         else:
             prompt = expr_prompt
 
-
-        #randomize scenario selection (within what this grade band may see) to ensure variety.
+        # randomize scenario selection (within what this grade band may see) to ensure variety
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(grade_band)
 
@@ -227,9 +213,9 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
         raw = extract_json(response.response)
@@ -246,7 +232,6 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -259,15 +244,13 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
                                         attempt + 1):
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     parts = question_data['variables']
-    equation_stra = "".join(parts) #turn individual variables/operations into a single string to be parsed by sympy
+    equation_stra = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
     equation_stra = equation_stra.replace("âˆ’", "-")
     expr = parse_expr(equation_stra, transformations=transformations)
 
@@ -278,84 +261,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             solution = expr
         case "simplify":
             solution = sp.simplify(expr)
-    
-    #print("Solution:", solution)
-    # solution = str(solution) if solution is not None else None
 
-    # for attempt in range(max_retries):
-
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique numbers only. NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations. 
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     answer_response = None
-
-    #     if solution is not None:
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-
-    #     if answer_response is None:
-    #         print("Answer generation failed")
-    #         continue
-
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
-    #NOT SURE IF NEED TO SPLIT, Going to try w/out for now to test. 
-    # if scenario == "simplify":
-    #     incorrect_answers = inc_gen.generate_incorrect_simplified_answers(float(solution)) if solution is not None else [] #for answers like 2x
-    # else:
-    #     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
-    
     if scenario == "simplify":
         incorrect_answers = inc_gen.generate_symbolic_incorrect_answers(solution)
     else:
@@ -368,19 +274,10 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "expressions",
         "answer_options": answers,
         "correct_answer": str(normalize_answer(solution))
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

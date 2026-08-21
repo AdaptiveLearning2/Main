@@ -1,16 +1,12 @@
--- Bucket the summary RPCs' cutoff by the school's timezone, not UTC.
+-- Bucket the summary RPCs' cutoff by the school's timezone, not UTC. These
+-- two RPCs back the same dashboard tiles as `_weekly_signal_report`, which
+-- already buckets by school timezone -- left on a UTC cutoff, the per-day
+-- chart and the headline average could disagree about whether a late-evening
+-- session belongs to "this week".
 --
--- `_weekly_signal_report` (main.py) was moved off `now - days` in UTC to a
--- school-timezone-aware boundary (20260813000000-era work): the oldest school
--- day starts at local midnight, not whatever hour that is in UTC. These two
--- RPCs back the headline tiles on the same dashboard pages -- the parent
--- summary and the multi-child list -- and were left on the old UTC cutoff, so
--- the per-day chart and the headline average could disagree about whether a
--- late-evening session belongs to "this week".
---
--- The old signature must go explicitly. CREATE OR REPLACE cannot change a
--- parameter list, so without this the 4-argument version survives as an
--- overload: still granted, still callable, still cutting off in UTC.
+-- The old signature must be dropped explicitly. CREATE OR REPLACE can't
+-- change a parameter list, so without this the old version survives as an
+-- overload, still granted and still cutting off in UTC.
 DROP FUNCTION IF EXISTS "public"."student_signal_summary"("uuid", integer, boolean, boolean);
 DROP FUNCTION IF EXISTS "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean);
 
@@ -39,14 +35,9 @@ STABLE
 AS $$
   WITH bounds AS (
     -- Local midnight `p_days` days ago, expressed as the UTC instant it is --
-    -- the same boundary `_school_timezone`/`_school_day` compute in Python.
-    -- `now() AT TIME ZONE p_timezone` reads now() as wall-clock time in the
-    -- school's zone; date_trunc('day', ...) floors it to local midnight
-    -- today; the trailing `AT TIME ZONE p_timezone` converts that local
-    -- timestamp back to a timestamptz. An unrecognised zone name raises,
-    -- which surfaces as the RPC failing rather than a silently wrong cutoff
-    -- -- the caller only ever passes a name `_retention_window` already
-    -- validated, or the 'UTC' default.
+    -- matches the boundary `_school_timezone`/`_school_day` compute in
+    -- Python. An unrecognised zone name raises, so the RPC fails loudly
+    -- rather than silently using the wrong cutoff.
     SELECT (date_trunc('day', now() AT TIME ZONE p_timezone)
             - (GREATEST(p_days, 1) - 1) * interval '1 day') AT TIME ZONE p_timezone AS since
   ),

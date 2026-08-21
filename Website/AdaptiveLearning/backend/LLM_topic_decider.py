@@ -1,4 +1,3 @@
-#Ideally - this will be called from LLMTest2 to randomly select a topic. Then can call methods from other files for specific question generation.
 import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS #pip install flask-cors
@@ -16,12 +15,9 @@ import concurrent.futures
 from supabase_auth import datetime
 import LLM_algebra_generation, LLM_ordering_generation, LLM_rationals_generation, LLM_mean_generation, LLM_median_generation
 import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation, LLM_angle_relationship_generation, LLM_expressions_generation
-#python -m flask --app LLM_topic_decider run
+# python -m flask --app LLM_topic_decider run
 
-#connect with supabase 
-load_dotenv() 
-# url = os.getenv("VITE_SUPABASE_URL")
-# key = os.getenv("VITE_SUPABASE_ANON_KEY")
+load_dotenv()
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
@@ -31,23 +27,17 @@ ALL_TOPICS = [
     "mean", "median", "mode", "probability", "angle_relationships",
 ]
 
-# Code-enforced version of the same rule both topic prompts below state in
+# Enforces in code the same grade rule the prompts below only state in
 # English ("Grades 1-3 should primarily see ordering, geometry, and
-# expressions... Algebra and probability should only appear after grade 6").
-# An 8B model does not reliably follow that -- the same reason difficulty is
-# also clamped deterministically elsewhere in this file (see the EEG-bias
-# comment in LLM_single_prompt_topic_and_difficulty_decider) -- and
-# randomize_selection()'s fallback path used to pick uniformly across all 10
-# topics with no grade awareness at all. Keyed on the raw grade string, not
-# _grade_band()-style bands, because the rule itself draws its line between
-# grade 5 and grade 6, finer than any of the generation files' four bands.
+# expressions... Algebra and probability should only appear after grade 6"),
+# because an 8B model does not reliably follow prose instructions. Keyed on
+# the raw grade string rather than a _grade_band()-style band, since the rule
+# splits between grade 5 and grade 6 -- finer than any four-band split.
 def _allowed_topics(grade):
-    # Read numerically via grade_levels rather than by matching the exact
-    # strings the dropdown emits. `profiles.grade_level` is free text, so
-    # "Grade 1" used to miss every branch here and fall through to the
-    # fully-permissive one -- a 1st grader eligible for algebra, which is
-    # the single thing this function exists to prevent. An unreadable grade
-    # is now treated as the youngest rather than the oldest.
+    # Reads the grade number via grade_levels instead of matching dropdown
+    # strings exactly, since profiles.grade_level is free text. An unreadable
+    # grade is treated as the youngest, so it can't fall through to the
+    # fully-permissive branch.
     number = grade_levels.grade_number(grade)
     if number is None or number <= 3:
         return ["ordering", "geometry", "expressions"]
@@ -57,37 +47,28 @@ def _allowed_topics(grade):
 
 
 def _safe_topic(topic, grade):
-    """topic if the student's grade may see it, otherwise a random topic
-    from what it may see. Applied to both the LLM's own selection (which the
-    prompt asks for but doesn't enforce) and to randomize_selection()'s
-    fallback, so this is the one place a topic is checked before a question
-    ever generates."""
+    """Returns topic if the student's grade may see it, otherwise a random
+    allowed topic. Used both on the LLM's own pick and on the randomized
+    fallback, so every topic is checked here before a question generates."""
     allowed = _allowed_topics(grade)
     return topic if topic in allowed else random.choice(allowed)
 
 
-#Possibly worthwhile to store history in supabase.
-#Possibly reset history per session.
-
 def get_user_performance(user_id):
-    # Fetched fresh every call (not cached) so this reflects the student's
-    # up-to-date accuracy, including anything they've answered so far in
-    # their current session -- a stale cache here would defeat the point of
-    # session-aware personalization.
+    # Fetched fresh every call, not cached, so it reflects answers from the
+    # student's current session too.
     return supabase.table("user_math_performance") \
         .select("correct_questions,attempted_questions, math_topics(topic_name)") \
         .eq("user_id", user_id) \
         .execute()
 
 
-# How many of the session's most recent answers/EEG samples to look at when
-# gauging how the student is doing RIGHT NOW, as opposed to their all-time
-# per-topic accuracy above.
+# How many recent in-session answers/EEG samples to look at, versus the
+# all-time per-topic accuracy above.
 SESSION_PERFORMANCE_WINDOW = 10
 EEG_BIAS_WINDOW = 5
-# The focus/calm/confidence thresholds live in `signal_fusion`, which is the
-# only thing that reads them. A second copy here was inert -- the same
-# two-implementations-one-dead shape this change deleted from the sidecar.
+# The focus/calm/confidence thresholds live only in `signal_fusion`; don't
+# duplicate them here.
 
 DIFFS = ["easy", "medium", "hard"]
 
@@ -122,13 +103,12 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
 
 
 def _consent_flags(user_id):
-    """Which channels the student permits, so an absence can name its cause.
+    """Which signal channels the student permits.
 
-    Read here rather than through main's `_consent()` because main imports this
-    module; the reverse import would be a cycle. Fails **closed** in the same
-    direction as that helper -- on a read error every channel reads as revoked,
-    so a database problem suppresses signals rather than acting on ones the
-    student may have refused.
+    Reads the table directly instead of main's `_consent()` because main
+    imports this module, so the reverse import would be circular. Fails
+    closed: a read error reports every channel as revoked, so a database
+    problem never records a signal the student refused.
     """
     if not user_id:
         return {"eeg": False, "heart": [], "face": False}
@@ -145,12 +125,10 @@ def _consent_flags(user_id):
             # a student nobody has configured.
             return {"eeg": False, "heart": [], "face": False}
         r = rows[0]
-        # One flag per *sensor*, and the heart channel can arrive from either --
-        # so this returns the permitted **sources**, not a boolean. ORing the two
-        # flags and then never looking at `source` again would let a student who
-        # allowed the headband and declined the camera have rppg-sourced rows
-        # acted on. Latent today (nothing writes rppg) and therefore exactly the
-        # kind of thing that gets missed later.
+        # Heart rate can come from either sensor, so this returns the permitted
+        # sources, not a plain bool. Collapsing both flags into one boolean
+        # would let a student who declined the camera have rppg-sourced rows
+        # acted on anyway.
         heart_sources = []
         if r.get("headband_optical_enabled"):
             heart_sources += ["muse_optics", "muse_ppg"]
@@ -169,10 +147,8 @@ def _consent_flags(user_id):
 def _latest(table, columns, session_id, limit=1, sources=None):
     """This session's most recent row(s) from a signals table, newest first.
 
-    `limit` defaults to 1 because only the newest row is ever read for the heart
-    and facial channels. `sources` restricts to the sensors the student
-    permitted, applied in the query rather than after it -- an unfetched row
-    cannot be acted on by a later change.
+    `sources` restricts to sensors the student permitted, filtered in the
+    query itself so a declined sensor's rows are never fetched at all.
     """
     try:
         q = (
@@ -191,15 +167,13 @@ def _latest(table, columns, session_id, limit=1, sources=None):
 def get_session_signal_state(session_id, user_id=None):
     """This session's fused EEG + heart + facial state.
 
-    Reads the database rather than calling the EEGResearch sidecar, so it works
-    when that service is down and reflects a short rolling window instead of one
-    instantaneous reading. The window is also the damping: averaging the last
-    few rows, once per question, is what stops a 4 Hz label from flapping, which
-    is why there is no cooldown here.
+    Reads the database instead of calling the sidecar, so it still works if
+    that service is down. Averaging the last few rows also damps a 4 Hz
+    signal so it doesn't flap between labels question to question.
 
-    Returns a `FusedState`, or None when there is no session to read. The
-    asymmetric rule that combines the channels lives in `signal_fusion` as pure
-    functions, so it can be tested without a database or a model.
+    Returns a `FusedState`, or None with no session to read. The rule that
+    combines channels lives in `signal_fusion` as plain functions, testable
+    without a database or a model.
     """
     if not session_id:
         return None
@@ -213,18 +187,16 @@ def get_session_signal_state(session_id, user_id=None):
     engagement_vals = [r["engagement"] for r in eeg_rows if r.get("engagement") is not None]
 
     focus      = fmean(focus_vals)      if focus_vals      else None
-    # `stress` in cognitive_signals is `1.0 - calm`, written by eeg_client. It
-    # is the calm score inverted and renamed, not a second measurement -- unlike
-    # heart_signals.stress_score, which is derived against the session's own
-    # baseline. Two columns, two meanings, and only one of them measures stress.
+    # cognitive_signals.stress is 1.0 - calm, so this just inverts it back.
+    # It is not an independent measurement, unlike heart_signals.stress_score.
     calm       = (1.0 - fmean(stress_vals)) if stress_vals else None
     confidence = fmean(engagement_vals) if engagement_vals else None
 
     eeg = signal_fusion.eeg_channel(focus, calm, confidence,
                                     revoked=not consent["eeg"])
 
-    # Scoped to the sources the student actually permitted, in the query. A row
-    # from a declined sensor is never fetched, so no later edit can act on one.
+    # Scoped to permitted sources in the query, so a declined sensor's rows
+    # are never fetched.
     heart_rows = _latest("heart_signals", "stress_category, trusted, source",
                          session_id, sources=consent["heart"]) if consent["heart"] else []
     newest_heart = heart_rows[0] if heart_rows else {}
@@ -235,8 +207,8 @@ def get_session_signal_state(session_id, user_id=None):
         revoked=not consent["heart"],
     )
 
-    # Selected by explicit name rather than `*`, which is what keeps the
-    # confidence this gate reads unambiguous. See `signal_fusion.face_channel`.
+    # Named columns, not `*`, so the confidence value this gate reads stays
+    # unambiguous. See `signal_fusion.face_channel`.
     face_rows = _latest("face_signals", "emotion, emotion_confidence, emotion_trusted",
                         session_id) if consent["face"] else []
     newest_face = face_rows[0] if face_rows else {}
@@ -255,13 +227,13 @@ def get_session_signal_state(session_id, user_id=None):
     )
 
 
-#Store 40 questions globally, 10 per topic 
+# 40 questions globally, 10 per topic
 user_histories = {}
 
 def get_user_history(user_id):
     if user_id not in user_histories:
         user_histories[user_id] = {
-            "global": deque(maxlen=40), #stores last 40 questions regardless of topic, can use to ensure no repeats
+            "global": deque(maxlen=40), # last 40 questions regardless of topic, used to avoid repeats
             "geometry": deque(maxlen=10),
             "algebra": deque(maxlen=10),
             "expressions": deque(maxlen=10),
@@ -293,23 +265,15 @@ def extract_json(text):
     return None
 
 def add_question_to_supabase(question, difficulty):
-    """Store the question and return **its id**, or None if it could not be stored.
+    """Store the question and return its id, or None if it could not be stored.
 
-    Returned rather than a bool, and the duplicate branch returns the existing
-    id rather than False, because the id is what an answer refers to. Without
-    one the adaptive page had nothing to put in `session_answers.question_id`,
-    which is why it never recorded an answer at all: every question a student
-    answered there was counted in that browser's localStorage and nowhere else,
-    so `user_stats`, `session_answers` and every report downstream of them read
-    zero however long the child practised.
-
-    A duplicate is the ordinary case rather than an error -- the generator
-    reproduces a question sooner or later -- and answering one is exactly as
-    real as answering a novel one.
+    Returns the id, not a bool, and a duplicate returns the existing row's id
+    rather than False: the id is what `session_answers.question_id` refers
+    to, and a duplicate is the ordinary case, not an error, since the
+    generator reproduces a question sooner or later.
     """
-    # Let the database check for the duplicate instead of pulling every row in
-    # the (unboundedly growing) questions table into Python on every single
-    # generated question.
+    # Let the database find the duplicate instead of pulling the whole
+    # questions table into Python on every generated question.
     existing = supabase.table("questions") \
         .select("id") \
         .eq("question_text", question["question_text"]) \
@@ -336,16 +300,11 @@ def add_question_to_supabase(question, difficulty):
 
 
 def _attach_stored_id(question, difficulty):
-    """Store the question and put its id on it, in place. Returns the question.
+    """Store the question and set its id on it, in place. Returns the question.
 
-    The id is what an answer refers to. Without it the page has nothing to send
-    to `/api/sessions/{id}/answer`, so nothing generated on the adaptive path is
-    ever recorded -- which is the bug this line was added to fix.
-
-    Both entry points here need it, and each had its own copy of these five
-    lines. That is precisely the shape that lets one path keep the id while the
-    other quietly stops setting it, with no error anywhere and the same symptom
-    as before: a student practising and the database reading zero.
+    The id is what the page sends to `/api/sessions/{id}/answer`, so a
+    question with no id never gets an answer recorded. Shared by both entry
+    points below so the id-setting logic exists in one place, not two.
     """
     question["id"] = add_question_to_supabase(question, difficulty)
     if question["id"]:
@@ -353,7 +312,6 @@ def _attach_stored_id(question, difficulty):
     return question
 
 
-#Possibility - can just select topic/difficulty manually if LLM generation is too slow.
 def calculate_topic_and_difficulty(user_id, grade):
     accuracy_response = get_user_performance(user_id)
 
@@ -405,13 +363,8 @@ def parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt):
     return topic_response, difficulty_response
 
 
-#Change: use two separate prompt to try to improve speed and get more "adaptive" results. 
-#Prompt 1: Take in user performance data/recent history, select topic. 
-#Prompt 2: Select difficulty. 
-
-#PROBABLY: need to provide previous and current user performance data so LLM can see differences.  
-#Also should provide last topic selection? not sure since history should cover that. 
-def LLM_topic_and_difficulty_separate_decider(user_id, grade): 
+# Runs the topic and difficulty prompts in parallel for speed.
+def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     accuracy_response = get_user_performance(user_id)
 
     json_response = accuracy_response.data or []
@@ -537,7 +490,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
                 difficulty_data = None
                 continue
 
-        # Validate required keys
         topic_required_keys = ["topic", "selection_method"]
         difficulty_required_keys = ["difficulty"]
         if not all(k in topic_data for k in topic_required_keys):
@@ -550,7 +502,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
             difficulty_data = None
             continue
 
-        # If we reach here → SUCCESS
         break
 
     if topic_data and difficulty_data:
@@ -572,7 +523,6 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     return question
 
 
-#Theres probably a cleaner way to do this - have a list of topics and then loop through to find the right one, rather than hardcoding every option. But this works for now.
 def question_generation(topic, difficulty, user_id, grade):
     history = get_user_history(user_id)
     recent_global = list(history["global"])[-5:]
@@ -680,11 +630,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     history = get_user_history(user_id)
     recent_global = list(history["global"])[-10:]
 
-    # Session-scoped signals: how the student is doing and feeling RIGHT NOW
-    # in their current session, as opposed to their all-time accuracy above.
-    # Both read straight from the database (cognitive_signals / heart_signals /
-    # face_signals / session_answers) rather than a live sidecar call, so this
-    # works even if the EEG service is unreachable.
+    # How the student is doing right now in this session, as opposed to
+    # all-time accuracy. Reads straight from the database, not a live sidecar
+    # call, so this still works if the EEG service is unreachable.
     session_perf = get_session_performance(session_id)
     signal_state = get_session_signal_state(session_id, user_id)
     eeg_label    = signal_state.label if signal_state else "no_eeg"
@@ -763,13 +711,11 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
                 print(response.response)
                 continue
 
-        # Validate required keys
         required_keys = ["topic", "difficulty"]
         if not all(k in topic_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", topic_data)
             topic_data = None
             continue
-        # If we reach here → SUCCESS
         break
 
     if topic_data:
@@ -779,21 +725,14 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         print("LLM selection generation failed, fallback to randomized selection")
         topic,difficulty = randomize_selection(accuracy_response, grade)
 
-    # EEG state and the manual Easier/Auto/Harder control were both given to
-    # the LLM above as context for topic/difficulty selection, but an 8B model
-    # doesn't reliably follow soft prompt instructions (verified: it has
-    # returned "medium" for a clearly stressed student despite being told to
-    # prefer easier). Difficulty needs to be a dependable safety behavior, not
-    # a probabilistic one, so apply both as a deterministic shift on top of
-    # whatever the LLM picked -- same rules as the old live-sidecar bias:
-    # stressed always eases off, focused only pushes harder when the student
-    # left the control on Auto, and this never costs a second LLM call.
-    #
-    # `eeg_label` is now the *fused* label across every consented channel, not
-    # EEG alone -- see signal_fusion for the asymmetric rule behind it. The
-    # asymmetry below is the one that was already here and it is preserved
-    # exactly: easing off overrides a manual setting, pushing harder defers to
-    # it. Fusion widens what can trigger the ease-off; it does not loosen this.
+    # The LLM saw cognitive state and the manual control as context, but an 8B
+    # model doesn't reliably follow that instruction (it has answered "medium"
+    # for a clearly stressed student). So apply both again as a deterministic
+    # shift here: stressed always eases off, focused only pushes harder if the
+    # student left the control on Auto. Easing off overrides the manual
+    # setting; pushing harder defers to it -- same asymmetry as signal_fusion.
+    # `eeg_label` is the fused label across every consented channel, not EEG
+    # alone.
     effective_bias = manual_bias
     if eeg_label == "stressed":
         effective_bias = -1
@@ -807,20 +746,15 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     _attach_stored_id(question, difficulty)
 
-    # Metadata for the frontend's "EEG eased/raised difficulty" badge -- reuses
-    # the same session-scoped EEG read above rather than a second lookup.
+    # Metadata for the frontend's "EEG eased/raised difficulty" badge, reusing
+    # the session-scoped EEG read above.
     question["eeg_label"]    = eeg_label
     question["eeg_adjusted"] = bool(signal_state and signal_state.adjusted)
-    # Which channel decided, and why. Names the source on an override
-    # ("heart elevated (muse_optics) overriding eeg-neutral") so a reading that
-    # contradicts the headband can be explained rather than just observed.
-    #
-    # **Diagnostic, and not for the student.** These carry raw internals
-    # ("eeg confidence 0.31 below 0.45") and this payload goes to the student's
-    # browser. Nothing renders them today -- checked: `Adaptive.jsx:556` uses
-    # only `eeg_label` and `eeg_adjusted` for the eased/raised badge. Keep it
-    # that way; a teacher-facing surface is where these belong, and a child
-    # reading their own confidence scores is neither useful nor kind.
+    # Which channel decided, and why (e.g. "heart elevated overriding
+    # eeg-neutral"). Diagnostic only, and not meant for the student: this
+    # carries raw internals like confidence numbers. Adaptive.jsx only uses
+    # eeg_label and eeg_adjusted for the badge -- keep it that way. A child
+    # reading their own confidence score isn't useful or kind.
     question["signal_reason"]   = signal_state.reason if signal_state else "no session"
     question["signal_channels"] = signal_state.channels if signal_state else {}
     question["difficulty"]   = difficulty
@@ -831,14 +765,10 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
 
 def randomize_selection(accuracy_response, grade):
-    # Was a uniform pick across all 10 topics with no grade awareness at all
-    # -- this is the fallback path for a failed LLM call, so it fires often
-    # enough to matter, and used to be the most direct way a 1st grader
-    # landed on "algebra". _allowed_topics() is the single source of truth
-    # for the grade rule; see its docstring.
+    # Fallback for a failed LLM call, so it fires often enough to matter.
+    # Draws only from the grade's allowed topics -- see _allowed_topics().
     topic = random.choice(_allowed_topics(grade))
 
-    #get accuracy from supabase, select difficulty level accordingly
     for row in accuracy_response.data or []:
         if row.get("math_topics", {}).get("topic_name") == topic:
             correct = row.get("correct_questions") or 0
@@ -860,112 +790,6 @@ def randomize_selection(accuracy_response, grade):
     return topic, difficulty
 
 
-#select from 11 math topics
-#POSSIBLY can have LLM select topic first given things like stress/accuracy
-
-#TO-DO: Implement LLM-based topic selection, provide (optional) accuracy/stress values from frontend. 
-# def randomize_question():
-#     num = random.randint(0, 9) #get int from 0-9 inclusive
-#     print("num", num)
-#     match num:
-#         case 0:
-#             # Ordering, need to call generate question 
-#             response = LLM_ordering_generation.generate_ordering_question(history["global"], history["ordering"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "ordering"})
-#             history["ordering"].append({
-#                     "text": response["question_text"],
-#                     "topic": "ordering"}) 
-
-#         case 1:
-#             # Rationals
-#             response = LLM_rationals_generation.generate_rational_question(history["global"], history["rationals"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "rationals"})
-#             history["rationals"].append({
-#                     "text": response["question_text"],
-#                     "topic": "rationals"})
-#         case 2: 
-#             #expressions
-#             response = LLM_expressions_generation.generate_expression_question(history["global"], history["expressions"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "expressions"})
-#             history["expressions"].append({
-#                     "text": response["question_text"],
-#                     "topic": "expressions"})
-#         case 3: 
-#             #algebra
-#             response = LLM_algebra_generation.generate_algebra_question(history["global"], history["algebra"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "algebra"})
-#             history["algebra"].append({
-#                     "text": response["question_text"],
-#                     "topic": "algebra"})
-#         case 4: 
-#             #geometry
-#             response = LLM_geometry_generation.generate_geometry_question(history["global"], history["geometry"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "geometry"})
-#             history["geometry"].append({
-#                     "text": response["question_text"],
-#                     "topic": "geometry"})
-#         case 5:
-#             #angle relationship
-#             response = LLM_angle_relationship_generation.generate_angle_relationship_question(history["global"], history["angle_relationships"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "angle_relationships"})
-#             history["angle_relationships"].append({
-#                     "text": response["question_text"],
-#                     "topic": "angle_relationships"})
-#         case 6:
-#             #mean
-#             response = LLM_mean_generation.generate_mean_question(history["global"], history["mean"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mean"})
-#             history["mean"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mean"})
-#         case 7: 
-#             #median
-#             response = LLM_median_generation.generate_median_question(history["global"], history["median"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "median"})
-#             history["median"].append({
-#                     "text": response["question_text"],
-#                     "topic": "median"})
-#         case 8:
-#             #mode
-#             response = LLM_mode_generation.generate_mode_question(history["global"], history["mode"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mode"})
-#             history["mode"].append({
-#                     "text": response["question_text"],
-#                     "topic": "mode"})
-#         case 9:
-#             #probability
-#             response = LLM_probability_generation.generate_probability_question(history["global"], history["probability"])
-#             history["global"].append({
-#                     "text": response["question_text"],
-#                     "topic": "probability"})
-#             history["probability"].append({
-#                     "text": response["question_text"],
-#                     "topic": "probability"})
-
-#     print(response)
-#     return response
-
-
-
-
 app= Flask(__name__)
 CORS(app)
 @app.route("/")
@@ -977,5 +801,3 @@ def display_question():
 
     response = LLM_topic_decider(user_id)
     return jsonify(response)
-
-#New display_question function, request id from frontend then calls LLM_topic_decider

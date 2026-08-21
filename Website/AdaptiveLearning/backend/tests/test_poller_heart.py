@@ -1,15 +1,14 @@
 """The poller's heart write, and the consent gate in front of it.
 
-Nothing wrote `heart_signals` from the pull path at all, so a co-located
-deployment recorded no heart rate while an identical push one recorded it fully
--- the two-deployments-diverging failure the shared mapper exists to prevent,
-one layer above it.
+The pull path used to write nothing to `heart_signals`, so a co-located
+deployment recorded no heart rate while an identical push deployment recorded
+it fully.
 
-The consent tests are the important half. The poller writes with the
-**service-role** client, so neither RLS nor `/api/signals/heart`'s per-sample
-check reaches anything it inserts: `_may_record_heart` is the only enforcement
-under `INGEST_MODE=pull`, and every one of these asserts on what reached the
-table rather than on what the poller decided.
+The consent tests matter most. The poller writes with the service-role
+client, so neither RLS nor `/api/signals/heart`'s per-sample check reaches
+anything it inserts -- `_may_record_heart` is the only enforcement under
+`INGEST_MODE=pull`. Every test here checks what actually reached the table,
+not what the poller decided.
 """
 import pytest
 
@@ -53,8 +52,8 @@ def _payload(bpm=68.2, ts="2026-08-10T10:00:00+00:00", source="muse_optics"):
 
 @pytest.fixture
 def poller():
-    """A poller object without a running thread -- `_record_heart` is what the
-    loop calls, and driving the thread would make these timing tests."""
+    """A poller with no running thread. `_record_heart` is what the loop
+    calls, and driving a real thread would make these timing-dependent."""
     db = _FakeSupabase()
     p = eeg_poller._Poller(db, "student-1", "session-1", "station1")
     return p, db
@@ -62,8 +61,8 @@ def poller():
 
 @pytest.fixture(autouse=True)
 def _restore_hooks():
-    """Both hooks. They are module globals wired once at import, so a test that
-    left one swapped would silently decide the next test's answer."""
+    """Restores both hooks. They're module globals wired once at import, so a
+    test that left one swapped would silently affect the next test."""
     heart, eeg = eeg_poller._heart_consent_check, eeg_poller._consent_check
     yield
     eeg_poller.set_heart_consent_check(heart)
@@ -86,8 +85,8 @@ def test_a_consented_reading_is_written(poller):
     assert row["user_id"] == "student-1"
     # Keyed on the reading's own stamp, not the tick's.
     assert row["ts"] == "2026-08-10T10:00:00+00:00"
-    # Upsert on the dedupe key, matching /api/signals/heart: a deployment left
-    # on `pull` whose sidecar also pushes must not double-count this channel.
+    # Upserts on the dedupe key, matching /api/signals/heart: a deployment on
+    # `pull` whose sidecar also pushes must not double-count this channel.
     assert kwargs["on_conflict"] == "session_id,source,ts"
     assert kwargs["ignore_duplicates"] is True
     assert p.heart_samples == 1
@@ -103,8 +102,8 @@ def test_a_refused_channel_records_nothing(poller):
 
 
 def test_an_unwired_check_records_nothing(poller):
-    """Fails closed. A deployment nobody wired the check into is otherwise
-    indistinguishable from one whose student said yes, and only one may record."""
+    """Fails closed. A deployment where nobody wired up the check would
+    otherwise be indistinguishable from one where the student said yes."""
     p, db = poller
     eeg_poller.set_heart_consent_check(None)
     p._record_heart(_payload(), loops=1)
@@ -113,8 +112,8 @@ def test_an_unwired_check_records_nothing(poller):
 
 
 def test_a_failed_consent_read_records_nothing(poller):
-    """Like `_consent` itself and unlike the reporting helpers: a read error must
-    never be the reason a refusal stops being enforced."""
+    """Like `_consent` itself, and unlike the reporting helpers: a read error
+    must never be the reason a refusal stops being enforced."""
     p, db = poller
 
     def _boom(_user_id, _source):
@@ -127,7 +126,7 @@ def test_a_failed_consent_read_records_nothing(poller):
 
 
 def test_consent_is_checked_per_sensor(poller):
-    """One channel, two sensors, two permissions. A student who allowed the
+    """One channel, two sensors, two permissions: a student who allowed the
     headband and refused the camera has not consented to rPPG."""
     p, db = poller
     _allow("muse_optics")
@@ -139,8 +138,8 @@ def test_consent_is_checked_per_sensor(poller):
 
 
 def test_a_rejected_window_is_not_a_row(poller):
-    """The block always carries a `source`, and reports refusal as `bpm: None`
-    with a `rejected_by`. Gating on the block would write a null row per tick."""
+    """A refused window reports `bpm: None` with a `rejected_by`. Gating on
+    the block's presence instead would write a null row every tick."""
     p, db = poller
     _allow("muse_optics")
     p._record_heart(_payload(bpm=None), loops=1)
@@ -149,8 +148,8 @@ def test_a_rejected_window_is_not_a_row(poller):
 
 
 def test_a_held_reading_is_written_once(poller):
-    """The sidecar holds the block between recomputes so a 1Hz poller sees every
-    reading; without this the poller would rewrite each one on every tick."""
+    """The sidecar holds the block between recomputes so a 1Hz poller sees
+    every reading -- without dedup the poller would rewrite it every tick."""
     p, db = poller
     _allow("muse_optics")
     for _ in range(5):
@@ -163,8 +162,8 @@ def test_a_held_reading_is_written_once(poller):
 
 
 def test_a_withdrawal_mid_session_stops_the_writes(poller, monkeypatch):
-    """A lesson outlives a change of mind, and the poller is the only thing
-    enforcing one under pull."""
+    """A lesson can outlive a change of mind, and under pull the poller is
+    the only thing enforcing that withdrawal."""
     p, db = poller
     monkeypatch.setattr(eeg_poller, "CONSENT_RECHECK_SECONDS", 0.0)
     _allow("muse_optics")
@@ -177,8 +176,8 @@ def test_a_withdrawal_mid_session_stops_the_writes(poller, monkeypatch):
 
 
 def test_consent_is_not_read_once_per_reading(poller):
-    """Cached on a cadence: a Supabase round trip per reading would put the
-    consent table on the recording path."""
+    """Consent is cached on a cadence -- a Supabase round trip per reading
+    would put the consent table on the recording hot path."""
     p, db = poller
     calls = []
 
@@ -195,10 +194,9 @@ def test_consent_is_not_read_once_per_reading(poller):
 
 
 def test_a_failed_write_is_retried_on_the_next_tick(poller):
-    """The block sits on the payload for ~40 more ticks, so a retry is free.
-
-    The stamp used to be claimed before the write, which turned one transient
-    insert error into a permanently lost reading.
+    """The block stays on the payload for ~40 more ticks, so a retry is free.
+    The timestamp used to be marked as consumed before the write succeeded,
+    which turned one transient insert error into a permanently lost reading.
     """
     p, db = poller
     _allow("muse_optics")
@@ -222,8 +220,8 @@ def test_a_failed_write_is_retried_on_the_next_tick(poller):
 
 
 def test_a_refusal_consumes_the_reading(poller):
-    """The other direction. A refusal is final for this reading -- nothing about
-    the next tick changes it -- so re-deciding it 40 times would re-log it."""
+    """The opposite case: a refusal is final for this reading, so re-deciding
+    it on every later tick would just re-log the same refusal repeatedly."""
     p, _db = poller
     _allow()
     p._record_heart(_payload(), loops=1)
@@ -232,14 +230,12 @@ def test_a_refusal_consumes_the_reading(poller):
 
 
 def test_withdrawing_eeg_consent_stops_the_heart_channel_too(monkeypatch):
-    """Deliberate, and pinned here because it is not obvious and is not local.
-
-    `_record_heart` runs inside the poller loop, so the EEG consent gate killing
-    the poller ends headband heart recording as well -- even though
-    `headband_optical` is consented separately. Accepted because it errs the
-    safe way (the pull path records less than consent allows, never more), and
-    documented in CLAUDE.md. If this test goes red because someone decoupled
-    them, that is a feature change and needs the doc updated with it.
+    """Deliberate behaviour, pinned here because it's not obvious.
+    `_record_heart` runs inside the poller loop, so the EEG consent gate
+    killing the poller also ends headband heart recording -- even though
+    `headband_optical` is consented separately. Accepted because it errs
+    safe (the pull path records less than consent allows, never more). If
+    this test breaks because someone decoupled them, update CLAUDE.md too.
     """
     import eeg_client
 
@@ -262,8 +258,8 @@ def test_withdrawing_eeg_consent_stops_the_heart_channel_too(monkeypatch):
 
 
 def test_status_counts_heart_separately(poller):
-    """A session recording EEG happily while its heart channel is refused or
-    unmeasurable is normal, and one combined number would call that healthy."""
+    """A session recording EEG fine while its heart channel is refused or
+    unmeasurable is normal -- one combined number would hide that."""
     p, _db = poller
     assert p.heart_samples == 0
     assert p.last_heart_ts is None

@@ -7,23 +7,14 @@ import PageLoader from '../ui/PageLoader'
 /**
  * Admin is decided by the backend, not by a role claim.
  *
- * Deliberately not `RoleGuard`. That reads `role` from `AuthContext`, which
- * reads it from `user_metadata.role` -- set by the client at sign-up and
- * rewritable at any time through `supabase.auth.updateUser` without this
- * backend seeing it. That is fine for choosing which dashboard to show a
- * teacher; it is not fine for the switches that decide whether consent is
- * enforced. Admin is `profiles.role`, which the client cannot write and this
- * page cannot read, so the only way to know is to ask the backend.
- *
- * This is a UI convenience, not the security boundary: every `/api/admin/*`
- * endpoint checks again on each request. Removing this component would make
- * the dashboard reachable and every button on it fail with a 403.
+ * Not `RoleGuard`: that reads a role the client can rewrite through Supabase,
+ * which is fine for picking a dashboard but not for gating consent switches.
+ * This is a UI convenience only -- every `/api/admin/*` endpoint checks again.
  */
 export default function AdminGuard({ children }) {
   const { user, loading } = useAuth()
-  // Three states, not two: `null` is "haven't asked yet", which must not
-  // render as "denied" or the page redirects away while the check is in
-  // flight.
+  // `null` means "haven't asked yet" and must not render as denied while the
+  // check is in flight.
   const [allowed, setAllowed] = useState(null)
 
   useEffect(() => {
@@ -37,9 +28,8 @@ export default function AdminGuard({ children }) {
 
   if (loading || (user && allowed === null)) return <PageLoader />
   if (!user) return <Navigate to="/login" replace />
-  // A failed check sends them to their own dashboard rather than showing an
-  // error: someone who is not an admin did not ask for this page, they
-  // followed a stale link or typed the URL.
+  // Redirect rather than error -- a non-admin here followed a stale link, not
+  // a broken feature.
   if (!allowed) return <Navigate to="/dashboard" replace />
 
   return <>{children}</>

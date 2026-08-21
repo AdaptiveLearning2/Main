@@ -3,10 +3,8 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import StudentReport from './StudentReport'
 
-// The teacher report derives its "back" link from the router state the class
-// roster passes, and seeds the heading from that same state so the name shows
-// before the weekly-report loads. These pin both, including the direct-visit
-// fallback where no state was passed (refresh / bookmark / deep link).
+// Tests the "back" link and heading built from router state, including the
+// direct-visit case where no state exists (refresh / bookmark / deep link).
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 
@@ -16,14 +14,12 @@ const SID = 'stu-1'
 
 beforeEach(() => {
   apiFetch.mockReset()
-  // Resolve by URL rather than call order so reordering the fetches inside the
-  // report can't silently swap fixtures. weekly-report is null here so the name
-  // stays whatever router state seeded -- that is what these assert.
+  // Resolve by URL, not call order, so fixtures can't get silently swapped.
   apiFetch.mockImplementation((url) => {
     const u = String(url)
     if (u.includes('/stats/'))        return Promise.resolve({ total_questions: 0, total_correct: 0, current_streak: 0 })
     if (u.includes('/weekly-report')) return Promise.resolve(null)
-    return Promise.resolve([]) // sessions + performance
+    return Promise.resolve([]) // sessions and performance
   })
 })
 
@@ -39,7 +35,7 @@ function renderWithState(state) {
 
 it('links back to the specific class using name and id from router state', async () => {
   renderWithState({ name: 'Ada', classId: 'class-1', className: 'Algebra' })
-  await screen.findByText('Recent Sessions') // let the initial fetches settle
+  await screen.findByText('Recent Sessions') // wait for fetches to settle
   const back = screen.getByRole('link', { name: /back to algebra/i })
   expect(back).toHaveAttribute('href', '/teacher/classes/class-1')
 })
@@ -61,14 +57,13 @@ it('falls back to the class list on a direct visit with no state', async () => {
   await screen.findByText('Recent Sessions')
   const back = screen.getByRole('link', { name: 'Back to Classes' })
   expect(back).toHaveAttribute('href', '/teacher/classes')
-  // No name in state, and weekly-report supplied none, so the placeholder holds.
+  // No name anywhere, so the placeholder heading stays.
   expect(screen.getByText("Student's Progress")).toBeInTheDocument()
 })
 
 it('shows an error state, not an empty report, when the core load fails', async () => {
-  // A 403 (a student outside the teacher's classes), offline, or a server error
-  // on stats/sessions/performance must not render as a zeros-filled report --
-  // that reads as a real but inactive student and hides the access boundary.
+  // A failed load must show an error, not a zeros-filled report that looks
+  // like a real but inactive student.
   apiFetch.mockReset()
   apiFetch.mockImplementation((url) =>
     String(url).includes('/weekly-report')
@@ -79,8 +74,8 @@ it('shows an error state, not an empty report, when the core load fails', async 
 
   expect(await screen.findByText(/couldn't load this student's report/i)).toBeInTheDocument()
   expect(screen.getByText('You do not have access to this student')).toBeInTheDocument()
-  // The report body (and its misleading zeros) must not render...
+  // Report body must not render...
   expect(screen.queryByText('Recent Sessions')).not.toBeInTheDocument()
-  // ...but the back link stays, so the teacher can still leave.
+  // ...but the back link stays so the teacher can still leave.
   expect(screen.getByRole('link', { name: /back to algebra/i })).toHaveAttribute('href', '/teacher/classes/class-1')
 })

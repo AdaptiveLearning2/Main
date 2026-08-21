@@ -1,7 +1,4 @@
-﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
-# 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
-# 3. Generate 4 unique answer options, including correct answer, using LLM.
-# 4. Send question and answer options to frontend to display to user.
+﻿# Generates a "mean" question via LLM and computes the average with sympy.
 
 import os
 import re
@@ -19,16 +16,17 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
-        return str(x)          # "3/4"
+        return str(x)
     if isinstance(x, sp.Integer):
-        return int(x)          # 5
+        return int(x)
     if isinstance(x, sp.Float):
         return float(x)
     if isinstance(x, sp.Expr):
-        return str(x)          # "5*x", "3+4"
+        return str(x)
     return str(x)
 
 
@@ -52,8 +50,6 @@ def extract_json(text):
 
     return None
 
-
-#Currently only using integers, possibly try to include decimals/rationals in future
 
 mean_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
@@ -90,11 +86,10 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. "mean" isn't in LLM_topic_decider's grade-1-3 allowlist
-# (see _allowed_topics() there), so "early" is defense-in-depth only -- kept
-# to whole-number datasets that divide evenly, so a student who hasn't been
-# taught division yet still lands on a whole-number average rather than a
-# decimal one, whichever tier fires.
+# "mean" isn't in LLM_topic_decider's grade-1-3 allowlist (see
+# _allowed_topics() there), so "early" here is defense-in-depth only. It's
+# still kept to whole-number datasets that divide evenly, so a student who
+# hasn't learned division yet still gets a whole-number average.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 3 values, one or two-digit whole numbers under 20, that divide evenly (no remainder) for a whole-number average.",
@@ -118,9 +113,6 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -148,9 +140,9 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
@@ -168,7 +160,6 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -181,100 +172,34 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
                                         attempt + 1):
             continue
 
-        # If we reach here â†’ SUCCESS
+        # The student is shown question_text but scored on the field
+        # above; nothing used to check they agree. See
+        # question_consistency for the measured failure.
+        inconsistent = question_consistency.dataset_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+            continue
+
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     parts = question_data['variables']
-    vals = [sympify(part) for part in parts] 
+    vals = [sympify(part) for part in parts]
     solution = sum(vals) / len(vals)
 
-    #print("Solution:", solution)
-    # solution = str(solution) if solution else None
-
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique whole numbers only. NUMBERS must be represented as strings. 
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-            
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
     solution = serialize_sympy(solution) if solution is not None else None
     answers = [serialize_sympy(ans) for ans in incorrect_answers] + [solution]
-    
+
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "mean",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

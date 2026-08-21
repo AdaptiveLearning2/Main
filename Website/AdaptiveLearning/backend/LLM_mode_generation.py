@@ -1,7 +1,4 @@
-﻿# 1. Get question from LLM. Response should include question text, topic, variables, operations.
-# 2. Solve question using Python (potentially Wolfram Alpha API) to obtain correct answer.
-# 3. Generate 4 unique answer options, including correct answer, using LLM.
-# 4. Send question and answer options to frontend to display to user.
+﻿# Generates a "mode" question via LLM and computes the mode(s) with sympy/Counter.
 
 from collections import Counter
 import os
@@ -19,10 +16,8 @@ from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
+import question_consistency
 
-#POSSIBLY: manually generate solution using numbers from question_text.
-#This way I can count the # of modes present and ensure solution matches
-#that amount w/ randomly selected numbers. 
 def extract_json(text):
     start = text.find("{")
     if start == -1:
@@ -128,7 +123,6 @@ def generate_incorrect_answers(solution, values):
     return generated_answers
 
 def normalize_answer(ans):
-    #always return list
     if isinstance(ans, list):
         return [str(x) for x in ans]
     return [str(ans)]
@@ -139,12 +133,10 @@ def _grade_band(grade):
     # "advanced" -- profiles.grade_level is free text. See grade_levels.
     return grade_levels.grade_band(grade)
 
-# Grade-band-first. The solver (mode()/generate_incorrect_answers() above)
-# supports multi-modal datasets (returns a list of tied values); bimodal
-# datasets are reserved for "hard" difficulty everywhere, since spotting a
-# tie is a genuine extra step over a single clear mode. "mode" isn't in
-# LLM_topic_decider's grade-1-3 allowlist, so "early" is defense-in-depth
-# only.
+# The solver can return more than one tied value (a bimodal dataset), so
+# bimodal datasets are kept to "hard" difficulty at every grade -- spotting
+# a tie takes an extra step over a single clear mode. "mode" isn't offered
+# to grades 1-3 at all, so the "early" tier here is just a backup.
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 4-5 values, whole numbers below 20, with a SINGLE clear mode appearing at least 2 more times than any other value.",
@@ -168,9 +160,6 @@ COMPLEXITY_BY_GRADE = {
     },
 }
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_mode_question(global_questions, prev_questions,difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -198,9 +187,9 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
@@ -218,7 +207,6 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -231,101 +219,32 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
                                         attempt + 1):
             continue
 
-        # If we reach here â†’ SUCCESS
+        # The student reads question_text but is scored against variables --
+        # check the numbers in the text match the scored dataset.
+        inconsistent = question_consistency.dataset_mismatch(
+            question_data.get("question_text"), question_data.get("variables"))
+        if inconsistent:
+            print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
+            continue
+
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
-    
+
     parts = question_data['variables']
     solution = mode(parts)
 
-    #solution = normalize_answer(solution_list)
-
-    #print("Solution:", solution)
-    # solution = str(solution) if solution else None
-
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique, whole numbers numbers only. These numbers MUST come from the numeric values specified in the question that are not the solution.
-    #     - NUMBERS must be represented as strings. For example, "0.5" or "1/2" are valid representations.
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    # answers = incorrect_data["incorrect_answers"] + [str(solution)]
-    
     incorrect_answers = generate_incorrect_answers(solution, parts)
     solution = serialize_answer(solution)
     answers = [serialize_answer(ans) for ans in incorrect_answers] + [solution]
-    
+
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "mode",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

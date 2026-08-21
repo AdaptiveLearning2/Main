@@ -1,14 +1,13 @@
-"""The school-year retention window: what it denies, and what it must not.
+"""Tests the school-year retention window: what it denies, and what it must
+not.
 
-Recording is gated on the window *and* consent. The two are separate questions
-and both fail closed, so the tests that matter are the ones proving they stay
-separate -- a window that also suppressed reading would take a parent's history
-away on the last day of term, months before the delete job is meant to remove
-anything.
+Recording is gated on the window and consent separately, and both fail
+closed. The tests that matter prove they stay separate -- a window that
+also suppressed reading would take away a parent's history on the last day
+of term, months before the delete job runs.
 
-Every test here overrides conftest's `_school_year_is_open`, which is the point
-of that fixture having an escape hatch: a default nothing can turn off is a rule
-nothing tests.
+Every test here overrides conftest's `_school_year_is_open`, since a
+default nothing can turn off is a rule nothing tests.
 """
 
 import os
@@ -48,14 +47,10 @@ class _Window:
 
 
 def _today():
-    """Today **in UTC**, because these rows are configured with `timezone: UTC`.
-
-    Not `date.today()`, which is the machine's local date. The two differ for
-    part of every day on any machine that is not on UTC, so a test built on the
-    local date passes or fails depending on what time the suite runs -- which is
-    how the first version of `test_the_first_and_last_days...` failed in the
-    evening and would have passed in the morning.
-    """
+    """Today in UTC, since these rows use `timezone: UTC`. Not
+    `date.today()` (the machine's local date) -- the two differ for part of
+    every day off UTC, so a test built on the local date would pass or fail
+    depending on when the suite ran."""
     return datetime.now(timezone.utc).date()
 
 
@@ -64,12 +59,9 @@ def _row(starts, ends, tz="UTC"):
 
 
 def _window(monkeypatch, rows, raises=False):
-    """Install a real `_retention_window` over conftest's open-year default.
-
-    Clears the TTL cache first: successful reads are reused for
-    `_RETENTION_TTL_SECONDS`, so without this every test after the first would
-    be asserting against the previous test's row.
-    """
+    """Installs a real `_retention_window` over conftest's open-year
+    default. Clears the TTL cache first, or every test after the first
+    would assert against the previous test's cached row."""
     monkeypatch.undo()
     main._retention_cache_clear()
     monkeypatch.setattr(main, "supabase", _Window(rows, raises))
@@ -86,24 +78,18 @@ def test_a_day_inside_the_window_records(monkeypatch):
 
 
 def test_the_first_and_last_days_of_school_are_school_days(monkeypatch):
-    """Both bounds inclusive.
-
-    The last day matters most: the delete job runs *on* `ends_on`, and if that
-    date did not record, the job's own day would be the one day of the year
-    with no data -- which reads as an outage rather than as a boundary.
-    """
+    """Both bounds are inclusive. The last day matters most: the delete
+    job runs on `ends_on`, so if that date didn't record, the job's own
+    day would look like an outage instead of a boundary."""
     today = str(_today())
     assert _window(monkeypatch, [_row(today, "2099-12-31")])["state"] == main.WINDOW_OPEN
     assert _window(monkeypatch, [_row("2000-01-01", today)])["state"] == main.WINDOW_OPEN
 
 
 def test_before_the_year_starts_is_not_the_same_as_after_it_ends(monkeypatch):
-    """Two states, not one 'closed'.
-
-    "Recording has not started yet" and "the year is over" lead a parent to
-    different actions, and collapsing them into a single off state is the same
-    failure as a tile that cannot tell no-data from zero.
-    """
+    """Two states, not one "closed". "Not started yet" and "the year is
+    over" lead a parent to different actions -- collapsing them is the
+    same failure as a tile that can't tell no-data from zero."""
     today = _today()
     before = _window(monkeypatch, [_row(str(today + timedelta(days=10)),
                                         str(today + timedelta(days=20)))])
@@ -115,12 +101,10 @@ def test_before_the_year_starts_is_not_the_same_as_after_it_ends(monkeypatch):
 
 
 def test_an_unconfigured_window_records_nothing(monkeypatch):
-    """No row is not an open-ended licence.
-
-    The same default as consent: nothing recorded until someone says so. A
-    school that has not configured its year has a visible, fixable state rather
-    than a silent assumption that recording is fine.
-    """
+    """No row is not an open-ended licence -- same default as consent:
+    nothing recorded until someone says so. An unconfigured school gets a
+    visible, fixable state, not a silent assumption that recording is
+    fine."""
     w = _window(monkeypatch, [])
     assert w["state"] == main.WINDOW_UNCONFIGURED
     assert w["state"] in main._WINDOW_DENIED
@@ -137,13 +121,11 @@ def test_a_failed_read_records_nothing_and_says_so(monkeypatch):
 # ── the timezone is load-bearing ────────────────────────────────────────────
 
 def test_the_boundary_is_resolved_in_the_schools_timezone(monkeypatch):
-    """"The last day of school" ends at local midnight, not UTC midnight.
-
-    Constructed so UTC and the school disagree about the date: at 03:00 UTC it
-    is still the previous day in Los Angeles (UTC-7/8). With `ends_on` set to
-    that previous day, a UTC comparison says the year is over while the school
-    is still in its final day.
-    """
+    """The last day of school ends at local midnight, not UTC midnight.
+    Constructed so UTC and the school disagree: at 03:00 UTC it's still the
+    previous day in Los Angeles. With `ends_on` set to that day, a UTC
+    comparison would say the year is over while the school is still in its
+    final day."""
     class _FixedNow:
         @staticmethod
         def now(tz=None):
@@ -217,14 +199,10 @@ def test_a_closed_window_records_nothing_however_consented(monkeypatch, _consent
 
 
 def test_the_window_does_not_touch_what_may_be_read(monkeypatch):
-    """The one that would be a data-loss bug rather than a recording one.
-
-    `_reportable_channels` reads `_consent`, not `_may_record`. If the window
-    gated it, every channel would report as off the day the school year ended
-    and a parent's history would vanish months before the delete job is meant
-    to remove anything -- and it would look like a withdrawal, which is a claim
-    about a decision nobody made.
-    """
+    """A data-loss bug, not just a recording one: `_reportable_channels`
+    reads `_consent`, not `_may_record`. If the window gated it, every
+    channel would report off the day the year ended, and a parent's
+    history would vanish -- reading as a withdrawal nobody made."""
     import inspect
     source = inspect.getsource(main._reportable_channels)
     assert "_may_record" not in source, (
@@ -258,32 +236,25 @@ def test_the_reason_names_the_window_before_the_channel(monkeypatch):
 
 # ── every recording site is gated, checked together ─────────────────────────
 #
-# The negative above proves reading is *not* gated. This is the other half, and
-# it exists because the first version of this file had only the negative: it
-# would have passed with the window wired into nothing at all.
+# The negative above proves reading is not gated. This is the other half:
+# every recording site must gate too, or it would pass with the window
+# wired into nothing.
 #
-# By source rather than by behaviour, deliberately. Driving each of these to a
-# refusal needs six different fixtures -- a poller, a session owner, a rate
-# limiter, a live sidecar -- and the thing worth pinning is not that they refuse
-# today but that none of them reads consent *without* the window. That is a
-# property of the call, so the call is what is inspected. Same argument as
-# `_MODE_AWARE` in test_ingest_mode.py, which lists the endpoints that must know
-# the ingest mode after five review rounds found them one at a time.
+# Checked by source, not behaviour: driving each site to a refusal needs
+# six different fixtures, and what matters is not that they refuse today
+# but that none of them reads consent without the window -- a property of
+# the call itself. Same approach as `_MODE_AWARE` in test_ingest_mode.py.
 
-# The endpoints are **discovered, not listed**: any function in `main` whose
-# body inserts into one of the three signal tables is a recording site by
-# definition, and has to be gated. A hand-kept allowlist is the shape
-# `_MODE_AWARE` has, and it is only there because nothing can derive the set of
-# endpoints that "should know about the ingest mode" -- that is a judgement.
-# "Writes signal rows" is not a judgement, so it should not be maintained by
-# hand, and a seventh endpoint added next year is caught without anyone
-# remembering this file exists.
+# The endpoints are discovered, not listed: any function in `main` that
+# inserts into a signal table is a recording site by definition. A
+# hand-kept allowlist would need someone to remember to add each new one;
+# "writes signal rows" does not, so a seventh endpoint added later is
+# caught automatically.
 _SIGNAL_TABLES = ("cognitive_signals", "face_signals", "heart_signals")
 
-# The two that gate without inserting: they are the poller's permission checks,
-# and the poller does the writing. Nothing in their source can reveal them, so
-# these stay explicit -- a short list of exceptions beside a derived rule, which
-# is a different thing from a list standing in for the rule.
+# These two gate without inserting -- they're the poller's permission
+# checks, and the poller does the writing. Nothing in their source reveals
+# that, so they stay an explicit exception list beside the derived rule.
 _GATING_CALLBACKS = ("_poller_may_record_eeg", "_poller_may_record_eeg_reason",
                      "_heart_consent_for_poller")
 
@@ -291,15 +262,14 @@ _GATING_CALLBACKS = ("_poller_may_record_eeg", "_poller_may_record_eeg_reason",
 def _writes_signal_rows(source: str) -> bool:
     """Whether a function inserts into a signal table.
 
-    Deliberately crude -- a table name and a write call in the same body. It
-    over-matches rather than under-matches, and the failure of over-matching is
-    a test telling someone to gate a function that did not need it, which is a
-    conversation. Under-matching is a recording site nobody notices.
+    Deliberately crude: a table name and a write call in the same body. It
+    over-matches on purpose -- over-matching just means someone gets asked
+    about a function that didn't need gating, while under-matching hides a
+    real recording site.
 
-    `upsert` is in the list because leaving it out missed `ingest_heart` on the
-    first run: heart rows dedupe on `heart_session_source_ts_key`, so that
-    endpoint upserts where the other two insert. That is precisely the
-    under-match this cannot afford, and it is why the self-check below exists.
+    `upsert` is included because leaving it out missed `ingest_heart`: heart
+    rows dedupe on `heart_session_source_ts_key`, so that endpoint upserts
+    where the other two insert.
     """
     return (any(t in source for t in _SIGNAL_TABLES)
             and (".insert(" in source or ".upsert(" in source))
@@ -321,12 +291,9 @@ def _recording_sites():
 
 
 def test_the_discovery_finds_the_endpoints_we_know_about():
-    """The derived list is only worth anything if it actually finds things.
-
-    Without this, a typo in `_writes_signal_rows` yields an empty set and every
-    parametrised test below silently passes by having nothing to check -- the
-    exact way an exhaustiveness test stops being one.
-    """
+    """The derived list only matters if it actually finds things. A
+    typo in `_writes_signal_rows` would yield an empty set, and every
+    parametrised test below would pass by having nothing to check."""
     sites = _recording_sites()
     for known in ("ingest_cognitive", "ingest_face", "ingest_heart"):
         assert known in sites, (known, sites)
@@ -335,13 +302,9 @@ def test_the_discovery_finds_the_endpoints_we_know_about():
 @pytest.mark.parametrize("name", _recording_sites() + list(_GATING_CALLBACKS)
                          + ["eeg_start"])
 def test_every_recording_site_gates_on_the_window(name):
-    """A site that calls `_consent` directly records all summer.
-
-    Consent is necessary and not sufficient: `_may_record` is the conjunction,
-    and reading the raw flags skips the school year silently -- no error, no
-    empty result, just rows written outside the window that the delete job will
-    then be asked to reason about.
-    """
+    """A site that calls `_consent` directly records all summer. Consent
+    alone is not sufficient -- `_may_record` also checks the window, and
+    skipping it writes rows outside the window with no error at all."""
     import inspect
     source = inspect.getsource(getattr(main, name))
     assert "_may_record(" in source, (
@@ -359,11 +322,9 @@ def test_every_recording_site_gates_on_the_window(name):
 
 def test_a_raw_consent_dict_permits_nothing():
     """The safe direction for the mistake the test above catches.
-
-    `_permitted_heart_sources` reads `record_*`, so handing it a bare `_consent`
-    result yields no sources rather than every consented one -- a caller that
-    forgets the window records nothing instead of recording all year.
-    """
+    `_permitted_heart_sources` reads `record_*`, so a bare `_consent` result
+    yields no sources -- a caller that forgets the window records nothing
+    instead of recording all year."""
     raw_consent = {"headband_optical_enabled": True, "camera_enabled": True,
                    "retrieved": True}
     assert main._permitted_heart_sources(raw_consent) == set()
@@ -414,16 +375,11 @@ def test_the_window_outranks_consent_in_the_status_too(monkeypatch):
 
 
 def test_every_window_state_has_a_meaning():
-    """The safety net `_WINDOW_STATES` is commented as having.
-
-    Three facts about a state -- whether it records, its sentence, its
-    machine-readable stop reason -- used to live in three structures kept in
-    step by hand. They are one table now, and the comment there promises this
-    test catches a constant declared without a row in it. It did not exist; a
-    sixth state would have been denied by `_WINDOW_DENIED` (which is derived,
-    so it cannot miss one) and then explained itself as nothing at all, which
-    is the silent half of the failure the table was meant to end.
-    """
+    """Three facts about a state -- whether it records, its sentence, its
+    stop reason -- used to live in three structures kept in step by hand.
+    They're one table now; this test checks that every declared WINDOW_
+    constant has a row in it, so a new state can't deny correctly and then
+    explain itself as nothing."""
     declared = {v for k, v in vars(main).items()
                 if k.startswith("WINDOW_") and isinstance(v, str)}
     assert declared, "the constants moved; this test is no longer looking at them"
@@ -446,20 +402,12 @@ def test_every_window_state_has_a_meaning():
 
 
 def test_the_timezone_fallback_cannot_itself_fail(monkeypatch):
-    """`_school_timezone` is documented to degrade to UTC rather than refuse --
-    a wrong day boundary on a chart being a smaller harm than a blank one.
-
-    Its fallback was `ZoneInfo("UTC")`, which needs a timezone database that
-    Windows does not ship. Without the `tzdata` package that raised too, so the
-    function that exists to degrade took the whole request down instead: a
-    student clicking Connect Headband got a 500 out of `/api/sessions/start`,
-    via the rollup on the stale-session sweep.
-
-    `tzdata` is a dependency now, but the reason to pin this is that CI runs on
-    Linux, where the system database makes this path work whatever is
-    installed -- so the platform that can catch a regression here is the one
-    the tests never run on.
-    """
+    """`_school_timezone` should degrade to UTC rather than refuse -- a
+    wrong day boundary is a smaller harm than a blank one. Its old fallback
+    needed the `tzdata` package Windows doesn't ship, so without it the
+    degrade path itself raised and took the whole request down. `tzdata`
+    is a dependency now, but this is pinned here because CI runs on Linux,
+    where the system database masks the regression."""
     def _no_tzdata(*_a, **_k):
         raise Exception("No time zone found with key UTC")
 
@@ -478,11 +426,9 @@ def test_the_timezone_fallback_cannot_itself_fail(monkeypatch):
 # ── the switch: a deployment that is not on a school year ───────────────────
 
 def _unenforced(**over):
-    """A row that says "not gating on a year", the prototyping shape: no dates.
-
-    Written as its own helper rather than `_row(None, None)` plus a flag so the
-    tests below read as what the column is for.
-    """
+    """A row that says "not gating on a year" -- the prototyping shape,
+    no dates. Its own helper rather than `_row(None, None)` plus a flag, so
+    the tests below read as what the column is for."""
     row = {"id": True, "starts_on": None, "ends_on": None,
            "timezone": "UTC", "enforced": False}
     row.update(over)
@@ -512,12 +458,10 @@ def test_not_enforced_is_distinguishable_from_inside_the_year(monkeypatch):
 
 
 def test_enforcing_with_no_dates_denies_rather_than_recording_for_ever(monkeypatch):
-    """A half-finished edit is not a licence.
-
-    `enforced = true` with no dates is someone who meant to configure a year and
-    did not finish. Reading that as unbounded would make the most permissive
-    state in the system the one you reach by leaving a form blank -- the exact
-    thing the absent-row default exists to prevent."""
+    """A half-finished edit is not a licence. `enforced = true` with no
+    dates means someone started configuring a year and didn't finish --
+    reading that as unbounded would make leaving a form blank the most
+    permissive state in the system."""
     w = _window(monkeypatch, [_row(None, None)])
 
     assert w["state"] == main.WINDOW_UNCONFIGURED
@@ -525,10 +469,10 @@ def test_enforcing_with_no_dates_denies_rather_than_recording_for_ever(monkeypat
 
 
 def test_a_row_without_the_column_still_enforces(monkeypatch):
-    """Fail-closed on the column's absence, checked with `is False` rather than
-    falsiness. A row written before this column existed, or one PostgREST hands
-    back without it, must keep the gate on -- otherwise adding the column would
-    silently open every deployment that had not yet been migrated."""
+    """Fails closed on the column's absence, checked with `is False` rather
+    than falsiness. A row predating this column, or one PostgREST returns
+    without it, must keep the gate on -- otherwise adding the column would
+    silently open every unmigrated deployment."""
     today = _today()
     legacy = _row(str(today + timedelta(days=30)), str(today + timedelta(days=200)))
     assert "enforced" not in legacy

@@ -1,16 +1,13 @@
 """The question bank's list and count endpoints.
 
-Both shipped untested. `/api/questions/count` states in its own docstring that
-it follows "the same three-state rule as the reporting helpers" -- a rule that
-is asserted everywhere else it is used in this codebase, because the failure it
-prevents is silent by construction: a count that degrades to 0 renders as a
-question bank with nothing in it, which is indistinguishable from a real one.
+`/api/questions/count` follows the same three-state rule as the reporting
+helpers elsewhere in this codebase: a count that degrades to 0 renders as an
+empty question bank, indistinguishable from a real one, so a failed read must
+be reported as a failure rather than a zero.
 
-The ordering on `/api/questions` is the other half. Without it the endpoint
-returned whatever Postgres handed back, so the dashboard's "Recent Questions"
-panel showed an arbitrary five of however many it had pulled -- a list that
-looks chronological and is not, which is exactly the kind of wrong that nobody
-reports as a bug.
+`/api/questions` needs an explicit order. Without it, the dashboard's "Recent
+Questions" panel showed an arbitrary five of however many rows Postgres
+returned -- a list that looks chronological but isn't.
 """
 import os
 
@@ -25,17 +22,16 @@ import main  # noqa: E402
 class _Questions:
     """A `questions` table that records how it was queried.
 
-    The count endpoint asks PostgREST for a header rather than rows, so `count`
-    and `data` are independent here -- a fake that derived one from the other
-    could not tell the two apart, and telling them apart is the whole point of
+    The count endpoint asks PostgREST for a header rather than rows, so
+    `count` and `data` are kept independent here -- a fake that derived one
+    from the other couldn't tell them apart, which is the whole point of
     `count="exact"`.
     """
 
     def __init__(self, rows=(), count=None, raises=None):
-        # `None` is a real answer from this client and has to survive as one:
-        # PostgREST hands back a null `data` often enough that every caller in
-        # main.py guards with `or []`, and a fake that normalised it could not
-        # test the guard.
+        # `None` is a real answer here and must stay `None`: PostgREST hands
+        # back null `data` often enough that every caller in main.py guards
+        # with `or []`, and normalising it away would defeat that test.
         self.rows = None if rows is None else list(rows)
         self.count = count
         self.raises = raises
@@ -89,8 +85,8 @@ def test_the_count_comes_from_the_header_not_the_rows(_questions):
 
     The dashboard used to fetch `?limit=1000` and take the length, which was
     silently wrong above the cap: a bank that grew past 1000 simply stopped
-    counting. So the assertion is that the answer is the count PostgREST
-    reported, not the number of rows that came back with it.
+    counting. This checks the answer comes from PostgREST's reported count,
+    not the number of rows returned.
     """
     c = _questions(rows=[{"id": "q1"}], count=4212)
 
@@ -104,12 +100,9 @@ def test_the_count_comes_from_the_header_not_the_rows(_questions):
 
 
 def test_a_failed_count_is_not_an_empty_question_bank(_questions):
-    """The three-state rule, on the endpoint that names it in its docstring.
-
-    `{"total": 0}` and a failed read are the same tile to a teacher -- "no
-    questions" -- and one of them is a claim about the database made from a
-    request that never landed.
-    """
+    """`{"total": 0}` and a failed read look the same tile to a teacher -- "no
+    questions" -- but one of them is a claim about the database from a request
+    that never landed."""
     _questions(raises=RuntimeError("postgrest down"))
 
     out = main.count_questions()
@@ -120,18 +113,18 @@ def test_a_failed_count_is_not_an_empty_question_bank(_questions):
 
 
 def test_a_genuinely_empty_bank_still_counts_zero(_questions):
-    """The mirror, so the check above cannot be satisfied by never counting."""
+    """The mirror case, so the check above can't be satisfied by never counting."""
     _questions(rows=[], count=0)
 
     assert main.count_questions() == {"total": 0, "retrieved": True}
 
 
 def test_a_null_count_is_zero_rather_than_null(_questions):
-    """PostgREST omits the count when it was not asked for one.
+    """PostgREST omits the count when it wasn't asked for one.
 
     Distinct from the failure above on purpose: the request succeeded, so
     `retrieved` stays true and the total falls back to 0 rather than claiming
-    the read did not happen.
+    the read didn't happen.
     """
     _questions(rows=[], count=None)
 
@@ -146,7 +139,7 @@ def test_a_null_count_is_zero_rather_than_null(_questions):
     ({}, []),
 ])
 def test_the_count_is_filtered_the_same_way_the_list_is(_questions, kwargs, expected):
-    """A total that ignored the filters would disagree with the list beside it."""
+    """A total that ignored the filters would disagree with the list next to it."""
     c = _questions(count=3)
 
     main.count_questions(**kwargs)
@@ -158,12 +151,12 @@ def test_the_count_is_filtered_the_same_way_the_list_is(_questions, kwargs, expe
 
 def test_the_list_is_newest_first(_questions):
     """Without an order this returned whatever Postgres handed back, so the
-    dashboard's "Recent Questions" panel showed an arbitrary five of however
-    many it had pulled -- a list that looks chronological and is not.
+    "Recent Questions" panel showed an arbitrary five rows -- a list that
+    looks chronological but isn't.
 
-    Asserted on the query rather than on the returned rows: the fake hands back
-    whatever it was given, so checking the output would pass just as happily
-    with the ordering removed.
+    Asserted on the query rather than the returned rows: the fake just echoes
+    back whatever it's given, so checking the output would pass even with the
+    ordering removed.
     """
     c = _questions(rows=[{"id": "q1"}])
 
@@ -182,7 +175,7 @@ def test_the_list_passes_its_limit_through(_questions):
 
 
 def test_the_list_returns_an_empty_list_rather_than_none(_questions):
-    """`res.data or []` -- the page maps over this."""
+    """`res.data or []` -- the page maps over this result."""
     _questions(rows=None)
 
     assert main.get_questions() == []

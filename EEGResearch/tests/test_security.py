@@ -8,11 +8,10 @@ from src.app.main import app
 def _send_with_raw_authorization(client: TestClient, auth_value: bytes):
     """Send a request with a raw (possibly non-ASCII) Authorization header.
 
-    httpx's normal header API refuses non-ASCII str values before a request is
-    ever sent, so client.get(..., headers={...}) cannot reproduce what a
-    non-Python client (curl, a raw socket) can put on the wire. Building the
-    request and replacing its header list with raw bytes bypasses that
-    client-side validation, matching what Starlette actually receives.
+    httpx's normal header API rejects non-ASCII str values before sending, so
+    a plain `client.get(headers=...)` can't reproduce what a non-Python client
+    puts on the wire. Building the request and replacing its raw header bytes
+    bypasses that client-side validation.
     """
     request = client.build_request("GET", "/api/v1/state")
     raw = list(request.headers.raw)
@@ -22,10 +21,9 @@ def _send_with_raw_authorization(client: TestClient, auth_value: bytes):
 
 
 def test_state_rejects_non_ascii_bearer_token_with_401():
-    # Regression test: a byte >= 0x80 in the Authorization header arrives here
-    # as a non-ASCII str (Starlette decodes header bytes as latin-1).
-    # secrets.compare_digest raises TypeError on non-ASCII str input, which
-    # previously surfaced as an unauthenticated 500 instead of a 401.
+    # A byte >= 0x80 arrives as a non-ASCII str (Starlette decodes headers as
+    # latin-1), which crashes secrets.compare_digest -- must be a 401, not a
+    # 500.
     client = TestClient(app)
     response = _send_with_raw_authorization(client, b"Bearer caf\xe9")
     assert response.status_code == 401
@@ -38,8 +36,8 @@ def test_state_rejects_high_byte_bearer_token_with_401():
 
 
 def test_state_still_accepts_correct_token_via_raw_path():
-    # Sanity check that the raw-header send path itself isn't what's making
-    # the requests above 401 -- a valid token through the same path succeeds.
+    # Confirms the raw-header send path itself isn't what causes the 401s
+    # above -- a valid token through the same path must succeed.
     client = TestClient(app)
     settings = get_settings()
     response = _send_with_raw_authorization(
@@ -48,14 +46,12 @@ def test_state_still_accepts_correct_token_via_raw_path():
     assert response.status_code == 200
 
 
-# ── require_local_controller: the mode decides who may drive the hardware ────
+# ── require_local_controller: the mode decides who may drive the hardware ──
 #
-# Device lifecycle and headband pairing were admin-only because the backend was
-# the only caller -- under `pull` it polls this sidecar and drives the hardware
-# for the student. Push inverts that: the backend is remote by definition, so it
-# refuses those operations, and the page in front of the student is the only
-# thing that can reach their headband. These pin that the widening is scoped to
-# push and nowhere else.
+# Under `pull`, the backend polls this sidecar and drives hardware for the
+# student, so pairing stays admin-only. Under `push` the backend is remote and
+# refuses those operations, so the student's own page must be allowed to
+# reach their headband instead. These tests pin that widening to push only.
 
 import pytest  # noqa: E402
 
@@ -68,7 +64,7 @@ def _auth(token):
 
 @pytest.fixture
 def _fresh_settings(monkeypatch):
-    """`get_settings` is cached, and these tests turn PUSH_ENABLED on and off."""
+    """`get_settings` is cached; clear it around tests that toggle PUSH_ENABLED."""
     def _clear():
         get_settings.cache_clear()
     _clear()
@@ -85,9 +81,8 @@ def test_the_admin_token_drives_the_hardware_in_either_mode(monkeypatch, _fresh_
 
 
 def test_under_pull_the_learner_token_may_not_drive_the_hardware(monkeypatch, _fresh_settings):
-    """The pre-existing rule, unchanged. A pull deployment's browser gains
-    nothing from this dependency -- the backend is the legitimate controller
-    there, and it holds the admin token."""
+    """Under pull, the backend is the legitimate controller and holds the
+    admin token -- the browser gains nothing from this dependency."""
     monkeypatch.setenv("PUSH_ENABLED", "false")
     _fresh_settings()
     s = get_settings()
@@ -98,9 +93,8 @@ def test_under_pull_the_learner_token_may_not_drive_the_hardware(monkeypatch, _f
 
 
 def test_under_push_the_learner_token_may(monkeypatch, _fresh_settings):
-    """Without this, push has no pairing path at all: the browser holds the
-    learner token and every start/scan/connect endpoint answered 401, which is
-    what made push unusable for the channel it exists for."""
+    """Without this, push has no pairing path: the browser holds only the
+    learner token, and every start/scan/connect endpoint would answer 401."""
     monkeypatch.setenv("PUSH_ENABLED", "true")
     _fresh_settings()
     s = get_settings()
@@ -109,7 +103,8 @@ def test_under_push_the_learner_token_may(monkeypatch, _fresh_settings):
 
 
 def test_push_does_not_admit_an_unrelated_token(monkeypatch, _fresh_settings):
-    """Turning push on widens *which* token is accepted, not whether one is."""
+    """Push widens which token is accepted, not whether a valid one is
+    required."""
     monkeypatch.setenv("PUSH_ENABLED", "true")
     _fresh_settings()
 
@@ -122,9 +117,8 @@ def test_push_does_not_admit_an_unrelated_token(monkeypatch, _fresh_settings):
 
 
 def test_the_learner_only_routes_did_not_become_admin_routes(monkeypatch, _fresh_settings):
-    """The change is one-directional. `/api/v1/state` and the push endpoints
-    stay learner-readable in both modes -- widening the pairing routes must not
-    have narrowed anything."""
+    """`/api/v1/state` and the push endpoints must stay learner-readable in
+    both modes -- widening the pairing routes must not narrow anything else."""
     monkeypatch.setenv("PUSH_ENABLED", "false")
     _fresh_settings()
     s = get_settings()

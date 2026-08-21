@@ -38,23 +38,15 @@ beforeEach(() => {
 
 describe('the display name', () => {
   it('shows what is stored, not a guess from the email', async () => {
-    // It was seeded from the email prefix, so an untouched form held
-    // "teacher" -- and a save would have written that guess over a real name.
     draw()
     expect(await screen.findByDisplayValue('Ms Patel')).toBeInTheDocument()
     expect(screen.queryByDisplayValue('teacher')).not.toBeInTheDocument()
   })
 
   it('actually saves it', async () => {
-    // "Save Changes" raised a success toast and made no request at all.
     draw()
-    // Waited for by *value*, not just by presence. Both pages disable the field
-    // until the profile lands -- so that a fast typist cannot have their input
-    // overwritten by the response arriving behind them -- and `findByLabelText`
-    // resolves the moment the input exists, which is before the fetch settles.
-    // `userEvent.clear()` throws on a disabled element, so this raced: it
-    // passed locally every time and failed on CI, where the microtask lands a
-    // tick later.
+    // Waits for the value, not just presence: the field is disabled until the
+    // profile loads, and userEvent.clear() throws on a disabled element.
     await screen.findByDisplayValue('Ms Patel')
     const field = screen.getByLabelText(/display name/i)
     await userEvent.clear(field)
@@ -93,10 +85,9 @@ describe('changing the password', () => {
   }
 
   it('checks the current password before changing anything', async () => {
-    // Supabase's `updateUser` never asks for the old password, so a form that
-    // collects one and does not verify it claims a protection it does not
-    // give -- and on a school machine left signed in, that protection is the
-    // whole point.
+    // Supabase's updateUser doesn't ask for the old password itself, so the
+    // form must verify it -- otherwise a shared school machine left signed in
+    // gives anyone at the desk a way to change the password.
     authFns.signInWithPassword.mockResolvedValue({ error: new Error('bad creds') })
 
     await fill({ 'current password': 'wrong', '^new password': 'newpass123', 'confirm new': 'newpass123' })
@@ -130,10 +121,7 @@ describe('changing the password', () => {
 
 describe('the tabs', () => {
   it('does not offer notification switches with nothing behind them', async () => {
-    // Three toggles for a new student enrolling, a Monday report and
-    // generation alerts -- none of which exist: no push infrastructure, no
-    // service worker, no scheduled fan-out. They held React state and were
-    // forgotten on navigation, while telling a teacher a thing was on.
+    // There's no push infrastructure, so notification toggles would tell a teacher something is on when it isn't.
     draw()
     await screen.findByDisplayValue('Ms Patel')
 

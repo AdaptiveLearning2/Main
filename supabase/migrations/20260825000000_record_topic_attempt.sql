@@ -1,46 +1,37 @@
 -- One atomic statement for a per-topic attempt, instead of four round trips
--- with a lost-update race in the middle of them.
+-- with a lost-update race in the middle.
 --
--- `_record_topic_attempt` ran on every answer -- the hottest path in the
--- product -- and made four sequential calls: read the question's subject, look
--- the subject up in `math_topics`, read the student's existing row, then upsert
--- a row computed from it. The last two are a read-modify-write with no lock, so
--- two answers landing together both read the same counts and the second upsert
--- overwrote the first: attempts silently lost from the table the adaptive
--- engine reads to decide what to serve next.
+-- The previous version ran on every answer -- the hottest path in the
+-- product -- as four sequential calls, the last two a read-modify-write with
+-- no lock: two answers landing together could both read the same counts and
+-- the second upsert would overwrite the first, silently losing an attempt
+-- from the table the adaptive engine reads to choose what to serve next.
 --
 -- `ON CONFLICT DO UPDATE SET attempted_questions = <table>.attempted_questions
--- + 1` increments the *stored* value rather than one the client read a moment
--- ago, which is what makes the race disappear rather than narrow.
+-- + 1` increments the stored value rather than one the client read a moment
+-- ago, which removes the race rather than narrowing it.
 --
--- The topic is still derived from the question row and never from the caller.
--- The client has to be trusted about whether it got the answer right; letting
--- it also name the topic would let a page credit one subject for work done in
--- another. Moving the join into SQL does not change who is trusted with what --
--- `p_question_id` names a question, and the subject comes off that row.
+-- The topic is still derived from the question row, never from the caller --
+-- the client is trusted about correctness, but letting it also name the topic
+-- would let a page credit one subject for work done in another.
 --
--- Returns the topic **name**, or NULL when there is nothing to attribute the
--- answer to -- an unknown question, or a subject with no `math_topics` row.
--- NULL is the same "recorded nothing, deliberately" that the Python it replaces
--- expressed by falling through, and it is distinguishable from an error, which
--- raises.
+-- Returns the topic name, or null when there's nothing to attribute the
+-- answer to (an unknown question, or a subject with no `math_topics` row).
+-- Null is distinguishable from an error, which raises.
 --
--- The name rather than the id, because the name is what the caller can use.
--- `/api/sessions/{id}/answer` hands it back to the page, which keys its Topic
--- Accuracy panel by name and would otherwise have to re-read the whole table
--- after every answer to find out which figure moved. Nothing anywhere holds an
--- id-to-name map, so returning the id would mean a second query to resolve it.
+-- The name rather than the id: the caller hands it straight to the page,
+-- which keys its Topic Accuracy panel by name. Nothing holds an id-to-name
+-- map, so returning the id would mean a second query to resolve it.
 --
 -- SECURITY INVOKER (the default): the backend calls it with the service-role
 -- client, and as invoker the row-level policies still apply if a
--- lower-privileged role is ever granted EXECUTE. Nothing is granted one below.
+-- lower-privileged role is ever granted EXECUTE.
 --
--- **Apply this before deploying the code that calls it.** `_record_topic_attempt`
--- swallows its exceptions -- it must, because a failed topic lookup may not cost
--- a student the answer that is already recorded -- so against a database
--- without this function the call fails as PostgREST's PGRST202 and the symptom
--- is per-topic attribution quietly stopping. The caller logs that case by name
--- rather than letting it join the ordinary failures; see the note there.
+-- Apply this before deploying the code that calls it. The caller swallows
+-- exceptions here, since a failed topic lookup must not cost a student the
+-- answer that's already recorded -- so against a database without this
+-- function the call fails as PostgREST's PGRST202 and attribution quietly
+-- stops.
 
 CREATE OR REPLACE FUNCTION "public"."record_topic_attempt"(
   "p_user_id" "uuid",
@@ -61,9 +52,9 @@ BEGIN
   WHERE q."id" = p_question_id;
 
   IF v_topic_id IS NULL THEN
-    -- No question, no subject on it, or a subject that is not a topic. Nothing
-    -- to attribute this to, and inventing a `math_topics` row here would put a
-    -- subject in the table that the question generator cannot pick from.
+    -- No question, no subject on it, or a subject that isn't a topic --
+    -- nothing to attribute this to. Inventing a `math_topics` row here would
+    -- put a subject in the table that the question generator can't pick from.
     RETURN NULL;
   END IF;
 

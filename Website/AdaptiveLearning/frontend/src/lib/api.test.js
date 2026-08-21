@@ -1,16 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The one module in this suite tested unmocked.
+// The only test file that runs apiFetch for real, with only `lib/supabase`
+// and `fetch` mocked. Every other test replaces apiFetch wholesale, so this
+// is the sole place the URL, the bearer token, and error handling are
+// actually exercised.
 //
-// Every other test replaces `apiFetch` wholesale, so nothing anywhere else
-// exercises the URL it builds, whether the bearer token is attached, or how a
-// non-2xx response becomes an Error -- the behaviour all of those tests are
-// implicitly trusting. Only `lib/supabase` and `fetch` are mocked here.
-//
-// `timeoutMs` has the largest share of it for one reason: a request that
-// *hangs* is not a request that fails. A rejected promise has a `.catch`
-// waiting for it somewhere; a promise that never settles has nothing, and the
-// caller waits for ever.
+// Timeouts get the most coverage because a hung request is not the same as
+// a failed one: a rejected promise has a `.catch` waiting; one that never
+// settles does not, and the caller waits forever.
 
 vi.mock('./supabase', async () => await import('../test/mocks/supabase'))
 
@@ -56,16 +53,16 @@ describe('the request it builds', () => {
   })
 
   it('omits Authorization entirely when nobody is signed in', async () => {
-    // Omitted, not sent empty: `Bearer null` is a malformed credential the
-    // backend would reject as bad auth rather than treat as absent.
+    // Must be omitted, not sent as `Bearer null` — that reads as a bad
+    // credential, not as no credential.
     setSession(null)
     await apiFetch('/api/questions')
     expect(lastCall()[1].headers).not.toHaveProperty('Authorization')
   })
 
   it('omits it when reading the session throws, rather than failing the call', async () => {
-    // `getAccessToken` swallows this on purpose. A public endpoint must still
-    // be reachable when the auth client is unhappy.
+    // `getAccessToken` swallows this on purpose, so a public endpoint stays
+    // reachable even when the auth client is broken.
     authFns.getSession.mockRejectedValue(new Error('auth client down'))
     await expect(apiFetch('/api/questions')).resolves.toEqual({ ok: true })
     expect(lastCall()[1].headers).not.toHaveProperty('Authorization')
@@ -90,8 +87,7 @@ describe('the request it builds', () => {
 
 describe('an error response', () => {
   it('carries the status code, not just a message', async () => {
-    // Callers that tell "this doesn't exist" apart from "the request failed"
-    // have only this to go on -- ClassDetail renders a different page for each.
+    // Callers need the status code to tell "not found" from "request failed".
     globalThis.fetch.mockResolvedValue(failing({ status: 404, body: '{"detail":"no such class"}' }))
 
     await expect(apiFetch('/api/classes/x'))
@@ -106,8 +102,8 @@ describe('an error response', () => {
   })
 
   it('falls back to the status text when the body is empty', async () => {
-    // An Error with an empty message reaches a page as a blank error banner,
-    // which reads as a rendering fault rather than as a failed request.
+    // An empty error message would render as a blank banner, which looks
+    // like a rendering bug rather than a failed request.
     globalThis.fetch.mockResolvedValue(
       failing({ status: 500, body: '', statusText: 'Internal Server Error' }))
 
@@ -123,7 +119,7 @@ describe('an error response', () => {
 describe('the optional bound', () => {
   it('rejects a request that never settles, once the bound is up', async () => {
     vi.useFakeTimers()
-    globalThis.fetch.mockReturnValue(new Promise(() => {}))   // hangs for ever
+    globalThis.fetch.mockReturnValue(new Promise(() => {}))   // never resolves
 
     const call = apiFetch('/api/profile/me', { timeoutMs: 10_000 })
     const settled = call.then(() => 'resolved', e => e)
@@ -138,9 +134,8 @@ describe('the optional bound', () => {
   })
 
   it('aborts the hung request rather than leaving it in flight', async () => {
-    // Rejecting alone leaves the request in flight after the caller has given
-    // up on it -- a client timeout that cancels nothing just stops you finding
-    // out what happened.
+    // Rejecting alone leaves the request running in the background — the
+    // timeout must also abort it.
     vi.useFakeTimers()
     let signal
     globalThis.fetch.mockImplementation((_url, opts) => {
@@ -156,10 +151,8 @@ describe('the optional bound', () => {
   })
 
   it('bounds the token read too, not just the fetch', async () => {
-    // `getAccessToken` awaits `supabase.auth.getSession()`, which goes to the
-    // network when the access token needs refreshing. A timeout wrapped around
-    // `fetch` alone would leave exactly the hang it was added to stop -- and this
-    // is the shape that would pass a test written only against a hung `fetch`.
+    // `getAccessToken` can itself hit the network refreshing the token, so
+    // the timeout has to cover that too, not just `fetch`.
     vi.useFakeTimers()
     authFns.getSession.mockReturnValue(new Promise(() => {}))
     globalThis.fetch.mockResolvedValue(ok())
@@ -174,8 +167,8 @@ describe('the optional bound', () => {
   })
 
   it('leaves a request without a bound alone', async () => {
-    // Opt-in, deliberately. A blanket default would abort the LLM-backed
-    // endpoints, which are bounded server-side and can queue first.
+    // Opt-in on purpose: a default timeout would abort the LLM-backed
+    // endpoints, which can legitimately take longer and are bounded server-side.
     vi.useFakeTimers()
     globalThis.fetch.mockReturnValue(new Promise(() => {}))
 

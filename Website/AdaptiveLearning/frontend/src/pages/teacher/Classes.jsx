@@ -29,9 +29,8 @@ export default function Classes() {
       setClasses(await apiFetch('/api/classes'))
       setFailed(false)
     } catch (e) {
-      // An empty `catch {}` here left the list empty and drew "No classes
-      // yet", with a Create Class prompt beside it -- inviting a teacher to
-      // recreate classes that already exist because the read failed.
+      // Must set failed, not just leave the list empty, or a failed read
+      // shows "No classes yet" and invites the teacher to recreate them.
       console.error('Failed to load classes:', e)
       setFailed(true)
     }
@@ -141,11 +140,7 @@ export default function Classes() {
               <div className="flex items-center justify-between p-5 flex-wrap gap-4">
                 <div className="flex items-center gap-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-violet-400 to-purple-500 rounded-xl flex items-center justify-center text-white font-black text-lg shadow">
-                    {/* `(cls.name || '?')`, the same guard `ClassDetail.jsx`
-                        already carries and regression-tests. `''[0]` is
-                        undefined and `.toUpperCase()` on it throws during
-                        render, so one class row with a blank name took out the
-                        whole list -- on the first page a teacher opens. */}
+                    {/* Falls back to '?': an empty name would make `''[0]` undefined and crash on .toUpperCase(). */}
                     {(cls.name || '?')[0].toUpperCase()}
                   </div>
                   <div>
@@ -158,7 +153,6 @@ export default function Classes() {
                         {copiedId === cls.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
                       </button>
 
-                      {/* grade pill / editor */}
                       {editingId === cls.id ? (
                         <span className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
                           <select value={editGrade} onChange={e => setEditGrade(e.target.value)}

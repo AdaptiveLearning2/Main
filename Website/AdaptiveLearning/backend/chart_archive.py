@@ -1,29 +1,23 @@
-"""Render a closed session's charts and put them in private storage (Phase 8).
+"""Render a closed session's charts and put them in private storage.
 
-`chart_render.py` (part 1) turns a payload into SVG. This is the half that
-decides *what* payload, *when*, and *where it goes* -- and, mostly, what must
-not happen when it fails.
+`chart_render.py` turns a payload into SVG. This is the half that decides
+*what* payload, *when*, and *where it goes* -- and, mostly, what must not
+happen when it fails.
 
 Three properties are load-bearing:
 
-- **Out of band.** A storage failure must not fail the session-end request. The
-  student's session record, their stats and the daily rollup are all written by
-  then; an archive is derived data and the least important thing in that
-  endpoint. So the work is handed to a small pool and the request returns.
-- **Logged, never swallowed into a 200.** The reporting helpers deliberately
-  degrade to an empty payload, because a broken dashboard read costs a view. The
-  opposite applies here: this is the copy that survives the end-of-year delete,
-  so a failure has to be visible to whoever can fix it before `ends_on`.
-- **Idempotent.** Uploads use upsert and the paths are derived from the ids, so
-  a replayed close overwrites the same four objects. A close that runs twice --
-  the `/end` endpoint and then the stale-session sweep, say -- must not leave two
-  archives of one session.
+- **Out of band.** A storage failure must not fail the session-end request.
+  The session record, stats and daily rollup are all written by then, so this
+  work goes to a small pool and the request returns immediately.
+- **Logged, never swallowed.** This archive is the copy that survives the
+  end-of-year delete, so a failure has to stay visible to whoever can fix it
+  before `ends_on` -- unlike the reporting helpers, which degrade quietly.
+- **Idempotent.** Uploads use upsert and paths are derived from ids, so a
+  replayed close overwrites the same four objects instead of doubling them.
 
-**A channel that recorded nothing gets no object.** Not an empty chart: an empty
-chart asserts the session had that channel and it read flat, which is exactly the
-absence-rendered-as-data failure the reporting rules exist to stop. `chart_paths`
-carries the null instead, and the migration documents the four states it can be
-in.
+**A channel that recorded nothing gets no object**, not an empty chart -- an
+empty chart would claim the channel read flat. `chart_paths` carries null
+instead.
 """
 
 from __future__ import annotations
@@ -47,11 +41,10 @@ _ROW_CAP = 20000
 def _epoch_ms(value) -> float | None:
     """A timestamp as milliseconds, or None for anything unparseable.
 
-    Deliberately not `main._parse_ts`. That one returns a datetime and logs
-    against the consent path, where an unparseable stamp suppresses a notice a
-    student needs to see. Here a bad stamp costs one point on one chart, so it
-    is dropped quietly -- and `chart_render` already breaks the line at a gap
-    rather than bridging it, so the loss reads as a gap and not as a reading.
+    Not `main._parse_ts`: that one logs against the consent path, where a bad
+    stamp matters. Here a bad stamp only costs one point on one chart, so it's
+    dropped quietly -- `chart_render` already breaks the line at a gap rather
+    than bridging it, so the loss reads as a gap, not a fabricated reading.
     """
     if isinstance(value, datetime):
         parsed = value
@@ -85,12 +78,11 @@ def _line_points(rows, fields) -> dict:
 def _counts(rows, field: str, default=None) -> dict:
     """Label frequencies for a pie.
 
-    Rows whose value is missing are skipped when `default` is None -- a rejected
-    facial window is not a reading, and counting it as an emotion would inflate
-    every slice against a session that mostly failed its quality gate. Where a
-    default is given (heart, whose `unknown` bucket the live view draws) it is
-    counted under that name instead, because *there* the state is real: the
-    window produced a heart rate and no stress category.
+    Rows with a missing value are skipped when `default` is None -- a rejected
+    facial window isn't a reading, and counting it as an emotion would inflate
+    every slice. Where a default is given (heart's `unknown` bucket) it's
+    counted under that name, because there the state is real: a heart rate
+    with no stress category.
     """
     out: dict[str, int] = {}
     for row in rows:
@@ -105,12 +97,9 @@ def build_session_charts(cognitive, face, heart) -> dict:
     """The four charts, keyed by `chart_render.CHART_NAMES`. None where empty.
 
     **Trusted and untrusted rows alike**, unlike `signal_daily_rollup`, which
-    averages trusted rows only. The difference is deliberate and it is about what
-    each artefact is for: the rollup publishes a number that outlives the
-    evidence, so it must not smuggle a rejected reading past the quality gate;
-    this is a picture of the session, and it has to match what the reviewer was
-    shown or the drift test protecting the two palettes is protecting a
-    likeness of nothing.
+    averages trusted rows only. The rollup publishes a number that outlives the
+    evidence and must not smuggle a rejected reading past the quality gate;
+    this is a picture of the session, and has to match what the reviewer saw.
     """
     charts = {}
 
@@ -147,10 +136,10 @@ def build_session_charts(cognitive, face, heart) -> dict:
 def object_path(user_id: str, session_id: str, chart: str) -> str:
     """`{user_id}/{session_id}/{chart}.svg`.
 
-    User-id first because that prefix is what a storage RLS policy can be
-    written against, if one is ever needed. None is today -- the bucket has no
-    policies and only `service_role` reaches it -- but a layout that forecloses
-    the option is a migration of every object away.
+    User-id first, so a storage RLS policy could be written against that
+    prefix if one is ever needed -- there's none today, only `service_role`
+    reaches the bucket, but a different layout would mean migrating every
+    object to get one.
     """
     return f"{user_id}/{session_id}/{chart}.svg"
 
@@ -158,9 +147,9 @@ def object_path(user_id: str, session_id: str, chart: str) -> str:
 def _fetch(client, session_id: str):
     """The same three reads `/api/signals/session/{id}` makes, same order, cap.
 
-    Service-role, so RLS does not apply: this runs with no request behind it and
-    has already been authorised by the fact that the session belongs to the
-    student whose close triggered it.
+    Service-role, so RLS doesn't apply: this runs with no request behind it,
+    already authorised by the fact that the session belongs to the student
+    whose close triggered it.
     """
     def rows(table):
         return client.table(table).select("*").eq("session_id", session_id) \
@@ -172,9 +161,9 @@ def _fetch(client, session_id: str):
 def archive_session(client, session_id: str, user_id: str) -> dict:
     """Render, upload, and record the paths on the session row.
 
-    Returns the `chart_paths` map it wrote, for the tests and for a caller that
-    wants to do this synchronously. Raises on a failure it could not contain --
-    `_run` below is what turns that into a log line.
+    Returns the `chart_paths` map it wrote, for tests and for a caller that
+    wants this synchronously. Raises on a failure it couldn't contain; `_run`
+    below turns that into a log line.
     """
     cognitive, face, heart = _fetch(client, session_id)
     charts = build_session_charts(cognitive, face, heart)
@@ -191,8 +180,9 @@ def archive_session(client, session_id: str, user_id: str) -> dict:
             path=path,
             file=svg.encode("utf-8"),
             # `upsert` as a string: storage-py passes file_options through as
-            # HTTP headers, and a bool becomes "True", which the server does not
-            # recognise -- so a replayed close would 409 instead of overwriting.
+            # HTTP headers, and a bool becomes "True", which the server
+            # doesn't recognise -- a replayed close would 409 instead of
+            # overwriting.
             file_options={"content-type": "image/svg+xml", "upsert": "true"},
         )
         paths[name] = path
@@ -205,11 +195,9 @@ def archive_session(client, session_id: str, user_id: str) -> dict:
 # ── reading them back ───────────────────────────────────────────────────────
 
 # Long enough to load a page of four images on a slow connection, short enough
-# that a URL copied out of devtools or a shared screenshot is stale by the time
-# anyone else tries it. There is no revocation: a signed URL is valid until it
-# expires, whatever happens to the student's consent in between, so the TTL is
-# the only bound there is on a leaked one -- which is the argument for keeping
-# it small rather than convenient.
+# that a URL copied out of devtools or a screenshot is stale for anyone else
+# who tries it. There's no revocation, so this TTL is the only bound on a
+# leaked URL -- the reason to keep it small rather than convenient.
 SIGNED_URL_TTL_SECONDS = 300
 
 
@@ -217,37 +205,31 @@ def signed_chart_urls(client, chart_paths, user_id: str,
                       session_id: str) -> tuple[dict, list]:
     """`({chart: url | None}, [charts recorded but unreadable])`.
 
-    **The path is derived here, never taken from `chart_paths`.** That column is
-    ordinary jsonb on `sessions`, and `sessions` carries a `FOR ALL` own-row
-    policy, so a student can PATCH their own row through PostgREST and put any
-    string they like in it -- including another student's object path. Signing
-    what is stored would hand them a URL to it, through an endpoint whose access
-    check had just correctly confirmed they own *the session*. The stored value
-    is a record of **which** charts exist; it is not an address to be trusted.
+    **The path is derived here, never taken from `chart_paths`.** That column
+    is ordinary jsonb on `sessions`, which carries a `FOR ALL` own-row policy,
+    so a student can PATCH their own row and put any string they like there
+    -- including another student's object path. Signing what's stored would
+    hand them a URL to it. The stored value only records **which** charts
+    exist; it's not a trusted address.
 
-    So `chart_paths` is read for presence only: a truthy value means "this chart
-    was rendered and uploaded", and where it points is not consulted. The
-    consequence is that changing `object_path`'s scheme means migrating the
-    objects -- which was already true, and is noted there.
+    So `chart_paths` is read for presence only, and where it points is never
+    consulted. Changing `object_path`'s scheme therefore means migrating the
+    objects to match.
 
-    Signed rather than public, and issued per request rather than stored. These
-    are charts of a named child's cognitive and physiological signals; a public
-    object URL is an access-control bypass that no policy added later can undo,
-    because a URL that has been shared stays shared.
+    Signed rather than public, and issued per request rather than stored --
+    these are charts of a named child's physiological signals, and a public
+    URL is an access-control bypass no later policy can undo.
 
-    The two return values keep three states apart that would otherwise collapse
-    into one null:
+    The two return values keep three states apart that would otherwise
+    collapse into one null:
 
     * `url` -- rendered, uploaded, still there.
-    * `None` in the dict -- the channel produced nothing to draw. The absence is
-      the record.
-    * named in the second list -- a path *was* recorded and the object could not
-      be signed. That is a fault, not an absence, and a reader has to be able to
-      tell them apart or a bucket half-emptied by hand reads as a term in which
-      nobody wore a headband.
+    * `None` in the dict -- the channel produced nothing to draw.
+    * named in the second list -- a path *was* recorded but couldn't be
+      signed. A fault, not an absence.
 
     A chart absent from `chart_paths` altogether is absent from both, meaning
-    it was never attempted -- every session closed before Phase 8 shipped.
+    it was never attempted (a session closed before archiving existed).
     """
     urls: dict[str, str | None] = {}
     missing: list[str] = []
@@ -258,7 +240,7 @@ def signed_chart_urls(client, chart_paths, user_id: str,
         if not chart_paths[name]:
             urls[name] = None
             continue
-        # Presence, above, is all the stored value is allowed to decide.
+        # Presence above is all the stored value is allowed to decide.
         path = object_path(user_id, session_id, name)
         try:
             signed = storage.create_signed_url(path, SIGNED_URL_TTL_SECONDS)
@@ -278,25 +260,22 @@ def signed_chart_urls(client, chart_paths, user_id: str,
 
 # ── removing them ───────────────────────────────────────────────────────────
 
-# One `remove` call per batch. Storage-py takes a list, and a parent erasing a
-# term's worth of sessions would otherwise be a few hundred round trips inside
-# one request.
+# One `remove` call per batch. Without batching, a parent erasing a term's
+# worth of sessions would be a few hundred round trips in one request.
 _REMOVE_BATCH = 100
 
 
 def remove_objects(client, paths) -> tuple[int, list]:
     """Delete archived chart objects. Returns `(removed, failed paths)`.
 
-    Called by the erasure path with a list `erase_signals` derived from the ids
-    -- never one read out of `chart_paths`. A path taken from that column would
-    be an instruction to destroy an object of the writer's choosing, which is
-    the same trap as the signing endpoint with the consequence reversed.
+    Called by the erasure path with a list of paths `erase_signals` derives
+    from the ids -- never one read out of `chart_paths`, which would let a
+    caller destroy an object of the writer's choosing.
 
-    Failure is reported, not raised. By the time this runs the database half has
-    committed and `chart_paths` no longer points at these objects, so anything
-    left behind is orphaned but unservable -- the signing endpoint has nothing
-    to sign. That is a smaller problem than an erasure that half-rolls-back, and
-    it is why the caller can be told a number instead of an exception.
+    Failure is reported, not raised. By the time this runs, the database half
+    has committed and `chart_paths` no longer points at these objects, so
+    anything left behind is orphaned but unservable -- a smaller problem than
+    an erasure that half-rolls-back.
     """
     paths = [p for p in (paths or []) if p]
     if not paths:
@@ -309,8 +288,8 @@ def remove_objects(client, paths) -> tuple[int, list]:
             storage.remove(batch)
             removed += len(batch)
         except Exception as e:
-            # Loud: this is the one part of an erasure that can be incomplete,
-            # and nobody is watching a return value once the parent is gone.
+            # Loud: this is the one part of an erasure that can be
+            # incomplete, and nobody is watching a return value by now.
             print(f"[charts] erasure could not remove {len(batch)} object(s): {e}")
             failed.extend(batch)
     return removed, failed
@@ -318,21 +297,21 @@ def remove_objects(client, paths) -> tuple[int, list]:
 
 # ── sweeping objects whose session is gone ──────────────────────────────────
 #
-# Storage does not cascade (#107). Deleting a `sessions` row -- or a `profiles`
-# row, which cascades to sessions -- leaves the SVGs behind, and `main.py` has no
-# delete endpoint to hook, so today those deletes come from the dashboard or a
-# direct connection. A sweep is the only shape that catches them.
+# Storage does not cascade. Deleting a `sessions` row (or a `profiles` row,
+# which cascades to sessions) leaves the SVGs behind, and `main.py` has no
+# delete endpoint to hook -- those deletes come from the dashboard or a direct
+# connection. A sweep is the only thing that catches them.
 #
-# It deletes on **absence**, which is the dangerous kind of job: one failed read
-# of `sessions` makes every object in the bucket look orphaned. Every guard below
-# exists so that failure aborts instead of emptying the bucket, and the default
-# is `dry_run=True` for the same reason.
+# It deletes on **absence**, the dangerous kind of job: one failed read of
+# `sessions` makes every object in the bucket look orphaned. Every guard below
+# exists so that failure aborts instead of emptying the bucket, and
+# `dry_run=True` is the default for the same reason.
 #
 # Deliberately *not* in scope: an object belonging to a session that still
-# exists. `expire_signal_rows` leaves the archive standing on purpose -- it and
-# `signal_daily_rollup` are what survive the year, and that survival is why a
-# same-day delete with no grace period is defensible. A sweep that "corrected"
-# that would remove the thing making its own schedule safe.
+# exists. `expire_signal_rows` leaves the archive standing on purpose -- it
+# survives the year alongside `signal_daily_rollup`, which is why a same-day
+# delete with no grace period is defensible. A sweep that "corrected" that
+# would remove the thing making its own schedule safe.
 
 _LIST_PAGE = 100
 # storage-py pages silently; a backend that ignored `offset` would loop for ever.
@@ -345,9 +324,9 @@ _UUID = re.compile(
 def _list_all(storage, prefix: str) -> list[str]:
     """Every entry name under `prefix`, paged.
 
-    `list` caps at 100 by default and reports no truncation, so a single call is
-    a silent cap -- a bucket would look like its first 100 students for ever, and
-    the sweep would report "nothing orphaned" about objects it never saw.
+    `list` caps at 100 by default and reports no truncation, so a single call
+    is a silent cap: a bucket would look like its first 100 students forever,
+    and the sweep would report "nothing orphaned" about objects it never saw.
     """
     names: list[str] = []
     for page_no in range(_LIST_MAX_PAGES):
@@ -364,10 +343,9 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
                         max_orphan_fraction: float = 0.5) -> dict:
     """Remove archived charts whose session row no longer exists.
 
-    Returns a report; never raises for an ordinary failure, because the caller
-    is a cron job or an operator and a traceback is a worse answer than a
-    refusal that says why. `refused` is the field to read first: when it is set
-    nothing was deleted.
+    Returns a report; never raises for an ordinary failure, since a traceback
+    is a worse answer than a refusal that says why. `refused` is the field to
+    read first: when it's set nothing was deleted.
 
     `dry_run` defaults to **True**. A sweep that deletes by default is one
     mistyped argument away from being the bug it exists to fix.
@@ -377,11 +355,11 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
               "dry_run": dry_run, "refused": None}
     storage = client.storage.from_(BUCKET)
 
-    # The bucket is listed **before** `sessions` is read, and the order is the
+    # The bucket is listed **before** `sessions` is read -- that order is the
     # guard. Read the table first and a session created in between has objects
-    # whose id is missing from the snapshot -- deleted as orphans while its row
-    # sits there. Listing first can only ever be stale in the safe direction: an
-    # object written after the listing is not considered at all.
+    # missing from the snapshot, deleted as orphans while its row sits there.
+    # Listing first can only be stale in the safe direction: an object written
+    # after the listing is simply not considered.
     try:
         found: list[tuple[str, str]] = []
         for user_id in _list_all(storage, ""):
@@ -410,8 +388,8 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
                     .in_("id", batch).execute().data) or []
             live.update(str(r["id"]) for r in rows if r.get("id"))
     except Exception as e:                                     # noqa: BLE001
-        # Not "treat them as orphaned". A failed read here is precisely the
-        # state that makes a live bucket look deletable.
+        # Not "treat them as orphaned": a failed read here is exactly the
+        # state that would make a live bucket look deletable.
         report["refused"] = f"could not read sessions: {e}"
         return report
 
@@ -420,10 +398,9 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
     if not orphans:
         return report
 
-    # A handful of orphans is a deleted session. Most of the bucket being
-    # orphaned is a broken read that did not raise -- a filtered-out service
-    # role, a schema change, a table pointed at the wrong project. Refuse and
-    # let a human look, rather than being the fastest way to lose the archive.
+    # A handful of orphans is normal (deleted sessions). Most of the bucket
+    # looking orphaned means a broken read that didn't raise -- refuse and let
+    # a human look, rather than being the fastest way to lose the archive.
     fraction = len(orphans) / len(found)
     if fraction > max_orphan_fraction:
         report["refused"] = (
@@ -434,8 +411,8 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
         return report
 
     if len(orphans) > max_deletes:
-        # Reported, not silent: the next run finishes the work, but "removed 500"
-        # with nothing saying more was waiting reads as "the bucket is clean".
+        # Reported, not silent: "removed 500" with nothing saying more is
+        # waiting reads as "the bucket is clean".
         report["hit_cap"] = True
         orphans = orphans[:max_deletes]
 
@@ -459,11 +436,11 @@ def sweep_orphan_charts(client, *, dry_run: bool = True, max_deletes: int = 500,
 
 # ── running it off the request path ─────────────────────────────────────────
 #
-# Two workers, lazily built, shut down from `main._lifespan`. Same shape as the
-# strategy and live-signals pools next to it, and sized the same way: this work
-# is a handful of reads and four small uploads per closing session, and sessions
-# close one student at a time. A bigger pool would only buy the ability to hold
-# more of a storage outage in memory.
+# Two workers, lazily built, shut down from `main._lifespan`. Sized like the
+# strategy and live-signals pools next to it: this is a handful of reads and
+# four small uploads per closing session, and sessions close one student at a
+# time. A bigger pool would only buy holding more of a storage outage in
+# memory.
 
 _POOL: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
@@ -481,10 +458,9 @@ def _pool() -> ThreadPoolExecutor:
 def shutdown_pool() -> None:
     """Drop the queue on the way out. Called from `main._lifespan`.
 
-    Pending archives are abandoned rather than awaited. That is the right trade
-    for a shutdown: the rows they summarise are still in the database and still
-    have until `ends_on`, so the archive can be rebuilt, while a shutdown that
-    blocks on storage is an outage that will not end.
+    Pending archives are abandoned, not awaited: the rows they summarise are
+    still in the database until `ends_on`, so the archive can be rebuilt --
+    while a shutdown that blocks on storage is an outage with no end.
     """
     global _POOL
     with _pool_lock:
@@ -499,18 +475,17 @@ def _run(client, session_id: str, user_id: str) -> None:
         drawn = sum(1 for v in paths.values() if v)
         print(f"[charts] {session_id[:8]}: archived {drawn}/{len(paths)}")
     except Exception as e:
-        # Loud, and not into a response. Nothing is waiting on this, so the log
-        # is the only place it can surface -- and it has to surface, because the
-        # window in which it can still be fixed closes on `ends_on`.
+        # Loud, and not into a response: nothing is waiting on this, so the
+        # log is the only place it can surface, and it must -- the window to
+        # fix it closes on `ends_on`.
         print(f"[charts] {session_id[:8]}: archive failed: {e}")
 
 
 def schedule(client, session_id: str, user_id: str) -> None:
     """Queue an archive for a session that has just closed. Never raises.
 
-    Never raises including on submit: a pool that has been shut down, or an
-    interpreter already tearing down, must not turn a successful session close
-    into a 500 over a picture.
+    Including on submit: a shut-down pool, or an interpreter already tearing
+    down, must not turn a successful session close into a 500 over a picture.
     """
     try:
         _pool().submit(_run, client, session_id, user_id)

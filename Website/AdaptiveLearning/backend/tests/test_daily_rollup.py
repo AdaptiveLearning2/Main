@@ -1,14 +1,13 @@
 """The rollup writer: which days it recomputes, and that it never costs a close.
 
-The aggregation itself is SQL and is exercised against a real Postgres by the
-migration checks; what lives here is the part Python owns -- which days get
-recomputed for a session, in whose timezone, and what happens when the call
-fails.
+The aggregation itself is SQL, checked against a real Postgres elsewhere. What
+lives here is the Python side -- which days get recomputed for a session, in
+whose timezone, and what happens when the call fails.
 
 The property that matters most is the last one. `_rollup_session_days` runs at
-the end of `end_session`, and a rollup is derived data: losing a day of it costs
-a summary that the next close rebuilds, while raising would cost the student
-their session record and their stats update.
+the end of `end_session`, and a rollup is derived data: losing a day of it just
+costs a summary the next close rebuilds, while raising would cost the student
+their session record and stats update.
 """
 
 import os
@@ -61,8 +60,8 @@ def rpc(monkeypatch):
 
 def test_a_session_rolls_up_the_school_day_it_happened_on(rpc):
     """20:00 on the 11th in California, not the 12th in UTC -- the same
-    boundary the weekly report buckets by, and they have to agree or the rollup
-    cannot answer the report's questions once the raw rows are gone."""
+    boundary the weekly report buckets by. They must agree, or the rollup
+    can't answer the report's questions once the raw rows are gone."""
     main._rollup_session_days(USER, "2026-06-12T02:00:00Z", "2026-06-12T03:00:00Z")
 
     assert rpc.days == ["2026-06-11"]
@@ -71,8 +70,8 @@ def test_a_session_rolls_up_the_school_day_it_happened_on(rpc):
 
 
 def test_a_session_over_local_midnight_rolls_up_both_days(rpc):
-    """One session, two school days. Recomputing both is cheaper than reasoning
-    about which one moved, and the writer is idempotent so the extra call is
+    """One session, two school days. Recomputing both is simpler than figuring
+    out which one changed, and the writer is idempotent so the extra call is
     free."""
     # 23:30 on the 11th to 00:30 on the 12th, Los Angeles.
     main._rollup_session_days(USER, "2026-06-12T06:30:00Z", "2026-06-12T07:30:00Z")
@@ -82,7 +81,7 @@ def test_a_session_over_local_midnight_rolls_up_both_days(rpc):
 
 def test_an_implausible_span_does_not_loop(rpc):
     """A corrupt `started_at` must not turn a session close into thousands of
-    RPCs. A lesson does not span a year; anything claiming to is bad data."""
+    RPCs. A lesson doesn't span a year; anything claiming to is bad data."""
     main._rollup_session_days(USER, "1970-01-01T00:00:00Z", "2026-06-12T03:00:00Z")
 
     assert rpc.days == ["2026-06-11"], "fell back to the closing day only"
@@ -93,9 +92,8 @@ def test_an_inverted_span_still_rolls_up_the_closing_day(rpc):
 
     A `started_at` later than `ended_at` -- clock skew, or a bad write -- made
     the loop condition false from the start, so it ran zero times and logged
-    nothing. A session that just closed always has one day worth recomputing,
-    and doing nothing quietly is the outcome this whole helper is shaped to
-    avoid.
+    nothing. A session that just closed always has at least one day to
+    recompute, and silently doing nothing is what this helper exists to avoid.
     """
     main._rollup_session_days(USER, "2026-06-12T03:00:00Z", "2026-06-10T03:00:00Z")
 
@@ -105,10 +103,10 @@ def test_an_inverted_span_still_rolls_up_the_closing_day(rpc):
 def test_one_days_failure_does_not_skip_the_next(monkeypatch):
     """Per-day isolation.
 
-    A single try around the loop meant a failure on the first day of a two-day
-    session also skipped the second -- and the second is the closing day, the
-    one the call exists for. The days are independent recomputations; nothing
-    about one failing says the next will.
+    A single try around the whole loop meant a failure on the first day of a
+    two-day session also skipped the second day -- the closing day, the one
+    this call exists for. Each day is an independent recomputation, so one
+    failing must not skip the rest.
     """
     attempted = []
 
@@ -137,11 +135,11 @@ def test_one_days_failure_does_not_skip_the_next(monkeypatch):
 
 
 def test_a_failed_rollup_does_not_reach_the_caller(monkeypatch):
-    """The whole reason this is called last and swallows.
+    """Why this is called last and swallows its own errors.
 
-    `end_session` has already written `ended_at` and the student's `user_stats`
-    by the time this runs. Raising here would surface as a failed session close
-    for a summary that the next close rebuilds anyway.
+    By the time this runs, `end_session` has already written `ended_at` and
+    the student's `user_stats`. Raising here would surface as a failed session
+    close, just for a summary the next close rebuilds anyway.
     """
     monkeypatch.setattr(main, "supabase", _RpcRecorder(raises=True))
     monkeypatch.setattr(main, "_retention_window", lambda: {
@@ -151,7 +149,7 @@ def test_a_failed_rollup_does_not_reach_the_caller(monkeypatch):
 
 
 def test_unparseable_timestamps_still_roll_up_today(rpc, monkeypatch):
-    """A session whose stamps cannot be read is still a session that just
+    """A session whose stamps can't be read is still a session that just
     ended, and today's rollup is the one it could have changed."""
     monkeypatch.setattr(main, "_utc_now",
                         lambda: datetime(2026, 6, 12, 3, 0, tzinfo=timezone.utc))
@@ -165,12 +163,12 @@ def test_the_rollup_runs_after_the_writes_that_matter():
     """Ordering, asserted rather than assumed.
 
     If the rollup call moved above the `sessions` update or the `user_stats`
-    write, a slow or hanging RPC would delay them -- and it would see a session
+    write, a slow or hanging RPC would delay them -- and would see a session
     row without its `ended_at`.
     """
     import inspect
-    # Both now live in `_close_session`, which is where the ordering is decided
-    # for all three close sites at once.
+    # Both live in `_close_session`, which decides the ordering for all three
+    # close sites at once.
     source = inspect.getsource(main._close_session)
     assert source.index("_rollup_session_days") > source.index("_credit_session_to_user_stats"), (
         "the rollup runs before the stats write it must not be able to affect"
@@ -183,21 +181,20 @@ def test_every_session_close_writes_a_rollup():
     """Discovered, not listed.
 
     Three places end a session: the `/end` endpoint, `start_session`'s sweep of
-    sessions a student abandoned, and `class_live`'s staleness monitor. Only the
-    first called the rollup, so a student who closed the tab -- the case the
-    sweep exists for -- left a day with raw rows and no summary. Once the delete
-    job runs, that day is simply gone.
+    abandoned sessions, and `class_live`'s staleness monitor. If only one calls
+    the rollup, a student who closed the tab -- the case the sweep exists for
+    -- leaves a day with raw rows and no summary, which the delete job then
+    removes for good.
 
-    Matched on the write rather than on a hand-kept list of functions, for the
-    same reason as the recording-site check: "sets ended_at" is a fact about the
-    code, not a judgement someone has to remember to record here.
+    Matched on the write rather than a hand-kept list of functions: "sets
+    ended_at" is a fact about the code, not something someone has to remember
+    to update here.
 
-    Now asserted through `_close_session`. Each site used to carry its own copy
-    of the close sequence and each copy drifted separately -- the sweep credited
-    correct answers it had never selected, `class_live` skipped the empty-session
-    discard -- so the sequence lives in one helper and this checks that every
-    closer reaches it. The helper's own contents are pinned just below, which is
-    what stops the indirection turning into a hole.
+    Asserted through `_close_session`, which all three sites now share. Each
+    site used to carry its own copy of the close sequence and drifted
+    separately -- the sweep credited correct answers it never selected,
+    `class_live` skipped the empty-session discard. The helper's own contents
+    are pinned just below, so the shared helper can't quietly go incomplete.
     """
     import inspect
 
@@ -217,10 +214,9 @@ def test_every_session_close_writes_a_rollup():
 def test_the_shared_close_does_every_step_a_close_owes():
     """The other half of the check above.
 
-    Routing three sites through one helper only helps if the helper is complete;
-    a step dropped here now goes missing from all three at once, which is the
-    risk the consolidation trades for. Each of these shipped as "the close site
-    that was missed" at least once.
+    Routing three sites through one helper only helps if the helper is
+    complete -- a step dropped here now goes missing from all three at once.
+    Each of these steps was, at some point, the close site someone missed.
     """
     import inspect
     source = inspect.getsource(main._close_session)

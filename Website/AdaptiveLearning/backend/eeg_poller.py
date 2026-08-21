@@ -1,4 +1,4 @@
-"""Background pollers — VERBOSE diagnostic version."""
+"""Background pollers -- VERBOSE diagnostic version."""
 from __future__ import annotations
 
 import os
@@ -14,30 +14,23 @@ POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 # Which ingestion path is live, stated rather than inferred.
 #
 # `pull` is this poller: it runs inside the backend and polls the sidecar over
-# HTTP, which works only because start.ps1 puts both on one machine. `push` is
-# the sidecar POSTing to /api/signals/* with the student's own token, which is
-# what the camera forces -- a hosted backend has no route to a student's laptop.
+# HTTP, which only works when both are on one machine (start.ps1). `push` is
+# the sidecar POSTing to /api/signals/* with the student's own token -- what
+# the camera forces, since a hosted backend has no route to a student's laptop.
 #
-# Explicit because the failure is silent otherwise. A poller that cannot reach
-# the sidecar looks exactly like a headband that never connected: no rows, no
-# error, a live-looking session. Deploy the backend anywhere but the student's
-# machine and every session degrades that way with nothing to read. So `push`
-# makes start() refuse loudly instead of starting a thread that will never
-# succeed, and the refusal names the setting.
+# Explicit because the failure is silent otherwise: a poller that can't reach
+# the sidecar looks exactly like a headband that never connected (no rows, no
+# error, a live-looking session). So `push` makes start() refuse loudly instead
+# of starting a thread that will never succeed.
 #
-# **It binds the poller only. The ingest endpoints are always open.**
-# `/api/signals/*` accepts in either mode, deliberately -- rejecting the push
-# endpoints under `pull` would break the mixed local-dev case where a developer
-# runs the poller and posts a batch by hand.
+# **It binds the poller only. The ingest endpoints are always open**, in both
+# modes -- rejecting push under `pull` would break local dev, where a developer
+# runs the poller and also posts a batch by hand.
 #
-# The consequence is worth stating rather than discovering: a deployment left on
-# `pull` whose sidecar *also* pushes writes `cognitive_signals` twice for every
-# sample. The rows are valid and the counts are wrong, silently -- and unlike
-# the heart path there is no dedupe key to catch it, because
-# `heart_session_source_ts_key` has no equivalent on a table that already holds
-# production rows. `main.ingest_cognitive` warns when it is used under `pull`
-# for that reason; `face_signals` and `heart_signals` are unexposed to this,
-# since the poller never writes them.
+# One consequence: a deployment left on `pull` whose sidecar also pushes writes
+# `cognitive_signals` twice per sample. Rows are valid, counts are silently
+# wrong -- unlike the heart path, there's no dedupe key to catch it here.
+# `main.ingest_cognitive` warns when this happens.
 INGEST_MODE = (os.getenv("INGEST_MODE", "pull") or "pull").strip().lower()
 _VALID_MODES = ("pull", "push")
 if INGEST_MODE not in _VALID_MODES:
@@ -80,58 +73,48 @@ class _Poller(threading.Thread):
         self.user_id    = user_id
         self.session_id = session_id
         self.device_id  = device_id
-        # Named _stop_event, not _stop: threading.Thread itself uses a private
-        # method named _stop() internally (called from _wait_for_tstate_lock,
-        # which is_alive()/join() hit once the thread has actually finished).
-        # An attribute here named _stop shadows that method, so the internal
-        # call becomes "call this Event instance" -> TypeError: 'Event' object
-        # is not callable, raised from is_alive()/join() on a finished thread.
+        # Named _stop_event, not _stop: threading.Thread has its own private
+        # _stop() method, called internally once the thread finishes. An
+        # attribute named _stop would shadow it and break is_alive()/join().
         self._stop_event = threading.Event()
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
-        # First re-check is one interval away, not immediate: `start()` has
-        # just read consent, and initialising this to 0.0 made loop 1 read it
-        # again milliseconds later.
+        # Not 0.0: `start()` just read consent, so the first re-check should
+        # be a full interval away, not immediately on loop 1.
         self._consent_checked_at = 0.0
-        # Heart readings are tracked separately from EEG ones. They arrive on a
-        # different cadence -- one per ~10s window, held on the payload in
-        # between -- so the EEG `last_ts`, which changes every tick, cannot say
-        # whether a heart reading has already been recorded.
+        # Heart readings are tracked separately from EEG ones: they arrive on
+        # a different cadence (one per ~10s window, held between recomputes),
+        # so the EEG `last_ts` can't say whether a heart reading is new.
         self.last_heart_ts   = None
         self.heart_samples   = 0
-        # Its own counter, for the same reason `heart_samples` is separate from
-        # `samples`: folding heart failures into `errors` makes a session whose
-        # EEG writes are fine but whose heart writes all fail look like general
-        # trouble, which is precisely the distinction splitting the counts was
-        # meant to preserve.
+        # Its own counter: folding heart failures into `errors` would make a
+        # session with fine EEG writes but failing heart writes look like
+        # general trouble.
         self.heart_errors    = 0
         self._heart_consent  = False
         self._heart_source   = None
-        # None, not 0.0. time.monotonic()'s reference point is undefined, so
-        # 0.0 is not a "never checked" sentinel -- on a host that has been up
-        # for less than the interval it is a claim that we checked at boot.
+        # None, not 0.0: time.monotonic()'s reference point is undefined, so
+        # 0.0 doesn't mean "never checked" -- it could look like "checked at
+        # boot" on a freshly started host.
         self._heart_checked_at = None
 
     def _may_record_heart(self, source: str) -> bool:
         """Whether this student consents to heart data from `source`.
 
         The poller writes with the **service-role** client, so neither RLS nor
-        `/api/signals/heart`'s per-sample check applies to anything it inserts:
+        `/api/signals/heart`'s per-sample check applies to what it inserts:
         this call is the only thing standing between a withdrawal and a heart
         row under `INGEST_MODE=pull`.
 
-        Per source, not per channel, because one channel arrives from two
-        sensors under two separate permissions -- a student who allowed the
-        headband and refused the camera has consented to `muse_optics` and not
-        to `rppg`, and a heart-rate failover must never open a webcam they
-        declined.
+        Per source, not per channel: one channel arrives from two sensors
+        under two separate permissions, so a student who allowed the headband
+        and refused the camera consented to `muse_optics` but not `rppg`.
 
-        Re-read on a slow cadence rather than per sample: a lesson outlives a
-        change of mind, and a poller that only asked at the start would keep
-        recording against a mid-lesson withdrawal until the session ended.
-        Unwired, it denies -- a deployment nobody wired the check into is
-        otherwise indistinguishable from one whose student said yes.
+        Re-read on a slow cadence, not per sample, so a mid-lesson withdrawal
+        takes effect instead of being recorded against until the session ends.
+        Unwired, it denies -- otherwise an unwired deployment looks the same
+        as a wired one where the student said yes.
         """
         now = time.monotonic()
         if (self._heart_checked_at is not None and source == self._heart_source
@@ -153,38 +136,29 @@ class _Poller(threading.Thread):
     def _record_heart(self, data: dict, loops: int) -> None:
         """Write one heart reading, if the payload carries a new one.
 
-        The headband is the primary heart source and nothing wrote
-        `heart_signals` from this path at all, so a pull deployment recorded no
-        heart rate while an identical push one recorded it fully -- the same
-        two-deployments-diverging failure the shared mapper exists to prevent,
-        one layer above it.
-
         A rejected window is not a reading: the sidecar's block always has a
         `source` and reports refusal as `bpm: None` with a `rejected_by`, so
-        gating on the block's presence would write a null row per tick.
+        gating on the block's mere presence would write a null row every tick.
         """
         heart = data.get("heart")
         if not heart or heart.get("bpm") is None:
             return
         source = heart.get("source")
         if not source:
-            # Same rule as the mapper's: consent is decided per sensor, so a
-            # reading that cannot name its sensor cannot be checked at all.
+            # Same rule as the mapper: consent is per sensor, so a reading
+            # that can't name its sensor can't be checked at all.
             return
         # Falls back to the tick's stamp exactly as the mapper does, so the
-        # value compared here is the one that ends up in the row.
+        # value compared here matches what ends up in the row.
         heart_ts = heart.get("ts") or data.get("timestamp")
         if heart_ts == self.last_heart_ts:
             return
 
-        # The stamp is claimed at each point where this reading is *finished
-        # with*, and deliberately not before. A refusal and an unmappable block
-        # are both final -- nothing about the next tick would change them, and
-        # re-deciding them 40 times over would re-log the refusal every tick.
-        # A failed write is the opposite: the block sits on the payload for
-        # ~40 more ticks, so leaving the stamp unclaimed retries it for free on
-        # the next one. Claiming it up front turned one transient insert error
-        # into a permanently lost reading.
+        # Claim the stamp only once this reading is finished with. A refusal
+        # or an unmappable block is final, so claiming it stops re-logging the
+        # same refusal every tick. A failed *write* is different: leaving the
+        # stamp unclaimed lets the next tick retry it for free, instead of
+        # turning one transient insert error into a permanently lost reading.
         if not self._may_record_heart(source):
             self.last_heart_ts = heart_ts
             if loops <= 3 or loops % 10 == 0:
@@ -197,9 +171,8 @@ class _Poller(threading.Thread):
             return
         try:
             # Upsert, matching `/api/signals/heart`. `heart_session_source_ts_key`
-            # makes a repeat a no-op, which is what keeps a deployment left on
-            # `pull` while its sidecar also pushes from double-counting this
-            # channel -- the protection `cognitive_signals` has no key for.
+            # makes a repeat a no-op, so a deployment left on `pull` whose
+            # sidecar also pushes doesn't double-count this channel.
             self.supabase.table("heart_signals").upsert(
                 row, on_conflict="session_id,source,ts", ignore_duplicates=True
             ).execute()
@@ -211,17 +184,16 @@ class _Poller(threading.Thread):
                       f"source={source} bpm={row.get('heart_rate_bpm')}", flush=True)
         except Exception as e:
             self.heart_errors += 1
-            # Throttled like the success lines, because the retry that makes a
-            # transient failure survivable also makes a *persistent* one repeat:
-            # the block is held for ~10 ticks, so an unreachable table would
-            # otherwise print ten identical lines per reading, for the session.
+            # Throttled like the success lines: the block is held for ~10
+            # ticks, so an unreachable table would otherwise print ten
+            # identical failure lines per reading.
             if self.heart_errors <= 3 or self.heart_errors % 10 == 0:
                 print(f"!!! [eeg-poller] HEART INSERT FAILED #{self.heart_errors}: "
                       f"{type(e).__name__}: {e}", flush=True)
 
     def run(self):
-        # Not 0.0 at construction: `start()` read consent moments ago, and
-        # starting the clock here means the first re-check is a full interval
+        # Not 0.0 at construction: `start()` read consent moments ago, so
+        # starting the clock here makes the first re-check a full interval
         # away rather than immediate.
         self._consent_checked_at = time.monotonic()
         print(f"\n>>> [eeg-poller] STARTING user={self.user_id[:8]} session={self.session_id[:8]} device={self.device_id}", flush=True)
@@ -243,33 +215,20 @@ class _Poller(threading.Thread):
                 try:
                     still_consented = _consent_check(self.user_id) if _consent_check else False
                 except Exception as e:
-                    # Fails closed, like `_consent` itself. A read error must
+                    # Fails closed, like `_consent` itself: a read error must
                     # not be the reason recording continues.
                     still_consented = False
                     print(f"!!! [eeg-poller] consent re-check failed, stopping: {e}", flush=True)
                 if not still_consented:
-                    # **This stops the heart channel too, and that is a
-                    # decision rather than an oversight.** `_record_heart` runs
-                    # in this loop, so killing the poller ends headband heart
-                    # recording even though `headband_optical` is consented
-                    # separately -- and `start()` refuses without EEG consent,
-                    # so on the pull path a student who allows the headband and
-                    # declines EEG records no heart rate at all.
-                    #
-                    # Accepted because it errs the safe way: the pull path
-                    # records *less* than consent allows, never more. Undoing it
-                    # means a poller that keeps running with the cognitive write
-                    # switched off, which is a session that reports EEG stopped
-                    # while still holding the device -- a feature, not a fix.
-                    # The push path is unaffected: `/api/signals/heart` checks
-                    # per source and never consults EEG consent.
-                    # One line, and it does not say *why*. The check is a bool,
-                    # so this loop cannot tell a withdrawal from a closed school
-                    # year or a failed read of either -- it used to assert the
-                    # first, which is the one naming a decision the family made.
-                    # The wired check already logged the reason a moment ago
-                    # (with the student id); this only records that the poller
-                    # stopped, and which session, which that line does not have.
+                    # **This stops the heart channel too, deliberately.**
+                    # `_record_heart` runs in this loop, so stopping the
+                    # poller ends headband heart recording even though
+                    # `headband_optical` is a separate consent -- a student
+                    # who allows the headband but declines EEG records no
+                    # heart rate under pull. Accepted because it errs safe:
+                    # this records *less* than consent allows, never more.
+                    # The push path is unaffected, since `/api/signals/heart`
+                    # checks per source and never consults EEG consent.
                     print(f"<<< [eeg-poller] stopping session={self.session_id[:8]}: "
                           "recording no longer permitted", flush=True)
                     self._stop_event.set()
@@ -279,20 +238,16 @@ class _Poller(threading.Thread):
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
 
-            # Outside the EEG freshness check below, deliberately. A heart
-            # reading covers a 25s window and is held on the payload between
-            # recomputes, so it has its own cadence and its own stamp; nesting
-            # it under "the EEG timestamp moved" would tie it to a channel it
-            # does not come from and drop it whenever EEG stalled.
+            # Outside the EEG freshness check below, deliberately: a heart
+            # reading has its own cadence and stamp. Nesting it under "the EEG
+            # timestamp moved" would drop it whenever EEG stalled.
             if data:
                 self._record_heart(data, loops)
 
             if data and data.get("timestamp") and data["timestamp"] != self.last_ts:
                 self.last_ts = data["timestamp"]
-                # Both rules now live in `signal_mapping.eeg_quality`, which
-                # the push path reads too. Inline here, they were pull-only: the
-                # same unworn headband wrote nothing through this loop and a
-                # zeroed row per tick through /api/signals/cognitive.
+                # Lives in `signal_mapping.eeg_quality` so both ingestion
+                # paths agree on it, rather than each having its own copy.
                 verdict = signal_mapping.eeg_quality(data)
                 row = eeg_client.map_eeg_to_cognitive(data, self.session_id, self.user_id)
 
@@ -303,10 +258,9 @@ class _Poller(threading.Thread):
                         print(f">>> [eeg-poller] loop={loops} no_signal, skipping insert", flush=True)
                 else:
                     if verdict == "contact_poor" and (loops <= 3 or loops % 10 == 0):
-                        # The mapper has already nulled the measurements; this is
-                        # only the log. Keeping the row keeps the session's
-                        # timeline intact -- see the mapper for why that matters
-                        # to class_live's staleness check.
+                        # The mapper already nulled the measurements; this is
+                        # just the log. Keeping the row keeps the session's
+                        # timeline intact for class_live's staleness check.
                         print(f">>> [eeg-poller] loop={loops} poor contact, inserting null measurements", flush=True)
                     try:
                         res = self.supabase.table("cognitive_signals").insert(row).execute()
@@ -318,42 +272,30 @@ class _Poller(threading.Thread):
                         print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
                         print(f"!!! [eeg-poller] row was: {row}", flush=True)
             # wait(), not sleep(): stop() then returns within microseconds
-            # instead of up to POLL_INTERVAL later. The lines printed below run
-            # after the loop, so a sleeping poller is one that still has output
-            # to emit -- and if the interpreter starts shutting down first, that
-            # print can hit an already-held stdout lock and abort the process.
+            # instead of waiting out the rest of POLL_INTERVAL.
             self._stop_event.wait(POLL_INTERVAL)
 
         try:
-            # Each device_id (station) is its own independent sidecar stream now, so
-            # only another poller *on the same device* keeps it alive. Hold _lock
-            # across the whole check-then-stop sequence (not just the _active read)
-            # so start() -- which also holds _lock while registering a new poller
-            # and spawning its thread -- can't register a replacement in the gap
-            # between our check and the actual stop_session() call. Without this, a
-            # rapid disconnect+reconnect could have this thread kill the stream
+            # Each device_id (station) is its own sidecar stream; only another
+            # poller *on the same device* keeps it alive. Hold _lock across
+            # the whole check-then-stop sequence, not just the _active read,
+            # so start() can't register a replacement in the gap between our
+            # check and the actual stop_session() call -- otherwise a rapid
+            # disconnect+reconnect could have this thread kill the stream
             # right after a new poller started depending on it.
             with _lock:
-                # Deregister *here*, in the one stop path that nothing outside
-                # this thread drives. `stop`, `stop_for_user`, `start`'s
-                # same-user replacement and `stop_all` all pop and forget; a
-                # poller that ends itself -- consent withdrawn -- had no caller
-                # to do it, so the entry and the warning record outlived it.
-                # That is the fifth stop path, and `_forget_warning`'s docstring
-                # says every one of them. Inside the lock this block already
-                # takes, and before the liveness scan below, so a dead self
-                # cannot count as a reason to keep the sidecar stream open.
+                # Deregister here: this is the one stop path nothing outside
+                # this thread drives (a poller ending itself on withdrawn
+                # consent has no external caller to do it). Inside the lock
+                # and before the liveness scan below, so a dead self can't
+                # count as a reason to keep the sidecar stream open.
                 #
-                # **`is self`, not just the key.** A disconnect/reconnect on the
-                # same session id leaves this thread finishing a `get_state`
-                # while `start()` has already registered a replacement under the
-                # same key -- the normal case, since that read is real HTTP. An
-                # unconditional pop then deregisters the *live* poller: it keeps
-                # writing, `stop()` can no longer reach it, `can_use_device`
-                # hands its device to another user, and the scan below stops the
-                # sidecar stream out from under it. That is the very race the
-                # lock three lines up exists to prevent, reintroduced by the fix
-                # for the self-termination path.
+                # **`is self`, not just the key.** A disconnect/reconnect on
+                # the same session id can leave this thread finishing a
+                # `get_state` after `start()` already registered a replacement
+                # under the same key. An unconditional pop would then
+                # deregister the *live* replacement instead -- the exact race
+                # the lock above exists to prevent.
                 if _active.get(self.session_id) is self:
                     _active.pop(self.session_id, None)
                     _forget_warning(self.session_id)
@@ -375,85 +317,73 @@ class _Poller(threading.Thread):
 
 
 # The heart channel re-reads consent on the same cadence as EEG
-# (CONSENT_RECHECK_SECONDS, below). One constant, because the question it
-# answers is the same one -- how long may a withdrawal keep being recorded
-# against -- and two numbers would imply a difference in that answer that
-# nothing here intends.
+# (CONSENT_RECHECK_SECONDS, below). One constant, since both answer the same
+# question: how long a withdrawal may keep being recorded against.
 
-# `_consent` lives in `main`, and importing it here would be a cycle, so `main`
-# hands it in at import. Takes the sensor as well as the student: one channel
-# arrives from two sensors under two separate permissions, and a single boolean
-# would let a headband's consent authorise a camera.
+# `_consent` lives in `main`; importing it here would be a cycle, so `main`
+# hands it in at import. Takes the sensor as well as the student, since one
+# channel arrives from two sensors under two separate permissions -- a single
+# boolean would let a headband's consent authorise a camera.
 #
 # No default, and None denies. An unwired deployment that assumed yes would
-# record against refusals and look exactly like a wired one doing its job.
+# record against refusals while looking like a wired one doing its job.
 _heart_consent_check = None
 
 
 def set_heart_consent_check(fn) -> None:
     """Register how this module asks whether a student consents to a heart sensor.
 
-    `fn(user_id, source) -> bool`. Wired from `main` at import, against the same
-    `_consent` read and the same source map `/api/signals/heart` enforces, so
-    the two ingestion paths cannot come to different answers about one student.
+    `fn(user_id, source) -> bool`. Wired from `main` at import, against the
+    same source map `/api/signals/heart` enforces, so the two ingestion paths
+    can't disagree about one student.
     """
     global _heart_consent_check
     _heart_consent_check = fn
 
 
 _active: Dict[str, _Poller] = {}
-# Sessions already warned about for double-writing. Lives here rather than in
-# `main` because `stop()` is what bounds it: a set kept over there had nothing
-# to evict it and grew with every session ever double-written for the life of
-# the process -- "bounded by concurrent sessions" was what the comment claimed
-# and the opposite of what it did. Next to `_active`, under the same lock, and
-# discarded by the same call that ends the poller.
+# Sessions already warned about for double-writing. Lives here, not in `main`,
+# because `stop()` is what bounds it -- next to `_active`, under the same
+# lock, discarded by the same call that ends the poller.
 _warned_double_write: set[str] = set()
 _lock = threading.Lock()
 
-# Pre-claim pairing window (#34). can_use_device's own docstring used to say a
-# station with no live poller is "open to anyone" -- true and necessary, since
-# a user has to scan and connect before their own poller can exist, but it left
-# a gap: two users targeting the same unclaimed station could each read its
-# live snapshot or issue control commands (scan/connect/disconnect) until one
-# of them won the eeg_poller.start() claim. That claim is the *end* of
-# pairing, not the start of it, so ownership has to begin earlier -- at the
-# first scan/connect/disconnect a user makes on an unclaimed device.
+# Pre-claim pairing window. A station with no live poller is open to anyone,
+# but a user has to scan and connect before their own poller can exist -- so
+# without this, two users targeting the same unclaimed station could both read
+# its live snapshot or issue control commands until one won the eventual
+# eeg_poller.start() claim. Ownership has to begin at the first
+# scan/connect/disconnect on an unclaimed device, not at that later claim.
 #
-# TTL'd rather than held indefinitely: an abandoned scan (tab closed mid-way,
-# /start never called) would otherwise brick a physical station for anyone
-# else, which is exactly the contention pairing exists to resolve. 30s is a
-# reasoned default, not a measured one -- long enough to cover a ~12s
-# Bluetooth scan (PR #8) plus a subsequent connect attempt, short enough that
-# an abandoned pairing reopens the station well within a lesson. It is
-# sliding (refreshed on every reserve_device call from the same user), so an
-# active pairing flow that runs longer than one window doesn't expire out
-# from under the user still driving it.
+# TTL'd rather than held indefinitely: an abandoned scan (tab closed mid-way)
+# would otherwise brick a physical station for anyone else. 30s is a reasoned
+# default, not a measured one -- long enough for a ~12s Bluetooth scan plus a
+# connect attempt, short enough to reopen well within a lesson. It slides
+# (refreshed on every reserve_device call from the same user), so an
+# in-progress pairing doesn't expire out from under the user driving it.
 RESERVATION_TTL_SECONDS = 30.0
 
 # device_id -> (user_id, reserved_at, session_id | None). Same _lock as
-# _active: a reservation and a poller-claim are two stages of the same
-# ownership question, and checking them under different locks would let one
-# race past the other.
+# _active: a reservation and a poller-claim are two stages of one ownership
+# question, and checking them under different locks would let one race past
+# the other.
 #
-# session_id is what makes a release scopable (#88). It is **optional and
-# stays optional**: the pairing flow is allowed to run before a session
-# exists, and a caller that does not know one is not a caller to refuse. None
-# means "unattributable", which release_reservation treats as the old
-# release-everything-this-user-holds behaviour rather than as a reason to keep
-# it -- an entry nobody can attribute must still be releasable, or an abandoned
-# pairing outlives every mechanism for clearing it early.
+# session_id scopes a release to the pairing attempt that created it, and
+# stays optional: the pairing flow can run before a session exists. None
+# means "unattributable", and release_reservation treats that as
+# release-everything for that user rather than as a reason to keep the entry
+# -- an entry nobody can attribute must still be releasable, or an abandoned
+# pairing outlives every way of clearing it early.
 _reservations: Dict[str, tuple] = {}
 
 
 def _reservation_owner(device_id: str) -> str | None:
     """The user_id currently holding device_id's reservation, or None.
 
-    Caller holds _lock. An expired entry is dropped here rather than by a
-    background sweep -- the registry has one entry per physical station and
-    is read on every can_use_device call, so pruning lazily on read is
-    enough; a timer thread would be one more thing stop_all has to join, for
-    a dict this small.
+    Caller holds _lock. An expired entry is dropped here, on read, rather than
+    by a background sweep -- the dict is small and read often enough that
+    lazy pruning is enough, and a timer thread would be one more thing
+    stop_all has to join.
     """
     entry = _reservations.get(device_id)
     if entry is None:
@@ -469,11 +399,8 @@ def _live_poller_owner(device_id: str) -> str | None:
     """The user_id of the live poller currently holding device_id, or None.
 
     Caller holds _lock. Shared by start(), reserve_device() and
-    can_use_device() -- all three answer the same question, "who, if anyone,
-    currently owns this device via a live poller", and previously each
-    carried its own copy of the scan. Three copies is how can_use_device and
-    start() could have quietly disagreed about a claim; a fourth copy for
-    reserve_device would only have made that more likely, not less.
+    can_use_device() -- all three answer the same question ("who, if anyone,
+    owns this device via a live poller"), so they can't quietly disagree.
     """
     for p in _active.values():
         if p.device_id == device_id and p.is_alive():
@@ -485,22 +412,18 @@ def reserve_device(user_id: str, device_id: str,
                    session_id: str | None = None) -> bool:
     """Claim or refresh device_id's pre-claim reservation for user_id.
 
-    session_id records *which* pairing attempt this is, so that ending one
-    session releases only the reservations that session created (#88). It is
-    optional because the pairing endpoints are reachable without one, and a
-    missing session_id degrades to the old behaviour rather than refusing.
+    session_id records *which* pairing attempt this is, so ending one session
+    releases only the reservations it created. Optional, since the pairing
+    endpoints are reachable without one.
 
     Called from the three control endpoints -- refresh/connect/disconnect --
-    the actions that mean "I am now pairing this station", rather than from
-    read-only status/debug polling. A bystander's periodic status check must
-    not itself claim a station out from under someone about to pair it.
+    meaning "I am now pairing this station", not from read-only status/debug
+    polling. A bystander's status check must not itself claim a station out
+    from under someone about to pair it.
 
-    Returns False when a *live poller* already owns the device (the
-    stronger, later-stage claim start() enforces) or another user's
-    reservation on it hasn't expired. The check and the claim happen under
-    one lock so two users calling this for the same unclaimed device can't
-    both observe "free" before either commits -- the exact race #34 exists to
-    close.
+    Returns False when a *live poller* already owns the device, or another
+    user's reservation on it hasn't expired. Check and claim happen under one
+    lock, so two users can't both observe "free" before either commits.
     """
     with _lock:
         owner = _live_poller_owner(device_id)
@@ -526,39 +449,27 @@ def release_reservation(user_id: str, device_id: str | None = None,
                         session_id: str | None = None) -> None:
     """Drop user_id's reservation, scoped as narrowly as the caller can manage.
 
-    With device_id: drop only that device's entry, and only if it is still
-    user_id's. This is what the three control endpoints need on a failed
-    request -- a bridge error scanning station B must not release a *different*
-    reservation the same user still legitimately holds on station A. An
-    unscoped release used to run from every failure branch and would have
-    dropped both; see test_a_successful_scan_still_holds_its_reservation_
-    through_a_later_failure_on_another_device for the case that caught it.
+    With device_id: drop only that device's entry, and only if it's still
+    user_id's. Needed so a bridge error scanning station B doesn't release a
+    *different* reservation the same user legitimately holds on station A.
 
-    With session_id (and no device_id): drop the reservations *this session*
-    created, plus any the same user holds that are not attributed to a session
-    at all. This is what stop() uses, and it is the fix for #88 -- a user
-    genuinely can hold more than one reservation at once
-    (test_the_same_users_failed_attempt_on_one_device_spares_their_other builds
-    exactly that), so closing one session used to release a different, live
-    session's station up to RESERVATION_TTL_SECONDS early.
+    With session_id (no device_id): drop the reservations *this session*
+    created, plus any the same user holds not attributed to any session. Used
+    by stop() -- a user can genuinely hold more than one reservation, so
+    closing one session must not release a different, live session's station
+    early.
 
-    **Unattributed entries are still dropped, deliberately.** Sparing them
-    would be the safer-looking choice and is the wrong one: a reservation with
-    no session_id is one no session close can ever name, so keeping it means an
-    abandoned pairing outlives the only mechanism for clearing it early. That
-    is a station held against everyone rather than released too soon for one
-    person -- trading a bounded imprecision for an unbounded one. It is also
-    the compatibility path: a frontend that has not been updated sends no
-    session_id, and gets exactly the old behaviour rather than a release that
-    silently stops working.
+    **Unattributed entries are still dropped, deliberately.** A reservation
+    with no session_id can never be named by a session close, so sparing it
+    would mean an abandoned pairing outlives every way of clearing it early --
+    a station held against everyone, which is worse than releasing one
+    person's slightly too soon. It's also the compatibility path: an
+    unupdated frontend sends no session_id and gets the old behaviour.
 
-    Without either: drop every reservation user_id holds. No production caller
-    does this any more -- stop() always passes a session_id -- but it stays the
-    default so a caller that genuinely has no session in scope releases too
-    much rather than too little. The failure direction matters: releasing early
-    can only make a station available sooner than ideal, never deny one to its
-    rightful holder, and that asymmetry is what made the #88 tradeoff
-    acceptable while it stood.
+    Without either: drop every reservation user_id holds. Stays the default
+    so a caller with no session in scope releases too much rather than too
+    little -- releasing early can only free a station sooner, never deny one
+    to its rightful holder.
     """
     with _lock:
         if device_id is not None:
@@ -579,9 +490,9 @@ def release_reservation(user_id: str, device_id: str | None = None,
 def is_polling(session_id: str) -> bool:
     """Whether this backend has a live poller for that session.
 
-    The actual condition, rather than `INGEST_MODE == "pull"`, which is only a
-    proxy for it. A developer hand-posting a batch while no poller runs is not
-    double-writing, and treating the mode as the answer reports them anyway.
+    The actual condition, not `INGEST_MODE == "pull"`, which is only a proxy:
+    a developer hand-posting a batch while no poller runs isn't
+    double-writing, but the mode check alone would report it as such.
     """
     with _lock:
         p = _active.get(session_id)
@@ -591,11 +502,8 @@ def is_polling(session_id: str) -> bool:
 def _forget_warning(session_id: str) -> None:
     """Evict one session's warning record. Call from **every** stop path.
 
-    This is what makes the set bounded by concurrent sessions rather than by
-    uptime, which is what the comment beside it claims. `stop()` had it and the
-    other two did not, so the claim was true only for the path someone had
-    thought about -- the same shape as the bug that moved this set out of `main`
-    in the first place.
+    This is what keeps the set bounded by concurrent sessions instead of by
+    uptime -- miss a stop path and it grows for the life of the process.
 
     Caller holds `_lock`; `stop_all` is the exception and says why.
     """
@@ -605,10 +513,10 @@ def _forget_warning(session_id: str) -> None:
 def claim_double_write_warning(session_id: str) -> bool:
     """True once per live-polled session, for logging a double write.
 
-    Answers "is this session being written by both paths, and have we not said
-    so yet" in one step under one lock, so the check and the claim cannot race
-    into two log lines. Returns False for a session with no live poller, which
-    is the hand-posted dev batch the ingest endpoint stays open for.
+    Answers "is this being written by both paths, and have we not said so
+    yet" in one step under one lock, so the check and the claim can't race
+    into two log lines. False for a session with no live poller -- the
+    hand-posted dev batch the ingest endpoint stays open for.
     """
     with _lock:
         p = _active.get(session_id)
@@ -618,31 +526,30 @@ def claim_double_write_warning(session_id: str) -> bool:
         return True
 
 
-# How often a running poller re-reads consent. Not per tick: at 4 Hz that is a
-# database read four times a second per student, to answer a question that
-# changes at most a few times a session. Not never, either -- a withdrawal that
-# only takes effect at the next session means recording against a refusal for as
-# long as the current one runs, which is the thing consent exists to prevent.
+# How often a running poller re-reads consent. Not per tick: at 4 Hz that's a
+# database read four times a second per student for a question that changes
+# at most a few times a session. Not never, either, or a withdrawal wouldn't
+# take effect until the next session -- recording against a refusal the whole
+# time, which is what consent exists to prevent.
 CONSENT_RECHECK_SECONDS = 20.0
 
-# Injected by `main` at start(). A callable rather than an import, because
-# `_consent` lives in `main` and importing it here would be a cycle -- and
-# because it keeps the dependency pointing one way, `main` -> `eeg_poller`.
+# Injected by `main` at start(). A callable, not an import: `_consent` lives
+# in `main`, and importing it here would be a cycle.
 _consent_check = None
 
-# Optional. `_consent_check` only returns a bool, which cannot say *why* --
+# Optional. `_consent_check` only returns a bool, which can't say *why* --
 # withdrawn consent and a closed school year both read as False. When wired,
-# start() uses this for the message it raises instead of a fixed sentence that
-# always blames consent.
+# start() uses this for the message it raises instead of a fixed sentence
+# that always blames consent.
 _consent_reason_check = None
 
 
 def set_consent_check(fn) -> None:
     """Register how this module asks whether a student still consents to EEG.
 
-    Required before `start()` will run. There is deliberately no default: a
-    fallback of "assume yes" would make an unwired deployment record against a
-    refusal, and it would look identical to a wired one.
+    Required before `start()` will run. No default, deliberately: "assume
+    yes" would make an unwired deployment record against a refusal and look
+    identical to a wired one.
     """
     global _consent_check
     _consent_check = fn
@@ -661,18 +568,16 @@ def set_consent_reason_check(fn) -> None:
 def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
     print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
     if INGEST_MODE == "push":
-        # Not a silent no-op. Returning {"running": False} here would be
-        # indistinguishable from a sidecar that is simply not up yet, which is
-        # the confusion this mode setting exists to remove.
+        # Not a silent no-op: {"running": False} would be indistinguishable
+        # from a sidecar that's simply not up yet.
         raise PushModeError(
             "INGEST_MODE=push: the sidecar posts to /api/signals/* itself, so "
             "this backend does not poll it. Set INGEST_MODE=pull for a "
             "co-located deployment (start.ps1, dev, single-machine classroom)."
         )
-    # Consent, before anything starts polling. The push path has had this at
-    # `/api/signals/*` since it existed; the poller writes `cognitive_signals`
-    # directly with the service-role client, which bypasses RLS *and* the ingest
-    # endpoint, so under pull nothing checked at all. Same rule, both paths.
+    # Consent, before anything starts polling. The poller writes
+    # `cognitive_signals` directly with the service-role client, which
+    # bypasses RLS and the ingest endpoint, so under pull nothing else checks.
     if _consent_check is None:
         raise ConsentError(
             "eeg_poller has no consent check wired. Refusing to poll rather "
@@ -689,21 +594,17 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
             print(f"=== already running for this session", flush=True)
             return {"running": True, "already": True}
         # The sidecar is a single shared stream: two different users polling
-        # it concurrently would each attribute the *same* physical device's
-        # readings to their own session. Same-user restarts (below) are fine
-        # -- that's just the user switching sessions/devices -- but a live
-        # poller some other user still owns must block us instead of quietly
+        # it concurrently would each attribute the same physical device's
+        # readings to their own session. Same-user restarts are fine, but a
+        # live poller some other user owns must block us instead of quietly
         # sharing the stream.
         live_owner = _live_poller_owner(device_id)
         if live_owner is not None and live_owner != user_id:
             print(f"=== device claimed by another user (device={device_id})", flush=True)
             raise DeviceClaimedError(device_id)
-        # A caller that never went through reserve_device -- skipping the
-        # scan/connect UI and hitting /start directly with a known device_id
-        # -- must not be able to walk around someone else's in-progress
-        # pairing on that station. Same exception as the live-poller case
-        # above; main.py's handler already reads generically enough to cover
-        # both (see its 409 message).
+        # A caller that skips the scan/connect UI and hits /start directly
+        # with a known device_id must not be able to walk around someone
+        # else's in-progress pairing on that station.
         owner = _reservation_owner(device_id)
         if owner is not None and owner != user_id:
             print(f"=== device reserved by another user, not yet polling (device={device_id})", flush=True)
@@ -713,19 +614,16 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
                 print(f"=== stopping previous poller for same user (session={sid[:8]})", flush=True)
                 p.stop()
                 _active.pop(sid, None)
-                # The fourth stop path, and the one the helper missed when it
-                # was introduced to cover the other three. Every way a poller
-                # ends has to clear its record or the set is bounded by uptime,
-                # which is the claim its comment denies -- and this is the path
-                # a student hits just by starting a second session.
+                # Every way a poller ends has to clear its warning record too,
+                # or the set grows unbounded -- this is the path a student
+                # hits just by starting a second session.
                 _forget_warning(sid)
         p = _Poller(supabase, user_id, session_id, device_id)
         p.start()
         _active[session_id] = p
-        # The reservation's job ends here -- can_use_device checks live
-        # pollers first, so a stale entry would never be consulted, but
-        # leaving it costs a slot in the dict for no reason for up to
-        # RESERVATION_TTL_SECONDS after ownership moved to something stronger.
+        # The reservation's job ends here: ownership has moved to something
+        # stronger, so leaving the entry around just wastes a dict slot until
+        # it expires.
         _reservations.pop(device_id, None)
         return {"running": True, "already": False}
 
@@ -733,18 +631,15 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
 def can_use_device(user_id: str, device_id: str) -> bool:
     """Whether user_id may read/control device_id's (station's) live stream.
 
-    A station with a *live* poller belongs to that poller's user -- its stream
-    is that student's in-progress biometric data, not shared classroom data --
-    so only the owner may touch it. start()'s claim guard ensures at most one
-    user ever holds a given device_id, so the first live match is decisive; a
-    dead-but-not-yet-reaped poller doesn't count (is_alive()), matching the
-    rest of this module.
+    A station with a *live* poller belongs to that poller's user -- its
+    stream is that student's in-progress biometric data, not shared classroom
+    data -- so only the owner may touch it. A dead-but-not-yet-reaped poller
+    doesn't count (`is_alive()`).
 
     Below that, a station someone else has *reserved* (mid-scan/connect, no
-    poller yet -- see reserve_device) is theirs until the reservation expires.
-    Only once neither a live poller nor an unexpired reservation names an
-    owner is a station open to anyone, which is what lets a user scan/pair a
-    genuinely free station before their own poller has started.
+    poller yet) is theirs until the reservation expires. Only once neither a
+    live poller nor an unexpired reservation names an owner is a station open
+    to anyone -- what lets a user scan/pair a genuinely free station.
     """
     with _lock:
         owner = _live_poller_owner(device_id)
@@ -760,20 +655,17 @@ def stop(session_id: str, user_id: str | None = None) -> dict:
     """Stop this session's poller if one exists, and release its user's
     pre-claim reservation regardless of whether one did.
 
-    user_id matters exactly when there is no poller to pop: a user who
+    user_id matters exactly when there's no poller to pop: a user who
     scanned or connected but gave up before reaching /start holds a
-    reservation with nothing in _active for it, so a caller that only
-    released a *popped poller's* user_id would silently skip the release on
-    every path that ends a session or pairing attempt without one -- which
-    was the actual gap across three call sites (this function had no way to
-    fix it locally until this parameter existed). Every caller here already
-    has the right user_id in scope: the student ending their own session, or
-    -- for the teacher-facing stale-session sweep -- the student the session
-    belongs to, not the teacher reading it.
+    reservation with nothing in _active for it, so releasing only a *popped
+    poller's* user_id would silently skip that case. Every caller here
+    already has the right user_id in scope -- the student ending their own
+    session, or, for the teacher-facing stale-session sweep, the student the
+    session belongs to.
 
-    Reservations are released outside the lock this function otherwise holds,
-    since release_reservation takes its own; p.stop() is fine to leave inside
-    it, since _Poller.stop() only sets an Event and does no I/O.
+    Reservations are released outside the lock this function otherwise
+    holds, since release_reservation takes its own; p.stop() is fine to
+    leave inside it, since _Poller.stop() only sets an Event and does no I/O.
     """
     with _lock:
         _forget_warning(session_id)
@@ -782,10 +674,9 @@ def stop(session_id: str, user_id: str | None = None) -> dict:
             p.stop()
     release_for = user_id or (p.user_id if p else None)
     if release_for is not None:
-        # Scoped to this session (#88): a stale-session sweep must not release
-        # the station a *different*, still-live session of the same user is
-        # mid-pairing with. Reservations this session never created, and that
-        # carry a session_id of their own, are left alone.
+        # Scoped to this session: a stale-session sweep must not release the
+        # station a *different*, still-live session of the same user is
+        # mid-pairing with.
         release_reservation(release_for, session_id=session_id)
     if p:
         return {"running": False, "samples": p.samples}
@@ -808,37 +699,34 @@ def live_pollers() -> list[_Poller]:
     """Every poller thread still running, registered or not.
 
     threading.enumerate() rather than _active, deliberately: start() and
-    stop_for_user() pop a poller out of the registry the moment they signal it,
-    while its thread runs on for one more loop check. The registry therefore
-    does not name every thread that is still alive, which is exactly the set
-    that matters when the question is "has anything got output left to print".
+    stop_for_user() pop a poller from the registry the moment they signal it,
+    while its thread runs on for one more loop check. So the registry doesn't
+    name every thread that's still alive -- which is what matters when the
+    question is "has anything got output left to print".
     """
     # Matched by class name, not isinstance: reloading this module rebinds
-    # _Poller to a new class object, and threads started by the old one would
-    # then fail an isinstance check -- reporting "nothing running" while they
-    # are still running, which is the one wrong answer this must never give.
+    # _Poller to a new class object, so threads started by the old one would
+    # fail an isinstance check and report "nothing running" while still
+    # running -- the one wrong answer this must never give.
     return [t for t in threading.enumerate() if type(t).__name__ == "_Poller"]
 
 
 def stop_all(timeout: float = 5.0) -> int:
     """Stop and join every live poller. Called from main's lifespan shutdown.
 
-    A poller is a daemon thread that prints, including a block of teardown
-    lines after its loop ends. Left to interpreter shutdown, one of those
-    prints can land while the stdout BufferedWriter lock is already held, which
-    CPython treats as fatal ("_enter_buffered_busy: could not acquire lock
-    for <_io.BufferedWriter name='<stdout>'>"), aborting the process with exit
-    code 134 on a clean shutdown. Joining here means no poller outlives the
-    server.
+    A poller is a daemon thread that prints teardown lines after its loop
+    ends. Left to interpreter shutdown, one of those prints can land while
+    the stdout lock is already held, which CPython treats as fatal, aborting
+    the process with exit code 134 on an otherwise clean shutdown. Joining
+    here means no poller outlives the server.
 
     Signals every poller before joining any, so the whole set costs one poll
-    interval rather than one each. `timeout` is likewise the budget for the
-    whole join, shared across the threads via a single deadline -- a per-thread
-    timeout would make the worst case N x timeout, and this runs on a shutdown
-    path where something is waiting on it.
+    interval rather than one each. `timeout` is the budget for the whole
+    join, shared via a single deadline -- a per-thread timeout would make the
+    worst case N x timeout on a shutdown path something is waiting on.
 
-    Returns how many pollers were signalled -- diagnostics for a caller that
-    wants to log it; both call sites here ignore it.
+    Returns how many pollers were signalled, for a caller that wants to log
+    it; both call sites here ignore it.
     """
     pollers = live_pollers()
     for p in pollers:
@@ -848,22 +736,18 @@ def stop_all(timeout: float = 5.0) -> int:
         p.join(timeout=max(0.0, deadline - time.monotonic()))
     with _lock:
         # Anything registered between live_pollers() above and this clear is
-        # dropped while still running. That needs a request to start a poller
-        # mid-shutdown, after the server stopped accepting them -- and the
-        # alternative, holding _lock across the joins, would deadlock against
-        # the run loop's own _lock use on the way out.
+        # dropped while still running -- that needs a request to start a
+        # poller mid-shutdown. The alternative, holding _lock across the
+        # joins, would deadlock against the run loop's own _lock use on exit.
         _active.clear()
-        # The warned-set goes with them. It is keyed by session and every
-        # session just ended, so the whole thing is spent -- and leaving it
-        # populated across a reload would carry one process's records into the
-        # next, which is the unbounded growth the comment beside it denies.
+        # The warned-set goes with them: every session just ended, so the
+        # whole thing is spent, and leaving it populated across a reload
+        # would carry one process's records into the next.
         _warned_double_write.clear()
         # And any pre-claim reservation. A restarting process holds nothing --
-        # every physical station should come back open to pairing rather than
-        # locked to whoever last touched it before the restart. Tests rely on
-        # this too: it's what stops a reservation from one test file leaking
-        # into the next through the same autouse stop_all() every test's
-        # teardown already calls.
+        # every physical station should come back open to pairing. Tests rely
+        # on this too, so a reservation from one test file can't leak into
+        # the next through the autouse stop_all() teardown.
         _reservations.clear()
     still_running = [p.session_id[:8] for p in live_pollers()]
     if still_running:
@@ -882,10 +766,10 @@ def status(user_id: str) -> dict:
                     "samples":    p.samples,
                     "errors":     p.errors,
                     "last_ts":    p.last_ts,
-                    # Counted separately from `samples`. A session recording
-                    # EEG happily while its heart channel is refused, declined
-                    # or unmeasurable is a normal state, and one combined
-                    # number would report it as healthy.
+                    # Counted separately from `samples`: a session recording
+                    # EEG fine while its heart channel is refused, declined,
+                    # or unmeasurable is normal, and one combined number
+                    # would hide that.
                     "heart_samples": p.heart_samples,
                     "heart_errors": p.heart_errors,
                     "last_heart_ts": p.last_heart_ts,

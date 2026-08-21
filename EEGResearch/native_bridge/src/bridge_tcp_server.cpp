@@ -113,24 +113,17 @@ void BridgeTcpServer::send_json_line(const std::string& payload) {
                 return;
             }
             if (offset == 0) {
-                // Nothing of this line went out, so the stream is still on a
-                // line boundary and dropping it whole leaves the rest parseable.
-                // Counted rather than silent: a consumer reconstructing a clock
-                // from sample index cannot tell a dropped line from a sensor
-                // that produced fewer samples.
+                // Nothing sent yet, so we're still on a line boundary. Drop
+                // the whole line and count it instead of leaving it silent.
                 dropped_lines_ += 1;
                 return;
             }
-            // Part of the line is already on the wire. Resuming later would
-            // splice the remainder onto the front of whatever is sent next and
-            // corrupt every line after it, so the only honest option is to end
-            // the connection and let the consumer reconnect to a clean stream.
+            // Part of the line already went out. Resuming later would splice
+            // the rest onto the next line, so close the connection instead.
             close_client();
             return;
         }
-        // A short but successful send is normal for a non-blocking socket and
-        // is not an error -- it was previously treated as complete, which is
-        // the same truncation by a different route.
+        // A short send is normal for a non-blocking socket, not an error.
         offset += static_cast<size_t>(sent);
     }
 }
@@ -151,7 +144,7 @@ bool BridgeTcpServer::poll_command(std::string& line_out) {
     if (n == SOCKET_ERROR) {
         const int err = WSAGetLastError();
         if (err == WSAEWOULDBLOCK) {
-            // No data; still return a buffered line if present.
+            // No new data; still return a buffered line if one is waiting.
             const auto pos = recv_buffer_.find('\n');
             if (pos == std::string::npos) {
                 return false;

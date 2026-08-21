@@ -15,12 +15,8 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'stu-1', email: 'kid@example.com' } }),
 }))
 
-// Its own network call, and not what these tests are about.
+// Mocked because these banners fetch on mount but aren't under test here.
 vi.mock('../../components/consent/ParentRestoredBanner', () => ({ default: () => null }))
-// Both banners fetch on mount and both have their own file. Unmocked, this
-// page's route table has no entry for them, and the `noRoute` throw would be
-// swallowed by the banner's own catch -- so the test would pass with an error
-// nobody sees.
 vi.mock('../../components/consent/ParentLinkedBanner', () => ({ default: () => null }))
 
 import { mockApi, overrideApi, resetApi, apiError } from '../../test/mocks/apiFetch'
@@ -51,9 +47,7 @@ beforeEach(() => {
 
 describe('the topic grid', () => {
   it('shows each measured topic as a number, not only a colour', async () => {
-    // Roughly one boy in twelve cannot separate the red from the green, and
-    // this is a page for children. The percentage is the signal; the tint only
-    // makes it scannable.
+    // Color alone isn't accessible to everyone, so accuracy must show as text too.
     draw()
 
     expect(await screen.findByText('30%')).toBeInTheDocument()
@@ -64,16 +58,13 @@ describe('the topic grid', () => {
     draw()
     await screen.findByText('30%')
 
-    // `mode` was not in the payload at all. It should render as a topic in the
-    // curriculum and carry no figure.
+    // `mode` isn't in the payload, so it should still show as a topic but with no figure.
     expect(screen.getByText('mode')).toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
   })
 
   it('draws the same plain tiles when the breakdown could not be read', async () => {
-    // The reason `topics` may fail to `{}`: an unmeasured tile and a tile whose
-    // read failed look identical, so neither asserts anything and neither can
-    // be wrong. If this ever gains copy, the failure needs its own flag first.
+    // A failed breakdown read should render the same as an unmeasured tile.
     overrideApi(BREAKDOWN, () => { throw apiError(500, 'down') })
 
     draw()
@@ -96,8 +87,7 @@ describe('the weakest topic', () => {
   })
 
   it('will not call a topic weakest off one or two attempts', async () => {
-    // One unlucky question is 0%. Ranking on that would tell a child their
-    // weakest subject is one they have barely met -- wrong, and discouraging.
+    // A single wrong answer is 0% and shouldn't be enough to rank a topic weakest.
     overrideApi(BREAKDOWN, () => ([
       topic('algebra', 0, 1),
       topic('geometry', 70, 10),
@@ -105,8 +95,7 @@ describe('the weakest topic', () => {
 
     draw()
 
-    // Geometry is the only rankable topic, so it wins by default rather than
-    // algebra winning on a single miss.
+    // Geometry is the only topic with enough attempts to rank.
     const cta = await screen.findByRole('button', { name: /weakest so far/i })
     expect(cta).toHaveTextContent(/geometry/i)
   })
@@ -123,15 +112,12 @@ describe('the weakest topic', () => {
 
 describe('the streak card', () => {
   it('shows the personal best when the current streak is below it', async () => {
-    // `best_streak` was in the payload all along and rendered nowhere, so a
-    // student on a bad week saw only the number they had fallen to.
     draw()
     expect(await screen.findByText('best 9 days')).toBeInTheDocument()
   })
 
   it('does not repeat the number back while the student is on their best run', async () => {
-    // The two are equal then, and "best 6" under a 6 reads as though something
-    // is missing rather than as an achievement.
+    // "best 9" under a 9 would look redundant rather than like an achievement.
     overrideApi('/api/stats/me', () => ({ ...STATS, current_streak: 9, best_streak: 9 }))
 
     draw()

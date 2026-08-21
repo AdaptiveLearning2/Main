@@ -25,11 +25,9 @@ struct EegFrame {
 /**
  * One optical sample, as it left the headband.
  *
- * Carries the packet's own timestamp rather than an arrival time. Beat-to-beat
- * intervals are the whole point of RMSSD, and at 64Hz the sample spacing is
- * ~15.6ms -- the same order as the HRV differences being measured -- so timing
- * jitter introduced by when this process happened to be scheduled would land
- * directly in the output.
+ * Carries the packet's own timestamp, not an arrival time: RMSSD measures
+ * 20-50ms beat intervals, and at 64Hz sample spacing (~15.6ms) is the same
+ * order, so scheduling jitter in this process would otherwise leak in.
  *
  * `n` is how many channels arrived, since that is preset-dependent: 4 on
  * PRESET_1035, 8 on 1033, 16 on the modes that break the link.
@@ -39,16 +37,11 @@ struct OpticsFrame {
     /**
      * Monotonic sample number, assigned at enqueue and never reused.
      *
-     * The derivation reconstructs its time base from sample index rather than
-     * from mono_ts_ms, because the stamps carry ~25ms rms of BLE batching
-     * jitter and RMSSD measures 20-50ms differences. That reconstruction is
-     * only sound if no sample goes missing, and three places can drop one --
-     * the queue bound below, a WSAEWOULDBLOCK in the TCP server, and a short
-     * send(). None is observable from the samples themselves: a lost sample
-     * just shifts the reconstructed clock by one interval for the remainder of
-     * the recording, and shows up as a single impossible beat interval.
-     *
-     * A gap in this sequence makes all three detectable for free.
+     * mono_ts_ms carries ~25ms of BLE batching jitter, so the time base is
+     * reconstructed from this index instead. That only works if no sample is
+     * dropped -- possible at the queue bound below, a WSAEWOULDBLOCK in the
+     * TCP server, or a short send() -- and a gap in this sequence is what
+     * makes any of those three detectable.
      */
     long long seq{0};
     std::array<double, 16> ch{};
@@ -65,11 +58,9 @@ struct BandPowers {
 
 /**
  * Electrode contact quality straight from libMuse -- the headband's own view
- * of whether each sensor is seated well, independent of what the wearer is
- * doing. This is what "signal quality" should be derived from; deriving it
- * from a calmness/alpha measure conflates "is the headband on properly" with
- * "is the student relaxed", and reports poor contact for a perfectly-fitted
- * headband on an alert, focused student.
+ * of fit, independent of what the wearer is doing. Deriving quality from a
+ * calmness/alpha measure instead would conflate "is the headband on
+ * properly" with "is the student relaxed".
  */
 struct ContactQuality {
     // HSI_PRECISION per channel (TP9, AF7, AF8, TP10):
@@ -83,17 +74,13 @@ struct ContactQuality {
 
 /**
  * Evidence that the optical sensor is producing data, and what it looks like.
+ * Counters and a most-recent sample, not a stream -- the open question is
+ * whether a given preset emits OPTICS at all, at what rate, and how many
+ * channels, so the streaming format waits until that's known.
  *
- * Deliberately counters and a most-recent sample rather than a stream. The
- * question this answers is "does a PRESET_1031 Athena actually emit OPTICS, at
- * what rate, and with how many channels" -- and until that has been seen, any
- * streaming format for it would be designed against an assumption. The stream
- * comes next, once the shape is known rather than inferred.
- *
- * OPTICS and PPG are counted separately because they are different packets on
+ * OPTICS and PPG are counted separately because they're different packets on
  * different hardware: the 2025 Athena carries PPG inside OPTICS and emits no
- * PPG packet at all, while 2018-2024 models do the opposite. A build that saw
- * only a total would not be able to tell which one it was talking to.
+ * separate PPG packet, while 2018-2024 models do the opposite.
  */
 struct OpticalSignals {
     long long optics_packets{0};
@@ -105,39 +92,32 @@ struct OpticalSignals {
      *  OPTICS and arbitrary for PPG, per bridge_optics.h / bridge_ppg.h. */
     std::array<double, 16> last_optics{};
     std::array<double, 3> last_ppg{};
-    /** libMuse's own quality verdicts, so this bridge does not have to invent
-     *  one. Absent until the corresponding packet type arrives, which is why
-     *  each carries a has_ flag rather than defaulting to false -- "the sensor
-     *  says the signal is bad" and "the sensor has not said anything" are
-     *  different, and only one of them justifies a fallback. */
+    /** libMuse's own quality verdicts. has_ flags because "signal is bad" and
+     *  "sensor hasn't reported yet" are different, and only one justifies a
+     *  fallback. */
     bool ppg_good{false};
     bool heart_good{false};
     bool has_ppg_good{false};
     bool has_heart_good{false};
     /**
-     * Optical samples discarded because the queue was full.
-     *
-     * Non-zero means the reconstructed time base has lost alignment, and any
-     * RMSSD computed across the gap is wrong. Reported rather than merely
-     * bounded, because a silent drop is indistinguishable from a slow heart.
+     * Optical samples discarded because the queue was full. Non-zero means
+     * the reconstructed time base has lost alignment and any RMSSD across the
+     * gap is wrong -- reported rather than silently bounded, since a silent
+     * drop looks identical to a slow heart.
      */
     long long optics_dropped{0};
-    /** steady_clock ms of the most recent optical packet of either kind; 0 if
-     *  none. Not emitted raw -- steady_clock's epoch is arbitrary and
-     *  process-local, so the number means nothing outside this process.
-     *  optical_age_ms() turns it into the thing a consumer actually wants. */
+    /** steady_clock ms of the most recent optical packet; 0 if none. Not
+     *  emitted raw since that clock is process-local. optical_age_ms() turns
+     *  it into something a consumer can actually use. */
     long long last_ms{0};
 };
 
 /**
  * The headband's own account of its current settings.
  *
- * `known` is separate rather than being encoded as preset=="" or channels==0,
- * for the same reason ContactQuality carries has_hsi: zero is a value, and a
- * consumer that branches on it cannot otherwise tell "no headband", "the
- * configuration has not arrived yet" and "the OFF build" apart from each other
- * or from a real reading. Nothing branches on it today; this is what stops the
- * first thing that does from having to guess.
+ * `known` is separate from preset=="" or channels==0, same reasoning as
+ * ContactQuality's has_hsi: zero is a valid value, so a consumer needs a way
+ * to tell "no headband" apart from "no reading yet" or a real zero.
  */
 struct DeviceConfig {
     std::string preset;
@@ -156,21 +136,16 @@ public:
     /**
      * Drain one optical sample. Non-blocking, unlike poll_frame.
      *
-     * Separate queue rather than interleaving into eeg_queue_: the two run at
-     * different rates (256Hz EEG, 64Hz optics) and a consumer wants them as
-     * separate streams.
+     * Its own queue rather than sharing eeg_queue_, since EEG and optics run
+     * at different rates (256Hz vs 64Hz) and a consumer wants them separate.
      *
-     * Non-blocking so this never adds a second wait of its own -- but optics
-     * latency is still bounded by poll_frame's 200ms wait, because both are
-     * drained from the same loop. At 256Hz EEG keeps that loop spinning and the
-     * bound is never approached. It matters in the case where EEG stops while
-     * optics continues, which is not hypothetical: electrode contact
-     * collapsing to [4,4,4,4] on an optics-carrying preset is a documented
-     * failure mode. Optics then emerge in 200ms batches.
-     *
-     * Not a correctness problem -- each sample carries its own timestamp and
-     * sequence number, and the queue holds ~32s -- but the coupling is real
-     * and worth knowing before someone measures latency and is surprised.
+     * Optics latency is bounded by poll_frame's 200ms wait, since both are
+     * drained from the same loop -- normally not noticeable at 256Hz EEG, but
+     * if EEG stops while optics keeps going (electrode contact collapsing on
+     * an optics-carrying preset is a known failure mode), optics arrive in
+     * 200ms batches. Not a correctness issue -- each sample has its own
+     * timestamp and sequence number, and the queue holds ~32s -- but worth
+     * knowing if latency looks surprising.
      */
     bool poll_optics(OpticsFrame& frame);
 
@@ -192,62 +167,51 @@ public:
      * Headband model as reported by libMuse once connected, e.g. "MS-03" for a
      * 2025 Muse S Athena. Empty until the CONNECTED packet arrives.
      *
-     * Reported rather than inferred from the name, because the name is
-     * user-settable and the model decides which presets are available at all.
+     * Read from the device rather than inferred from its name, since the name
+     * is user-settable and the model decides which presets are available.
      */
     std::string muse_model() const;
     /**
-     * The preset this bridge asked for, e.g. "PRESET_1031". An intent.
+     * The preset this bridge asked for, e.g. "PRESET_1031".
      *
-     * Reported next to active_preset() rather than instead of it, because the
-     * two disagreeing is the whole diagnosis: set_preset() returns void, so a
-     * request that the headband ignores is indistinguishable from one it
-     * honoured unless the result is read back.
+     * Reported next to active_preset() because the two disagreeing is the
+     * diagnosis: set_preset() returns void, so a request the headband ignored
+     * is only visible by comparing intent against the read-back result.
      */
     std::string requested_preset() const;
     /**
-     * What the headband reports about itself, read from MuseConfiguration.
-     *
-     * Observations, not an echo of what was requested. libMuse documents the
-     * configuration as repopulated "after headband settings (like preset or
-     * notch frequency) are changed" (bridge_muse.h:262-265), so this is read
-     * live rather than cached at request time -- a preset applied a moment
+     * What the headband reports about itself, read live from
+     * MuseConfiguration (which libMuse repopulates after preset or notch
+     * changes), not cached at request time -- so a preset applied a moment
      * later still shows up.
      *
-     * Returned together, from a single get_muse_configuration() call, because
-     * they are two views of one thing. Fetching them separately means a preset
-     * change landing between the two calls puts a mismatched pair on the wire
-     * -- in the one-second window right after a switch, which is exactly when
-     * someone is watching.
+     * preset and channel count come from one get_muse_configuration() call so
+     * a preset change landing mid-fetch can't put a mismatched pair on the
+     * wire, right when someone is watching.
      */
     DeviceConfig device_config() const;
     /** Optical packet counters, latest sample and libMuse's quality verdicts. */
     OpticalSignals optical_signals() const;
     /**
      * Milliseconds since the most recent optical packet, or -1 if none yet.
-     *
-     * The counters alone cannot distinguish a stream that is flowing from one
-     * that delivered a burst and stopped -- both leave a non-zero count. This
-     * is what makes "is optics live right now" answerable, which is the whole
-     * point of reporting a rate.
+     * The counters alone can't tell a live stream from one that delivered a
+     * burst and stopped -- both leave a non-zero count; this can.
      */
     long long optical_age_ms() const;
     /**
      * Whether the headband exposes an optical (PPG/fNIRS) sensor at all.
-     *
-     * A capability, not a dropout. Muse 2016 has no optical hardware, and a
-     * heart channel that reports "sensor failed" for a device that never had
-     * one would hand the camera fallback a job it should not be given.
+     * A capability, not a dropout: Muse 2016 has no optical hardware, and
+     * reporting "sensor failed" for a device that never had one would hand
+     * the camera fallback a job it shouldn't get.
      */
     bool optical_supported() const;
     /**
      * Charge remaining, 0-100, or **negative when no BATTERY packet has
-     * arrived** -- which is the state for the whole first stretch of a session,
-     * since libMuse fires this periodically rather than on connect.
+     * arrived** -- the state for most of the first minute of a session, since
+     * libMuse fires this periodically rather than on connect.
      *
-     * Negative rather than 0, because 0% is a real and alarming reading and a
-     * consumer branching on the number should not have to guess which it got.
-     * main.cpp turns it into JSON null. Same rule as eeg_channel_count.
+     * Negative, not 0, since 0% is a real and alarming reading. main.cpp
+     * turns it into JSON null, same rule as eeg_channel_count.
      */
     double battery_percent() const;
     BandPowers band_powers() const;
@@ -263,10 +227,9 @@ public:
      * True while libMuse is *currently* delivering notch-filtered EEG
      * (45-65Hz removed) -- i.e. one arrived within NOTCH_STALE_MS.
      *
-     * Deliberately not a latch. Latching on the first notch packet means raw
-     * EEG stays suppressed forever if notch packets later stop, and since raw
-     * is the only fallback, the bridge then enqueues nothing at all until a
-     * reconnect: a full outage, recoverable only by cycling the headband.
+     * Not a latch: latching on the first notch packet would suppress raw EEG
+     * forever if notch packets later stopped, leaving nothing to enqueue
+     * until a reconnect -- a full outage over one missed packet.
      */
     bool notch_available() const;
     /** Called by the data listener each time a notch-filtered packet lands. */
@@ -294,9 +257,9 @@ private:
     /**
      * Pick the preset for a model, once the model is actually known.
      *
-     * Separate from connect_named because get_model() is documented to return
-     * MU_02 until the headband reaches CONNECTED, and the preset is set before
-     * that -- so this runs from the connection listener instead.
+     * Separate from connect_named because get_model() returns MU_02 until the
+     * headband reaches CONNECTED, so this runs from the connection listener
+     * instead, after the real model is known.
      */
 #if defined(ENABLE_LIBMUSE)
     void apply_model_preset(const std::shared_ptr<interaxon::bridge::Muse>& muse);
@@ -338,9 +301,8 @@ private:
     std::queue<EegFrame> eeg_queue_;
     std::queue<OpticsFrame> optics_queue_;
     /** Never reset within a connection. Cleared by reset_device_fields_locked(),
-     *  which both stop() and disconnect_muse() call -- the latter being the one
-     *  a reconnect actually takes, so a new headband starts a fresh sequence
-     *  rather than appearing to continue the previous one's. */
+     *  called from disconnect_muse() so a new headband starts a fresh sequence
+     *  instead of continuing the previous one's. */
     long long optics_seq_{0};
     bool connected_{false};
     bool discovered_{false};

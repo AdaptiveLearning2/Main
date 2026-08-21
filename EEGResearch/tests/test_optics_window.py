@@ -1,10 +1,10 @@
-"""The optical window buffer in the TCP bridge adapter.
+"""Tests for the optical window buffer in the TCP bridge adapter.
 
-What is pinned here is the time base. The bridge's `mono_ts_ms` records BLE
-delivery, not sample time (see test_optics_fixture.py), so the window is placed
-on `seq` and the stamps are used only to measure an average rate. Every test
-below is about a way that could go wrong quietly -- producing a rate that is
-plausible and wrong rather than an error.
+These check the time base. The bridge's `mono_ts_ms` records BLE delivery,
+not sample time (see test_optics_fixture.py), so the window is placed on
+`seq`, and the stamps are used only to measure an average rate. Every test
+below covers a way this could go wrong quietly -- a rate that's plausible
+and wrong rather than an outright error.
 """
 
 from __future__ import annotations
@@ -55,12 +55,10 @@ def test_rate_is_measured_from_the_stamps_not_assumed():
 
 
 def test_rate_counts_dropped_samples_rather_than_rows():
-    """The failure this reconstruction exists to avoid.
-
-    With a tenth of the samples missing, `(len(rows) - 1) / span` reports 57.6Hz
-    for a link still running at 64 -- and every derived rate is then 10% low,
-    with nothing anywhere to say so. `seq` counts what was sent, so the measured
-    rate stays put and the loss shows up as a gap instead.
+    """With a tenth of the samples missing, `(len(rows) - 1) / span` would
+    report 57.6Hz for a link still running at 64, silently making every
+    derived rate 10% low. `seq` counts what was sent, so the measured rate
+    stays put and the loss shows up as a gap instead.
     """
     a = _adapter()
     for i in range(640):

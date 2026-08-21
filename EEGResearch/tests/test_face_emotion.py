@@ -1,10 +1,10 @@
-"""FER+ classification and model provisioning, without onnxruntime.
+"""Tests FER+ classification and model provisioning, without onnxruntime.
 
 The session is injected, so the confidence gate, the degraded state and the
-tensor shaping are all exercised on a machine with no ONNX Runtime — CI's state.
-Downloads are exercised against local files rather than the network; a test that
-fetched 35 MB would be slow, flaky, and would fail for the wrong reason on an
-offline machine.
+tensor shaping are all exercised on a machine with no ONNX Runtime -- CI's
+state. Downloads are tested against local files rather than the network,
+since fetching 35 MB would be slow, flaky, and fail offline for the wrong
+reason.
 """
 
 from __future__ import annotations
@@ -61,11 +61,11 @@ def _logits_favouring(label: str, margin: float = 6.0) -> list[float]:
     return out
 
 
-# ── provenance ───────────────────────────────────────────────────────────────
+# -- provenance --
 
 def test_the_model_url_is_pinned_to_a_commit_not_to_main():
-    """`resolve/main/` is a moving reference: the bytes a student's laptop
-    fetches next term need not be the bytes reviewed today."""
+    """`resolve/main/` is a moving reference -- the bytes a student's laptop
+    fetches next term need not match the bytes reviewed today."""
     assert "/resolve/main/" not in MODEL_URL
     assert MODEL_REVISION in MODEL_URL
     assert len(MODEL_REVISION) == 40
@@ -77,7 +77,7 @@ def test_the_checksum_is_a_full_sha256():
     int(MODEL_SHA256, 16)
 
 
-# ── arithmetic ───────────────────────────────────────────────────────────────
+# -- arithmetic --
 
 def test_softmax_sums_to_one_and_favours_the_largest():
     out = softmax(np.array([1.0, 3.0, 2.0]))
@@ -86,9 +86,9 @@ def test_softmax_sums_to_one_and_favours_the_largest():
 
 
 def test_softmax_survives_extreme_logits():
-    """Subtracting the max is what stops exp() overflowing to inf and the whole
-    distribution becoming nan -- which would surface as a confident wrong label
-    rather than an error."""
+    """Subtracting the max stops exp() overflowing to inf and the whole
+    distribution becoming nan, which would otherwise surface as a confident
+    wrong label rather than an error."""
     out = softmax(np.array([1e4, 0.0, -1e4]))
     assert np.isfinite(out).all()
     assert out.sum() == pytest.approx(1.0)
@@ -103,7 +103,7 @@ def test_a_wrongly_sized_crop_is_rejected_rather_than_reshaped():
         to_tensor(np.zeros((32, 32)))
 
 
-# ── classification ───────────────────────────────────────────────────────────
+# -- classification --
 
 def test_classifies_a_confident_face():
     clf = EmotionClassifier(Path("unused"), session=FakeSession(_logits_favouring("happy")))
@@ -114,8 +114,8 @@ def test_classifies_a_confident_face():
 
 
 def test_low_confidence_reports_the_label_but_marks_it_untrusted():
-    """The label is still useful to a caller that wants to show a trend; what
-    must not happen is it being counted as a reading."""
+    """The label can still show a trend, but must not be counted as a
+    trusted reading."""
     flat = [0.0] * len(EMOTION_LABELS)
     clf = EmotionClassifier(Path("unused"), session=FakeSession(flat))
     out = clf.classify(_crop())
@@ -130,20 +130,20 @@ def test_no_face_is_distinguishable_from_an_unsure_one():
 
 
 def test_control_flow_matches_a_field_not_a_sentence():
-    """The original returned only prose, so a caller wanting to tell a broken
-    model from an unsure one had to parse English."""
+    """A caller distinguishing a broken model from an unsure one needs a
+    structured field, not a prose message to parse."""
     clf = EmotionClassifier(Path("unused"), session=FakeSession(raises=RuntimeError("boom")))
     out = clf.classify(_crop())
     assert out.rejected_by == "inference_failed"
     assert isinstance(out.reason, str) and out.reason
 
 
-# ── the state the original could not express ─────────────────────────────────
+# -- distinguishing broken from merely untrusted --
 
 def test_a_broken_session_becomes_degraded_not_merely_untrusted():
-    """A model that fails to load, a session that crashes, and a student with a
-    neutral face all produced `trusted: false` in the original -- so a whole
-    session of failures looked exactly like a calm one."""
+    """A crashing session must be distinguishable from a calm, low-confidence
+    face -- both would otherwise look like `trusted: false`, hiding a broken
+    model behind a plausible reading."""
     clf = EmotionClassifier(Path("unused"), session=FakeSession(raises=RuntimeError("boom")))
     assert not clf.degraded
 
@@ -157,7 +157,8 @@ def test_a_broken_session_becomes_degraded_not_merely_untrusted():
 
 
 def test_one_failure_is_not_degraded():
-    """A bad crop is ordinary. Only a run of failures is a broken session."""
+    """A single bad crop is ordinary; only a run of failures is a broken
+    session."""
     clf = EmotionClassifier(Path("unused"), session=FakeSession(raises=ValueError("x")))
     clf.classify(_crop())
     assert not clf.degraded
@@ -179,8 +180,8 @@ def test_a_recovery_clears_the_failure_run():
 
 def test_a_wrong_output_shape_counts_as_a_failure_not_a_low_score():
     """A substituted or mismatched model returns the wrong number of outputs.
-    Treating that as low confidence would give an eternity of untrusted
-    readings instead of a degraded flag naming the real problem."""
+    Treating that as low confidence would give endless untrusted readings
+    instead of a degraded flag naming the real problem."""
     clf = EmotionClassifier(Path("unused"), session=FakeSession([1.0, 2.0, 3.0]))
     for _ in range(FAILURE_TOLERANCE):
         out = clf.classify(_crop())
@@ -193,7 +194,7 @@ def test_meta_reports_the_pinned_revision():
     assert clf.get_meta()["emotion_model_revision"] == MODEL_REVISION[:8]
 
 
-# ── provisioning ─────────────────────────────────────────────────────────────
+# -- provisioning --
 
 def test_verify_rejects_a_file_of_the_wrong_size(tmp_path):
     p = tmp_path / "m.onnx"
@@ -206,8 +207,8 @@ def test_verify_rejects_a_missing_file(tmp_path):
 
 
 def test_an_unverified_file_is_deleted_rather_than_left_for_the_next_run(tmp_path):
-    """The next run checks existence before it checks anything else, so a
-    partial or substituted file left on disk would be trusted."""
+    """The next run checks existence before anything else, so a partial or
+    substituted file left on disk would be trusted."""
     p = tmp_path / "m.onnx"
     p.write_bytes(b"corrupt")
     with pytest.raises(FileNotFoundError):
@@ -216,8 +217,8 @@ def test_an_unverified_file_is_deleted_rather_than_left_for_the_next_run(tmp_pat
 
 
 def test_ensure_model_accepts_a_file_that_hashes_correctly(tmp_path, monkeypatch):
-    """Constructed rather than downloaded: a test that fetched 35 MB would be
-    slow, flaky, and would fail for the wrong reason offline."""
+    """Constructed rather than downloaded, since fetching 35 MB would be
+    slow, flaky, and fail for the wrong reason offline."""
     import src.app.services.face_emotion as fe
 
     payload = b"pretend onnx" * 100
@@ -232,8 +233,8 @@ def test_ensure_model_accepts_a_file_that_hashes_correctly(tmp_path, monkeypatch
 
 
 def test_loading_an_unverified_model_is_refused(tmp_path):
-    """Belt and braces: even if provisioning is bypassed, the classifier will
-    not hand an unverified file to onnxruntime."""
+    """Even if provisioning is bypassed, the classifier must not hand an
+    unverified file to onnxruntime."""
     p = tmp_path / "m.onnx"
     p.write_bytes(b"not the model")
     with pytest.raises(ValueError, match="unverified"):
@@ -243,11 +244,9 @@ def test_loading_an_unverified_model_is_refused(tmp_path):
 def test_no_camera_dependency_is_imported():
     """Importing this module must not drag in onnxruntime or cv2.
 
-    Checked in a subprocess. `sys.modules` is process-global, so once any other
-    test in the run has imported either one, an in-process assertion measures
-    the test ordering instead of this module -- and while the optional `face`
-    extra was uninstalled it could not fail at all, which made it look like a
-    passing test of laziness when it was a passing test of absence.
+    Checked in a subprocess, since `sys.modules` is process-global: once any
+    other test in the run has imported either one, an in-process assertion
+    would measure test ordering instead of this module.
     """
     import subprocess
     import sys
@@ -262,21 +261,20 @@ def test_no_camera_dependency_is_imported():
             assert not leaked, f"importing face_emotion pulled in {leaked}"
             print("clean")
         """),
-        # The repo root is passed as an argument rather than assumed from the
-        # working directory: with `cwd="."` this passed only when pytest
-        # happened to be invoked from EEGResearch/.
+        # Pass the repo root as an argument rather than relying on cwd, which
+        # would only work when pytest runs from EEGResearch/.
         str(Path(__file__).resolve().parents[1])],
         capture_output=True, text=True,
     )
     assert "clean" in result.stdout, result.stderr
 
 
-# ── cropping ─────────────────────────────────────────────────────────────────
+# -- cropping --
 
 def test_a_crop_is_box_averaged_not_sampled():
-    """A face crop is typically 150-250 px, so nearest-neighbour would discard
-    most pixels and make the result depend on where the sample grid lands --
-    which shifts with every small head movement, adding noise to a classifier
+    """A face crop is typically 150-250 px, so nearest-neighbour would
+    discard most pixels and depend on where the sample grid lands -- which
+    shifts with every small head movement, adding noise to a classifier
     already sampled only a few times a second."""
     from src.app.services.face_emotion import to_gray64
 
@@ -289,13 +287,10 @@ def test_a_crop_is_box_averaged_not_sampled():
 
 
 def test_a_crop_smaller_than_the_model_input_is_refused():
-    """Reaching 64x64 from a smaller crop means upsampling -- inventing detail
-    the sensor never captured, which the classifier would label with full
-    confidence. A distant or half-cropped face is a missing measurement.
-
-    Found by a divide-by-zero warning: an earlier guard let a 46 px crop
-    through, and forcing 64 non-empty bins out of 46 rows produced empty bins
-    and a silent nan."""
+    """Reaching 64x64 from a smaller crop means upsampling -- inventing
+    detail the sensor never captured, which the classifier would then label
+    with full confidence. A distant or half-cropped face should be treated
+    as a missing measurement instead."""
     from src.app.services.face_emotion import to_gray64
 
     frame = np.full((480, 640, 3), 128, dtype=np.uint8)
@@ -305,9 +300,9 @@ def test_a_crop_smaller_than_the_model_input_is_refused():
 
 
 def test_a_crop_never_produces_nan():
-    """Whatever the geometry, every output cell must average at least one real
-    pixel. A nan would reach softmax and come back as a uniform distribution --
-    a confident-looking 12.5% for every emotion."""
+    """Whatever the geometry, every output cell must average at least one
+    real pixel. A nan would reach softmax and come back as a uniform
+    distribution -- a confident-looking 12.5% for every emotion."""
     from src.app.services.face_emotion import to_gray64
 
     frame = np.random.default_rng(0).integers(0, 255, (480, 640, 3), dtype=np.uint8)

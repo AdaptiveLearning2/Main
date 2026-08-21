@@ -45,18 +45,15 @@ public:
                                   const std::shared_ptr<interaxon::bridge::Muse>&) override {
         switch (packet->packet_type()) {
         case interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG:
-            // Same channel mapping as raw EEG, with 45-65Hz removed. Mains hum
-            // couples in harder as contact impedance rises, i.e. exactly when
-            // the signal is already marginal, so prefer this when it flows.
+            // Same channels as raw EEG with 45-65Hz mains hum removed. Prefer
+            // this when it flows, since hum gets worse as contact worsens.
             service_.note_notch_available();
             service_.enqueue_frame(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::EEG:
-            // Fall back to raw only while notch-filtered packets are NOT
-            // arriving (none within NOTCH_STALE_MS), so a preset that doesn't
-            // emit them still produces data -- and so does a session where they
-            // stop partway through, which a latch would have turned into a
-            // total loss of frames until reconnect.
+            // Fall back to raw only while notch-filtered packets aren't
+            // arriving, so a preset without them (or one where they stop
+            // mid-session) still produces data instead of going silent.
             if (!service_.notch_available()) {
                 service_.enqueue_frame(packet);
             }
@@ -74,10 +71,10 @@ public:
             break;
         case interaxon::bridge::MuseDataPacketType::OPTICS:
         case interaxon::bridge::MuseDataPacketType::PPG:
-            // Both, because which one arrives is a property of the headband
-            // rather than of this build: muse2025 carries PPG inside OPTICS and
-            // emits no PPG packet, everything from 2018 to 2024 does the
-            // reverse. Registering for one would work on half the hardware.
+            // Which one arrives depends on the headband, not this build:
+            // 2025 models carry PPG inside OPTICS and emit no PPG packet,
+            // 2018-2024 models do the reverse. Registering only one would
+            // miss half the hardware.
             service_.update_optical(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD:
@@ -104,10 +101,9 @@ public:
     void receive_muse_connection_packet(const interaxon::bridge::MuseConnectionPacket& packet,
                                         const std::shared_ptr<interaxon::bridge::Muse>& muse) override {
         service_.update_connection_state(packet.current_connection_state);
-        // The model is only trustworthy from here on. bridge_muse.h:196 is
-        // explicit that get_model() returns MU_02 for anything from 2018
-        // onwards until CONNECTED is reached -- and connect_named() sets the
-        // preset before that, so asking there would silently treat an Athena
+        // The model is only trustworthy once CONNECTED: get_model() returns
+        // MU_02 for anything from 2018 onwards until then, and connect_named()
+        // sets the preset earlier -- so asking sooner would misread an Athena
         // as a 2016 Muse.
         if (packet.current_connection_state == interaxon::bridge::ConnectionState::CONNECTED) {
             service_.apply_model_preset(muse);
@@ -187,9 +183,8 @@ void MuseBridgeService::refresh_scan() {
     if (!manager_) {
         return;
     }
-    // Re-check on every explicit refresh (not just at startup) so a radio
-    // toggled off mid-session is caught on the next scan, unlike GettingData32
-    // which only ever checks once and relies on a possibly-stale cached flag.
+    // Re-check on every refresh, not just at startup, so a radio toggled off
+    // mid-session is caught on the next scan instead of relying on a stale flag.
     refresh_bluetooth_state();
     manager_->stop_listening();
     manager_->start_listening();
@@ -201,13 +196,10 @@ namespace {
 
 // Whether to move a capable headband onto an Optics-carrying preset.
 //
-// Off by default, and deliberately so. PRESET_21 is what every session has run
-// on until now, it is verified working on a 2025 Athena despite not being
-// listed for that model, and switching preset changes EEG bit depth (12 -> 14)
-// and, on some of the alternatives, channel count. A silent EEG regression
-// would be attributed to whatever shipped alongside it rather than to this, so
-// it goes behind a flag that can be turned on for one session and turned off
-// again.
+// Off by default. Switching off PRESET_21 changes EEG bit depth (12 -> 14)
+// and sometimes channel count, and a silent EEG regression would be blamed
+// on whatever shipped alongside it. Gated behind a flag so it can be turned
+// on for one session and off again.
 bool optics_preset_enabled() {
     const char* raw = std::getenv("MUSE_ENABLE_OPTICS");
     if (!raw || !*raw) {
@@ -217,9 +209,8 @@ bool optics_preset_enabled() {
     return value == "1" || value == "true" || value == "TRUE" || value == "yes";
 }
 
-// Only the two this bridge ever asks for get names; anything else is reported
-// numerically rather than guessed at. The enum has ~90 members and a
-// hand-maintained table of them would be wrong within one SDK release.
+// Only presets this bridge actually asks for get names; anything else is
+// reported numerically. The enum has ~90 members, too many to hand-maintain.
 std::string preset_name(interaxon::bridge::MusePreset preset) {
     switch (preset) {
     case interaxon::bridge::MusePreset::PRESET_21: return "PRESET_21";
@@ -235,20 +226,15 @@ std::string preset_name(interaxon::bridge::MusePreset preset) {
 
 // Which optics preset to ask an Athena for.
 //
-// Configurable because the choice is a bandwidth trade that has to be measured
-// on hardware rather than reasoned about: 4 CH EEG at 256Hz alongside 16 CH
-// optics at 64Hz was verified to break the link within ~20 seconds AND to
-// collapse electrode contact quality from [1,1,1,1] to [4,4,4,4] on a worn
-// headband, while the same build on PRESET_21 held for minutes with good
-// contact. Fewer optical channels is the obvious next thing to try, and being
-// able to try it without a rebuild is the difference between one session and
-// several.
+// Configurable because it's a bandwidth trade measured on hardware, not
+// reasoned about: 4 CH EEG at 256Hz plus 16 CH optics at 64Hz broke the BLE
+// link within ~20s and collapsed electrode contact from [1,1,1,1] to
+// [4,4,4,4], while PRESET_21 held for minutes with good contact. Being able
+// to try fewer optical channels without a rebuild matters.
 //
-// Losing the 16-channel mode costs the Red and Ambient channels, which exist
-// only there (bridge_optics.h:51-66). That is survivable for this purpose: red
-// is what a pulse oximeter needs to compute SpO2 by ratio-of-ratios, whereas a
-// heart rate comes from the pulsatile component of any wavelength blood
-// absorbs, and 850nm IR is the conventional choice for exactly that.
+// Dropping the 16-channel mode loses the Red and Ambient channels. That's
+// fine here: SpO2 needs red for ratio-of-ratios, but heart rate only needs
+// the pulsatile component, and 850nm IR covers that.
 struct OpticsPresetChoice {
     interaxon::bridge::MusePreset preset;
     const char* label;
@@ -276,28 +262,21 @@ OpticsPresetChoice optics_preset_choice() {
     // silently running the default would present as "my setting had no effect"
     // with nothing to go on. Says so once rather than every reconnect.
     if (raw && *raw && value != "1035") {
-        // atomic exchange rather than a plain bool: this runs from the
-        // connection listener thread, so concurrent reconnects can race it.
-        // The cost of losing is only a duplicate stderr line, but the rest of
-        // this file is careful about which thread touches what, and a lone
-        // unsynchronised static invites the next one to be less careful.
+        // atomic, not a plain bool: this runs on the connection listener
+        // thread, so concurrent reconnects can race it.
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true)) {
             std::cerr << "Unrecognised MUSE_OPTICS_PRESET='" << value
                       << "' (expected 1031-1036); using PRESET_1035\n";
         }
     }
-    // Default: fewest optical channels, lowest power. The least bandwidth that
-    // still carries a pulse, which is the end of the ladder most likely to
-    // coexist with EEG rather than the end that carries the most data.
+    // Default: fewest optical channels, lowest power -- least bandwidth that
+    // still carries a pulse, most likely to coexist with EEG.
     return {interaxon::bridge::MusePreset::PRESET_1035, "PRESET_1035"};
 }
 
-// Verified against bridge_muse_model.h:14-32. The enumerator names and the
-// markings on the hardware do not line up: MU_04 and MU_05 are the 2019 and
-// 2021 Muse S, printed MS-01 and MS-02, while MS_03 is the 2025 Muse S. Reading
-// the enumerator name straight out would report an Athena's predecessor as
-// "MU-04", which is printed on no headband at all.
+// The enum names don't match what's printed on the hardware: MU_04/MU_05 are
+// the 2019/2021 Muse S, printed MS-01/MS-02, while MS_03 is the 2025 Muse S.
 const char* model_name(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01: return "MU-01";
@@ -311,11 +290,9 @@ const char* model_name(interaxon::bridge::MuseModel model) {
     }
 }
 
-// Optical hardware by model, as a capability rather than a runtime observation.
-// MU-01 and MU-02 have no PPG at all; everything from the 2018 Muse 2 onwards
-// does. Saying so up front is what lets a heart channel report "this headband
-// has no optical sensor" instead of "the sensor stopped working", which are
-// different situations and only one of them justifies falling back to a camera.
+// A capability, not a runtime observation. MU-01/MU-02 have no PPG at all;
+// everything from the 2018 Muse 2 onwards does. Lets a heart channel report
+// "no sensor" instead of "sensor stopped working" -- different situations.
 bool model_has_optical(interaxon::bridge::MuseModel model) {
     switch (model) {
     case interaxon::bridge::MuseModel::MU_01:
@@ -337,23 +314,15 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
     const interaxon::bridge::MuseModel model = muse->get_model();
     const bool has_optical = model_has_optical(model);
 
-    // PRESET_21 unless we are deliberately asking for optics. MS_03 is the only
-    // model with a PRESET_10xx range at all, so it is the only one there is
-    // anything to switch to -- has_optical is true for every model from 2018
-    // onwards and is deliberately not part of this condition, where it would
-    // read as a second gate while being unable to change the outcome.
-    //
-    // PRESET_1031 rather than one of the 8-channel EEG variants that carry the
-    // same 16-channel optics: it keeps EEG at 4 channels, which is the shape
-    // EegFrame emits and the channel count the Python side averages over.
+    // PRESET_21 unless we're deliberately asking for optics. MS_03 is the
+    // only model with a PRESET_10xx range, so it's the only one worth
+    // switching. Keeps EEG at 4 channels, matching what EegFrame emits.
     const char* requested = "PRESET_21";
     if (optics_preset_enabled() && model == interaxon::bridge::MuseModel::MS_03) {
-        // libMuse documents this as legal after connection: "You can call it in
-        // the middle of execute operation, but in this case be aware that this
-        // operation will interrupt data streaming to set new preset. Data
-        // streaming will be restored after that." (bridge_muse.h:351-358).
-        // Whether the headband honours it is a separate question, which is why
-        // active_preset() reads the answer back instead of trusting this call.
+        // libMuse allows changing preset after connection; it interrupts and
+        // then restores streaming. Whether the headband actually honours the
+        // request is separate, which is why active_preset() reads it back
+        // instead of trusting this call.
         const OpticsPresetChoice choice = optics_preset_choice();
         muse->set_preset(choice.preset);
         requested = choice.label;
@@ -368,23 +337,11 @@ void MuseBridgeService::apply_model_preset(const std::shared_ptr<interaxon::brid
 }
 
 void MuseBridgeService::reset_device_fields_locked() {
-    // Queues and the sample counter belong here, not in stop().
-    //
-    // stop() runs at process shutdown; disconnect_muse() runs on every headband
-    // swap, and connect_named() calls it first -- so the reconnect path is the
-    // one that matters and was the one not resetting. Two consequences, both
-    // defeating the instrumentation added alongside them: samples kept
-    // numbering contiguously across an interval with no headband attached, so
-    // the seq gap detector reported nothing lost on precisely the event it
-    // exists to catch; and the queues survived the swap, so a reconnect resumed
-    // by emitting the previous headband's samples with their old timestamps.
-    //
-    // optics_dropped resets below, so leaving these alone also left the counter
-    // and the sequence disagreeing about what "since when" meant.
-    //
-    // The EEG queue has always had the same gap on this path. Same line, same
-    // hazard, fixed with it rather than left as the one queue that survives a
-    // reconnect.
+    // Reset here, in disconnect_muse(), not stop() -- this runs on every
+    // headband swap. Without it, samples numbered contiguously across a gap
+    // with no headband attached, hiding exactly what the seq detector exists
+    // to catch, and the queues would resume a reconnect by emitting the
+    // previous headband's stale samples.
     while (!eeg_queue_.empty()) {
         eeg_queue_.pop();
     }
@@ -396,23 +353,18 @@ void MuseBridgeService::reset_device_fields_locked() {
     active_muse_name_.clear();
     firmware_version_.clear();
     // Model, preset and capability describe the headband that just went away.
-    // Leaving them set would report an Athena on PRESET_1031 while nothing is
-    // connected, and optical_supported would keep claiming a sensor exists --
-    // which is the one field a heart channel would use to decide whether a
-    // missing signal justifies falling back to the camera.
+    // Leaving them set would report a device still connected, and
+    // optical_supported specifically is what a heart channel checks before
+    // falling back to the camera.
     muse_model_.clear();
     requested_preset_.clear();
     optical_supported_ = false;
-    // Cleared with them, and for the same reason: a charge percentage left
-    // standing describes the headband that just went away. Worse than a stale
-    // preset, because it is the one number here a student is asked to act on --
-    // "82%" beside a Connect button for a headband nobody is wearing.
+    // Cleared for the same reason -- and it's the one number here a student
+    // is asked to act on, so a stale "82%" beside Connect is worse than most.
     battery_percent_ = -1.0;
     latest_bands_ = BandPowers{};
     latest_contact_ = ContactQuality{};
-    // Counters included. Carrying them across a reconnect would make "this
-    // headband is producing optics" indistinguishable from "some headband did,
-    // once, earlier in this process".
+    // Counters too, so old optics activity can't look like current activity.
     latest_optical_ = OpticalSignals{};
 }
 #endif
@@ -440,32 +392,30 @@ bool MuseBridgeService::connect_named(const std::string& name) {
 
     manager_->stop_listening();
     chosen->register_connection_listener(connection_listener_);
-    // EEG: raw 4-channel samples at 220Hz (PRESET_21).
-    // Band absolutes: libMuse computes these from the raw EEG and fires them as
-    // separate packet types. All registered before run_asynchronously().
+    // EEG: raw 4-channel samples at 220Hz (PRESET_21). Band absolutes are
+    // computed by libMuse from the raw EEG. All registered before
+    // run_asynchronously().
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::THETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::ALPHA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BETA_ABSOLUTE);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::GAMMA_ABSOLUTE);
-    // Electrode fit/validity reported by the headband itself -- the correct
-    // basis for "signal quality", as opposed to inferring it from calmness.
+    // Electrode fit/validity from the headband itself -- the correct basis
+    // for "signal quality", instead of inferring it from calmness.
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::NOTCH_FILTERED_EEG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::HSI_PRECISION);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_GOOD);
-    // Optical. Registered unconditionally rather than behind MUSE_ENABLE_OPTICS
-    // or a model check: a headband that emits neither simply never fires these,
-    // which is itself the observation worth having, and gating them would mean
-    // "no optics" and "we did not ask for optics" looked identical.
+    // Optical, registered unconditionally: a headband that emits neither
+    // simply never fires these, which is itself useful to know, versus
+    // gating them and not being able to tell "no optics" from "didn't ask".
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::OPTICS);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::PPG);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD);
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::IS_HEART_GOOD);
-    // Charge remaining. Registered on every preset because the packet is not a
-    // signal the preset carries -- it is device telemetry libMuse fires on its
-    // own schedule -- so it costs nothing on PRESET_21 and is the one reading a
-    // student can act on before a lesson rather than after it.
+    // Battery is device telemetry libMuse fires on its own schedule, not
+    // preset-dependent, so register it on every preset -- costs nothing on
+    // PRESET_21 and is a reading a student can act on before a lesson.
     chosen->register_data_listener(data_listener_, interaxon::bridge::MuseDataPacketType::BATTERY);
     chosen->set_preset(interaxon::bridge::MusePreset::PRESET_21);
     {
@@ -529,9 +479,9 @@ std::string MuseBridgeService::firmware_version() const {
 #endif
 }
 
-// Guarded like firmware_version() above: queue_mutex_ lives inside the
-// ENABLE_LIBMUSE block, so an unguarded body would break the OFF build -- which
-// is the one CI compiles.
+// Guarded like firmware_version(): queue_mutex_ only exists inside the
+// ENABLE_LIBMUSE block, so an unguarded body would break the OFF build,
+// which is the one CI compiles.
 std::string MuseBridgeService::muse_model() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -541,9 +491,9 @@ std::string MuseBridgeService::muse_model() const {
 #endif
 }
 
-// Outside the ENABLE_LIBMUSE region, like the accessors below it: main.cpp
-// calls this unconditionally, so a definition nested inside the guard links in
-// the ON build and leaves an unresolved external in the OFF build CI compiles.
+// Defined outside the ENABLE_LIBMUSE region, like the accessors below it:
+// main.cpp calls this unconditionally, so nesting it in the guard would leave
+// an unresolved symbol in the OFF build CI compiles.
 OpticalSignals MuseBridgeService::optical_signals() const {
 #if defined(ENABLE_LIBMUSE)
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -590,14 +540,13 @@ DeviceConfig MuseBridgeService::device_config() const {
     if (!muse) {
         return {};
     }
-    // One call, both fields. Read live rather than cached at request time: the
-    // configuration is repopulated when settings change, so a preset that lands
-    // a moment after set_preset() still shows up -- and one that never lands
-    // keeps reporting the old value, which is the signal worth having.
+    // One call for both fields, read live rather than cached: the
+    // configuration is repopulated when settings change, so a preset applied
+    // a moment after set_preset() still shows up.
     //
-    // Deliberately outside the lock. get_muse_configuration() is thread-safe on
-    // its own, and calling into libMuse while holding the queue mutex would put
-    // an SDK call on the path the data listener needs to enqueue frames.
+    // Outside the lock deliberately -- get_muse_configuration() is thread-safe
+    // on its own, and calling into libMuse while holding queue_mutex_ would
+    // block the data listener's own use of that lock.
     const auto config = muse->get_muse_configuration();
     if (!config) {
         return {};
@@ -626,9 +575,8 @@ double MuseBridgeService::battery_percent() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     return battery_percent_;
 #else
-    // The synthetic build has no battery to report, and inventing one would put
-    // a number on a student's screen with nothing behind it -- the same reason
-    // EEG_SOURCE=sim emits no heart block.
+    // The synthetic build has no battery to report; inventing one would put a
+    // number on screen with nothing behind it.
     return -1.0;
 #endif
 }
@@ -762,10 +710,8 @@ void MuseBridgeService::enqueue_frame(const std::shared_ptr<interaxon::bridge::M
 
 void MuseBridgeService::unregister_data_listeners(
     const std::shared_ptr<interaxon::bridge::Muse>& muse) {
-    // One list, called from both teardown paths. They previously carried
-    // byte-identical copies kept in sync by hand, which is the shape of thing
-    // that silently leaks a listener across reconnects the first time someone
-    // adds a packet type to one and not the other -- and this change adds four.
+    // One shared list for both teardown paths, so they can't drift out of
+    // sync and silently leak a listener across reconnects.
     static constexpr interaxon::bridge::MuseDataPacketType kTypes[] = {
         interaxon::bridge::MuseDataPacketType::EEG,
         interaxon::bridge::MuseDataPacketType::DELTA_ABSOLUTE,
@@ -788,22 +734,17 @@ void MuseBridgeService::unregister_data_listeners(
 }
 
 void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    // values() rather than enumerating the Optics/Ppg accessors: it reports how
-    // many channels actually arrived, which is the thing worth observing.
-    // PRESET_1031 claims 16-channel optics, and asking for OPTICS9..OPTICS16 by
-    // name on a device running a 4- or 8-channel mode would read whatever those
-    // accessors return for channels that are not present.
+    // values() instead of the named Optics/Ppg accessors: it reports how many
+    // channels actually arrived, since named channels not present on a
+    // narrower preset would just return garbage.
     const std::vector<double> values = packet->values();
     const bool is_optics = packet->packet_type() == interaxon::bridge::MuseDataPacketType::OPTICS;
     const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    // Clamped to what is actually stored, so the count and the array can never
-    // disagree. This field exists to report a channel count nobody knows in
-    // advance, which is exactly the situation where a preset delivering more
-    // than the buffer holds would otherwise publish "20 channels" beside
-    // sixteen numbers.
+    // Clamped to what's actually stored, so the reported count and the array
+    // can never disagree if a preset delivers more channels than fit.
     if (is_optics) {
         latest_optical_.optics_packets += 1;
         latest_optical_.last_optics.fill(0.0);
@@ -823,10 +764,9 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
     }
     latest_optical_.last_ms = now_ms;
 
-    // Queue the sample itself, not just the counters. OPTICS only -- the PPG
-    // packet path is for 2018-2024 hardware and has its own channel mapping;
-    // streaming both into one queue would produce a series whose meaning
-    // changes with the headband.
+    // Queue the sample too, not just the counters. OPTICS only -- PPG is a
+    // separate channel mapping for 2018-2024 hardware, and mixing both into
+    // one queue would give a series whose meaning changes with the headband.
     if (is_optics) {
         OpticsFrame frame{};
         // The packet's own timestamp, in ms. libMuse reports microseconds.
@@ -838,15 +778,10 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
         }
         frame.n = static_cast<int>(n);
         optics_queue_.push(frame);
-        // Same bound as the EEG queue. At 64Hz this is ~32 seconds of backlog,
-        // which is far longer than the main loop can fall behind without
-        // something else being badly wrong.
-        //
-        // Counted, not just dropped. The derivation rebuilds its clock from
-        // sample index, so a silent discard shifts that clock by one interval
-        // for the rest of the session and shows up as one impossible beat
-        // interval -- which is exactly what the seq field and this counter
-        // exist to make visible rather than plausible.
+        // Same bound as the EEG queue -- ~32s of backlog at 64Hz, far more
+        // than the main loop should ever fall behind by. Counted, not just
+        // dropped: since the time base is rebuilt from sample index, a
+        // silent drop would shift it and show up as an impossible interval.
         if (optics_queue_.size() > 2048) {
             optics_queue_.pop();
             latest_optical_.optics_dropped += 1;
@@ -855,17 +790,13 @@ void MuseBridgeService::update_optical(const std::shared_ptr<interaxon::bridge::
 }
 
 void MuseBridgeService::update_battery(const std::shared_ptr<interaxon::bridge::MuseDataPacket>& packet) {
-    // The named accessor rather than values()[0]. The optical path uses values()
-    // deliberately -- it needs the channel *count*, which is the thing nobody
-    // knows in advance -- but here the packet's three fields are a fixed mapping
-    // and reading them positionally would silently return millivolts if the SDK
-    // ever reordered the enum.
+    // Named accessor, not values()[0]: this packet's fields are a fixed
+    // mapping, unlike optics where the channel count itself is the unknown.
     const double pct = packet->get_battery_value(
         interaxon::bridge::Battery::CHARGE_PERCENTAGE_REMAINING);
-    // Range-checked before storing, because -1 is this field's "not reported"
-    // and a garbage reading landing on a negative number would be published as
-    // absence. Out of range is dropped rather than clamped: the previous good
-    // reading is a better answer than a fabricated 100.
+    // Range-checked before storing: -1 means "not reported", so a garbage
+    // negative reading must not land there. Dropped rather than clamped --
+    // the previous good reading beats a fabricated 100.
     if (!(pct >= 0.0 && pct <= 100.0)) {
         return;
     }
@@ -878,8 +809,8 @@ void MuseBridgeService::update_optical_quality(const std::shared_ptr<interaxon::
     if (values.empty()) {
         return;
     }
-    // libMuse's own verdict rather than a threshold invented here. Non-zero is
-    // good, matching the IS_GOOD convention already used for the electrodes.
+    // libMuse's own verdict, not a threshold invented here. Non-zero is good,
+    // matching the IS_GOOD convention used for the electrodes.
     const bool good = values[0] != 0.0;
     const bool is_ppg = packet->packet_type() == interaxon::bridge::MuseDataPacketType::IS_PPG_GOOD;
 
@@ -903,23 +834,18 @@ void MuseBridgeService::update_band_power(const std::shared_ptr<interaxon::bridg
 
     std::lock_guard<std::mutex> lock(queue_mutex_);
 
-    // Average only the electrodes the headband says are usable. Averaging all
-    // four unconditionally meant a single failed electrode contaminated every
-    // band value, and two failed ones (the ear contacts are the usual pair)
-    // made the whole spectrum unusable -- even while the two frontal
-    // electrodes were reading cleanly. Excluding the bad ones keeps the good
-    // channels' data intact instead of discarding the whole frame.
+    // Average only the electrodes the headband says are usable, so one or two
+    // badly-seated electrodes (commonly the ear contacts) don't contaminate
+    // bands computed from the frontal ones that are reading cleanly.
     //
-    // Falls back to all four when no contact data has arrived yet, so this
-    // never produces less data than the previous behaviour.
+    // Falls back to all four when no contact data has arrived yet.
     double sum = 0.0;
     int used = 0;
     if (latest_contact_.has_is_good || latest_contact_.has_hsi) {
         for (size_t i = 0; i < per_channel.size(); ++i) {
             const bool valid_data = !latest_contact_.has_is_good || latest_contact_.is_good[i] >= 1.0;
-            // HSI: 1 good, 2 mediocre, 4 poor. 0 means "not reported", which
-            // is covered by <= 2.0 -- absence of a fit reading is not evidence
-            // of a bad fit, so it must not exclude the channel.
+            // HSI: 1 good, 2 mediocre, 4 poor, 0 = not reported. <= 2.0 covers
+            // 0 too, since no reading yet isn't evidence of a bad fit.
             const double fit = latest_contact_.hsi[i];
             const bool seated = !latest_contact_.has_hsi || fit <= 2.0;
             if (valid_data && seated) {
@@ -989,43 +915,29 @@ void MuseBridgeService::rebuild_muse_name_list() {
 }
 
 void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionState state) {
-    // Do NOT call any libMuse API (e.g. get_muse_version) here.
-    // libMuse holds an internal lock during callbacks; re-entering the SDK deadlocks.
-    // GettingData32 avoids this by posting to the UI thread first.
+    // Do NOT call any libMuse API (e.g. get_muse_version) here -- libMuse
+    // holds an internal lock during callbacks, and re-entering the SDK
+    // deadlocks.
     //
-    // Deliberately does NOT drain the queues or reset optics_seq_, which looks
-    // like an omission and is not. Two reasons:
-    //
-    //  - This fires on every state transition, including transient blips. A
-    //    reset here would discard in-flight samples that are perfectly good,
-    //    and reset the sequence for a link that never actually went away.
-    //  - Every reconnect the sidecar drives goes through connect_named(),
-    //    which calls disconnect_muse() first, and that path resets properly.
-    //
-    // The residual gap is a link libMuse re-establishes entirely on its own,
-    // with no connect from above: the sequence would then continue across it
-    // and a consumer would not see the interruption. Accepted rather than
-    // fixed, because the fix belongs here and doing it here costs more than
-    // the case is worth.
+    // Deliberately doesn't drain the queues or reset optics_seq_: this fires
+    // on every transition including transient blips, and a reset here would
+    // discard good in-flight samples for a link that never really dropped.
+    // Every reconnect the sidecar drives goes through connect_named(), which
+    // calls disconnect_muse() first and resets properly there.
     std::lock_guard<std::mutex> lock(queue_mutex_);
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);
     if (state != interaxon::bridge::ConnectionState::CONNECTED) {
         firmware_version_.clear();
-        // Alongside firmware, not alongside the queues above. The queues are
-        // left across a blip because the samples in them are still good; a
-        // charge percentage is a claim about a link that is currently down.
-        // Costs a brief null on a transient reconnect, until the next BATTERY
-        // packet -- which is the honest answer for that interval.
+        // Cleared with firmware, not left standing like the queues: a charge
+        // percentage is a claim about a link that's currently down.
         battery_percent_ = -1.0;
     }
 }
 
 void MuseBridgeService::refresh_bluetooth_state() {
-    // Blocking .get() is safe here: the bridge has no message pump to stall
-    // (main() runs winrt::init_apartment() in MTA mode), unlike GettingData32
-    // which must never block its UI thread and so only checks this once at
-    // startup via an async continuation.
+    // Blocking .get() is safe here: this process has no message pump to
+    // stall (main() runs winrt::init_apartment() in MTA mode).
     try {
         using namespace winrt::Windows::Devices::Radios;
         for (const auto& radio : Radio::GetRadiosAsync().get()) {
@@ -1039,8 +951,8 @@ void MuseBridgeService::refresh_bluetooth_state() {
         // than reporting a false "Bluetooth is off".
         return;
     }
-    // No Bluetooth radio enumerated: default to enabled so this diagnostic
-    // never masks the real cause of a failed scan.
+    // No Bluetooth radio found: default to enabled so this diagnostic never
+    // masks the real cause of a failed scan.
     bluetooth_enabled_.store(true);
 }
 #endif

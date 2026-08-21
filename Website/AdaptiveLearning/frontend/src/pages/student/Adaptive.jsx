@@ -16,15 +16,14 @@ import { toast } from 'sonner'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
-// How long to wait before offering the session to the sidecar again. The
-// student opening the lesson before starting the local app is the ordinary
-// sequence, so this is a normal path rather than an error path -- long enough
-// not to hammer a loopback port, short enough that a lesson does not get far
-// before recording begins.
+// Retry delay for offering the session to the sidecar. The student often
+// opens the lesson before starting the local app, so this is normal, not an
+// error -- long enough to avoid hammering the port, short enough to start
+// recording soon.
 const PUSH_RETRY_MS = 5000
 
-// Named for the sensor a student would recognise, not the table. "Cognitive"
-// and "face" are our words; a student has a headband and a camera.
+// Labeled by the sensor a student recognizes (headband, camera), not by
+// table name.
 const CHANNEL_LABELS = [
   ['cognitive', 'Headband'],
   ['heart',     'Heart sensor'],
@@ -36,19 +35,23 @@ const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'
 const SHORT  = { angle_relationships: 'Angle Rel.' }
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 
-/** What to put under a toast when the only detail is the thrown thing.
- *
- * The three hardware failures on this page each wrote this out, one of them
- * without the `?.` -- so how an error reaches a student depended on which
- * device had failed. One place to change if that should ever say something
- * other than the raw message.
- */
+/** Formats an error for a toast description, one place so every hardware
+ * failure on this page shows the message the same way. */
 const errorDetail = (e) => e?.message || String(e)
 
 const initSubjects = () => {
   const s = {}; TOPICS.forEach(t => { s[t] = { correct: 0, attempts: 0 } }); return s
 }
 
+/**
+ * Ingestion runs in one of two modes, reported by the backend as
+ * `ingest_mode` and surfaced here as `headband.pushMode`. Pull: the
+ * co-located backend polls the sidecar itself, and hardware control goes
+ * through `/api/eeg/*`. Push: hosted backend, local sidecar -- this page
+ * talks to the sidecar directly on loopback via `lib/sidecar.js`, and
+ * `/api/eeg/*` refuses with 409. Comments below note only what's
+ * mode-specific at each site.
+ */
 export default function Adaptive() {
   const { user } = useAuth()
 
@@ -59,43 +62,28 @@ export default function Adaptive() {
   const [classId, setClassId] = useState('')
   const [bias, setBias] = useState(0) // -1 easier, 0 auto, +1 harder
 
-  // How long the student meant this sitting to be, from their profile.
-  //
-  // Advisory, and deliberately so: when the time is up the page asks between
-  // questions rather than ending anything. A timer that closed the session
-  // would land mid-question about as often as not, discarding an answer a child
-  // was part way through giving -- and the setting is a plan, not a limit
-  // anyone asked to have enforced.
-  //
-  // null until the profile lands, so nothing is timed against a guess.
+  // Planned session length, from the profile. Advisory only -- it asks
+  // between questions instead of ending the session, since a timer could cut
+  // off a question mid-answer. Null until the profile loads, so nothing is
+  // timed against a guess.
   const [durationMin, setDurationMin]         = useState(null)
   const [sessionStartedAt, setSessionStartedAt] = useState(null)
   const [elapsedMin, setElapsedMin]           = useState(0)
   const [timeUpDismissed, setTimeUpDismissed] = useState(false)
   const [finishing, setFinishing]             = useState(false)
 
-  // Topic accuracy comes from `user_math_performance`, not from this browser.
-  //
-  // It was `localStorage.accuracyStats_<uid>`, which made this the only panel in
-  // the app whose numbers were not the database's. It disagreed with the
-  // dashboard on the same screen, it started from zero on a school computer,
-  // and nothing server-side could correct it -- a parent erasing a channel left
-  // the figures standing in the child's browser.
-  //
-  // Shape kept identical so the render sites are unchanged; `accuracyState` is
-  // what stops a failed read drawing as a student who has never practised.
+  // Topic accuracy comes from `user_math_performance` on the server, not from
+  // this browser -- a client-side cache could drift from the database and
+  // wouldn't reflect a parent's erasure. `accuracyState` distinguishes a
+  // failed read from a student who genuinely has no history.
   const [accuracyStats, setAccuracyStats] = useState(
     () => ({ total: { correct: 0, attempts: 0 }, subjects: initSubjects() }))
   const [accuracyState, setAccuracyState] = useState('loading')  // loading | ready | failed
 
   const loadAccuracy = useCallback(async () => {
     if (!user?.id) return
-    // `GET /api/performance/student/{id}` -- the endpoint StudentProgressReport
-    // already uses, rather than a second raw PostgREST query of the same table
-    // written out here. Two readers of one table meant two places to change
-    // when its shape moves, and the backend's access rule (`_verify_can_view_student`,
-    // which admits the student themselves) stops being the only description of
-    // who may read this the moment a page goes around it.
+    // Same endpoint StudentProgressReport uses, so there's one reader of this
+    // table and one access check to keep correct.
     let rows
     try {
       rows = await apiFetch(`/api/performance/student/${user.id}`)
@@ -118,32 +106,21 @@ export default function Adaptive() {
     setAccuracyState('ready')
   }, [user])
 
-  // One answer moves one topic by one. The backend names the topic it actually
-  // attributed the answer to -- derived from the question row, not from
-  // anything this page decided -- so applying it here is not a local guess
-  // about *what* changed, only about a +1 the database has already made
-  // atomically.
-  //
-  // It replaces a full re-read of the student's performance table after every
-  // single answer, in the app's hottest loop, immediately after the request
-  // that had just told the backend what changed.
+  // Applies the +1 the backend already made, using the topic name it
+  // returned -- avoids a full re-fetch of performance data after every
+  // answer.
   const applyAttempt = useCallback((topic, wasCorrect) => {
     if (!topic) return                 // nothing was attributed; nothing moved
-    // One place, so the tile and the running total cannot disagree about what
-    // an attempt does to a tally.
+    // Shared bump logic so the tile and the running total can't disagree.
     const bump = ({ correct, attempts }) => ({
       correct:  correct  + (wasCorrect ? 1 : 0),
       attempts: attempts + 1,
     })
     setAccuracyStats(prev => {
       const prior = prev.subjects[topic]
-      // The total counts every attempt, even one this page has no tile for.
-      // `TOPICS` is a hardcoded ten and `math_topics` is a table, so the two
-      // agree only until someone adds a row -- and returning early on an
-      // unrecognised topic dropped the attempt from Overall Accuracy as well as
-      // from the tile. `loadAccuracy`, which this replaced, summed every row
-      // the server returned whether or not it recognised the name, so the two
-      // paths disagreed the moment the table grew.
+      // Counts every attempt in the total even without a matching tile --
+      // `TOPICS` is a fixed list and `math_topics` can grow, so an
+      // unrecognized topic must still count toward the overall total.
       return {
         total: bump(prev.total),
         subjects: prior
@@ -167,42 +144,35 @@ export default function Adaptive() {
   const [recorder, setRecorder]   = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [headband, setHeadband]   = useState({
-    // `pushMode` deliberately absent until a health response lands: guessing
-    // "not push" is what produced an outage message on first paint.
+    // `pushMode` stays unset until a health check lands -- guessing "not
+    // push" showed a false outage message on first paint.
     available: false, connected: false, samples: 0, lastTs: null,
     phase: 'idle', // idle | starting | scanning | connecting | connected
     deviceName: null,
-    // Charge remaining, or null for "no reading". Null covers three cases that
-    // all mean the same thing to a reader -- nothing connected, a bridge that
-    // predates the field, and a headband that has not sent a BATTERY packet
-    // yet -- and none of them may render as 0%, which is a real charge.
+    // Charge percent, or null for "no reading" (not connected, an old bridge
+    // with no battery field, or no BATTERY packet yet). Must never render as
+    // 0%, which is a real charge level.
     battery: null,
   })
 
-  // Sidecar stations (device-keyed EEG registry, e.g. multiple headband rigs in the
-  // same room) -- distinct from the BLE headband name list below (muse_devices):
-  // a station is *which sidecar stream* to use, chosen before the BLE pairing flow
-  // (scan/connect by headband name) even starts.
+  // Sidecar stations are registered EEG devices (e.g. multiple headband
+  // rigs), chosen before the BLE scan/connect flow even starts -- distinct
+  // from the BLE device name list (muse_devices) below.
   const [stations, setStations]     = useState([])
-  // The camera is a registered station like any other, but it is never a
-  // headband, so it is tracked apart from `stations` -- which the picker
-  // filters to headbands precisely so nobody is offered a camera to pair.
+  // Tracked separately from `stations`, which is filtered to headbands only,
+  // so the picker never offers a camera to pair.
   const [camera, setCamera]         = useState(
     { id: null, running: false, busy: false })
   const [stationId, setStationId]   = useState(null)
 
-  // Push ingestion: what the local sidecar reports about its own delivery.
-  // Null until asked, so "not running in this deployment" and "asked and it is
-  // down" stay distinguishable -- the same three-state rule the backend's
-  // liveness fields follow.
+  // What the local sidecar reports about its own delivery, under push. Null
+  // until asked, so "not running here" and "asked and down" stay distinguishable.
   const [push, setPush]               = useState(null)
-  // Which channels actually delivered a reading since the last status poll.
-  // Actual capture, not consent: a consented channel whose sensor dropped out
-  // must stop being listed, or the chip claims a recording that is not
-  // happening -- which is worse than showing nothing.
+  // Channels that actually delivered a reading since the last poll -- not
+  // just consented ones, or the chip would claim a recording that stopped.
   const [recording, setRecording]     = useState([])
-  // Last poll's cumulative counts, so a *delta* can be taken. The counts
-  // themselves only ever grow, so `> 0` would latch on and never clear.
+  // Last poll's cumulative counts, used to compute a delta -- the counts
+  // only grow, so comparing to 0 would never clear.
   const lastRecorded = useRef(null)
   // Serialises start against stop. Both are async and the effect can tear down
   // while a start is still in flight, so they are chained rather than raced.
@@ -219,26 +189,18 @@ export default function Adaptive() {
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
-  // Unmount cleanup for the two things that outlived this page.
-  //
-  // `phaseTimer` is the 30s safety net that puts the headband card back to
-  // idle if a connection attempt neither finishes nor throws. It was cleared
-  // at the *start* of the next attempt and inside the catch, so navigating
-  // away mid-connect left it pending: it fired half a minute later against an
-  // unmounted component.
-  //
-  // `window.AL_currentSessionId` is set when the recorder is created and was
-  // never unset, so it named a finished session for the rest of the tab's
-  // life -- and the next reader of it could not tell that from a live one.
+  // Cleans up on unmount: `phaseTimer` is a 30s safety net that resets the
+  // headband card if a connect attempt hangs, and must not fire after the
+  // page is gone. `window.AL_currentSessionId` must not keep naming a
+  // session that no longer exists.
   useEffect(() => () => {
     clearTimeout(phaseTimer.current)
     delete window.AL_currentSessionId
   }, [])
 
-  // The clock starts when the session does, not when the page opened. A student
-  // who leaves the tab sitting on the setup screen for an hour has not been
-  // practising, and telling them their 15 minutes are up before the first
-  // question would make the setting worse than not having it.
+  // Clock starts when the session starts, not when the page opened --
+  // otherwise idle time on the setup screen would count against the
+  // student's planned duration.
   useEffect(() => {
     if (!sessionId) {
       setSessionStartedAt(null)
@@ -251,9 +213,8 @@ export default function Adaptive() {
 
   useEffect(() => {
     if (!sessionStartedAt || !durationMin) return
-    // 20s. The banner appears within a third of a minute of the mark, which is
-    // as precise as "you have been at this for 15 minutes" deserves to be, and
-    // it is a state update on a page that is otherwise idle between questions.
+    // Checked every 20s -- precise enough for a duration reminder, and cheap
+    // since the page is otherwise idle between questions.
     const tick = () => setElapsedMin((Date.now() - sessionStartedAt) / 60000)
     tick()
     const id = setInterval(tick, 20000)
@@ -266,10 +227,8 @@ export default function Adaptive() {
   useEffect(() => {
     apiFetch('/api/profile/me').then(p => {
       if (p?.grade_level) setGrade(p.grade_level)
-      // The student's saved starting point for the Easier/Auto/Harder control
-      // below, and how long they meant to practise for. `??`, not `||`: 0 is
-      // the adaptive bias and a real choice, so `||` would silently reset a
-      // student who had picked it -- indistinguishable from never having set it.
+      // `??`, not `||`: 0 is a valid bias choice (Auto), and `||` would
+      // treat it as unset.
       if (p?.difficulty_bias != null) setBias(p.difficulty_bias)
       if (p?.session_duration_minutes != null) setDurationMin(p.session_duration_minutes)
     }).catch(()=>{})
@@ -286,12 +245,9 @@ export default function Adaptive() {
     const checkHealth = async () => {
       try {
         const h = await eegHealth()
-        // The mode has to come from *this* poll. This one runs from mount; the
-        // status effect returns early until a session exists, so before the
-        // student answers anything `pushMode` was undefined and `available`
-        // false -- putting "EEG service not reachable on port 8001" on the
-        // first screen they see, which is the sentence the mode check exists to
-        // stop showing. Fixing /start and /status alone moved it here.
+        // Runs before a session exists, so pushMode is known before first
+        // paint -- otherwise the page shows a false "not reachable" message
+        // under push.
         if (alive) setHeadband(s => ({
           ...s,
           pushMode: h.ingest_mode === 'push',
@@ -305,42 +261,29 @@ export default function Adaptive() {
   }, [])
 
   // Discover sidecar stations once the EEG service is reachable. Auto-select when
-  // there's exactly one (mirrors the previous single-device behavior with no UI
-  // change); otherwise wait for the user to pick one via the station picker below.
+  // there's exactly one; otherwise wait for the user to pick one via the picker below.
   useEffect(() => {
-    // `available` is the *backend's* liveness probe of the sidecar, and under
-    // push the backend reports it as null on purpose -- it has no route to a
-    // student's laptop, so "not probed here" must stay distinguishable from
-    // "probed and down". `!null` is true, so gating on it alone meant this
-    // effect returned before ever asking the sidecar, and the push branch below
-    // could not run: no stations, and no camera card.
+    // `available` is null (not false) when the backend hasn't probed the
+    // sidecar, which is normal under push -- gating on falsiness alone would
+    // skip the push branch below.
     if (!headband.available && !headband.pushMode) return
     let alive = true
-    // Under push the backend answers `devices: []` deliberately -- it does
-    // not probe a sidecar it has no route to -- so asking it would report a
-    // machine with no hardware at all. The sidecar is on loopback and is the
-    // only thing that knows in that mode.
+    // Under push the backend can't reach the sidecar either, so ask it directly.
     const source = headband.pushMode
       ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
       : eegDevices()
     source.then(d => {
       if (!alive) return
-      // Tracked before the headband filter below, or enabling the camera would
-      // depend on the picker's rules -- two unrelated things.
+      // Read before the headband filter below, so camera state doesn't
+      // depend on the headband picker's rules.
       const face = (d?.devices || []).find(x => x.kind === 'face')
       setCamera(c => ({ ...c, id: face?.device_id || null,
                         running: !!face?.running }))
-      // This control connects a *headband*, and EEG_DEVICES registers cameras in
-      // the same registry (`default:muse@8765,camera:face@0` is the shipped
-      // example), so an unfiltered list offers "camera" as something to connect a
-      // headband to. It also breaks the single-device auto-select below: two
-      // entries mean stationId stays null and the button sits disabled next to a
-      // picker whose second option is wrong.
-      //
-      // Filtered by excluding `face` rather than allow-listing `muse`/`sim`: a
-      // new camera kind appearing here would be visibly wrong and get reported,
-      // whereas a new *headband* kind being silently dropped would take the
-      // count back to one and auto-select something else in its place.
+      // Cameras share the device registry with headbands, so they're
+      // filtered out here -- otherwise this picker offers a camera as a
+      // headband to connect, and breaks the single-device auto-select below.
+      // Excludes `face` rather than allow-listing headband kinds, so a new
+      // headband kind isn't silently dropped.
       const list = (d?.devices || []).filter(s => s.kind !== 'face')
       setStations(list)
       setStationId(prev => {
@@ -354,8 +297,8 @@ export default function Adaptive() {
   }, [headband.available, headband.pushMode])
 
   // Re-offers the session to the sidecar. Shared by the initial handover and
-  // by the status poll, because the two failures are the same one seen at
-  // different times: the sidecar not up yet, and the sidecar gone again.
+  // the status poll, since both are the same failure seen at different
+  // times.
   const recover = useCallback(() => {
     const sid = sessionIdRef.current
     if (!sid) return
@@ -372,27 +315,13 @@ export default function Adaptive() {
       })
   }, [])
 
-  // Headband telemetry while one is connected: charge, and under push whether
-  // the link is still up.
-  //
-  // Its own effect rather than a field on the status poll below, which reads
-  // the *backend* -- under push the backend has no route to a student's laptop,
-  // so the number would exist in one deployment and not the other for no reason
-  // a reader could see. Same source-by-mode split as `hw` in toggleHeadband.
-  //
-  // 5s rather than the charge's own natural cadence, which would be minutes:
-  // this is also push's only watcher of the link, and a button that offers to
-  // disconnect a headband that is already gone should not persist for longer
-  // than the pull path's equivalent. The read is a cached field on loopback.
+  // Polls headband charge, and under push whether the link is still up (the
+  // backend can't see that under push, so this is the only watcher of it).
   useEffect(() => {
     if (!headband.connected || !stationId) return
-    // Under pull with a session running, the 3s status poll below reads the
-    // same `eegStatus` response and now takes the charge off it -- so this
-    // would be a second call to one backend endpoint for a field already in
-    // hand. It still runs under pull *before* a session exists, which is when
-    // a student pairs a headband and the status poll has returned early, and
-    // always under push, where it reads the sidecar directly and is the only
-    // thing watching the link.
+    // Skips under pull once a session exists -- the status poll below already
+    // reads the same battery field then. Still runs under pull before a
+    // session starts, and always under push.
     if (!headband.pushMode && sessionId) return
     let killed = false
     const read = async () => {
@@ -401,27 +330,21 @@ export default function Adaptive() {
                                      : (await eegStatus(stationId))?.muse
         if (killed) return
         const pct = st?.ingestion?.battery_percent
-        // Under push this is also the only thing that can notice a headband
-        // that dropped on its own: the pairing flow sets `connected` and the
-        // Disconnect button clears it, and with the backend poll no longer
-        // touching it there is nothing else watching the link. `=== false`
-        // rather than falsiness -- an absent field means the sidecar did not
-        // report, which is not the same as a headband that went away.
+        // Under push, the only thing watching for a headband that dropped on
+        // its own. `=== false`, not falsiness: an absent field means the
+        // sidecar didn't report, not that the headband went away.
         const dropped = headband.pushMode && st?.ingestion?.muse_connected === false
-        // `undefined` from a bridge without the field, `null` before the first
-        // BATTERY packet, a number once one arrives. Only the last is a
-        // reading. Written as a typeof check and not `pct || null`, which would
-        // turn a genuinely flat battery into "no reading" -- erasing the one
-        // value most worth showing.
+        // typeof check, not `pct || null` -- a flat 0% battery must not be
+        // read as "no reading".
         setHeadband(s => ({
           ...s,
           battery: typeof pct === 'number' ? pct : null,
           ...(dropped ? { connected: false, phase: 'idle', deviceName: null, battery: null } : {}),
         }))
       } catch {
-        // A failed read is not a flat battery, and it is not a fresh one
-        // either. Leave whatever was last measured; the badge disappears on
-        // disconnect, which is the state that actually invalidates it.
+        // Leave the last known battery value on a failed read -- it's
+        // cleared on disconnect instead, which is what actually invalidates
+        // it.
       }
     }
     read()
@@ -429,24 +352,15 @@ export default function Adaptive() {
     return () => { killed = true; clearInterval(id) }
   }, [headband.connected, headband.pushMode, stationId, sessionId])
 
-  // Close the session the student is in.
-  //
-  // This page had no way to do that at all: only Practice.jsx ever called
-  // `/end`, so an adaptive session stayed open until the stale sweep on the
-  // student's *next* start closed it -- which is also when its rollup was
-  // written and its charts archived, both stamped at the sweep rather than at
-  // the sitting. A duration prompt with nothing to offer but "keep going" would
-  // have been the same decoration this change is removing.
-  //
-  // Clearing `sessionId` is what stops delivery: the handover effect's cleanup
-  // is keyed on it and takes the student's token back off the sidecar. The
-  // hardware stays paired, because finishing a sitting is not unplugging.
+  // Closes the current session. Clearing `sessionId` triggers the handover
+  // effect's cleanup, which takes the student's token back off the sidecar.
+  // Hardware stays paired -- finishing a session isn't unplugging the
+  // headband.
   const finishSession = async () => {
     setFinishing(true)
     try {
-      // The call and how a failure is reported live in lib/session.js, because
-      // Practice.jsx makes the same one and its copy had already drifted into
-      // swallowing the error. Resetting the page is this page's own business.
+      // The call itself lives in lib/session.js, shared with Practice.jsx,
+      // so both pages report failures the same way.
       await endSession(sessionIdRef.current)
     } finally {
       setSessionId(null)
@@ -454,9 +368,8 @@ export default function Adaptive() {
       setData(null)
       setPhase('idle')
       setFinishing(false)
-      // Cleared with the rest of the session state. It is set when the
-      // recorder is created and named a finished session until the tab closed,
-      // which the next reader could not tell from a live one.
+      // Cleared with the rest of session state, or it would keep naming a
+      // finished session as if it were still live.
       delete window.AL_currentSessionId
     }
   }
@@ -481,30 +394,18 @@ export default function Adaptive() {
       if (killed) return
       setHeadband(prev => ({
         ...prev,
-        // `service` is null under push ingestion -- this backend does not probe
-        // a sidecar there, so there is no liveness to report. `!!null` is false,
-        // which rendered "offline" every 3 seconds and contradicted the 409 the
-        // start endpoint had just given, which says nothing is wrong with the
-        // headband. Tracked separately so the panel can say which it is.
+        // `service` is null (not false) under push -- the backend never probes
+        // a sidecar it has no route to.
         pushMode: s.ingest_mode === 'push',
         available: !!s.service,
-        // Only under pull. `poller.running` is the *backend's* poller, and
-        // under push there is no poller by definition -- so this read false
-        // every 3 seconds against a headband that was paired and streaming,
-        // flipping the button back to "Connect Headband" the moment a session
-        // existed and offering to re-run the pairing sequence on a connected
-        // device. Fourth instance of the same mistake: reading a backend field
-        // as the truth about hardware the backend cannot see. Under push the
-        // pairing flow owns this, and the sidecar poll below corrects it.
+        // Only under pull: `poller.running` is the backend's own poller, which
+        // doesn't exist under push and would otherwise read as disconnected.
         ...(s.ingest_mode === 'push' ? {} : { connected: !!s.poller?.running }),
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
-        // Taken from the response already in hand. Under pull the telemetry
-        // effect above reads `eegStatus` too, so with a session running the two
-        // polled the same backend endpoint 3s and 5s apart for overlapping
-        // fields; that effect now stands down under pull once a session exists.
-        // Same `typeof` check and the same reason: 0% is a real charge, and
-        // `pct || null` would erase exactly the reading the badge is for.
+        // Only under pull -- the telemetry effect above already polls this
+        // under push. typeof check so a real 0% charge isn't read as no
+        // reading.
         ...(s.ingest_mode === 'push' ? {} : {
           battery: typeof s.muse?.ingestion?.battery_percent === 'number'
             ? s.muse.ingestion.battery_percent : null,
@@ -516,27 +417,20 @@ export default function Adaptive() {
     return () => { killed = true; clearInterval(id) }
   }, [sessionId, stationId])
 
-  // Hand the session and the student's token to the local sidecar, and take
-  // them back when the session ends. Only under push: in the co-located
-  // deployment the backend's poller is the writer, and a push client running
-  // alongside it would put every EEG sample in `cognitive_signals` twice with
-  // no dedupe key to catch it. The sidecar refuses that itself (409 when
-  // PUSH_ENABLED is false); not asking is the first line of the same defence.
+  // Hands the session and student's token to the sidecar under push, and
+  // takes them back when the session ends. Pull already has the backend's
+  // poller as writer; running both would double-write `cognitive_signals`,
+  // which has no dedupe key.
   useEffect(() => {
     if (!sessionId || !headband.pushMode) return
     let killed = false
 
-    // Retried, not attempted once. The sidecar being slower to come up than
-    // this page is the *normal* order of events on a student's machine -- they
-    // open the lesson, then start the local app -- and a single attempt that
-    // failed meant nothing was pushed for the rest of the session while the
-    // panel promised it would "change on its own". So the panel's sentence is
-    // now true: this keeps trying until it lands.
+    // Retried rather than attempted once -- the sidecar often starts after
+    // this page does.
     let attempt = null
     const handOver = () => {
-      // Onto the same chain the cleanup's stop goes on, so the two are ordered
-      // rather than racing. Off the chain this would be sequencing only the
-      // stop against nothing, which reads like a fix and is not one.
+      // Chained onto the same promise the cleanup's stop uses, so start and
+      // stop stay ordered instead of racing.
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
         .then(() => startPush(sessionId))
@@ -546,20 +440,15 @@ export default function Adaptive() {
         .catch(err => {
           if (killed) return
           if (err.status === 409) {
-            // Not a failure: the sidecar is up, answering, and declining --
-            // PUSH_ENABLED is off, so it refuses to be a second writer. Retrying
-            // that is a POST every 5 s for the whole lesson that can only ever
-            // get the same answer, and it made the panel alternate between two
-            // contradictory explanations. Reachable *and* not recording, which
-            // the badge and the copy both distinguish.
+            // Not a failure: the sidecar is up but PUSH_ENABLED is off, so it
+            // declines to be a second writer. Don't retry -- it can only ever
+            // answer the same way.
             setPush(p => ({ ...(p || {}), running: false, reachable: true, enabled: false,
                             error: String(err.message || err) }))
             return
           }
-          // A sidecar that is not up is the ordinary case on a machine with no
-          // headband and no camera, not an error to shout about -- but it is
-          // recorded, so the panel can say which rather than rendering a blank
-          // tile that reads as "nothing happening".
+          // An unreachable sidecar is the ordinary case on a machine with no
+          // headband or camera running yet -- recorded so the panel can say why.
           setPush(p => ({ ...(p || {}), running: false, reachable: false, error: String(err.message || err) }))
           attempt = setTimeout(handOver, PUSH_RETRY_MS)
         })
@@ -567,20 +456,14 @@ export default function Adaptive() {
     }
     handOver()
 
-    // The student's backend token expires roughly hourly and a lesson can run
-    // longer. The sidecar holds one token for the session, so without this the
-    // pushes start 401ing partway through and the samples pile up in a bounded
-    // queue until they are dropped. Re-handing the same session id replaces the
-    // token in place and leaves the queue alone.
+    // Tokens expire roughly hourly and a lesson can run longer. Without
+    // re-handing a fresh token, pushes start 401ing and samples pile up in
+    // the bounded queue until dropped.
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event !== 'TOKEN_REFRESHED' || killed) return
-      // The token comes from the callback argument. Calling `getSession()` in
-      // here deadlocks on supabase-js v2's auth lock, which is held while this
-      // dispatches -- and a deadlock in the refresh path means the sidecar
-      // keeps an expired token and every push 401s for the rest of the lesson.
-      //
-      // On the same chain as start and stop, so a refresh landing during
-      // teardown cannot re-hand a token to a sidecar that is being stopped.
+      // Uses the token from the callback argument -- calling `getSession()`
+      // here deadlocks on supabase-js's auth lock while it dispatches.
+      // Chained with start/stop so teardown can't race a refresh.
       const token = session?.access_token
       if (!token) return
       pushHandoff.current = pushHandoff.current
@@ -589,11 +472,10 @@ export default function Adaptive() {
         .catch(() => {})
     })
 
-    // Effect cleanup does not run on a tab close or a hard refresh, which is
-    // how most lessons actually end. Without this the sidecar keeps the token
-    // and keeps recording for up to an hour after the student walked away.
-    // `pagehide` rather than `beforeunload`: it fires for the bfcache case too,
-    // and `beforeunload` is unreliable on mobile.
+    // Effect cleanup doesn't run on a tab close or hard refresh. Without this
+    // the sidecar keeps recording with the student's token for up to an hour
+    // after they leave. `pagehide` (not `beforeunload`) also fires on
+    // bfcache and is reliable on mobile.
     const onPageHide = () => { stopPushOnUnload() }
     window.addEventListener('pagehide', onPageHide)
 
@@ -602,11 +484,8 @@ export default function Adaptive() {
       clearTimeout(attempt)
       window.removeEventListener('pagehide', onPageHide)
       sub?.subscription?.unsubscribe()
-      // Sequenced behind whatever start is in flight, not fired alongside it.
-      // Under StrictMode the effect is torn down and re-run immediately, and a
-      // bare stopPush() could land *after* the remount's startPush -- leaving
-      // the sidecar stopped while the panel showed "RECORDING", which is the
-      // precise lie this whole change exists to prevent.
+      // Chained behind any start in flight -- under StrictMode's teardown/remount,
+      // a bare stopPush() could land after the remount's startPush.
       pushHandoff.current = pushHandoff.current
         .catch(() => {})
         .then(() => stopPush())
@@ -615,9 +494,8 @@ export default function Adaptive() {
     }
   }, [sessionId, headband.pushMode])
 
-  // Delivery counts, for the panel and for the recording chip. Slower than the
-  // 3 s status poll: this is a local request but it is only ever read by a
-  // human glancing at it.
+  // Delivery counts for the panel and recording chip. Polled slower than the
+  // status effect since only a human glances at it.
   useEffect(() => {
     if (!sessionId || !headband.pushMode) return
     let killed = false
@@ -633,34 +511,22 @@ export default function Adaptive() {
           .filter(([key]) => (now[key] || 0) > (prev[key] || 0))
           .map(([, label]) => label) : [])
         lastRecorded.current = now
-        // A sidecar that went away after a successful handover: the initial
-        // retry loop has long since stopped, so without this the session never
-        // recovers -- and a restarted sidecar has no session and no token, so
-        // it will not resume on its own either. `enabled: false` is excluded:
-        // that one is configuration, and re-handing would just 409 forever.
+        // Recovers a sidecar that went away after handover -- the initial
+        // retry has long since stopped, and a restarted sidecar has no token.
+        // `enabled: false` is excluded: that's config, re-handing would just 409.
         if (d.enabled !== false && !d.running) recover()
-        // `enabled: false` means the sidecar is reachable and deliberately not
-        // pushing -- PUSH_ENABLED is off while this backend is in push mode, so
-        // nobody is writing this session at all. Merging a flat
-        // `reachable: true` over the top rendered that as a healthy session,
-        // and also erased the error from a failed handover. Reachability is
-        // about the sidecar; running is about whether anything is being
-        // recorded, and they are not the same claim.
+        // Reachability and running are separate claims -- collapsing them
+        // would show a disabled sidecar as healthy.
         setPush(p => ({ ...(p || {}), ...d, reachable: true, running: !!d.enabled && !!d.running }))
       })
       .catch(() => {
         if (killed) return
         setPush(p => ({ ...(p || {}), reachable: false, running: false }))
-        // A chip claiming a recording that is not happening is worse than no
-        // chip (RecordingIndicator.jsx) -- an unreachable sidecar is recording
-        // nothing, whatever `recording` last said while it was still up.
+        // A chip claiming a recording that isn't happening is worse than none.
         setRecording([])
-        // Cleared alongside it: the next successful poll must treat its count
-        // as a fresh baseline rather than diffing against one from before the
-        // gap, for the same reason the first poll after mount claims nothing.
+        // Next successful poll treats this as a fresh baseline, same as the
+        // first poll after mount.
         lastRecorded.current = null
-        // Unreachable now but reachable before -- the sidecar was restarted or
-        // the lesson outlived it. Same recovery.
         recover()
       })
     tick()
@@ -671,18 +537,13 @@ export default function Adaptive() {
   // Poll EEG debug snapshot (dev only)
   useEffect(() => {
     if (!EEG_DEBUG) return
-    // Wait for the mode. `pushMode` is absent until the health poll lands, and
-    // guessing "not push" sends the first poll to the backend -- which under
-    // push answers `available: null`, the one value that means "not probed" and
-    // reads as an outage. Same guess, same wrong sentence, as the first paint
-    // of the connect button.
+    // Waits for pushMode to be known -- guessing "not push" too early would
+    // misread the push response as an outage.
     if (headband.pushMode === undefined) return
     const poll = async () => {
       try {
-        // Under push the backend answers with the mode and nothing else --
-        // it has no route to a sidecar on a student's laptop. The page does,
-        // so the panel is fed from there in the same shape rather than being
-        // told to go read a log file.
+        // Under push the backend has no route to the sidecar, so the page
+        // reads it directly and feeds the panel the same shape.
         const d = headband.pushMode
           ? await sidecarDebug(stationId || 'default')
           : await apiFetch(`/api/eeg/debug${stationId ? `?device_id=${encodeURIComponent(stationId)}` : ''}`)
@@ -694,10 +555,8 @@ export default function Adaptive() {
     return () => clearInterval(debugTimer.current)
   }, [stationId, headband.pushMode])
 
-  // Old browser copies are cleared rather than left to rot. They are no longer
-  // read, but a stale `accuracyStats_<uid>` sitting in storage is the next
-  // reader's false lead -- and on a shared computer it is one child's figures
-  // outliving their session for no purpose at all.
+  // Clears the old localStorage cache, which is no longer read but would
+  // otherwise linger as a stale, misleading value on a shared computer.
   useEffect(() => {
     if (!user?.id) return
     localStorage.removeItem(`accuracyStats_${user.id}`)
@@ -705,10 +564,9 @@ export default function Adaptive() {
 
   useEffect(() => { localStorage.setItem('adaptive_mode', mode) }, [mode])
 
-  // Stop one device and then release the shared push client if -- and only
-  // if -- nothing else is still streaming through it. The device list that
-  // decision is made from is also what updates the camera's own state, so the
-  // card cannot claim to be recording into a client that has been torn down.
+  // Stops one device, then releases the shared push client only if nothing
+  // else is still streaming. The returned device list also updates camera
+  // state, so the card can't claim to record after the client is torn down.
   const endPushDevice = async (deviceId) => {
     await deviceStop(deviceId).catch(() => {})
     const { devices: list } = await releasePushIfIdle()
@@ -723,23 +581,19 @@ export default function Adaptive() {
   }
 
   const toggleCamera = async () => {
-    // Push only. The button is disabled otherwise, and this returns rather than
-    // trusting that -- the two guards protect different things: the disabled
-    // attribute is the explanation to the student, this is the correctness.
+    // Push only. Checked here too, not just via the disabled button -- the
+    // button explains to the student, this guards correctness.
     if (!camera.id || !headband.pushMode || camera.busy) return
     setCamera(c => ({ ...c, busy: true }))
     try {
       if (camera.running) {
-        // Via the same helper as the headband: the camera's off-path never
-        // released the push client, so turning it off with no headband running
-        // left the sidecar holding the student's access token.
+        // Uses the same helper as the headband, or turning off the camera
+        // alone would leave the sidecar holding the student's token.
         await endPushDevice(camera.id)
       } else {
-        // No session and no handover here. The camera comes on; whether
-        // anything is *stored* is decided by whether a lesson is running, and
-        // the sidecar simply has no consumer attached until then -- so frames
-        // are captured and dropped rather than queued against a session the
-        // student never started.
+        // Turning the camera on doesn't start a session -- frames are
+        // captured and dropped until a lesson actually starts consuming
+        // them.
         await deviceStart(camera.id)
         setCamera(c => ({ ...c, running: true }))
       }
@@ -755,21 +609,10 @@ export default function Adaptive() {
 
   const toggleHeadband = async () => {
     if (!stationId) return
-    // Guarded separately from the main try below, which starts several steps
-    // later. `getOrCreateSession` POSTs to /api/sessions/start, and a failure
-    // there used to reject the whole handler before any phase was set: the
-    // label stayed "Connect Headband", no alert fired, and the only trace was
-    // an unhandled rejection in the console. A click that does nothing at all
-    // is the worst version of this to debug, because it looks like a dead
-    // button rather than a failing request.
-    // Push pairs against a device, not a session -- the sidecar's scan and
-    // connect take only a device_id -- so nothing here needs one. Creating one
-    // anyway is what filled History with rows for button presses that recorded
-    // nothing: four of five on one afternoon, each a failed pairing attempt.
-    //
-    // Pull still needs it: its reservation is scoped by session_id (#88), and
-    // dropping that would trade this problem for a worse one. Sessions left
-    // behind by a failed pair there are discarded at close instead.
+    // Separate from the try below so a failed session creation still resets
+    // the button state and shows an alert, instead of leaving it looking
+    // dead. Push pairs against a device, not a session; pull's reservation
+    // is scoped by session_id, so it needs one here.
     let activeSessionId = sessionId
     try {
       if (!headband.pushMode) activeSessionId = await getOrCreateSession()
@@ -781,11 +624,9 @@ export default function Adaptive() {
       })
       return
     }
-    // Use a local var, not the recorder state var directly: setRecorder()
-    // below doesn't take effect until the next render, so a read of
-    // `recorder` later in this same call would still see the pre-update
-    // value (null, right after a disconnect) instead of what was just
-    // created.
+    // Uses a local var, not the recorder state directly -- `setRecorder()`
+    // won't take effect until the next render, so reading state later in
+    // this call would still see the old value.
     let rec = recorder
     if (!rec) {
       rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
@@ -793,34 +634,24 @@ export default function Adaptive() {
       window.AL_currentSessionId = activeSessionId
     }
 
-    // Who drives the headband depends on the ingest mode and nothing else.
+    // Under pull the backend proxies scan/connect via /api/eeg/muse/*; under
+    // push those refuse (409) and the page talks to the sidecar on loopback
+    // directly, admitted by `require_local_controller`.
     //
-    // pull: the backend polls this sidecar and proxies scan/connect, so every
-    //       step goes through /api/eeg/muse/*.
-    // push: the backend is remote by definition -- that is why push exists --
-    //       so those answer 409 (`_refuse_under_push`) and the page talks to
-    //       the sidecar on loopback itself. `require_local_controller` is what
-    //       admits the bundled learner token there, and only when PUSH_ENABLED
-    //       is set; under pull the same calls would 401, correctly.
-    //
-    // Defined here rather than as a component-level memo so the pull branch can
-    // close over `rec`, which is created a few lines above and deliberately not
-    // held in state.
+    // Defined here, not as a component-level memo, so the pull branch can
+    // close over `rec`, created just above and deliberately not held in state.
     const hw = headband.pushMode ? {
-      // Brings the hardware up and stops there. Delivery is started by the
-      // `sessionId` effect below, which fires when `fetchQuestion` creates a
-      // session -- so samples begin when the student begins, not when they
-      // plug something in.
+      // Brings the hardware up only -- delivery starts separately via the
+      // `sessionId` effect once a session exists, not when the headband
+      // connects.
       begin:      async () => { await deviceStart(stationId)
                                 return { ok: true, running: true } },
       disconnect: () => museDisconnect(stationId),
       scan:       () => museRefresh(stationId),
       connect:    (name) => museConnect(name, stationId),
       status:     () => museState(stationId),
-      // Not `stopPush()` outright. `/api/v1/push/stop` is global -- one
-      // client for the whole sidecar -- so disconnecting the headband used to
-      // tear down a running camera's delivery too, while its card went on
-      // saying RECORDING because nothing told it.
+      // Not `stopPush()` outright: that's global to the sidecar and would
+      // also tear down a running camera's delivery.
       end:        () => endPushDevice(stationId),
     } : {
       begin:      () => rec.start(),
@@ -838,25 +669,16 @@ export default function Adaptive() {
     if (headband.connected) {
       clearTimeout(phaseTimer.current)
       await hw.end()
-      // Drop the recorder rather than leaving it cached: it closed over
-      // deviceId at creation time, so reusing it after the user picks a
-      // different station on the picker would start the next poller on the
-      // stale station while the BLE pairing below runs against the new
-      // one -- silently misattributing whichever station's data actually
-      // gets recorded. Recreating it on the next connect binds it to
-      // whatever stationId is selected then.
+      // Drop rather than reuse: it closed over deviceId at creation, so
+      // reusing it after picking a different station would misattribute data.
       setRecorder(null)
-      // Set alongside the recorder, so it goes when the recorder does.
       delete window.AL_currentSessionId
-      // `battery: null` with the rest: a charge percentage describes the
-      // headband that just went away, and it is the one number here a student
-      // acts on. The bridge clears its own copy on disconnect for the same
-      // reason; this is the half that matters if the page never re-polls.
+      // Clear battery too -- it describes the headband that just left, and
+      // is the one number here a student acts on.
       setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null, battery: null }))
       return
     }
 
-    // Safety: if something goes wrong and we never reach catch, reset after 30s
     clearTimeout(phaseTimer.current)
     phaseTimer.current = setTimeout(() => {
       setHeadband(s => s.phase !== 'idle' && s.phase !== 'connected'
@@ -865,23 +687,20 @@ export default function Adaptive() {
     }, 30000)
 
     try {
-      // 1. Start the backend EEG poller
       setHeadband(s => ({ ...s, phase: 'starting' }))
       const res = await hw.begin(activeSessionId)
       if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
 
-      // 2. Disconnect any previous session so the headband isn't stuck in streaming state
-      //    (causes BadStateError on the next connect if skipped)
+      // Disconnect any previous session first, or the headband is left in a
+      // streaming state that throws BadStateError on the next connect.
       await hw.disconnect().catch(() => {})
       await new Promise(r => setTimeout(r, 1500))
 
-      // 3. Tell the native bridge to scan for nearby headbands
       setHeadband(s => ({ ...s, phase: 'scanning' }))
-      // session_id scopes the station reservation this scan claims (#88), so
-      // closing a *different* session of the same student cannot release it.
+      // session_id scopes the station reservation this scan claims, so closing
+      // a different session of the same student can't release it.
       await hw.scan(activeSessionId)
 
-      // 4. Poll up to 12 s for at least one device to appear
       let devices = []
       let bluetoothEnabled = true
       for (let i = 0; i < 12; i++) {
@@ -889,9 +708,8 @@ export default function Adaptive() {
         const st = await hw.status()
         devices = st?.ingestion?.muse_devices || []
         if (devices.length > 0) break
-        // Bridge reports the PC's Bluetooth radio state directly (see
-        // MuseBridgeService::bluetooth_enabled) — stop waiting immediately
-        // instead of burning the full 12 s when the radio itself is off.
+        // Stops waiting immediately if the bridge reports Bluetooth itself
+        // is off, instead of burning the full 12s timeout.
         if (st?.ingestion?.bluetooth_enabled === false) {
           bluetoothEnabled = false
           break
@@ -900,9 +718,8 @@ export default function Adaptive() {
 
       if (devices.length === 0) {
         setHeadband(s => ({ ...s, phase: 'idle' }))
-        // A longer dwell than the default, and the `Toaster` in App.jsx has a
-        // close button: this one is instructions a student has to act on, not
-        // a notification they only have to read.
+        // Longer dwell than the default toast -- this is an instruction the
+        // student has to act on, not just read.
         toast.error(
           bluetoothEnabled === false
             ? 'Bluetooth is turned off on this PC.'
@@ -916,14 +733,12 @@ export default function Adaptive() {
         return
       }
 
-      // 5. Connect to first discovered device (usually there's only one)
       const target = devices[0]
       setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
       await hw.connect(target, activeSessionId)
 
-      // 6. Poll for actual BLE connection — bridge connects asynchronously.
-      //    If we get BadStateError the headband is still streaming from a prior session;
-      //    the user must power-cycle the headband in that case.
+      // Bridge connects asynchronously; poll for it. A BadStateError here means
+      // the headband is still streaming from a prior session and needs a power-cycle.
       let muse_ok = false
       for (let i = 0; i < 10; i++) {
         await new Promise(r => setTimeout(r, 1000))
@@ -954,13 +769,9 @@ export default function Adaptive() {
     }
   }
 
-  // `sendAccuracyToBackend` used to run here, pushing this browser's tallies
-  // into `user_math_performance` before every question. It is gone, and it had
-  // to go rather than merely stop being called: the backend now owns that table
-  // and derives the topic from the question row, so a client upsert would
-  // overwrite real counts with whatever one browser happened to remember --
-  // and `Number(vals.correct) || null` turned every genuine zero into a null on
-  // the way, which is why the table sat empty while the panel showed figures.
+  // The backend owns `user_math_performance` and derives the topic itself --
+  // this page must not write to it directly, or a client update could
+  // overwrite real counts.
   const fetchQuestion = async () => {
     setPhase('loading'); setError(false)
     try {
@@ -987,19 +798,10 @@ export default function Adaptive() {
     setSessionCount(n => n + 1)
     setPhase('result')
 
-    // The answer goes to the backend. This page never did that -- it had no
-    // `/api/sessions/{id}/answer` call at all -- so every question answered
-    // here was counted in this browser and nowhere else, and `session_answers`,
-    // `user_stats` and every report built on them stayed at zero however long a
-    // student practised. `data.id` is the stored question's id, which the
-    // generator now returns.
-    // The POST, the missing-id guard and the failure toast all live in
-    // `lib/session.js` now: `Practice.jsx` makes the same call against the same
-    // endpoint and had drifted into having no `catch` at all, which is the
-    // second time these two pages have disagreed about whether a failure is
-    // worth mentioning -- `endSession` was extracted from the same pair for the
-    // same reason. Correctness stays here, because the two pages hold questions
-    // in different shapes and compare them differently.
+    // The POST, missing-id guard, and failure toast live in `lib/session.js`,
+    // shared with Practice.jsx, so both pages report failures the same way.
+    // Correctness checking stays here since the two pages hold questions
+    // differently.
     const res = await recordAnswer({
       sessionId: sessionIdRef.current,
       questionId: data?.id,
@@ -1007,11 +809,8 @@ export default function Adaptive() {
       correct: isCorrect,
     })
     if (res) {
-      // The response names the topic the backend attributed this to, so there
-      // is nothing left to go and ask. A local *guess* at the topic is what had
-      // to be avoided -- disagreeing copies of this number is the whole bug
-      // that moved these figures out of localStorage -- and this is not one:
-      // the name comes from the question row, the same place the write did.
+      // Uses the topic the backend attributed the answer to -- not a local
+      // guess, which is what caused these figures to disagree before.
       applyAttempt(res?.topic, isCorrect)
     }
   }
@@ -1024,19 +823,10 @@ export default function Adaptive() {
   const totalAcc = accuracyStats.total.attempts > 0
     ? Math.round((accuracyStats.total.correct / accuracyStats.total.attempts) * 100) : null
 
-  // What this headband has actually delivered.
-  //
-  // `headband.samples` is the *backend poller's* count, and under push there is
-  // no backend poller -- so the card read "0 samples sent" for a whole session
-  // while the sidecar's own status said 178 cognitive and 134 face rows
-  // delivered and the database agreed with the sidecar. Third instance of the
-  // same mistake on this page, after `available` and `connected`: a backend
-  // field standing in for something the backend cannot see in this deployment.
-  //
-  // cognitive + heart, because both come off the headband and this is the
-  // headband's card; the camera has its own. Read from the same `push.recorded`
-  // the RECORDING chip is derived from, so the badge and the number cannot
-  // disagree about whether anything is being written.
+  // `headband.samples` is the backend poller's count, which doesn't exist
+  // under push -- so under push this reads from `push.recorded` instead
+  // (cognitive + heart, since both come off the headband; camera has its own
+  // card). Same source the RECORDING chip uses, so the two can't disagree.
   const headbandSamples = headband.pushMode
     ? ((push?.recorded?.cognitive || 0) + (push?.recorded?.heart || 0))
     : headband.samples
@@ -1071,16 +861,9 @@ export default function Adaptive() {
             {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
             {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">on your device</span>}
-            {/* Three states, not two. `push === null` means we have not asked
-                yet and renders nothing; reachable-and-running is the only one
-                that may claim recording. Collapsing "not asked" into "not
-                recording" is how a surface ends up reporting an absence in data
-                that simply had not loaded. */}
-            {/* `running: false` counts. A restarted sidecar answers
-                `enabled: true, running: false` -- reachable, configured, and
-                recording nothing -- which fell through both earlier conditions
-                and left the panel showing a stale reading count and no warning
-                at all. Any known not-recording state is amber. */}
+            {/* Three states: push === null renders nothing (not asked yet), a
+                known not-recording state is amber, and only reachable +
+                running shows RECORDING. */}
             {headband.pushMode && push && push.running !== true &&
              (push.reachable === false || push.enabled === false || push.running === false) && (
               <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">not recording</span>
@@ -1102,10 +885,9 @@ export default function Adaptive() {
                       ? 'The app on this computer is running but is not set up to record (PUSH_ENABLED is off). Nothing is being saved for this session.'
                     : push && push.reachable === false
                       ? 'The app on this computer is not running, so nothing is being recorded. Start it and this will change on its own.'
-                      // Counted from what the backend said it *stored*, not from
-                      // what was sent -- it drops samples for a sensor that was
-                      // declined, so a sent count would read as a healthy
-                      // session that recorded nothing.
+                      // Counts what the backend stored, not what was sent --
+                      // a sent count would look healthy even for a declined
+                      // sensor.
                       : push?.recorded
                         ? `${Object.values(push.recorded).reduce((a, b) => a + b, 0)} readings recorded from this computer.`
                         : 'Turn on your Muse S headband, then click Connect. It pairs through the app on this computer.')
@@ -1115,14 +897,11 @@ export default function Adaptive() {
             )}
           </p>
         </div>
-        {/* Station picker: only shown when the sidecar has more than one registered
-            *headband* (e.g. several rigs in the same room). Cameras are filtered
-            out where `stations` is set, so a deployment with one headband and a
-            camera auto-selects the headband and never sees this. */}
+        {/* Shown only when more than one headband is registered; cameras are
+            already filtered out of `stations`. */}
         {stations.length > 1 && !headband.connected && (
-          // Its only label was the disabled placeholder option, which is the
-          // selected *value* rather than a name for the field -- several
-          // screen readers announce nothing for it.
+          // aria-label needed: the placeholder option alone isn't announced
+          // by some screen readers.
           <select
             aria-label="Headband"
             value={stationId || ''}
@@ -1137,31 +916,16 @@ export default function Adaptive() {
             ))}
           </select>
         )}
-        {/* Not gated on sessionId: toggleHeadband creates the session lazily via
-            getOrCreateSession() on click. #27 moved session creation off page-load
-            (to stop double-registering history) but left a !sessionId guard here, so
-            the button that creates the session was disabled until one existed. */}
-        {/* `available` is the backend's probe of the sidecar, and under push it
-            is null on purpose -- the backend has no route to a student's laptop,
-            so "not probed here" stays distinct from "probed and down". `!null`
-            is true, so gating on it alone disabled this button in exactly the
-            mode where the page is the only thing that *can* pair. Third place
-            this has bitten; the discovery effect and the debug panel were the
-            other two. `stationId` still gates, and under push it is only set
-            once the sidecar answered -- which is the reachability check that
-            actually applies there. */}
-        {/* Charge, beside the button that acts on it. Rendered only when there
-            is a reading -- no "--%" placeholder, because the gap between
-            connecting and the first BATTERY packet is normal and a permanent
-            empty slot would read as a broken sensor rather than as a headband
-            that has not said yet. `!= null` catches undefined too, and lets 0
-            through: a flat battery is exactly what this is for. */}
+        {/* Not gated on sessionId -- toggleHeadband creates one lazily.
+            `available` is null under push, so gating on falsiness would
+            disable the button exactly when this page is the only way to
+            pair. */}
+        {/* Rendered only when there's a reading -- no placeholder, since the
+            gap before the first BATTERY packet is normal, not broken.
+            `!= null` lets 0% through since that's a real reading. */}
         {headband.connected && headband.battery != null && (
-          // `aria-label` as well as `title`. A title tooltip is not reliably
-          // announced by screen readers and never appears on touch, so the one
-          // number a student is asked to act on had no accessible name at all.
-          // Interpolated so it reads as a value rather than a bare percentage
-          // next to an icon.
+          // aria-label alongside title -- a title tooltip isn't reliably
+          // read by screen readers or shown on touch.
           <span title="Headband charge"
             aria-label={`Headband charge ${headband.battery}%`}
             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold ${
@@ -1185,34 +949,16 @@ export default function Adaptive() {
         </button>
       </motion.div>
 
-      {/* Camera. Rendered only when one is registered, because a student
-          whose deployment has no camera should not be told about a channel that
-          does not exist for them -- the same rule the signal tiles follow.
-
-          Under pull it renders disabled with the reason. That is deliberate
-          rather than hiding it: `face_signals` has exactly one writer,
-          `/api/signals/face`, which is the push endpoint, so a camera started
-          under pull would capture and store nothing. A control that silently
-          did nothing would be worse than one that says why it cannot. */}
+      {/* Shown only when a camera is registered. Disabled, not hidden, under
+          pull -- `face_signals` has only one writer (the push endpoint), so
+          a camera under pull would capture nothing storable. */}
       {camera.id && (
         <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
           className="mb-6 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-4 flex items-center gap-4 shadow-sm">
           <div className="w-11 h-11 rounded-xl bg-fuchsia-600 grid place-items-center text-white text-lg">📷</div>
           <div className="flex-1 min-w-0">
-            {/* Three states, not two. The camera is deliberately not tied to
-                the session -- it comes on when the student says so, and whether
-                anything is *stored* depends on a lesson running -- so "the
-                camera is on" and "you are being recorded" are different claims
-                and only the second earns the red dot.
-
-                Driven off `camera.running` alone, this said RECORDING after
-                `finishSession` had cleared the session, while the sidecar was
-                capturing frames and dropping them. Clearing `camera.running`
-                there instead would have been the opposite lie: the camera
-                really is still on, and a student looking at the lens deserves
-                to be told so. Same rule as RecordingIndicator -- a chip
-                claiming a recording that is not happening is worse than no
-                chip -- applied to the surface that outlives the session. */}
+            {/* Camera being on and a lesson recording are different claims --
+                only camera.running && sessionId earns the RECORDING dot. */}
             <p className="font-bold text-sm flex items-center gap-2">
               Camera
               {camera.running && sessionId
@@ -1243,12 +989,9 @@ export default function Adaptive() {
         </motion.div>
       )}
 
-      {/* Time's up, asked rather than enforced.
-          A banner and not a modal: it must never sit on top of a question a
-          student is part way through, and "keep going" has to be the cheapest
-          thing in the room -- the setting is a plan, not a limit anyone asked
-          to have imposed on them. Dismissing it does not clear the preference,
-          only this sitting's reminder. */}
+      {/* Asked, not enforced -- a banner, not a modal, so it never blocks an
+          in-progress question. Dismissing clears only this reminder, not the
+          preference. */}
       {timeUp && (
         <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
           className="mb-6 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
@@ -1271,12 +1014,8 @@ export default function Adaptive() {
         <div className="lg:col-span-2 space-y-4">
           {sessionCount > 0 && (
             <div className="flex gap-3 flex-wrap items-center">
-              {/* Renders nothing when nothing is recording, which is the
-                  default state for a student with no headband and no camera --
-                  it must stay visually silent rather than sitting there empty.
-                  Under pull ingestion the poller is the writer and the sidecar
-                  reports no counts, so the headband's own connected state is
-                  the honest source there. */}
+              {/* Under pull the sidecar reports no counts (the poller writes
+                  instead), so headband.connected is used there. */}
               <RecordingIndicator channels={
                 headband.pushMode ? recording
                   : headband.connected ? ['Headband'] : []
@@ -1520,13 +1259,10 @@ export default function Adaptive() {
             })}
           </div>
 
-          {/* "Reset stats" is gone. It cleared a browser key, which was
-              harmless while these numbers lived in that browser; against
-              `user_math_performance` the same button would delete a student's
-              academic record from a one-click control with no confirmation --
-              and that record is what the adaptive engine reads to pick the next
-              question. Erasure is a parent-only, confirmed action elsewhere in
-              this product, and this number belongs on that side of the line. */}
+          {/* No reset button here -- deleting `user_math_performance` would
+              be a one-click, unconfirmed erasure of academic data the
+              adaptive engine relies on. Erasure is a parent-only, confirmed
+              action elsewhere. */}
           {accuracyState === 'failed' && (
             <p className="mt-5 text-xs text-amber-500">
               Could not load your topic history just now — these are not your real figures.
@@ -1547,23 +1283,10 @@ export default function Adaptive() {
 
           {debugOpen && (
             <div className="p-4 bg-gray-950 text-green-400 space-y-3">
-              {/* `available: null` means "not probed in this deployment", and
-                  `!null` is true -- so branching on falsiness alone put the
-                  outage sentence here under push ingestion, one layer down from
-                  where it was last fixed. The backend change buys nothing until
-                  the consumer reads the field that says why. */}
-              {/* The push branch fires only when the sidecar did not answer. It
-                  used to fire on the mode alone, which was right while the
-                  backend was the only source -- it cannot reach a sidecar on a
-                  student's laptop, so the panel had nothing. The page can, and
-                  now feeds this from `sidecarDebug`, so the mode by itself is
-                  no longer a reason to render an apology.
-
-                  `=== false`, not `!`: `available` is a real boolean only when
-                  it came from `sidecarDebug`. The backend's own push payload
-                  reports it null -- "not probed here" -- and reading that as an
-                  outage is the mistake this whole panel keeps making. The poll
-                  above no longer sends one, and this holds if it ever does. */}
+              {/* Fires only when the sidecar itself didn't answer
+                  (`=== false`), not on mode alone -- the backend's own push
+                  payload reports `available: null`, which would misread as
+                  an outage if treated as falsy. */}
               {eegDebug?.ingest_mode === 'push' && eegDebug?.available === false ? (
                 <p className="text-yellow-300">INGEST_MODE=push — the sidecar on this device is not answering, so there is nothing to show. Start it and this panel fills in on its own.</p>
               ) : !eegDebug || !eegDebug.available ? (
@@ -1576,17 +1299,12 @@ export default function Adaptive() {
                 const bands   = snap?.bands      || {}
                 const ing     = muse?.ingestion  || snap?.ingestion || {}
                 const museSvcRunning = muse?.running
-                // Scores are only meaningful when the electrodes are actually
-                // reading the scalp. "poor" means libMuse reports the fit or the
-                // data itself as bad -- focus/calm are still computed from that
-                // garbage and look like confident numbers (a headband with two
-                // dead electrodes happily reports "84.8% focus"), so blank them
-                // out the same way a total signal loss is blanked.
-                // Blank the scores only when we know they're untrustworthy:
-                // no data at all, or the headband itself reporting bad
-                // electrodes. A "poor" from the legacy calm-based heuristic
-                // (older bridge with no contact data) reports poor for any
-                // focused student, so blanking on that would hide every score.
+                // Scores are meaningless with bad electrode contact -- libMuse
+                // still computes confident-looking numbers from garbage data.
+                // Blanked only when contact is known bad or there's no data;
+                // the legacy "poor" heuristic (no contact info) reports poor
+                // for any focused student, so blanking on that would hide
+                // every score.
                 const untrusted = feat.signal_quality === 'no_signal' ||
                   (feat.signal_quality === 'poor' && feat.quality_basis === 'contact')
 
@@ -1650,12 +1368,10 @@ export default function Adaptive() {
                         <p className="text-gray-500 mb-1">Learner State</p>
                         <p className={stateColor[state.label] || 'text-gray-400'}>{state.label || '—'}</p>
                       </div>
-                      {/* No "Next Question" tile. The sidecar used to emit a
-                          question_policy here and it drove nothing -- difficulty
-                          is chosen in the backend from correctness, topic history
-                          and grade. Showing a difficulty next to live EEG implied
-                          the headband was picking questions, which is the reason
-                          it was deleted rather than merged. */}
+                      {/* No difficulty tile here -- difficulty is chosen by
+                          the backend from correctness, topic history, and
+                          grade, not by the headband. Showing one next to live
+                          EEG would imply otherwise. */}
                     </div>
 
                     {/* Row 2 — scores */}

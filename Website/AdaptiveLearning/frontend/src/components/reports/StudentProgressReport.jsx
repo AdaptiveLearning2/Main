@@ -5,10 +5,8 @@ import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
-// Persisted so the choice survives navigation between students -- switching
-// facial reporting off and having it silently come back on the next page is
-// the kind of thing that makes a privacy control untrustworthy. Shared with the
-// teacher student list, which reads the same facial signals.
+// Persisted so the choice survives navigation between students. Shared with
+// the teacher student list, which reads the same facial signals.
 
 const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
@@ -35,13 +33,10 @@ const TOPIC_ICONS = { ordering:'🔢', rationals:'➗', expressions:'📐', alge
  */
 /**
  * `showSignals` is the teacher's *"Hide sensor data"* view preference, passed
- * in rather than read here: this component is rendered by a parent surface too,
- * and that surface has no such switch. Defaulting to true means a caller that
- * knows nothing about the filter renders everything, which is the honest
- * default for a control that only declutters.
- *
- * It hides rendering only. What may be *read* is decided by stored consent,
- * server-side -- see `lib/viewPrefs.js` for why that split is deliberate.
+ * in rather than read here since the parent surface has no such switch.
+ * Defaults to true so a caller that knows nothing about the filter renders
+ * everything. It hides rendering only -- what may be read is decided by
+ * stored consent server-side; see `lib/viewPrefs.js`.
  */
 export default function StudentProgressReport({
   studentId,
@@ -64,23 +59,18 @@ export default function StudentProgressReport({
   const [loadError, setLoadError]       = useState(null)
   const [strategies, setStrategies]     = useState(null)
   const [strategySource, setStrategySource]   = useState(null)
-  // Whether the aggregate the advice was derived from actually loaded.
-  // The endpoint answers either way -- the rules read a null average as no
-  // signal to act on and fall through to their generic branches -- so
-  // without this the panel presents a generic list as one built from the
-  // child's week. Tracked beside `source` because it qualifies the result
-  // the same way.
+  // Whether the aggregate the advice was derived from actually loaded. Without
+  // it the panel would present a generic list as if built from the child's
+  // week, since a null average just falls through to the generic rules.
   const [strategySignals, setStrategySignals] = useState(null)
   const [strategyError, setStrategyError]     = useState(null)
   const [strategyLoading, setStrategyLoading] = useState(false)
-  // Bumped by both a new generation and the facial toggle, so a response that
-  // lands after either cannot overwrite what replaced it. Same guard as
-  // Sessions.jsx's roster read -- see hooks/useLatestRequest.
+  // Guards against a stale generation response overwriting a newer one.
+  // Same helper as Sessions.jsx's roster read -- see hooks/useLatestRequest.
   const beginStrategyRequest = useLatestRequest()
 
-  // Academic stats and the name. Deliberately not re-run when the facial
-  // toggle flips: none of this depends on it, and re-fetching three endpoints
-  // to change one query parameter is the regression #36 shipped.
+  // Academic stats and the name. Not re-run when the facial toggle flips --
+  // none of this depends on it.
   useEffect(() => {
     Promise.all([
       apiFetch(`/api/stats/student/${studentId}`),
@@ -93,29 +83,25 @@ export default function StudentProgressReport({
       setLoadError(null)
       setLoading(false)
     }).catch(err => {
-      // A failed core load (a 403 for a student outside the teacher's classes,
-      // offline, or a server error) must not fall through to the zeros-filled
-      // report below: that reads as a real-but-inactive student and, on the
-      // teacher route, hides that the id simply isn't theirs to view. Surface it.
+      // A failed core load must not fall through to the zeros-filled report --
+      // that would read as a real-but-inactive student and, on the teacher
+      // route, hide that the id simply isn't theirs to view.
       setLoadError(err.message || 'Could not load this report')
       setLoading(false)
     })
 
-    // Optional independent name source (the parent's children list). Kept apart
-    // from the weekly-report below so the heading still shows the real name when
-    // that heavier request fails.
+    // Optional independent name source (the parent's children list), kept
+    // apart from the weekly report so the heading survives that request failing.
     if (nameFetch) {
       nameFetch().then(n => { if (n) setName(n) }).catch(() => {})
     }
   }, [studentId, nameFetch])
 
-  // The signal report, which is the only thing the facial toggle changes.
-  // Fetched separately from the Promise.all above: this is the heaviest query,
-  // and a failure here shouldn't blank the page when the stats loaded fine.
+  // The signal report, fetched separately from the Promise.all above -- it's
+  // the heaviest query, and a failure here shouldn't blank the rest of the page.
   //
-  // nameFetch is in the dependency list because the body reads it. Callers
-  // memoise it against the same id, so it changes only when studentId does --
-  // it does not cause an extra fetch on toggle.
+  // nameFetch is a dependency because the body reads it, but callers memoise
+  // it per id, so it doesn't cause an extra fetch on toggle.
   useEffect(() => {
     let cancelled = false
     apiFetch(`/api/students/${studentId}/weekly-report`)
@@ -123,21 +109,19 @@ export default function StudentProgressReport({
         if (cancelled) return
         setSignalReport(r)
         setSignalError(null)
-        // With no independent nameFetch (the teacher case), the report is the
-        // name source; seed the heading from it once it arrives.
+        // With no independent nameFetch, the report is the name source --
+        // seed the heading from it once it arrives.
         if (!nameFetch && r?.student_name) setName(r.student_name)
       })
-      // Tracked separately from "no report": a failed request renders
-      // identically to a quiet week otherwise, and telling a viewer the student
-      // had no activity when the request just failed is worse than saying
-      // nothing. Same distinction #16 established for ClassDetail.
+      // Tracked separately from "no report" -- otherwise a failed request
+      // renders identically to a genuinely quiet week.
       .catch(err => {
         if (cancelled) return
         setSignalReport(null)
         setSignalError(err.message || 'Could not load signal report')
       })
-    // A stale resolve can still land after a navigation to another student,
-    // which would show one student's report under another's name.
+    // A stale resolve could otherwise land after navigating to another
+    // student and show one student's report under another's name.
     return () => { cancelled = true }
   }, [studentId, nameFetch])
 
@@ -148,12 +132,8 @@ export default function StudentProgressReport({
     setStrategyLoading(true)
     setStrategyError(null)
     try {
-      // A body is required even though every field of it has a default:
-      // FastAPI treats a Pydantic-model parameter with no default of its own
-      // as a required body, so a bodyless POST 422s regardless of what the
-      // fields inside it default to. include_face used to ride along here;
-      // now that consent (not a viewer-side flag) decides what is read, an
-      // empty object is the honest request -- "use the server's defaults".
+      // A body is required even though every field defaults -- FastAPI 422s a
+      // bodyless POST regardless. An empty object means "use server defaults".
       const res = await apiFetch(`/api/students/${studentId}/learning-strategies`, {
         method: 'POST',
         body: {},
@@ -161,8 +141,8 @@ export default function StudentProgressReport({
       if (!isCurrent()) return
       setStrategies(res.strategies || [])
       setStrategySource(res.source || null)
-      // Absent on payloads predating the field, which came from a working
-      // read by definition -- null leaves the panel's default claim intact.
+      // Absent on payloads predating the field -- null leaves the panel's
+      // default claim intact.
       setStrategySignals(res.basis?.signals_retrieved ?? null)
     } catch (err) {
       if (!isCurrent()) return
@@ -171,8 +151,8 @@ export default function StudentProgressReport({
       setStrategySignals(null)
       setStrategyError(err.message || 'Could not generate strategies right now.')
     } finally {
-      // Only the newest request owns the spinner; a superseded one clearing it
-      // would stop the indicator for the generation still running.
+      // Only the newest request owns the spinner, or a superseded one could
+      // stop it while a generation is still running.
       if (isCurrent()) setStrategyLoading(false)
     }
   }
@@ -192,10 +172,9 @@ export default function StudentProgressReport({
       {loading ? (
         <div className="space-y-4">{[1,2,3].map(i => <div key={i} className="h-32 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}</div>
       ) : loadError ? (
-        // A core-load failure shows an honest error here rather than the
-        // zeros-filled report; for a 403 the message is the backend's own
-        // "You do not have access to this student". The back link above stays,
-        // so a teacher who mistyped a student id can still get out.
+        // Shows an honest error rather than the zeros-filled report; for a 403
+        // the message is the backend's own "You do not have access...". The
+        // back link stays so a teacher who mistyped an id can still get out.
         <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-8 shadow-sm text-center">
           <p className="text-sm font-semibold text-gray-600 dark:text-gray-300">Couldn&apos;t load this student&apos;s report.</p>
           <p className="text-xs text-gray-400 mt-1">{loadError}</p>
@@ -224,12 +203,10 @@ export default function StudentProgressReport({
             ))}
           </div>
 
-          {/* Only rendered once the report loads -- the panels would otherwise
-              show a full grid of "N/A" and read as "no activity" rather than
-              "still loading". */}
-          {/* The read-failure notice is hidden along with the panels. It is a
-              statement about sensor data, and a viewer who asked not to see any
-              has not asked to be told it failed to load. */}
+          {/* Only rendered once loaded, or the panels show a grid of "N/A" and
+              read as "no activity" rather than "still loading". The
+              read-failure notice is hidden with them -- a viewer who asked not
+              to see sensor data hasn't asked to be told it failed to load. */}
           {showSignals && signalError && (
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>

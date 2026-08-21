@@ -34,13 +34,12 @@ export function withChannelOff(payload, name, {
 }
 
 /**
- * What a *failed* consent read actually looks like.
+ * What a failed consent read looks like.
  *
- * `_consent()` fails closed, so this is not an error shape or a truncated one --
- * it is a complete, plausible payload in which every channel is off and none
- * carries a date. That is what makes it dangerous to render, and why
- * `{...ALL_ON, retrieved: false}` proves nothing: those channels are on, so no
- * switch could have misreported them.
+ * `_consent()` fails closed, so this is a complete, plausible payload with
+ * every channel off and no date — not an error shape. That's what makes it
+ * risky to render wrong, and why testing with `{...ALL_ON, retrieved: false}`
+ * wouldn't prove anything: those channels being on couldn't be misreported.
  */
 export const CONSENT_READ_FAILED = {
   student_id: 'stu-1',

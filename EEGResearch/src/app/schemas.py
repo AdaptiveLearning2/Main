@@ -56,48 +56,29 @@ class InterpretedEegData(BaseModel):
     state: StateData
     bands: BandData | None = None
     ingestion: dict[str, Any] | None = None
-    # The headband's optical heart block, exactly as `CameraData` carries the
-    # camera's. Undeclared, this key was **silently dropped** by pydantic on the
-    # way out of `/api/v1/state` -- so under `INGEST_MODE=pull`, which is the
-    # default and reads precisely that endpoint, a headband on an optics preset
-    # could never record a heart rate. Everything upstream worked: the window
-    # was built, the anchor confirmed, the block held and stamped, and then the
-    # response model deleted it one layer before the poller saw it.
-    #
-    # Push was unaffected, because `push_client` posts `snapshot()` directly and
-    # never passes through this envelope -- so the two deployments silently
-    # disagreed about whether the headband has a heart channel at all, which is
-    # the one thing they are not allowed to differ on.
-    #
-    # Measured on hardware 2026-08-15 (MuseS-0FFC, PRESET_1035): 2697 optics
-    # packets at 64.3/s reached the adapter and `/api/v1/state` reported no
-    # `heart` key on 227 consecutive polls.
+    # The headband's optical heart block, exactly as `CameraData` carries the camera's.
+    # This field must stay declared: pydantic silently drops undeclared keys, so
+    # without it `/api/v1/state` deleted the heart block before the poller (pull mode,
+    # the default) ever saw it -- confirmed on hardware, 227 consecutive polls with no
+    # `heart` key despite 2697 optics packets/s reaching the adapter. Push was
+    # unaffected since `push_client` posts `snapshot()` directly, bypassing this model.
     heart: dict[str, Any] | None = None
 
 
 class CameraData(BaseModel):
     """Interpreted camera snapshot.
 
-    A separate model rather than making the EEG fields optional, which was the
-    other option and the wrong one: `channels`, `features` and `state` are
-    genuinely required of an EEG payload, and relaxing them to satisfy a camera
-    would let a malformed *EEG* record validate silently.
-    Two device kinds produce two shapes; the union says so.
+    A separate model rather than making the EEG fields optional: `channels`,
+    `features` and `state` are genuinely required of an EEG payload, and relaxing
+    them for the camera's sake would let a malformed EEG record validate silently.
 
-    `heart` and `face` are each absent -- not null -- when that channel is
-    switched off, so a consumer can tell a respected refusal from a sensor that
-    failed. Same reason the EEG fields are absent here rather than nulled.
+    `heart` and `face` are absent -- not null -- when that channel is switched off,
+    so a consumer can tell a respected refusal from a sensor that failed.
     """
 
-    # An explicit discriminator, not a field count. Without it an EEG payload
-    # validates happily as a CameraData -- pydantic ignores extra keys, so
-    # `channels`, `features` and `state` would be silently dropped from the
-    # response rather than raising. A consumer also gets to branch on the kind
-    # instead of probing for which fields happen to be present.
-    # Required, with no default. A default would make it useless as a
-    # discriminator: an EEG payload carries no `kind`, so it would take the
-    # default and validate as a camera anyway -- which it did, silently dropping
-    # channels, features and state from the response.
+    # Required, with no default, so it works as a discriminator: without it an EEG
+    # payload (which carries no `kind`) would validate as a camera and silently
+    # drop `channels`/`features`/`state` instead of raising.
     kind: Literal["camera"]
     contract_version: str
     device_id: str
@@ -109,7 +90,7 @@ class CameraData(BaseModel):
 
 class Envelope(BaseModel):
     status: Literal["ok", "idle"]
-    # EEG first: it carries no `kind`, and CameraData requires one, so the two
-    # cannot be confused in either direction.
+    # EEG first: it carries no `kind`, CameraData requires one, so the two
+    # can't be confused either way.
     data: InterpretedEegData | CameraData | None
     message: str

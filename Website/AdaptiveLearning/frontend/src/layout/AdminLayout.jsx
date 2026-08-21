@@ -99,18 +99,14 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function AdminLayout() {
-  // Scoped, so collapsing this sidebar does not collapse the other three
-  // layouts' -- one key would be shared across the whole origin.
+  // Scoped key so collapsing this sidebar doesn't collapse the other layouts'.
   const [collapsed, toggleCollapsed] = useCollapsedSidebar('admin')
   const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
     useMobileDrawer()
   const { dark, toggleTheme } = useTheme()
-  // The page-transition key. `window.location.pathname` is read straight off
-  // the browser during render, so React has no idea it changed: the value is
-  // not state, nothing subscribes to it, and a client-side navigation
-  // re-renders with the *same* key -- so `motion.div` sees one continuous
-  // element and the enter animation never plays. `useLocation()` is the
-  // subscription, and it is what the other three layouts use.
+  // Page-transition key. Must come from `useLocation()`, not
+  // `window.location.pathname` directly — React needs to see it change to
+  // replay the enter animation on navigation.
   const { pathname } = useLocation()
 
   return (

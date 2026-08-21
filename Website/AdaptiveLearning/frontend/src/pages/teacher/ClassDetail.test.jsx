@@ -3,8 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import ClassDetail from './ClassDetail'
 
-// Regression guards for the crashes fixed in PR #16, plus the load-error state
-// added alongside them. All three were reachable from a real API response.
+// Guards against crashes reachable from a real API response, plus the load-error state.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
@@ -23,9 +22,7 @@ function renderAt(id = CLASS_ID) {
   )
 }
 
-// Resolves by URL rather than by call order. mockResolvedValueOnce chains bind
-// to the sequence the two calls happen to be made in, so reordering them inside
-// loadData would silently swap the fixtures instead of failing.
+// Resolves by URL, not call order, so reordering the calls in loadData can't silently swap fixtures.
 function mockLoad(cls, students) {
   apiFetch.mockReset()
   apiFetch.mockImplementation((url) =>
@@ -44,8 +41,6 @@ it('renders a class with students', async () => {
 })
 
 it('survives the students endpoint returning a non-array', async () => {
-  // students was initialised to null and the render path calls .length on it
-  // unguarded, so anything non-array took the whole page down.
   mockLoad({ id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' }, null)
   renderAt()
   expect(await screen.findByText('Algebra')).toBeInTheDocument()
@@ -53,15 +48,12 @@ it('survives the students endpoint returning a non-array', async () => {
 })
 
 it('survives a class with an empty name', async () => {
-  // cls.name[0].toUpperCase() threw on "" because ""[0] is undefined.
   mockLoad({ id: CLASS_ID, name: '', join_code: 'ABC123' }, [])
   renderAt()
   expect(await screen.findByText('Untitled class')).toBeInTheDocument()
 })
 
 it('distinguishes a failed request from a missing class', async () => {
-  // Both left cls null, so a 403 or an offline client told the teacher their
-  // class did not exist -- sending them to look for the wrong problem.
   apiFetch.mockReset()
   apiFetch.mockRejectedValue(new Error('Not your class'))
   renderAt()
@@ -73,11 +65,7 @@ it('distinguishes a failed request from a missing class', async () => {
 const notFound = (msg) => Object.assign(new Error(msg), { status: 404 })
 
 it('still reports a genuinely missing class as not found', async () => {
-  // BOTH routes 404, which is what a missing class actually produces -- the
-  // roster runs the same owner check. An earlier version of this fixture had
-  // /students resolve [] here, a state the backend cannot reach, and it hid a
-  // live regression: the roster's rejection reached Promise.all first and the
-  // page reported a failed request instead of a missing class.
+  // Both routes 404, matching what a missing class actually produces (the roster runs the same owner check).
   apiFetch.mockReset()
   apiFetch.mockRejectedValue(notFound('Class not found'))
   renderAt()
@@ -86,9 +74,7 @@ it('still reports a genuinely missing class as not found', async () => {
 })
 
 it('does not blame the class for a 404 from the roster', async () => {
-  // The 404 -> "not found" translation belongs to the class request alone.
-  // Applied to the pair, a roster route that 404s for a reason of its own --
-  // a proxy, a rename -- reports an existing class as missing.
+  // The 404 -> "not found" translation applies only to the class request, not the roster's.
   apiFetch.mockReset()
   apiFetch.mockImplementation((url) =>
     String(url).includes('/students')

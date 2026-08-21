@@ -1,34 +1,24 @@
 -- One body for the signal summary, fanned out, instead of two copies of it.
 --
--- `student_signal_summary` and `student_signal_summary_many` computed the same
--- six averages and four counts from the same three tables, written out twice in
--- different shapes -- CTEs in one, correlated subqueries in the other. Nothing
--- tied them together, so every change had to be made twice by hand and noticed
--- twice by review.
---
--- That is not hypothetical here. 20260823000000 fixed `face_samples` counting a
--- column with no producer, and had to apply `count(f.attention)` ->
--- `count(f.emotion)` separately in each body -- the duplication that produced
--- the bug being used to repair it. A third copy of the fix is exactly what this
--- removes the room for.
+-- `student_signal_summary` and `student_signal_summary_many` computed the
+-- same averages and counts from the same three tables, written out twice in
+-- different shapes -- so every fix had to be made twice by hand. A previous
+-- migration fixing `face_samples` had to apply the same one-line change
+-- separately in each body.
 --
 -- `_many` is now a fan-out: unnest the ids, call the single-student function
 -- once per id through a LATERAL join, and project its columns. The single
--- function keeps the whole definition of what a summary *is*.
+-- function keeps the whole definition of what a summary is.
 --
--- Deliberately in this direction. The other way round -- the single function
--- calling `_many` with a one-element array -- would have to add
--- `dominant_emotion` to `_many`'s RETURNS TABLE, and changing a return type
--- means DROP + CREATE, a fresh ACL, and a window where deployed code reads a
--- column the database does not have yet. This way neither signature nor return
--- type moves, so `CREATE OR REPLACE` keeps the existing ACLs, no caller
--- changes, and there is no in-between state to sequence a deploy around.
+-- Deliberately in this direction rather than the reverse, since the single
+-- function calling `_many` would need to change `_many`'s return type --
+-- meaning DROP + CREATE, a fresh ACL, and a window where deployed code reads
+-- a column the database doesn't have yet. This way neither signature moves.
 --
--- The work is what it already was: the old body ran ten correlated subqueries
--- per student, this runs one function call per student. `p_include_heart` and
--- `p_include_emotion` still gate inside the single body, so an excluded channel
--- is still never read -- which is the property the facial opt-out rests on, and
--- it would have been quietly lost by projecting nulls out here instead.
+-- `p_include_heart` and `p_include_emotion` still gate inside the single
+-- body, so an excluded channel is still never read -- the property the
+-- facial opt-out rests on, which would be lost by projecting nulls out here
+-- instead.
 
 CREATE OR REPLACE FUNCTION "public"."student_signal_summary_many"(
   "p_student_ids" "uuid"[],
@@ -62,9 +52,9 @@ AS $$
     ids.sid, p_days, p_include_heart, p_include_emotion, p_timezone) s;
 $$;
 
--- Same signature, so CREATE OR REPLACE kept the existing ACL rather than
--- creating one. Restated anyway: a revoke that is assumed rather than written
--- is the one nobody notices is missing.
+-- Same signature, so CREATE OR REPLACE kept the existing ACL. Restated
+-- anyway: a revoke that's assumed rather than written is the one nobody
+-- notices is missing.
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM "anon";
 REVOKE ALL ON FUNCTION "public"."student_signal_summary_many"("uuid"[], integer, boolean, boolean, "text") FROM "authenticated";

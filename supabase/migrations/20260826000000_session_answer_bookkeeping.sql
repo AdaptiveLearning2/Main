@@ -1,33 +1,22 @@
 -- Two small functions for the counters an answer moves.
 --
--- ── bump_session_counters ───────────────────────────────────────────────────
+-- bump_session_counters: `record_answer` used to bump
+-- `sessions.questions_answered` by reading the row and writing back `read +
+-- 1` -- the same lost-update race `record_topic_attempt` was written to
+-- remove, left in place here: two answers landing together could both read
+-- the same count and the second write would overwrite the first. Incrementing
+-- the stored value removes the race rather than narrowing it, and drops a
+-- round trip, since the caller already reads the session for the ownership
+-- check.
 --
--- `record_answer` bumped `sessions.questions_answered` by reading the row and
--- writing back `read + 1`. That is the same lost-update race `record_topic_attempt`
--- (20260825000000) was written to remove, one function away and left in place:
--- two answers landing together both read the same count and the second write
--- overwrites the first, so a student answers ten questions and the session says
--- nine. Incrementing the *stored* value removes it rather than narrowing it.
---
--- It also drops a round trip. The read existed only to compute the new values,
--- and the caller already reads the session for the ownership check.
---
--- Returns the row so the caller can still see what the counters became.
---
--- ── session_answer_counts ───────────────────────────────────────────────────
---
--- What a closing session actually answered, as two integers rather than as
--- every answer row. `_answer_counts` fetched up to 2000 `correct` values and
--- summed them in Python, which worked but meant carrying a cap -- and the cap
--- needed its own fallback branch, because a capped count is wrong rather than
--- merely slow. Counting in SQL has no cap to reason about, so the branch and
--- the constant both go.
+-- session_answer_counts: what a closing session actually answered, as two
+-- integers rather than every answer row. The Python version fetched up to
+-- 2000 rows and summed them, which needed a cap and a fallback branch for
+-- when the cap was hit. Counting in SQL has no cap to reason about.
 --
 -- Kept separate from the bump on purpose: they run at different times, on
--- different paths, and folding them together would put session-close logic in
--- the hot answer path.
---
--- Both are SECURITY INVOKER (the default) and granted only to service_role.
+-- different paths, and folding them together would put session-close logic
+-- in the hot answer path.
 
 CREATE OR REPLACE FUNCTION "public"."bump_session_counters"(
   "p_session_id" "uuid",

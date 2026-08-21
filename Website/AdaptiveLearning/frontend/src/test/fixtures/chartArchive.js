@@ -1,10 +1,8 @@
 /**
  * `GET /api/signals/session/{id}/charts`, in each state `archivedChart()` reads.
  *
- * Three of the five states live in this payload; the other two are the page's
- * own (`pending` while the request is outstanding, `failed` when it rejects),
- * so a test reaches those through the mock's timing rather than through a
- * fixture.
+ * Covers three of five states; `pending` and `failed` are the page's own
+ * states and come from the mock's timing instead, not a fixture here.
  */
 
 export const CHART_NAMES = ['cognitive_timeline', 'heart_rate', 'emotion_pie', 'stress_pie']
@@ -21,11 +19,9 @@ export function buildChartArchive(overrides = {}) {
   }
 }
 
-/** Archived, but the named objects could not be signed or read.
- *
- *  A fault, not an absence -- and it is per chart, so the mixed case (one
- *  readable, one not, in a section that draws both) is ordinary rather than a
- *  corner case. That mix is what `anyUnavailable` exists for. */
+/** Archived, but the named objects could not be signed or read — a fault,
+ *  not an absence. Per-chart, so a mix of readable and unreadable charts in
+ *  one section is a normal case, not an edge case. */
 export function withUnavailable(payload, names) {
   const list = [].concat(names)
   return {
@@ -46,6 +42,6 @@ export function withEmpty(payload, names) {
   }
 }
 
-/** The archive never ran -- a session closed before chart archiving existed, or
- *  one with no signal samples to draw. Distinct from every failure above. */
+/** The archive never ran — an old session, or one with no samples to draw.
+ *  Distinct from the failure states above. */
 export const ARCHIVE_UNARCHIVED = { archived: false, charts: {}, unavailable: [] }

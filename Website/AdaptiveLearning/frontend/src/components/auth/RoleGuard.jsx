@@ -11,10 +11,8 @@ export default function RoleGuard({ roles, children }) {
 
   if (roles && !roles.includes(role)) {
     const home = homeFor(role)
-    // An unrecognised role has no home to send them to, and picking one anyway
-    // is what produced the parent redirect loop: every candidate route is
-    // guarded, so the guard rejects it and lands back here. Saying so once
-    // terminates; guessing does not.
+    // An unrecognised role has no home to send them to. Guessing one would
+    // loop, since every candidate route is guarded and would land back here.
     if (!home) {
       return (
         <div className="min-h-screen grid place-items-center p-8 text-center">

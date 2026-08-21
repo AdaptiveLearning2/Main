@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 """Capture a raw optical recording from the native bridge to a JSONL fixture.
 
-Exists so the heart-rate derivation can be developed and tested against a real
-recording rather than against live hardware. A headband session is slow, needs
-someone wearing it, and is not reproducible; a fixture is none of those things,
-and a regression in beat detection should be catchable by `pytest` rather than
-by putting the Athena back on.
+Lets heart-rate derivation be tested against a real recording instead of live
+hardware, since a headband session is slow and not reproducible.
 
-Talks to the bridge's TCP port directly rather than through the sidecar. The
-sidecar's job is to derive state, and asking it to also pass raw samples through
-untouched would mean building the thing this script exists to avoid needing.
+Talks to the bridge's TCP port directly rather than through the sidecar, so
+this stays a raw capture rather than a second copy of the sidecar's logic.
 
 Usage, with the bridge already running and connected:
 
     python scripts/capture_optics.py --seconds 120 --out tests/fixtures/optics_rest_64hz.jsonl.gz
 
-An `--out` ending in `.gz` is written gzipped, which is what the committed
-fixture is -- a two-minute recording is ~640KB plain and ~97KB compressed.
+`--out` ending in `.gz` is written gzipped, matching the committed fixture
+(a two-minute recording is ~640KB plain, ~97KB compressed).
 
 Each line is one optics frame:
 
     {"seq": 1234, "mono_ts_ms": ..., "n": 4, "ch": [...]}
 
-`seq` is the bridge's monotonic sample counter. A gap in it means a sample was
-lost between the headband and here, which matters because the derivation
-reconstructs its time base from sample index -- see tests/fixtures/README.md.
-This script warns when it finds one.
+`seq` is the bridge's sample counter. A gap means a sample was lost, which
+matters because the derivation rebuilds its time base from sample index --
+see tests/fixtures/README.md. This script warns when it finds a gap.
 """
 
 from __future__ import annotations
@@ -47,9 +42,7 @@ def main() -> int:
     ap.add_argument("--connect", default="", help="headband name to connect first")
     args = ap.parse_args()
 
-    # .gz by extension, because the committed fixture is gzipped and anyone
-    # following the documented invocation should end up with the same thing
-    # rather than a file that does not match the name in tests/.
+    # .gz by extension, matching the committed fixture's format.
     opener = gzip.open if args.out.endswith(".gz") else open
 
     count = 0
@@ -65,9 +58,8 @@ def main() -> int:
             sock.sendall(json.dumps({"cmd": "connect", "name": args.connect}).encode() + b"\n")
             print(f"connect requested: {args.connect}", file=sys.stderr)
 
-        # Written as they arrive rather than accumulated. The frames are the
-        # expensive part of this -- someone is wearing a headband to produce
-        # them -- so a crash at minute nine should not cost all nine.
+        # Written as frames arrive, not buffered, so a crash mid-capture
+        # doesn't lose everything recorded before it.
         with opener(args.out, "wt", encoding="utf-8") as fh:
             buf = b""
             started = time.time()
@@ -90,8 +82,8 @@ def main() -> int:
                         continue
                     if msg.get("kind") != "optics":
                         continue
-                    # .get() throughout: a malformed optics line should be
-                    # skipped like malformed JSON is, not abort the capture.
+                    # .get() throughout: skip a malformed line rather than
+                    # abort the capture.
                     if msg.get("mono_ts_ms") is None or msg.get("ch") is None:
                         continue
                     frame = {
@@ -126,8 +118,7 @@ def main() -> int:
     print(f"wrote {count} frames to {args.out} "
           f"({span_s:.1f}s span, {rate:.1f} Hz, channels={channels})", file=sys.stderr)
     if len(channels) > 1:
-        # A preset change mid-capture. Reporting the first frame's count would
-        # describe a recording that is not what it says it is.
+        # A preset change mid-capture would make the channel count misleading.
         print("WARNING: channel count changed during capture", file=sys.stderr)
     if seqs:
         gaps = sum(1 for a, b in zip(seqs, seqs[1:]) if b != a + 1)

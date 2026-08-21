@@ -24,11 +24,9 @@ const ok = (body = {}) => ({
 
 describe('startPush', () => {
   it("sends the student's own token, not the sidecar's", async () => {
-    // Two different credentials with different jobs. The sidecar token
-    // authenticates *this page* to a loopback process and is in the bundle; the
-    // access token is the student's backend credential and is what lets the
-    // sidecar post as them. Sending the wrong one either fails to authorise or,
-    // worse, hands a shared token to something that posts with it.
+    // Two different credentials: the sidecar token authenticates this page to
+    // the local process, while the access token is what lets the sidecar
+    // post as the student. Sending the wrong one is a real bug, not a detail.
     const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
 
     await sidecar.startPush('sess-1')
@@ -41,9 +39,8 @@ describe('startPush', () => {
   })
 
   it('refuses to start when nobody is signed in', async () => {
-    // Rather than posting `access_token: undefined` and letting the sidecar
-    // hold a credential that authorises nothing -- which would look like a
-    // working session producing no rows.
+    // Must not post `access_token: undefined` — that would look like a
+    // working session that silently produces no rows.
     getSession.mockResolvedValue({ data: { session: null } })
     mockFetch(async () => ok())
 
@@ -51,9 +48,8 @@ describe('startPush', () => {
   })
 
   it('surfaces the 409 the sidecar answers when push is off', async () => {
-    // The sidecar refuses to be a second writer alongside a poller. The caller
-    // has to be able to tell that apart from a network failure, because one is
-    // a configuration statement and the other is an outage.
+    // The caller must be able to tell "push is disabled" (config) apart from
+    // a network failure (outage).
     mockFetch(async () => ({
       ok: false, status: 409, statusText: 'Conflict',
       text: async () => JSON.stringify({ detail: 'PUSH_ENABLED=false' }),
@@ -65,8 +61,7 @@ describe('startPush', () => {
 
 describe('sidecarAlive', () => {
   it('is false rather than throwing when nothing is listening', async () => {
-    // The ordinary case on a machine with no headband and no camera. A throw
-    // here would take out whatever rendered it.
+    // Normal case on a machine with no headband and no camera — must not throw.
     mockFetch(async () => { throw new TypeError('Failed to fetch') })
 
     await expect(sidecar.sidecarAlive()).resolves.toBe(false)
@@ -89,10 +84,8 @@ describe('pushStatus', () => {
 
 describe('pushStatus, enabled', () => {
   it('reports enabled:false rather than omitting it', async () => {
-    // A reachable sidecar that is deliberately not pushing (PUSH_ENABLED off
-    // while the backend is in push mode) means nobody is writing this session
-    // at all. The caller has to be able to tell that from a healthy one --
-    // merging a flat `reachable: true` over the top rendered it as normal.
+    // A reachable sidecar that isn't pushing means nobody is writing this
+    // session. The caller must be able to tell that apart from a healthy one.
     mockFetch(async () => ok({ status: 'ok', data: { enabled: false } }))
 
     const out = await sidecar.pushStatus()
@@ -104,9 +97,8 @@ describe('pushStatus, enabled', () => {
 
 describe('startPush retry', () => {
   it('can be called again after a failure and succeed', async () => {
-    // The sidecar coming up after the page is the normal sequence on a
-    // student's machine: they open the lesson, then start the local app. A
-    // single attempt meant nothing was pushed for the rest of the session.
+    // Normal sequence: the student opens the lesson before starting the
+    // local app, so the first push attempt can fail and must be retryable.
     let calls = 0
     mockFetch(async () => {
       calls += 1
@@ -121,11 +113,10 @@ describe('startPush retry', () => {
 
 describe('startPush with a supplied token', () => {
   it('does not call getSession when given one', async () => {
-    // The auth-lock deadlock. supabase-js v2 holds an internal lock while
-    // dispatching onAuthStateChange, and getSession() waits on that same lock,
-    // so awaiting it from inside the callback hangs forever -- the sidecar
-    // keeps the expired token and every push 401s for the rest of the lesson,
-    // silently. The refresh handler passes the session it was handed.
+    // supabase-js v2 holds an internal lock while dispatching
+    // onAuthStateChange, and getSession() waits on that same lock, so
+    // calling it from inside the callback would deadlock. The refresh
+    // handler must pass the session it was already handed instead.
     const fetchSpy = mockFetch(async () => ok({ status: 'pushing' }))
     getSession.mockImplementation(() => {
       throw new Error('getSession must not be called from the refresh path')
@@ -148,10 +139,9 @@ describe('startPush with a supplied token', () => {
 
 describe('stopPushOnUnload', () => {
   it('uses keepalive so the request outlives the page', async () => {
-    // Effect cleanup does not run on a tab close or hard refresh, which is how
-    // most lessons end. Without a stop that survives teardown the sidecar keeps
-    // the bearer token and keeps recording for up to an hour after the student
-    // walked away -- a consent problem, not a tidiness one.
+    // React effect cleanup doesn't run on tab close or hard refresh, so the
+    // stop must survive teardown or the sidecar keeps recording after the
+    // student leaves — a consent problem.
     const fetchSpy = mockFetch(async () => ok())
 
     await sidecar.stopPushOnUnload()
@@ -162,8 +152,7 @@ describe('stopPushOnUnload', () => {
   })
 
   it('carries the sidecar token when one is configured', async () => {
-    // sendBeacon is the usual tool for an unload request and is no use here:
-    // it cannot set an Authorization header, and the sidecar requires one.
+    // sendBeacon can't be used here since it cannot set an Authorization header.
     vi.stubEnv('VITE_EEG_LOCAL_TOKEN', 'local-tok')
     vi.resetModules()
     const fresh = await import('./sidecar')
@@ -183,17 +172,13 @@ describe('stopPushOnUnload', () => {
 })
 
 describe('releasePushIfIdle', () => {
-  // The push client is one shared object for the whole sidecar --
-  // `/api/v1/push/stop` clears `set_payload_consumer` for every device at once.
-  // So neither device may tear it down on its own, and both call sites were
-  // wrong in opposite directions before this existed.
+  // The push client is shared: `/api/v1/push/stop` clears every device at
+  // once, so neither device may tear it down unconditionally on its own.
 
   const devicesReply = (list) => ok({ status: 'ok', data: list })
 
   it('leaves the push client alone while another device is still streaming', async () => {
-    // The reported bug: disconnecting the headband called stopPush()
-    // unconditionally, which killed a running camera's delivery. Its frames
-    // went nowhere while the card still said RECORDING.
+    // Disconnecting one device must not kill delivery for another still running.
     const seen = []
     mockFetch(async (url) => {
       seen.push(String(url))
@@ -211,9 +196,8 @@ describe('releasePushIfIdle', () => {
   })
 
   it('stops it once nothing is streaming', async () => {
-    // The other direction, which was also wrong: the camera's off-path never
-    // called stopPush at all, so turning the camera off with no headband left
-    // the sidecar holding the student's access token.
+    // The other direction: turning off the last device must actually stop
+    // the push client, or it keeps holding the student's access token.
     const seen = []
     mockFetch(async (url) => {
       seen.push(String(url))
@@ -231,10 +215,8 @@ describe('releasePushIfIdle', () => {
   })
 
   it('stops it when it cannot tell, rather than leaving a token held', async () => {
-    // A sidecar holding a student's token after they walked away is the worse
-    // of the two failures -- and a device still capturing reports
-    // `running: false` on the next poll rather than claiming to record into a
-    // client that is gone.
+    // A token left behind is worse than briefly stopping a device that was
+    // still running — it will just report itself as not running next poll.
     const seen = []
     mockFetch(async (url) => {
       seen.push(String(url))
@@ -250,9 +232,8 @@ describe('releasePushIfIdle', () => {
   })
 
   it('returns the list it decided from, so the caller need not read it twice', async () => {
-    // Two reads could disagree, and the second would be the one the card
-    // rendered -- which is how a camera ends up claiming to record into a push
-    // client that was just torn down.
+    // A caller reading devices a second time could see a different (stale)
+    // answer than the one this function acted on.
     const list = [{ device_id: 'camera', kind: 'face', running: true }]
     mockFetch(async (url) =>
       String(url).includes('/devices') ? devicesReply(list) : ok({}))
@@ -264,17 +245,14 @@ describe('releasePushIfIdle', () => {
 })
 
 describe('sidecarDebug', () => {
-  // `available` here is the panel's only way to say "the sidecar is not
-  // answering". It was hardcoded true, which made that sentence unreachable and
-  // drew a panel of blanks instead -- the same can't-tell-absent-from-empty
-  // failure the backend's `available: null` three-state exists to prevent.
+  // `available` is the panel's only way to say "the sidecar is not answering",
+  // so it must reflect whether calls actually reached the sidecar.
 
   const stateReply = (data) => ok({ status: 'ok', data })
 
   it('reports a sidecar that answered nothing yet as available', async () => {
-    // The trap that makes deriving this from the payloads wrong: a sidecar that
-    // is up and simply has no stream data answers `data: null`, and one with no
-    // headband attached answers an empty muse block. Both are ordinary states.
+    // A sidecar with no stream data yet answers `data: null`, same as one
+    // with no headband — both are normal, not evidence of being unreachable.
     mockFetch(async (url) =>
       String(url).includes('/muse/status') ? stateReply(null) : stateReply(null))
 
@@ -296,8 +274,7 @@ describe('sidecarDebug', () => {
   })
 
   it('stays available when only one route is unhappy', async () => {
-    // A half-working sidecar has something to show. Requiring both would send
-    // the panel to the outage message over one bad route.
+    // A half-working sidecar still has something to show.
     mockFetch(async (url) => {
       if (String(url).includes('/muse/status')) throw new Error('no muse route')
       return stateReply({ state: { focus: 42 } })
@@ -311,9 +288,8 @@ describe('sidecarDebug', () => {
   })
 
   it('never throws, so the panel keeps a payload to branch on', async () => {
-    // The caller's catch sets `eegDebug` to null, which renders the *pull*
-    // outage message -- wrong under push, and it names a port the backend was
-    // never going to reach.
+    // If this threw, the caller's catch would set `eegDebug` to null and
+    // show the wrong (pull-mode) outage message.
     mockFetch(async () => { throw new Error('boom') })
 
     await expect(sidecar.sidecarDebug('default')).resolves.toMatchObject({

@@ -5,16 +5,13 @@ import HideSensorDataToggle from '../../components/common/HideSensorDataToggle'
 import { readHideSensorData, writeHideSensorData } from '../../lib/viewPrefs'
 
 export default function StudentReport() {
-  // One of the two surfaces the teacher's display filter covers, and it renders
-  // the switch -- a control that silently changed a page it is absent from
-  // would be worse than one with a stated edge. See lib/viewPrefs.js.
+  // Renders the sensor-hide toggle from lib/viewPrefs.js.
   const [hideSensors, setHideSensors] = useState(readHideSensorData)
   const { id } = useParams()
   const location = useLocation()
   const { name, classId, className } = location.state || {}
 
-  // Return to the specific class the teacher came from when we know it, so the
-  // back link keeps context; fall back to the class list on a direct visit.
+  // Link back to the class the teacher came from, or the class list otherwise.
   const backTo    = classId ? `/teacher/classes/${classId}` : '/teacher/classes'
   const backLabel = className ? `Back to ${className}` : classId ? 'Back to Class' : 'Back to Classes'
 
@@ -26,16 +23,12 @@ export default function StudentReport() {
           onChange={next => { setHideSensors(next); writeHideSensorData(next) }} />
       </div>
       <StudentProgressReport
-      // Remount on a new student id so the heading re-seeds from initialName
-      // instead of showing the previous student's name until a fetch resolves.
+      // Remount on a new student id so the heading doesn't show the previous
+      // student's name until the fetch resolves.
       key={id}
       studentId={id}
-      // Seeded from router state (passed by the class roster) so the heading
-      // shows the real name immediately, even if the weekly-report is slow or
-      // fails; the report's student_name confirms it once loaded. On a cold
-      // direct visit there is no router state (name falls back to 'Student') and
-      // no class id, so the weekly-report's student_name is the only name source
-      // -- if it fails the heading stays 'Student'.
+      // Seeded from router state so the heading shows a name right away,
+      // before the weekly report loads. Falls back to 'Student' if neither has one.
       initialName={name || 'Student'}
       backTo={backTo}
       backLabel={backLabel}

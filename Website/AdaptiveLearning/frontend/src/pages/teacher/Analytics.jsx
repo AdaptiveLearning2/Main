@@ -24,14 +24,12 @@ export default function TeacherAnalytics() {
   const [loading, setLoading]     = useState(true)
   const [failed, setFailed]       = useState(false)
 
-  // See History.jsx: already true on mount, so setting it here would be a
-  // synchronous setState inside an effect.
+  // loading is already true on mount; no need to set it again here.
   const load = () => {
     apiFetch('/api/questions?limit=1000')
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
-      // Every chart on this page is derived by filtering `questions`, so a
-      // swallowed failure drew a full set of charts reading zero -- the shape
-      // of a real answer, with nothing behind it.
+      // Track failure explicitly, or the charts would render as all-zero
+      // instead of showing that the load failed.
       .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
   }
 
@@ -66,9 +64,7 @@ export default function TeacherAnalytics() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">Question bank distribution and insights.</p>
       </motion.div>
 
-      {/* Above the charts, not instead of them: the stat cards below already
-          render "—" while unloaded, so the page degrades to blanks with one
-          sentence saying why rather than to a confident set of zeros. */}
+      {/* Shown above the charts; the cards below already render "—" on failure. */}
       {failed && <LoadError what="the question bank" onRetry={retry} />}
 
       {/* summary */}

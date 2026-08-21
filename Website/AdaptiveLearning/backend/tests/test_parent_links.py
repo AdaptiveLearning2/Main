@@ -1,20 +1,16 @@
-"""The two ends of a parent-child link: telling the student, and ending it.
+"""Tests the two ends of a parent-child link: telling the student, and
+ending it.
 
-There was no route for this, so a link was permanent once made. That matters
-more than the missing button suggests: `_verify_can_view_student` reads a link
-as entitlement to a child's reports, and `signal_consent` reads it as the right
-to switch a sensor back on after the child switched it off. A relationship that
-cannot be ended is the wrong shape for the one relationship in this product
-that grants the most.
+There was no route to end a link, so it was permanent once made --
+`_verify_can_view_student` reads a link as entitlement to a child's
+reports, and `signal_consent` reads it as the right to switch a sensor
+back on after the child turned it off. What these pin: a caller can only
+delete their own link, and deleting a link touches nothing else.
 
-What these pin is the two things that could go wrong in the other direction:
-deleting a link that is not the caller's, and deleting anything *else* while
-deleting a link.
-
-The other half is the notification. A link is created knowing only the child's
-user id -- nothing asks them and, until now, nothing told them either, while the
-link grants a parent their reports and the right to switch a sensor back on that
-the child switched off.
+The other half is notification. A link is created knowing only the
+child's user id -- nothing asks them, and until now nothing told them
+either, even though the link grants a parent their reports and the right
+to re-enable a sensor the child switched off.
 """
 import os
 
@@ -156,14 +152,11 @@ def test_a_parent_can_end_their_own_link(client):
 
 
 def test_the_delete_is_scoped_to_the_caller(client):
-    """Both halves of the filter, asserted directly.
-
-    Scoped by `child_id` alone this would take every parent's link to that
-    child -- an endpoint one parent could use to cut another off from their own
-    child. The row id is never taken from the client for the same reason
-    `/charts` derives its object path instead of reading it back out of
-    `chart_paths`.
-    """
+    """Both halves of the filter, asserted directly. Scoped by
+    `child_id` alone, this would delete every parent's link to that child
+    -- one parent could use it to cut another off. The row id is never
+    taken from the client, same reasoning as `/charts` deriving its object
+    path instead of trusting `chart_paths`."""
     main.unlink_child(CHILD, None)
     _table, filters, _n = client.deletes[0]
     assert filters == {"parent_id": PARENT, "child_id": CHILD}
@@ -180,17 +173,14 @@ def test_a_link_that_is_not_yours_is_a_404_not_a_cheerful_ok(client):
 
 
 def test_unlinking_destroys_nothing_but_the_link(client):
-    """Unlinking is not erasure and not a withdrawal.
+    """Unlinking is not erasure and not a withdrawal. `signal_consent`
+    still holds what the family decided and every recorded row survives, so
+    a re-link restores a history that was never destroyed. Erasure is its
+    own endpoint that a parent has to ask for by name -- wiring destruction
+    to this would make the reversible control irreversible by accident.
 
-    `signal_consent` still holds what the family decided and every recorded row
-    survives, so a re-link restores the view of a history that was never
-    destroyed. Erasure is `POST /api/consent/{id}/erase`, which a parent has to
-    ask for by name -- wiring destruction to this would make the reversible
-    control the irreversible one by a side effect nobody asked for, which is the
-    rule `test_changing_consent_never_erases` pins one table over.
-
-    The fake raises on any table but `parent_child_links`, so this fails loudly
-    rather than by inspection.
+    The fake raises on any table but `parent_child_links`, so this fails
+    loudly rather than by inspection.
     """
     main.unlink_child(CHILD, None)
     assert [t for t, _f, _n in client.deletes] == ["parent_child_links"]
@@ -223,24 +213,18 @@ def test_an_acknowledged_link_is_not_reported_again(student):
 
 
 def test_the_read_is_scoped_to_the_caller(student):
-    """A student may only ever see links to *them*.
-
-    Unscoped this is a list of who is linked to whom, platform-wide.
-    """
+    """A student may only ever see links to them. Unscoped, this is a
+    list of who is linked to whom, platform-wide."""
     main.my_unacknowledged_parent_links(None)
     _kind, filters, _n = student.reads[0]
     assert filters == {"child_id": CHILD, "student_ack_at": None}
 
 
 def test_a_failed_read_says_so_rather_than_reporting_no_links(monkeypatch, student):
-    """Fails open to an empty list -- it decides whether an advisory banner is
-    drawn and nothing else, so a blip must not put a notice on a child's
-    dashboard about a link that may not exist.
-
-    But it says which it is. `retrieved: false` is what stops the banner
-    treating a failure as a confident "nothing happened", the same three-state
-    rule the reporting helpers carry the flag for.
-    """
+    """Fails open to an empty list, since a blip must not put a notice
+    on a child's dashboard about a link that may not exist. But
+    `retrieved: false` says which case it is, so the banner doesn't treat
+    a failure as a confident "nothing happened"."""
     class _Boom:
         def table(self, _name):
             raise RuntimeError("postgrest is down")
@@ -277,14 +261,13 @@ def test_acknowledging_nothing_is_a_404(student):
 
 # ── the parent is told ──────────────────────────────────────────────────────
 #
-# The reverse direction, and the one the consent model had no path for at all:
-# a parent re-enabling raises `needs_student_ack`, and a *student* switching a
-# sensor off raised nothing.
+# The reverse direction: a parent re-enabling raises `needs_student_ack`,
+# but a student switching a sensor off raised nothing.
 #
-# Read from `consent_withdrawals`, an append-only log, rather than from
-# `signal_consent`'s `*_revoked_at` -- those are nulled when a channel is turned
-# back on, so the first version of this feature had a parent restoring a channel
-# erase the notice for every linked parent at once.
+# Read from `consent_withdrawals`, an append-only log, rather than
+# `signal_consent`'s `*_revoked_at` -- those get nulled when a channel is
+# turned back on, so reading them meant a parent restoring a channel
+# erased the notice for every linked parent at once.
 
 
 class _WithdrawalClient(_Client):
@@ -366,18 +349,12 @@ def test_a_parent_who_never_acknowledged_sees_everything(notices):
 
 
 def test_re_enabling_the_channel_does_not_erase_the_notice(notices):
-    """The bug this table exists for.
-
-    `set_consent` nulls `*_revoked_at` when a channel is turned back on --
-    correctly, since that column answers "is this off, and since when". Deriving
-    the notice from it meant a parent restoring the channel erased the notice
-    for every linked parent, and a withdraw/restore inside one dashboard-load
-    interval made the whole feature silently no-op.
-
-    The event row is append-only, so the notice survives the restore. Modelled
-    by the fixture holding no consent row at all: if the endpoint still read
-    current state it would have nothing to report.
-    """
+    """The bug this table exists for. `set_consent` nulls
+    `*_revoked_at` when a channel is turned back on, since that column
+    answers "is this off, and since when". Deriving the notice from it
+    meant a parent restoring the channel erased the notice for everyone
+    linked. The event row is append-only, so the notice survives the
+    restore -- modelled here by the fixture holding no consent row at all."""
     notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
     out = main.parent_consent_notices(None)
     assert [c["channel"] for c in out["notices"][0]["channels"]] == ["camera"]
@@ -431,13 +408,10 @@ def test_acknowledging_stamps_the_watermark_it_was_given(notices):
 
 
 def test_a_withdrawal_landing_during_the_read_is_not_swallowed(notices):
-    """The race the watermark exists for.
-
-    Stamping `now()` acknowledges withdrawals the parent never saw: one landing
-    between the read that drew the banner and the click that dismissed it was
-    marked seen and never shown again -- silently and permanently, on the
-    notification whose entire job is to stop that happening.
-    """
+    """The race the watermark exists for. Stamping `now()` would
+    acknowledge withdrawals the parent never saw: one landing between the
+    read that drew the banner and the click that dismissed it would be
+    marked seen and never shown again."""
     notices.withdrawals.append(_w(CHILD, "camera", "2026-08-12T09:00:00Z"))
     shown = main.parent_consent_notices(None)["notices"][0]["through"]
 
@@ -450,11 +424,9 @@ def test_a_withdrawal_landing_during_the_read_is_not_swallowed(notices):
 
 
 def test_acknowledging_one_child_does_not_clear_another(notices):
-    """Two children, and the ack names one of them.
-
-    `.eq("parent_id", ...)` alone stamps every link the parent holds, so
-    dismissing one child's notice silently dropped the other's.
-    """
+    """Two children, and the ack names one of them. `.eq("parent_id",
+    ...)` alone would stamp every link the parent holds, so dismissing one
+    child's notice would silently drop the other's."""
     other = "child-2"
     notices.links.append({"id": "l-9", "parent_id": PARENT, "child_id": other,
                           "created_at": "2026-08-01T09:00:00Z",
@@ -469,13 +441,10 @@ def test_acknowledging_one_child_does_not_clear_another(notices):
 
 
 def test_two_parents_linked_to_one_child_are_told_independently(monkeypatch, notices):
-    """The schema's whole justification, asserted rather than assumed.
-
-    The obvious design puts `parent_ack_at` on `signal_consent`, which has one
-    row per *student* -- so the first of two linked parents to acknowledge would
-    clear the notice for the second, who would never learn their child had
-    turned a camera off. On the link row, each parent has their own.
-    """
+    """The schema's justification, asserted rather than assumed. The
+    obvious design puts `parent_ack_at` on `signal_consent`, one row per
+    student -- so the first of two parents to acknowledge would clear the
+    notice for the second. On the link row, each parent has their own."""
     OTHER_PARENT = "parent-2"
     notices.links.append({"id": "l-9", "parent_id": OTHER_PARENT, "child_id": CHILD,
                           "created_at": "2026-08-01T09:00:00Z",

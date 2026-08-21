@@ -2216,6 +2216,16 @@ contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geo
 `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
 so there is no comparable multiset.
 
+**Measure how often a fail-open check *engages*, never just how often it fires.** A check that never
+finds anything to compare reports a perfect false-positive rate while doing nothing, and reads as
+evidence that it works. Live sampling of 32 generations found exactly that: the dataset check was
+inert on **half** the `ordering` questions, because `_as_floats` rejected fractions as "not
+comparable" — while `solve_ordering` sorts on `float(sympify(v))` and handles them fine. Fractions
+are now one token and both sides are compared **by value**, so `4/5` shown against `0.8` scored
+agrees, and so does `32/40`. A **mixed number** anywhere in the text fails open: `1 1/2` is one value
+to a reader and two tokens to the regex, which truncates the list at it and would report the
+tokenisation as a dataset disagreement.
+
 ### A lesson-plan cell has four ways to contribute nothing, and they are named
 
 `lesson_plan_context` returns `None` for an unseeded cell, a blank row, a failed read, and missing

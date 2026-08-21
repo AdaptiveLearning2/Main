@@ -27,12 +27,23 @@ contradiction; they are not a proof of agreement.
 """
 
 import re
+from fractions import Fraction
 
-_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+# A fraction is one token, not two numbers. `ordering` routinely scores
+# "3/4" alongside "0.27" -- `solve_ordering` sorts on float(sympify(v)), so
+# those ARE comparable, and reading them as a bare 3 and 4 made this check
+# inert on half the ordering questions sampled live (2026-08-21).
+_NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?")
 
 # "The numbers of hours were: 8, 4, 12" -- these prompts put the dataset
 # after a colon, which is what makes locating it reliable enough to compare.
-_LIST_AFTER_COLON = re.compile(r":\s*(-?\d+(?:\.\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?)+)")
+_LIST_AFTER_COLON = re.compile(
+    rf":\s*({_NUMBER.pattern}(?:\s*,\s*{_NUMBER.pattern})+)")
+
+# "1 1/2" is one value to a reader and two tokens to the regex above, so a
+# text using mixed numbers cannot be tokenised confidently -- fail open
+# rather than report the tokenisation as a dataset disagreement.
+_MIXED_NUMBER = re.compile(r"\d+\s+\d+\s*/\s*\d+")
 
 # Wording that makes a question ask for the complement. Bounded to whole
 # words so "cannot" or a category called "Nothing" cannot trip it.
@@ -40,12 +51,21 @@ _NEGATION = re.compile(r"\b(not|isn't|is not|other than|neither)\b", re.I)
 
 
 def _as_floats(values):
+    """The values as floats, or None if any one of them is not a number.
+
+    Compared by VALUE, not by token, because that is what the solvers do:
+    a question showing 4/5 and scoring 0.8 agrees, and so does 32/40.
+    """
     out = []
     for v in values:
-        m = _NUMBER.fullmatch(str(v).strip())
-        if not m:
-            return None          # operators, fractions, labels -- not comparable
-        out.append(float(m.group(0)))
+        s = str(v).strip()
+        if not _NUMBER.fullmatch(s):
+            return None          # operators, labels, ranges -- not comparable
+        s = s.replace(" ", "")
+        try:
+            out.append(float(Fraction(s)) if "/" in s else float(s))
+        except (ValueError, ZeroDivisionError):
+            return None
     return out
 
 
@@ -63,10 +83,15 @@ def dataset_mismatch(question_text, values):
     if scored is None or len(scored) < 2:
         return None
 
+    if _MIXED_NUMBER.search(question_text):
+        return None
+
     matches = _LIST_AFTER_COLON.findall(question_text)
     if not matches:
         return None
-    shown = [float(n) for n in _NUMBER.findall(matches[-1])]
+    shown = _as_floats(_NUMBER.findall(matches[-1]))
+    if shown is None:
+        return None
     if len(shown) < 2:
         return None
 

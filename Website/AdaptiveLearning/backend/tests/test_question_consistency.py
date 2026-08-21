@@ -127,3 +127,63 @@ def test_a_category_containing_no_is_not_read_as_negation():
     a positive question look complementary."""
     text = "A shelf has 4 novels and 6 notebooks. What is the probability of drawing a notebook?"
     assert qc.negation_mismatch(text, "probability_of") is None
+
+
+# -- fractions ------------------------------------------------------------
+#
+# `ordering` scores fractions alongside decimals, and `solve_ordering` sorts
+# on float(sympify(v)), so they are comparable. Reading "3/4" as a bare 3 and
+# a bare 4 made this check fail open on HALF the ordering questions in a
+# 32-question live sample (2026-08-21) -- inert on exactly the topic the PR
+# claimed to cover. Every text below is verbatim from that sample.
+
+@pytest.mark.parametrize("text,values", [
+    ("Order from least to greatest: 3/4, 0.27, 0.85, 2/3",
+     ["3/4", "0.27", "0.85", "2/3"]),
+    ("Order from greatest to least:  -1/2, 2/3, 0.55, 1/4, 1.25, -3/4",
+     ["-1/2", "2/3", "0.55", "1/4", "1.25", "-3/4"]),
+    ("Order from least to greatest: 4/5, -12.25, 75, 32/40, 0.85, -9/10",
+     ["4/5", "-12.25", "75", "32/40", "0.85", "-9/10"]),
+    ("Order from least to greatest: 2/3, 0.82, 0.5, 7/8, 0.91",
+     ["2/3", "0.82", "0.5", "7/8", "0.91"]),
+])
+def test_real_ordering_questions_with_fractions_are_not_refused(text, values):
+    assert qc.dataset_mismatch(text, values) is None
+
+
+def test_a_fraction_dataset_that_disagrees_is_caught():
+    """The point of reading fractions at all: a mismatch among them is now
+    visible, where before the whole question was skipped."""
+    text = "Order from least to greatest: 3/4, 0.27, 0.85, 2/3"
+    assert qc.dataset_mismatch(text, ["3/4", "0.27", "0.85", "1/3"]) is not None
+
+
+def test_a_fraction_and_its_decimal_agree():
+    """Compared by value, not by token -- the solver sorts on the value, so
+    4/5 shown against 0.8 scored is agreement, not a mismatch."""
+    assert qc.dataset_mismatch("Order these: 4/5, 0.27", ["0.8", "0.27"]) is None
+
+
+def test_equal_fractions_written_differently_agree():
+    assert qc.dataset_mismatch("Order these: 4/5, 32/40", ["0.8", "0.8"]) is None
+
+
+def test_a_mixed_number_inside_the_list_fails_open():
+    """"1 1/2" is one value to a reader and two tokens to the regex, which
+    truncates the list at it: without the guard the text above yields a shown
+    list of just [3/4, 1] and reports a false mismatch against three scored
+    values. Failing open costs a check; firing would blame the model for the
+    tokenisation.
+
+    The mixed number has to sit INSIDE the list to test the guard -- with it
+    leading ("Order these: 1 1/2, 3/4") no comma-list matches at all, so the
+    function returns None for an unrelated reason and the guard is never
+    reached. That version of this test passed with the guard deleted.
+    """
+    text = "Order from least to greatest: 3/4, 1 1/2, 0.5"
+    assert qc._LIST_AFTER_COLON.findall(text) == ["3/4, 1"]   # the truncation
+    assert qc.dataset_mismatch(text, ["3/4", "3/2", "0.5"]) is None
+
+
+def test_a_zero_denominator_fails_open_rather_than_raising():
+    assert qc.dataset_mismatch("Order these: 1/0, 3/4", ["1/0", "3/4"]) is None

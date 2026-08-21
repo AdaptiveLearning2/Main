@@ -1,12 +1,8 @@
 """Smoke test for the recorded optical fixture.
 
-The fixture is a 230KB gzipped blob that the heart-rate derivation will be built
-on. Without a consumer it could be corrupt, truncated or reshaped and nothing
-would say so until whichever PR first tried to use it -- at which point the
-failure looks like a bug in the new code rather than in the data under it.
-
-This pins the format the derivation is allowed to assume, and the properties
-that make the recording usable at all.
+The fixture is a 230KB gzipped blob that the heart-rate derivation is built on.
+This checks the format is what the derivation assumes, and the properties that
+make the recording usable at all.
 """
 
 from __future__ import annotations
@@ -45,21 +41,19 @@ def test_fixture_timestamps_advance(frames):
 
 
 def test_fixture_rate_matches_the_recorded_preset(frames):
-    """~64Hz is what PRESET_1035 specifies, and what the derivation assumes when
-    it reconstructs a clock from sample index."""
+    """~64Hz is what PRESET_1035 specifies, and what the derivation assumes
+    when reconstructing a clock from sample index."""
     span_s = (frames[-1]["mono_ts_ms"] - frames[0]["mono_ts_ms"]) / 1000.0
     rate = len(frames) / span_s
     assert rate == pytest.approx(EXPECTED_RATE_HZ, abs=0.5)
 
 
 def test_fixture_timestamps_are_not_a_usable_clock(frames):
-    """The property that decided the design, pinned so it cannot be forgotten.
-
-    mono_ts_ms reflects BLE delivery batching rather than sample time: ~9% of
-    frames share a stamp with their predecessor and samples arrive in bursts,
-    leaving a uniform clock 40ms rms away from them. RMSSD measures 20-50ms
-    differences, so a clock built from these would be reporting Bluetooth
-    scheduling. Anyone tempted to use them should have to delete this first."""
+    """mono_ts_ms reflects BLE delivery batching, not sample time: ~9% of
+    frames share a stamp with their predecessor, and samples arrive in
+    bursts, 40ms rms away from a uniform clock. RMSSD measures 20-50ms
+    differences, so a clock built from these timestamps would just report
+    Bluetooth scheduling."""
     ts = [f["mono_ts_ms"] for f in frames]
     deltas = [b - a for a, b in zip(ts, ts[1:])]
     duplicates = sum(1 for d in deltas if d == 0)
@@ -76,30 +70,26 @@ def _peak_bpm(numpy, x, fs, lo_hz=0.7, hi_hz=3.0):
 
 
 def _highpass(numpy, x, fs, window_s=1.0):
-    """Subtract a moving average -- a crude high-pass, deliberately.
+    """Subtract a moving average -- a deliberately crude high-pass.
 
-    The point is to remove baseline wander *before* searching, rather than to
-    dodge it by narrowing the search band. Narrowing works on this recording
-    only because 72.5 bpm happens to fall inside the band chosen, and would
-    silently exclude a genuinely slow or fast heart.
-
-    A one-second window puts the corner near 1 Hz. Crude, and adequate to make
-    the point; the derivation should use a real bandpass."""
+    Removes baseline wander before searching, instead of dodging it by
+    narrowing the search band (which only works here because 72.5 bpm happens
+    to fall inside the chosen band, and would silently exclude a genuinely
+    slow or fast heart). A one-second window puts the corner near 1 Hz. Crude
+    but enough to make the point; the real derivation should use a proper
+    bandpass."""
     w = int(round(window_s * fs))
     return x - numpy.convolve(x, numpy.ones(w) / w, mode="same")
 
 
 def test_baseline_drift_dominates_the_low_end_of_the_pulse_band(frames):
-    """Why a raw FFT peak over 0.7-3.0 Hz is not a pulse detector.
+    """A raw FFT peak over 0.7-3.0 Hz is not a pulse detector.
 
-    Every channel's spectrum peaks at ~0.2 Hz and decays monotonically from
-    there -- baseline wander from perfusion, breathing and micro-movement. Its
-    tail is still the largest thing in the band at 0.7 Hz, so an unfiltered
-    argmax returns ~44 bpm: the band edge, not a heartbeat.
-
-    This is pinned because it produced two wrong answers before it was
-    understood, and the derivation must high-pass rather than merely restrict
-    the search band."""
+    Every channel's spectrum peaks at ~0.2 Hz and decays from there --
+    baseline wander from perfusion, breathing and micro-movement. Its tail is
+    still the largest thing in the band at 0.7 Hz, so an unfiltered argmax
+    returns ~44 bpm: the band edge, not a heartbeat. The derivation must
+    high-pass rather than just restrict the search band."""
     numpy = pytest.importorskip("numpy")
     a = numpy.array([f["ch"] for f in frames], dtype=float)
     fs = EXPECTED_RATE_HZ
@@ -111,12 +101,10 @@ def test_baseline_drift_dominates_the_low_end_of_the_pulse_band(frames):
         at = lambda f: spec[int(numpy.argmin(numpy.abs(freqs - f)))]  # noqa: E731
         assert at(0.2) > at(0.7), f"channel {ch}: expected drift below the pulse band"
 
-    # The unfiltered answer is not uniformly wrong -- it is worse than that.
-    # 850L's pulse is strong enough to beat the drift tail and reads correctly;
-    # the three weaker channels do not and land near the band edge. So a raw
-    # argmax gives channels that disagree by ~28 bpm while each looks like a
-    # plausible resting rate on its own, which is precisely the failure that is
-    # hard to notice.
+    # Worse than uniformly wrong: 850L's pulse beats the drift tail and reads
+    # correctly, but the three weaker channels don't and land near the band
+    # edge. So a raw argmax gives channels that disagree by ~28 bpm while
+    # each looks like a plausible resting rate on its own.
     naive = [_peak_bpm(numpy, a[:, ch], fs, 0.7, 3.0) for ch in range(a.shape[1])]
     assert max(naive) - min(naive) > 20, (
         f"expected unfiltered peaks to disagree sharply, got {naive}"
@@ -135,23 +123,21 @@ def _butter_highpass(numpy, x, fs, corner_hz=0.6, order=4):
 
 
 def test_the_recording_holds_two_comparable_components(frames):
-    """Both 44.5 and 72.5 bpm are real, on every channel.
+    """Both 44.5 and 72.5 bpm are real components, present on every channel.
 
     Under a 4th-order Butterworth high-pass each is an interior local maximum
     on all four traces -- neither is a band-edge artefact, and neither is
-    confined to one emitter. Their amplitudes are of the same order, ranging
-    from roughly 2:1 in favour of the slow component to 2:1 against it.
-
-    This is the property the derivation has to cope with, and it is stronger
-    than what an earlier version of this file asserted."""
+    confined to one emitter. Their amplitudes are the same order of
+    magnitude, ranging from roughly 2:1 in favour of the slow component to
+    2:1 against it. The derivation has to cope with this."""
     numpy = pytest.importorskip("numpy")
     a = numpy.array([f["ch"] for f in frames], dtype=float)
     fs = EXPECTED_RATE_HZ
 
-    # Bin width here is 0.0083 Hz and a Hanning main lobe is ~2 bins either
-    # side, so comparing against +/-2 stays inside the same lobe and barely
-    # distinguishes a peak from a shoulder. 8 clears the lobe; every channel
-    # passes out to 24, so this is not a tuned threshold.
+    # Bin width is 0.0083 Hz and a Hanning main lobe is ~2 bins either side,
+    # so +/-2 would stay inside the same lobe and barely tell a peak from a
+    # shoulder. 8 clears the lobe; every channel passes out to 24, so this
+    # isn't a tuned threshold.
     margin = 8
 
     ratios = []
@@ -175,29 +161,26 @@ def test_the_recording_holds_two_comparable_components(frames):
         f"expected comparable amplitudes, got ratios {ratios}"
     )
 
-    # The near-tie is the property that makes a per-channel argmax unusable:
-    # on these channels the two components are within a few percent, so which
-    # one wins is decided by whatever filter runs first rather than by the
-    # signal. A one-second moving average gives 3-1 for the fast component; a
-    # 4th-order Butterworth gives 2-2 on the same data.
-    #
-    # Asserted as a fact about the recording rather than as a disagreement
-    # between two particular filters -- the latter would go red the moment
-    # anyone retunes a helper here, with nothing about the data having changed.
+    # This near-tie is what makes a per-channel argmax unusable: the two
+    # components are within a few percent, so which one wins depends on
+    # whatever filter runs first, not the signal. A one-second moving average
+    # gives 3-1 for the fast component; a 4th-order Butterworth gives 2-2 on
+    # the same data. Checked as a fact about the recording, not as a
+    # disagreement between two filters, since the latter would break if
+    # someone retunes a helper with the data unchanged.
     near_ties = sum(1 for r in ratios if 0.9 < r < 1.1)
     assert near_ties >= 2, f"expected at least two near-ties, got ratios {ratios}"
 
 
 def test_850L_is_the_only_channel_with_a_decisive_margin(frames):
-    """The one channel-level fact that survives every method tried.
+    """850L has roughly double the pulse SNR of the others and reports 72.5
+    bpm under a moving average, a Butterworth and a raw peak alike, because
+    its slow-to-fast amplitude ratio is ~0.49 rather than the near-ties
+    elsewhere.
 
-    850L has roughly double the pulse SNR of the others and reports 72.5 bpm
-    under a moving average, a Butterworth and a raw peak alike, because its
-    slow-to-fast amplitude ratio is ~0.49 rather than the near-ties elsewhere.
-
-    Not grounds for nominating it primary -- one recording, and the physics
-    reason (850nm IR is the conventional PPG wavelength) is not the same as
-    evidence that this emitter is always best seated. It is grounds for a
+    Not grounds for making it the primary channel -- one recording, and the
+    physics reason (850nm IR is the conventional PPG wavelength) isn't
+    evidence this emitter is always best seated. It is grounds for a
     per-channel confidence that can notice the difference."""
     numpy = pytest.importorskip("numpy")
     a = numpy.array([f["ch"] for f in frames], dtype=float)
@@ -212,16 +195,10 @@ def test_850L_is_the_only_channel_with_a_decisive_margin(frames):
 
 
 def test_fixture_lost_no_samples(frames):
-    """The property that makes an index-based clock legitimate on this data.
-
-    The derivation reconstructs time from sample index rather than from
-    mono_ts_ms. That is only sound if nothing went missing between the headband
-    and the file -- and three paths could drop a sample silently, none of them
-    visible in the samples themselves. `seq` is the bridge's monotonic counter,
-    so a contiguous run is proof rather than assumption.
-
-    An earlier version of this fixture predated `seq` and this test asserted
-    that absence as a known limitation. It has been re-captured."""
+    """The derivation reconstructs time from sample index, not mono_ts_ms.
+    That's only sound if nothing went missing between the headband and the
+    file, which the samples themselves can't show. `seq` is the bridge's
+    monotonic counter, so a contiguous run is proof, not assumption."""
     seqs = [f["seq"] for f in frames]
     assert all(s is not None for s in seqs), "re-capture with a bridge that emits seq"
     assert seqs == list(range(seqs[0], seqs[0] + len(seqs))), "sample(s) lost in capture"
@@ -229,9 +206,8 @@ def test_fixture_lost_no_samples(frames):
 
 # ── the exertion pair ────────────────────────────────────────────────────────
 # Two captures minutes apart on the same headband: 60s at rest, then ~1 minute
-# of exercise, then 150s sitting still. What makes them worth 390KB is that
-# together they answer a question neither answers alone -- which spectral
-# component is the heart -- by experiment rather than by inference.
+# of exercise, then 150s sitting still. Together they answer, by experiment,
+# which spectral component is the heart.
 
 REST_FIXTURE = Path(__file__).parent / "fixtures" / "optics_rest_60s.jsonl.gz"
 RECOVERY_FIXTURE = Path(__file__).parent / "fixtures" / "optics_recovery_150s.jsonl.gz"
@@ -260,13 +236,10 @@ def test_exertion_pair_lost_no_samples():
 
 
 def test_the_pulse_rises_after_exertion():
-    """The end-to-end check no synthetic signal can provide.
-
-    A component that responds to exercise is cardiac. Every channel agrees in
-    both conditions and every channel is higher after exertion, which is what
-    identifies ~68/76 bpm as the heart rather than merely as the largest peak.
-
-    The wearer's watch recorded a peak of 97 bpm during the exercise itself."""
+    """A component that responds to exercise is cardiac. Every channel agrees
+    in both conditions and every channel is higher after exertion, which is
+    what identifies ~68/76 bpm as the heart rather than just the largest
+    peak. The wearer's watch recorded a peak of 97 bpm during exercise."""
     numpy = pytest.importorskip("numpy")
     rest = _channel_peaks(numpy, _load(REST_FIXTURE))
     recovery = _channel_peaks(numpy, _load(RECOVERY_FIXTURE))
@@ -281,15 +254,15 @@ def test_the_pulse_rises_after_exertion():
 def _tracked_bpms(numpy, frames):
     """Every window's rate over a recording, through the production path.
 
-    `HeartRateTracker`, not `estimate_window` directly: the tracker is what
-    `optics_processing` calls, and it owns the anchor, the continuity check and
-    the re-acquisition after two rejections. Threading `previous_bpm` by hand --
-    the obvious way to write this -- models a path no session takes, and it
-    matters here: doing so leaves the recovery fixture with a single accepted
-    window, because nothing ever drops a bad anchor.
+    Uses `HeartRateTracker`, not `estimate_window` directly: the tracker is
+    what `optics_processing` calls, and it owns the anchor, the continuity
+    check, and re-acquisition after two rejections. Threading `previous_bpm`
+    by hand would model a path no real session takes, and matters here: it
+    would leave the recovery fixture with a single accepted window, since
+    nothing would ever drop a bad anchor.
 
-    25s windows stepped 10s, which is what `RATE_WINDOW_SECONDS` and the poller
-    cadence produce. None for a window that produced no rate.
+    25s windows stepped 10s, matching `RATE_WINDOW_SECONDS` and the poller
+    cadence. None for a window that produced no rate.
     """
     from src.app.services.ppg_processing import HeartRateTracker
 
@@ -306,24 +279,18 @@ def _tracked_bpms(numpy, frames):
 
 
 def test_the_derived_rate_rises_after_exertion():
-    """The half `test_the_pulse_rises_after_exertion` does not cover (#71).
+    """Covers what `test_the_pulse_rises_after_exertion` does not.
 
-    That test takes a spectral peak per channel over the whole recording, so it
-    proves the *recording* contains an exertion rise -- worth knowing, since it
-    is what identifies ~68/76 bpm as cardiac rather than merely the largest
-    peak. It proves nothing about the code that derives a rate from it, despite
-    being documented as "the end-to-end check no synthetic signal can provide".
-
-    Both are worth having and they check different things: the spectral one says
-    the recording is valid evidence, this one says the code reads it.
+    That test takes a spectral peak per channel over the whole recording, so
+    it proves the *recording* contains an exertion rise. It proves nothing
+    about the code that derives a rate from it. This test checks the code.
 
     **Compared over the first 60s of recovery, not the whole file.** The
     recovery fixture is 150s of a heart returning to rest, so its median sits
-    near the resting rate by construction -- roughly 68 against rest's 69. That
-    is the statistic, not the derivation: issue #71 read a whole-recording
-    median as evidence the rise was not tracked. Matching the rest fixture's own
-    60s window is the like-for-like comparison, and there the derivation does
-    follow it.
+    near the resting rate by construction -- roughly 68 against rest's 69.
+    That's a fact about the whole-recording statistic, not evidence the rise
+    was tracked. Matching the rest fixture's own 60s window is the
+    like-for-like comparison, and there the derivation does follow it.
     """
     numpy = pytest.importorskip("numpy")
     rest = [b for b in _tracked_bpms(numpy, _load(REST_FIXTURE)) if b is not None]
@@ -341,10 +308,9 @@ def test_the_derived_rate_rises_after_exertion():
         f"spectral peaks rise {REST_BPM} -> {RECOVERY_BPM} on every channel"
     )
 
-    # And not because of the bad anchor the next test pins. That window reads
-    # 127.5 bpm, which would drag any average upwards on its own -- so the rise
-    # has to survive dropping it, or this test would start failing as a side
-    # effect of fixing something else.
+    # Not because of the bad anchor the next test checks. That window reads
+    # 127.5 bpm, which would drag any average up on its own, so the rise has
+    # to survive dropping it.
     without_anchor = [b for b in early if b <= 97.0]
     assert without_anchor, "every early recovery window was the implausible one"
     assert float(numpy.median(without_anchor)) > rest_bpm + 3.0, (
@@ -352,32 +318,27 @@ def test_the_derived_rate_rises_after_exertion():
     )
 
 
-# Fixed by #105: the tracker holds an unanchored candidate until a second
-# window agrees, so the 127.5 bpm window is never published. Before that this
-# was a strict xfail carrying the measurement; the assertion is unchanged.
+# The tracker holds an unanchored candidate until a second window agrees, so
+# the 127.5 bpm window is never published.
 def test_the_first_window_after_exertion_is_a_plausible_rate():
-    """What the recording can support, and what the derivation publishes.
-
-    Separate from the test above because it fails for a different reason and
-    would be fixed by a different change. That one asks whether the rise is
-    tracked at all; this asks whether the first reading after motion is one a
-    parent's chart should carry.
+    """Separate from the test above because it fails for a different reason.
+    That one asks whether the rise is tracked at all; this asks whether the
+    first reading after motion is one a parent's chart should carry.
     """
     numpy = pytest.importorskip("numpy")
     recovery = _tracked_bpms(numpy, _load(RECOVERY_FIXTURE))
 
     first = next((b for b in recovery if b is not None), None)
     assert first is not None, "no window of the recovery fixture produced a rate"
-    # The watch measured 97 during the exercise; nothing after it can be higher.
+    # The watch measured 97 during exercise; nothing after can be higher.
     assert first <= 97.0, f"first accepted recovery rate {first:.1f} bpm exceeds the watch peak"
 
 
 def test_the_44_bpm_component_is_not_cardiac():
-    """It is present in both captures and moves in neither.
-
-    That is what rules it out as a heart rate and makes it a known interferer.
-    Left unidentified -- respiration or perfusion are both plausible at 0.74 Hz
-    -- because one wearer on one afternoon cannot settle which."""
+    """It's present in both captures and moves in neither, which rules it out
+    as a heart rate and makes it a known interferer. Left unidentified --
+    respiration or perfusion are both plausible at 0.74 Hz -- since one
+    wearer on one afternoon can't settle which."""
     numpy = pytest.importorskip("numpy")
 
     def ratio_to_peak(frames):
@@ -401,16 +362,14 @@ def test_the_44_bpm_component_is_not_cardiac():
 
 
 def test_motion_settling_produces_octave_errors_that_agreement_cannot_catch():
-    """The failure mode that matters most, and the reason agreement is not enough.
+    """In the first 25s after exercise every channel reports ~127 bpm --
+    roughly twice the true rate -- and they all agree. Later windows split
+    113/58, the same signal read an octave apart in both directions.
 
-    In the first 25s after exercise every channel reports ~127 bpm -- roughly
-    twice the true rate -- and they all agree. Later windows split 113/58, which
-    is the same signal read an octave apart in both directions.
-
-    So a derivation cannot treat cross-channel agreement as correctness: every
-    channel makes the same octave error. It needs a continuity constraint and
-    harmonic disambiguation, and it should report low confidence for ~25s after
-    motion rather than reporting a rate."""
+    So cross-channel agreement can't mean correctness: every channel makes
+    the same octave error. The derivation needs a continuity constraint and
+    harmonic disambiguation, and should report low confidence for ~25s after
+    motion instead of a rate."""
     numpy = pytest.importorskip("numpy")
     frames = _load(RECOVERY_FIXTURE)
     a = numpy.array([f["ch"] for f in frames], dtype=float)

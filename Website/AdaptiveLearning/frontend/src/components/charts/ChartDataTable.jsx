@@ -7,32 +7,22 @@
  * directly; the placement is the part that is easy to get wrong and impossible
  * to see when it is.
  *
- * Recharts renders bare `<svg>` with no accessible name and no structure a
- * screen reader can walk, so the weekly signal panel — the whole of what a
- * parent or teacher is shown about a child's week — announced as nothing at
- * all. The stat tiles above it are readable; the trend and the distribution
- * were not.
+ * Recharts renders a bare `<svg>` with no accessible name, so the weekly
+ * signal panel announced as nothing at all. Two parts, both needed:
  *
- * Two parts, and both are needed:
+ * - **`role="img"` with a summary** on the chart container, stopping a reader
+ *   from tabbing through meaningless `<path>` nodes.
+ * - **A `sr-only` table** carrying the actual numbers, so a screen-reader
+ *   user isn't left with just "focus ranged 42% to 78%".
  *
- * - **`role="img"` with a summary** on the chart container. The role is what
- *   stops a reader tabbing through hundreds of meaningless `<path>` nodes, and
- *   the label is the sentence that replaces them. On its own it is a headline
- *   with the data thrown away.
- * - **A `sr-only` table** carrying the numbers. A sighted reader can pick a
- *   Tuesday out of a line; without this, a screen-reader user gets "focus
- *   ranged 42% to 78%" and no way to ask which day was which.
- *
- * Deliberately not `aria-hidden` on the SVG with a table beside it: some
- * screen readers still surface titled SVG content, and a chart that announces
- * both its own noise and a table is worse than one that announces the table.
+ * Not `aria-hidden` on the SVG, since some screen readers still surface
+ * titled SVG content alongside the table either way.
  */
 
 /** The rows behind a chart, for screen readers only.
  *
- * `columns` is `[{key, label, unit}]`. A cell with no number reads as
- * "not recorded" rather than as a blank, which is indistinguishable from a
- * table that failed to render.
+ * `columns` is `[{key, label, unit}]`. A cell with no number reads as "not
+ * recorded" rather than a blank, which would look like a broken table.
  */
 import { readValue } from './describeSeries'
 

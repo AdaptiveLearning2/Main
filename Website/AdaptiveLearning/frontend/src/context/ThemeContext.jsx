@@ -4,12 +4,10 @@ import { readPref, writePref } from '../lib/localPref'
 const ThemeContext = createContext()
 
 export function ThemeProvider({ children }) {
-  // Guarded, and this is the one that most needed it: `localStorage`
-  // *throws* rather than returning null when storage is unavailable --
-  // Safari private browsing, site data blocked, a partitioned iframe -- and
-  // an unguarded read here happens inside this provider's own `useState`
-  // initialiser. It wraps every route, so the throw took down the whole
-  // application rather than costing one remembered theme.
+  // `readPref` guards against `localStorage` throwing (Safari private
+  // browsing, blocked site data). This runs in the provider's own
+  // `useState` initializer, which wraps every route, so an unguarded throw
+  // here would crash the whole app instead of just losing the theme.
   const [dark, setDark] = useState(() => readPref('al_theme') === 'dark')
 
   useEffect(() => {

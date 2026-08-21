@@ -1,17 +1,14 @@
 import { matchPath } from 'react-router-dom'
 
-// Ordered, because the first match wins and the patterns overlap:
-// `/teacher/sessions/:id` has to be tested before `/teacher/sessions`, or a
-// session review is titled "Sessions".
+// Order matters: the first match wins and patterns overlap, so a more
+// specific route (`/teacher/sessions/:id`) must come before its prefix
+// (`/teacher/sessions`).
 //
-// Kept as one list beside the route table it mirrors, rather than pushed into
-// 25 page components. One list is checkable against App.jsx at a glance; 25
-// hook calls are not, and the pages that would quietly go without one are the
-// rarely opened ones nobody notices.
+// Kept as one list here instead of a title hook in each of the 25 page
+// components, so it stays easy to check against the route table at a glance.
 //
-// In `lib/` rather than beside the component so the file exports only data and
-// a pure function -- a module that exports both a component and a helper
-// breaks fast refresh for the whole file.
+// Lives in `lib/`, not beside a component, because a file that exports both
+// a component and a helper breaks fast refresh for the whole file.
 const TITLES = [
   ['/login',                        'Sign in'],
   ['/register',                     'Create account'],

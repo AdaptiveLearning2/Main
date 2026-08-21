@@ -3,27 +3,19 @@ import { motion } from 'framer-motion'
 /** The headline figure on a dashboard: a label, a number, a tinted icon.
  *
  * The student and teacher dashboards each carried a copy of this, identical
- * but for one line -- the hover overlay's gradient, which is the only thing
- * either of them wanted different. That is the shape of duplication worth
- * removing: two files that must be edited together, where nothing says so, and
- * where the difference between them is a single token.
+ * but for the hover overlay's gradient.
  *
  * `color` and `hoverTint` are raw Tailwind class strings rather than named
- * tones, matching how the call sites already wrote them. A name map would be
- * tidier and is the wrong trade here: these cards use per-card gradients
- * (`from-indigo-500 to-indigo-600`, `from-green-500 to-emerald-600`, ...) that
- * a fixed palette would have to enumerate, and a missing entry renders an
- * unstyled chip rather than failing.
+ * tones, matching how call sites already wrote them -- a fixed palette would
+ * have to enumerate every per-card gradient and render an unstyled chip on
+ * a miss.
  *
- * **`value ?? '—'` is load-bearing.** These render "not loaded" as an em dash,
- * which is why the dashboards can pass `null` for a figure whose read failed
- * instead of a zero -- the difference between a student who answered nothing
- * and a request that did not come back. Do not turn it into `value || '—'`: 0
- * is a real figure a student can have.
+ * **`value ?? '—'` is load-bearing.** Renders "not loaded" as an em dash, so
+ * callers can pass `null` for a failed read instead of a zero. Do not turn it
+ * into `value || '—'`: 0 is a real figure a student can have.
  *
  * Not to be confused with the compact tile in `pages/teacher/Students.jsx`,
- * which shares nothing but the idea -- different props, no motion, a third the
- * size, and it lives inside a table row rather than a dashboard grid.
+ * which shares nothing but the idea.
  */
 export default function StatCard({
   icon: Icon,

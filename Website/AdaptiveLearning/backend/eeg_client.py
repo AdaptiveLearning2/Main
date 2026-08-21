@@ -9,13 +9,10 @@ EEG_API_URL     = os.getenv("EEG_API_URL", "http://127.0.0.1:8001")
 EEG_API_TOKEN   = os.getenv("EEG_API_TOKEN")
 EEG_ADMIN_TOKEN = os.getenv("EEG_ADMIN_TOKEN")
 
-# Not validated at import time: main.py imports this module unconditionally,
-# and the rest of the codebase already treats the EEG sidecar as optional
-# hardware (every caller gates on is_alive() first). Requiring the tokens here
-# would mean the whole website backend refuses to start for anyone doing
-# frontend or Supabase-only work with no headband involved. Deferring the
-# check to the functions that actually send the header keeps the "no
-# guessable fallback" guarantee without that coupling.
+# Not validated at import time: the EEG sidecar is optional hardware, so
+# requiring these tokens here would make the whole backend refuse to start
+# for anyone doing frontend/Supabase-only work with no headband involved.
+# Checked instead in the functions that actually send the header.
 
 
 def _learner_headers() -> dict:
@@ -63,10 +60,8 @@ def stop_session(device_id: str = DEFAULT_DEVICE_ID) -> dict:
 def get_state(device_id: str = DEFAULT_DEVICE_ID, timeout: float = 2.0) -> Optional[dict]:
     """Returns the latest interpreted EEG snapshot for device_id, or None if idle / unavailable."""
     # Built before the try, so a missing token raises instead of being caught
-    # below and reported as "sidecar unavailable". The two failures differ in
-    # kind: a stopped sidecar is transient and recovers on its own, while a
-    # missing token never will, and would otherwise present forever as "EEG
-    # isn't working" with nothing pointing at configuration.
+    # below and reported as "sidecar unavailable". A stopped sidecar is
+    # transient; a missing token never fixes itself and needs to be seen.
     headers = _learner_headers()
     try:
         r = requests.get(
@@ -142,8 +137,7 @@ def list_devices() -> list:
         return []
 
 
-# Moved to `signal_mapping`, which both ingestion paths import. Re-exported
-# here so existing callers keep working: this module is the *pull transport*,
-# and the push path should not have to import an HTTP client to reach a pure
-# function. New code should import from signal_mapping directly.
+# Lives in `signal_mapping`, which both ingestion paths import. Re-exported
+# here so existing callers keep working. New code should import from
+# signal_mapping directly.
 from signal_mapping import map_eeg_to_cognitive  # noqa: E402,F401

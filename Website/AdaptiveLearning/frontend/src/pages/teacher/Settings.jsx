@@ -8,17 +8,8 @@ import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
 
-// "Notifications" is gone rather than fixed. It offered three switches -- a new
-// student enrolling, a weekly report every Monday, alerts on generation
-// failures -- and none of them had anything behind them: there is no push
-// infrastructure in this product, no service worker, no VAPID key and no
-// scheduled fan-out. The switches held React state and were forgotten on
-// navigation.
-//
-// The same call was already made once, for the student's `practice_reminders`:
-// it stopped describing notifications and became what it actually is, a banner.
-// A switch that persists nothing is worse than an absent feature, because it
-// tells a teacher a thing is on.
+// No "Notifications" tab: there's no push infrastructure, so a switch here
+// would persist nothing while claiming to be on.
 const TABS = ['General', 'Security', 'Appearance']
 
 export default function TeacherSettings() {
@@ -27,10 +18,7 @@ export default function TeacherSettings() {
   const navigate                = useNavigate()
   const [tab, setTab]           = useState('General')
 
-  // `null` until the profile lands, so the field never shows a value the
-  // teacher did not set. It used to be seeded from the email prefix, which
-  // meant "Save Changes" on an untouched form would have written that guess
-  // over a real display name -- if it had written anything at all.
+  // null until the profile loads, so the field never shows a value the teacher didn't set.
   const [displayName, setDisplayName] = useState(null)
   const [savingName, setSavingName]   = useState(false)
 
@@ -72,11 +60,8 @@ export default function TeacherSettings() {
 
     setSavingPw(true)
     try {
-      // The current password is *checked*, not decoration. Supabase's
-      // `updateUser` does not ask for it, so a form that collects one and never
-      // verifies it is claiming a protection it does not provide -- and on a
-      // school machine left signed in, that protection is the point: without it
-      // anyone passing the desk can take the account.
+      // Supabase's updateUser doesn't verify the current password itself, so
+      // this does -- otherwise anyone at a signed-in school machine could change it.
       const { error: reauth } = await supabase.auth.signInWithPassword({
         email: user?.email,
         password: pw.current,
@@ -108,7 +93,6 @@ export default function TeacherSettings() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">Manage your teacher account.</p>
       </motion.div>
 
-      {/* tab bar */}
       <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 mb-6 overflow-x-auto">
         {TABS.map(t => (
           <button key={t} onClick={() => setTab(t)}
@@ -168,11 +152,6 @@ export default function TeacherSettings() {
         {tab === 'Security' && (
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm space-y-4">
             <h3 className="font-black text-gray-900 dark:text-white">Change Password</h3>
-            {/* Controlled, and submitted. These were three uncontrolled inputs
-                next to a button that only raised a toast: a teacher could type
-                a new password, be told it had been updated, and still be on the
-                old one -- which is worse than the button not existing, because
-                they would not try again. */}
             {[
               { key: 'current', label: 'Current password', auto: 'current-password' },
               { key: 'next',    label: 'New password',     auto: 'new-password' },

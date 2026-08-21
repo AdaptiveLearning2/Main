@@ -1,29 +1,24 @@
-"""Named face landmarks from MediaPipe Face Mesh (Phase 11, step 1).
+"""Named face landmarks from MediaPipe Face Mesh.
 
-`face_geometry` takes named landmarks and returns head pose and gaze. This is
-what produces the names. It is deliberately the only file that knows a mesh
-index from a face part, so swapping detector means rewriting this and nothing
-else.
+`face_geometry` takes named landmarks and returns head pose and gaze. This
+file produces the names -- the only place that maps a mesh index to a face
+part, so swapping detectors only means rewriting this file.
 
-**The index table below is unverified against hardware.** MediaPipe 1.0.0 does
-not ship the canonical face mesh as a data file, and there is no camera in CI or
-on the machine this was written on, so the mapping from mesh index to face part
-comes from the published Face Mesh topology rather than from anything measured
-here. That is a real gap and it is the kind that fails silently: a left/right
-swap produces a gaze that is *mirrored*, not obviously broken, and every
-aggregate over it looks healthy.
+**The index table below is unverified against hardware.** MediaPipe 1.0.0
+doesn't ship the canonical mesh as a data file, and there's no camera in CI,
+so the mapping comes from published topology, not measurement. This can fail
+silently: a left/right swap produces a *mirrored* gaze, not an obviously
+broken one, so every aggregate over it still looks healthy.
 
-So the mapping is not trusted. `check_topology` re-derives the relationships a
-real face must satisfy -- eyes above mouth, nose between the eyes, chin below
-everything -- and a set that violates them is refused rather than passed on. A
-wrong index shows up on the first frame as a named refusal instead of as a
-mirrored number on a dashboard six weeks later. It is not a substitute for the
-manual camera check, which is what would confirm the table itself; it is what
-makes shipping the table before that check safe.
+So the mapping isn't trusted outright. `check_topology` re-derives the
+relationships a real face must satisfy (eyes above mouth, nose between the
+eyes, chin below everything) and refuses a set that violates them -- a wrong
+index shows up as a first-frame refusal instead of a mirrored number nobody
+questions. It doesn't replace the manual camera check that confirms the
+table itself; it's what makes shipping before that check safe.
 
-Nothing here is imported unless a caller asks for a landmarker, matching
-`face_roi.FaceLocator`: MediaPipe is a heavy optional dependency and a
-deployment that never enables the camera must not need it installed.
+Nothing here is imported unless a caller asks for a landmarker: MediaPipe is
+a heavy optional dependency a headband-only deployment shouldn't need.
 """
 
 from __future__ import annotations
@@ -39,19 +34,17 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Mesh index per landmark name, for MediaPipe Face Mesh with iris refinement
-# (`refine_landmarks=True`, which is what supplies 468-477).
+# (`refine_landmarks=True`, which supplies 468-477).
 #
-# **Left and right are the subject's own**, matching `face_geometry`'s canonical
-# model. MediaPipe numbers the mesh on the canonical face, so the subject's left
-# eye appears on the *right* of a non-mirrored image -- the single most likely
-# thing in this file to be backwards, and precisely what `check_topology`
-# cannot detect on its own, since a mirrored face is still a valid face.
-# Confirming it needs the manual camera check. The frame is not mirrored, so
-# the subject's own left is the image right: looking hard left drives `gaze.x`
-# POSITIVE and turning the head left drives `yaw` positive. Note that `gaze`
-# cannot see a swap of these labels at all -- it averages both eyes in image
-# coordinates -- so `head_pose` is what adjudicates, by refusing a mirrored set
-# outright rather than answering it wrongly.
+# **Left and right are the subject's own**, matching `face_geometry`'s
+# canonical model. MediaPipe numbers the mesh on the canonical face, so the
+# subject's left eye appears on the *right* of a non-mirrored image -- the
+# most likely thing here to be backwards, and something `check_topology`
+# can't catch on its own, since a mirrored face is still a valid face. The
+# frame is not mirrored: looking hard left drives `gaze.x` positive and
+# turning the head left drives `yaw` positive. `gaze` itself can't detect a
+# label swap (it averages both eyes in image coordinates), so `head_pose`
+# adjudicates by refusing a mirrored set outright.
 MEDIAPIPE_INDICES = {
     "left_eye_outer": 263,
     "left_eye_inner": 362,
@@ -69,26 +62,24 @@ MEDIAPIPE_INDICES = {
     "chin": 152,
 }
 
-# Below this, a landmark is treated as absent rather than as a position. Face
-# Mesh reports every point on every frame whether or not it can see it, so an
-# occluded corner arrives as a confident-looking coordinate somewhere plausible.
-# Absent is a state `face_geometry` handles -- it skips the point and reports
-# how many it used -- and a fabricated one is not.
+# Below this, treat a landmark as absent rather than as a position. Face Mesh
+# reports every point on every frame regardless of whether it can see it, so
+# an occluded corner arrives as a confident-looking but fake coordinate.
 MIN_VISIBILITY = 0.5
 
 
 def named_landmarks(points: Any, width: int, height: int) -> dict:
     """`{name: (x, y)}` in pixels, for the names this module knows.
 
-    `points` is a sequence indexable by mesh index, each item exposing `x`, `y`
-    and optionally `visibility` / `presence` -- the shape MediaPipe returns.
-    Normalised coordinates are scaled by the frame size, because everything
-    downstream works in pixels and a fit over normalised coordinates would
-    silently stretch every face by the frame's aspect ratio.
+    `points` is a sequence indexable by mesh index, each item exposing `x`,
+    `y` and optionally `visibility` / `presence` -- the shape MediaPipe
+    returns. Normalised coordinates are scaled to pixels here since a fit
+    over normalised coordinates would silently stretch every face by the
+    frame's aspect ratio.
 
-    Names whose index is missing, non-finite or too poorly seen are **omitted**,
-    not set to None: `face_geometry` counts the names it was given, and an
-    entry present with no value would be counted as supplied.
+    Names whose index is missing, non-finite or too poorly seen are
+    **omitted**, not set to None: `face_geometry` counts the names it was
+    given, and a None entry would be counted as supplied.
     """
     out: dict[str, tuple[float, float]] = {}
     if points is None or width <= 0 or height <= 0:
@@ -103,9 +94,9 @@ def named_landmarks(points: Any, width: int, height: int) -> dict:
         seen = getattr(point, "visibility", None)
         if seen is None:
             seen = getattr(point, "presence", None)
-        # Absent visibility means the detector does not report it, which is not
-        # the same as reporting zero. Face Mesh's own landmarks often carry no
-        # visibility at all, so a missing field must not reject every point.
+        # A missing visibility field is not the same as zero visibility --
+        # Face Mesh often reports no visibility at all, so a missing field
+        # must not reject every point.
         if seen is not None and seen < MIN_VISIBILITY:
             continue
 
@@ -122,17 +113,15 @@ def named_landmarks(points: Any, width: int, height: int) -> dict:
 def check_topology(landmarks: dict) -> str | None:
     """Reason the named set cannot be a face, or None if it could be.
 
-    This exists because the index table above is unverified. It re-derives what
-    must be true of any real face, from the landmarks themselves, so a wrong
-    index is caught on the first frame rather than becoming a mirrored gaze
-    nobody questions.
+    Exists because the index table above is unverified: this re-derives what
+    must be true of any real face, so a wrong index is caught on the first
+    frame instead of becoming a mirrored gaze nobody questions.
 
-    Deliberately weak. Every check here holds for a face at any yaw, pitch or
-    roll a neck allows, and for any face size -- a test that only passed for a
-    square-on adult would reject the children this is for. It catches gross
-    misassignment, which is the failure mode of a hand-written index table; it
-    cannot catch a left/right mirror, because a mirrored face satisfies every
-    relation below. Only the camera check catches that.
+    Deliberately weak. Every check holds for any yaw/pitch/roll a neck
+    allows and any face size, since a check tuned to a square-on adult would
+    reject the children this is for. It catches gross misassignment, not a
+    left/right mirror (a mirrored face satisfies every relation below) --
+    only the camera check catches that.
     """
     def mid_y(*names):
         ys = [landmarks[n][1] for n in names if n in landmarks]
@@ -149,8 +138,8 @@ def check_topology(landmarks: dict) -> str | None:
     if mouth is not None and chin is not None and mouth >= chin:
         return "mouth_below_chin"
 
-    # The nose sits between the eye corners horizontally. True at any yaw short
-    # of profile, where the fit is refused anyway.
+    # The nose sits between the eye corners horizontally, at any yaw short of
+    # profile (where the fit is refused anyway).
     xs = [landmarks[n][0] for n in ("left_eye_outer", "right_eye_outer")
           if n in landmarks]
     if len(xs) == 2 and "nose_tip" in landmarks:
@@ -158,9 +147,9 @@ def check_topology(landmarks: dict) -> str | None:
         if not (min(xs) <= nose <= max(xs)):
             return "nose_outside_eyes"
 
-    # An iris lies within its own eye's corners. Catches an iris index paired
-    # with the wrong eye, which is otherwise invisible: both are plausible
-    # points on a face.
+    # An iris lies within its own eye's corners -- catches an iris index
+    # paired with the wrong eye, which would otherwise be invisible since
+    # both points look plausible on a face.
     for side in ("left", "right"):
         iris = landmarks.get(f"{side}_iris")
         outer = landmarks.get(f"{side}_eye_outer")
@@ -178,20 +167,17 @@ def check_topology(landmarks: dict) -> str | None:
 
 MODEL_ENV = "FACE_LANDMARK_MODEL_PATH"
 
-# Pinned to `/1/`, **not** `/latest/`. Google serves both and they are the same
-# bytes today, but `latest` is by definition a moving target and a checksum
-# pinned against one is a setup failure waiting for the next release. The
-# emotion model has the same property for the same reason -- its URL carries a
-# git revision rather than a branch.
+# Pinned to `/1/`, not `/latest/`. Google serves both with the same bytes
+# today, but `latest` is a moving target, and a checksum pinned against it
+# would fail on the next release. Same reasoning as the emotion model's URL.
 MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/face_landmarker/"
              "face_landmarker/float16/1/face_landmarker.task")
 MODEL_SHA256 = "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
 MODEL_BYTES = 3_758_596
 
-# Well above the real size and well below anything that would fill a disk. The
-# size check is not the security control -- the digest is -- but it bounds what
-# a redirected or hostile URL can make this process write before the digest is
-# ever computed.
+# Well above the real model size, well below anything that fills a disk.
+# The digest is the real security control; this just bounds what a
+# redirected or hostile URL can write before the digest is checked.
 MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
 DOWNLOAD_TIMEOUT_S = 60
 
@@ -216,11 +202,11 @@ def verify(path: Path) -> bool:
 def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Path:
     """Return a verified model path, downloading once if permitted.
 
-    A **setup-time** step, mirroring `face_emotion.ensure_model`, and called
-    from `start.ps1 -Gaze`. `FaceMeshLandmarker` deliberately does not call it:
-    a sidecar that installs on a student's laptop must not reach the internet
-    the first time a lesson opens a camera, and a network failure there would
-    look like the feature being broken rather than the install being incomplete.
+    A **setup-time** step, mirroring `face_emotion.ensure_model`, called from
+    `start.ps1 -Gaze`. `FaceMeshLandmarker` deliberately never calls it: the
+    sidecar must not reach the internet the first time a lesson opens a
+    camera, since a network failure there would look like a broken feature
+    rather than an incomplete install.
     """
     path = Path(path) if path is not None else default_model_path()
     if verify(path):
@@ -230,11 +216,9 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
         try:
             path.unlink()
         except OSError as exc:
-            # Windows locks an open file, and this project's own convention is
-            # a sidecar per window -- so an earlier `-Gaze` session still
-            # holding the model open turns a designed failure mode into an
-            # unhandled PermissionError from a setup script. Reported as what
-            # it is instead.
+            # Windows locks open files, so an earlier `-Gaze` session still
+            # holding the model open would otherwise surface as a raw
+            # PermissionError instead of a clear message.
             raise OSError(
                 f"could not replace the landmark model at {path}: {exc}. "
                 f"Stop any running sidecar and re-run."
@@ -263,9 +247,8 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
         raise
 
     if not verify(path):
-        # Deleted rather than left behind: the next run checks existence before
-        # it checks anything else, so a partial or substituted file on disk
-        # would be trusted.
+        # Delete rather than leave behind: the next run checks existence
+        # first, so a partial or substituted file would otherwise be trusted.
         path.unlink(missing_ok=True)
         raise ValueError(
             f"landmark model checksum mismatch; expected {MODEL_SHA256[:16]}..."
@@ -276,46 +259,34 @@ def ensure_model(path: Path | None = None, *, allow_download: bool = True) -> Pa
 class _TasksMesh:
     """MediaPipe's Tasks `FaceLandmarker` behind the legacy `process()` shape.
 
-    **MediaPipe 1.0.0 removed `mp.solutions` entirely** -- the whole legacy
-    Solutions API, including the `FaceMesh` this module was written against.
-    `mp.solutions.face_mesh` raises `AttributeError: module 'mediapipe' has no
-    attribute 'solutions'`, which reads like a broken install and is not one.
-    The Tasks API replaces it, with a different call shape and a model bundle
-    that is no longer compiled into the wheel.
+    **MediaPipe 1.0.0 removed `mp.solutions` entirely**, the legacy Solutions
+    API this module was originally written against. `mp.solutions.face_mesh`
+    now raises `AttributeError`, which reads like a broken install and
+    isn't one -- the Tasks API replaces it, with a different call shape and
+    a model bundle no longer compiled into the wheel.
 
-    Adapting here rather than rewriting `locate()` is deliberate. `locate()` is
-    the half with tests, and the shape those tests inject is this one; porting
-    the untested half to fit the tested half keeps every existing test
-    exercising real code, and confines the API change to construction, which is
-    the part that was already documented as untestable without hardware.
+    Adapted here instead of rewriting `locate()`, which is the half with
+    tests: porting the untested half to fit the tested half keeps existing
+    tests exercising real code, and confines the API change to construction.
 
-    `VIDEO` rather than `IMAGE`: it tracks between frames, which is what
-    `static_image_mode=False` bought before. It requires timestamps that never
-    go backwards, so they are clamped rather than trusted -- `perf_counter` is
-    monotonic, but rounding two fast frames to the same millisecond is not, and
-    the failure is an exception mid-capture rather than a bad landmark.
+    `VIDEO` mode, not `IMAGE`, since it tracks between frames. It requires
+    timestamps that never go backwards, so they're clamped rather than
+    trusted -- `perf_counter` is monotonic, but two fast frames can round to
+    the same millisecond, which would otherwise raise mid-capture.
     """
 
     def __init__(self, model_path: str | None = None) -> None:
-        # The model is resolved and verified **before** MediaPipe is imported,
-        # matching `face_emotion`, which does the same ahead of onnxruntime and
-        # explains why: checking first is cheaper, and it means a bad model
-        # reports "unverified model" rather than "mediapipe missing" -- two
-        # very different problems that would otherwise produce the same message
-        # on a machine lacking the extra.
-        #
-        # It also decides whether this is testable. MediaPipe is deliberately
-        # absent from CI, so a check placed after the import can only be
-        # exercised on a machine that has it -- which is how the first version
-        # of this went red.
+        # Model is resolved and verified **before** MediaPipe is imported,
+        # matching `face_emotion`: checking first means a bad model reports
+        # "unverified model" rather than "mediapipe missing" (two different
+        # problems), and lets this check run on machines without MediaPipe,
+        # since CI has none.
         path = Path(model_path or os.environ.get(MODEL_ENV) or default_model_path())
         if path.is_file() and not verify(path):
-            # Checked again here, not only in `ensure_model`. That is a
-            # setup-time call, so on its own it protects the moment of install
-            # and nothing after it: a truncated, half-written or hand-swapped
-            # `.task` would load without complaint and produce landmarks that
-            # are wrong rather than absent -- silently wrong gaze numbers being
-            # exactly what a checksum exists to prevent.
+            # Checked again here, not only in `ensure_model`, which only
+            # protects the moment of install. A truncated or hand-swapped
+            # `.task` would otherwise load without complaint and produce
+            # wrong landmarks instead of an absent reading.
             raise ValueError(
                 f"refusing to load unverified landmark model at {path}; "
                 f"expected sha256 {MODEL_SHA256[:16]}... -- re-provision it "
@@ -346,10 +317,9 @@ class _TasksMesh:
                 num_faces=1,
                 min_face_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
-                # Not needed and not free. The geometry is derived from the
-                # landmarks here, deliberately -- see face_geometry, which fits
-                # an orthographic pose rather than trusting a matrix whose
-                # camera assumptions are not ours.
+                # Not needed and not free -- geometry is derived from the
+                # landmarks in face_geometry instead of trusting MediaPipe's
+                # own matrix, which makes camera assumptions we don't share.
                 output_face_blendshapes=False,
                 output_facial_transformation_matrixes=False,
             )
@@ -359,9 +329,9 @@ class _TasksMesh:
     def process(self, frame: Any) -> Any:
         """The legacy return shape: `.multi_face_landmarks[0].landmark`."""
         mp = self._mp
-        # SRGB means uint8 RGB, which is what OpenCvFrameSource already hands
-        # out. Contiguity is required by the C++ boundary and a cropped or
-        # sliced array is not.
+        # SRGB means uint8 RGB, matching what OpenCvFrameSource hands out.
+        # Contiguity is required at the C++ boundary; a cropped/sliced array
+        # isn't contiguous.
         image = mp.Image(image_format=mp.ImageFormat.SRGB,
                          data=self._np.ascontiguousarray(frame, dtype="uint8"))
         ms = max(int(time.perf_counter() * 1000), self._last_ms + 1)
@@ -370,8 +340,8 @@ class _TasksMesh:
         faces = getattr(result, "face_landmarks", None) or []
         if not faces:
             return type("R", (), {"multi_face_landmarks": None})()
-        # Tasks returns a plain list of landmarks per face; the legacy API
-        # wrapped it in an object with a `.landmark` attribute.
+        # Tasks returns a plain list of landmarks per face; wrap it to match
+        # the legacy API's `.landmark` attribute.
         return type("R", (), {
             "multi_face_landmarks": [type("F", (), {"landmark": faces[0]})()]
         })()
@@ -380,24 +350,19 @@ class _TasksMesh:
 class FaceMeshLandmarker:
     """MediaPipe Face Mesh, wrapped to return named landmarks.
 
-    Constructed lazily and injectable, for the same reason `FaceLocator` is:
-    importing MediaPipe costs a heavy dependency that a headband-only
-    deployment must not need, and a test must be able to drive the pipeline
-    without one.
+    Constructed lazily and injectable, like `FaceLocator`: importing
+    MediaPipe is a heavy dependency a headband-only deployment doesn't need,
+    and tests need to drive the pipeline without it.
 
-    Only the **construction** of a real Face Mesh is untestable here, needing
-    MediaPipe and a camera; `locate()` is exercised through an injected mesh,
-    which is the point of the injection. An earlier version of this docstring
-    said the whole class was untested, which overstated the gap and would have
-    discouraged anyone from covering the part that can be.
+    Only **constructing** a real Face Mesh is untestable here (it needs
+    MediaPipe and a camera); `locate()` is exercised through an injected
+    mesh instead.
     """
 
     def __init__(self, mesh: Any | None = None,
                  model_path: str | None = None) -> None:
-        # Reasons already reported, so a wrong index table does not become a
-        # per-frame error flood. At the capture loop's rate that is tens of
-        # identical lines a second, which buries the one thing worth reading
-        # and makes the log useless for whatever else is wrong.
+        # Tracks reasons already logged, so a wrong index table doesn't flood
+        # the log with tens of identical lines a second at capture rate.
         self._reported: set[str] = set()
         self._rejections = 0
         # Why the last frame produced nothing. See locate().
@@ -410,17 +375,15 @@ class FaceMeshLandmarker:
     def locate(self, frame: Any, width: int, height: int) -> dict:
         """Named landmarks for the first face found, or `{}`.
 
-        Returns empty rather than raising on a frame with no face: no face is
-        an ordinary outcome several times a minute, and the caller already
-        counts it.
+        Returns empty rather than raising on a frame with no face -- that's
+        an ordinary outcome several times a minute.
 
-        **`last_reason` says which kind of empty**, because `{}` covers two
-        unrelated events: the detector saw no face, or it saw one and
-        `check_topology` refused the landmark set. Rendering both as "no face"
-        sends someone to check their lighting when the answer is that a named
-        point is somewhere a face cannot put it -- and at strong yaw the second
-        happens routinely, since `nose_outside_eyes` becomes true near profile.
-        `None` means a face was returned.
+        **`last_reason` says which kind of empty**, since `{}` covers two
+        different events: no face detected, or a face detected but
+        `check_topology` refused the landmark set (which happens routinely
+        near profile, where `nose_outside_eyes` becomes true). Collapsing
+        both to "no face" would send someone to check lighting when the real
+        cause is elsewhere. `None` means a face was returned successfully.
         """
         result = self._mesh.process(frame)
         faces = getattr(result, "multi_face_landmarks", None)
@@ -433,11 +396,10 @@ class FaceMeshLandmarker:
         if wrong is not None:
             self.last_reason = wrong
             self._rejections += 1
-            # Once per reason, not once per frame. This means the index table
-            # is wrong rather than that the student moved, so it has to be
-            # visible -- but it is a standing condition, not an event, and
-            # repeating it every frame buries it in its own copies. The count
-            # is kept so the repetition is still measurable.
+            # Logged once per reason, not once per frame: this means the
+            # index table is wrong (a standing condition), not a one-off, so
+            # repeating it every frame would just bury it in copies. The
+            # count below still tracks how often it happens.
             if wrong not in self._reported:
                 self._reported.add(wrong)
                 logger.error("landmark topology rejected: %s "
@@ -452,8 +414,7 @@ class FaceMeshLandmarker:
     def rejections(self) -> int:
         """How many frames the topology check has refused.
 
-        Exposed because the log is now deduplicated: without a count, "wrong
-        on one frame" and "wrong on every frame since the session began" read
-        identically, and they are very different facts.
+        Exposed because the log is deduplicated -- without this count,
+        "wrong on one frame" and "wrong on every frame" would look the same.
         """
         return self._rejections

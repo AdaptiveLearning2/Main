@@ -1,15 +1,13 @@
-"""Which ingestion path is live, and why it must be stated rather than inferred.
+"""Tests for which ingestion path (push or pull) is live.
 
-`eeg_poller` runs inside this backend and polls the sidecar over HTTP. That only
-works because `start.ps1` puts both on one machine. With the camera on each
-student's own device the sidecar is a local per-student process and a hosted
-backend has no route to it -- so ingestion flips to the sidecar POSTing here.
+`eeg_poller` runs inside this backend and polls the sidecar over HTTP, which only
+works when both are on one machine (as `start.ps1` does). With the camera on a
+student's own device, the sidecar is local to that student and a hosted backend
+can't reach it, so ingestion flips to the sidecar POSTing here instead.
 
-The failure this guards is silent. A poller that cannot reach a sidecar produces
-no rows, raises nothing, and leaves a session looking live: identical, from
-every surface, to a headband that was never put on. Deploy the backend anywhere
-but the student's machine and *every* session degrades that way with nothing to
-read anywhere. So the mode is explicit and the wrong one refuses loudly.
+A poller that can't reach a sidecar fails silently: no rows, no error, and the
+session still looks live. So the mode must be set explicitly, and the wrong mode
+must refuse loudly instead of quietly recording nothing.
 """
 
 import os
@@ -30,8 +28,8 @@ def push_mode(monkeypatch):
 
 
 def test_the_poller_refuses_rather_than_returning_not_running(push_mode):
-    """A falsy return would be indistinguishable from a sidecar that is merely
-    not up yet -- the exact confusion this setting exists to remove."""
+    """A falsy return would look the same as a sidecar that just isn't up yet.
+    That's the confusion this setting exists to remove."""
     with pytest.raises(eeg_poller.PushModeError) as exc:
         eeg_poller.start(None, "user-1", "session-1", "station1")
 
@@ -39,12 +37,10 @@ def test_the_poller_refuses_rather_than_returning_not_running(push_mode):
 
 
 def test_the_endpoint_reports_configuration_not_a_broken_headband(push_mode, monkeypatch):
-    """And answers before the liveness check.
-
-    Under push ingestion this backend never talks to a sidecar, so "EEG service
-    is not running on port 8001" would be true and completely misleading -- it
-    reads as a fault when the deployment simply does not work that way.
-    """
+    """Under push, this backend never talks to a sidecar, so "EEG service is not
+    running on port 8001" would be true but misleading -- it reads as a fault
+    when the deployment just doesn't work that way. Must answer before the
+    liveness check runs."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "user-1"})
     monkeypatch.setattr(main, "eeg_client",
                         type("C", (), {"is_alive": staticmethod(lambda: False)}))
@@ -69,7 +65,7 @@ def test_the_endpoint_reports_configuration_not_a_broken_headband(push_mode, mon
 
 
 def test_pull_mode_is_the_default_so_existing_deployments_are_unchanged():
-    """start.ps1, dev and a single-machine classroom all keep working without
+    """start.ps1, dev, and a single-machine classroom keep working without
     setting anything."""
     assert eeg_poller.INGEST_MODE == "pull"
 
@@ -90,10 +86,10 @@ def test_an_unrecognised_mode_falls_back_rather_than_crashing_the_backend(monkey
 # ── the mapping both paths share ────────────────────────────────────────────
 
 def test_the_eeg_mapping_is_importable_without_an_http_client():
-    """It used to live in `eeg_client`, the pull transport. The push path would
-    have had to import an HTTP client it never calls to reach a pure function,
-    or keep a second copy -- and a second copy of a unit conversion is how one
-    path ends up storing percentages while the other stores ratios."""
+    """This used to live in `eeg_client`, the pull transport. The push path would
+    have needed to import an HTTP client just to reach a pure function, or keep
+    a second copy -- and a second copy of a unit conversion is how one path
+    ends up storing percentages while the other stores ratios."""
     row = signal_mapping.map_eeg_to_cognitive(
         {"features": {"focus_score": 72.0, "calm_score": 60.0, "confidence": 90.0},
          "timestamp": "2026-08-09T10:00:00Z"},
@@ -105,9 +101,9 @@ def test_the_eeg_mapping_is_importable_without_an_http_client():
 
 
 def test_a_low_score_is_not_rescued_into_a_high_one():
-    """The regression the old scale-sniffing caused: `if v > 1.5: v /= 100` left
-    a genuine 1.2% focus undivided, clamped it to 1.0, and stored *100%* --
-    precisely the disengaged region that should drive difficulty down."""
+    """Guards against the old scale-sniffing bug: `if v > 1.5: v /= 100` left a
+    genuine 1.2% focus undivided, clamped it to 1.0, and stored 100% -- exactly
+    the disengaged region that should drive difficulty down."""
     row = signal_mapping.map_eeg_to_cognitive(
         {"features": {"focus_score": 1.2}}, "s", "u")
     assert row["focus"] == pytest.approx(0.012)
@@ -120,8 +116,8 @@ def test_eeg_client_still_re_exports_the_mapping():
 
 
 def test_an_absent_channel_maps_to_no_row_rather_than_a_row_of_nulls():
-    """A row would be counted as a sample by every aggregate downstream, so an
-    emotion-only camera would report heart readings it never took."""
+    """A row here would be counted as a sample by every downstream aggregate, so
+    an emotion-only camera would report heart readings it never took."""
     payload = {"timestamp": "2026-08-09T10:00:00Z", "device_id": "camera",
                "face": {"emotion": "happy", "emotion_confidence": 0.9}}
 
@@ -153,8 +149,8 @@ def test_heart_values_are_carried_in_absolute_units():
 def test_a_row_can_carry_a_heart_rate_and_no_rmssd():
     """RMSSD is an enrichment, and about one window in five is gated out even on
     a good seated recording. So a null `rmssd_ms` beside a trusted
-    `heart_rate_bpm` is the normal case, not a broken one -- the cause is
-    carried under its own name so the row can be read back and explained."""
+    `heart_rate_bpm` is normal, not broken -- the reason is carried under its
+    own name so the row explains itself later."""
     row = signal_mapping.map_heart_to_heart_signal({
         "timestamp": "2026-08-09T10:00:00Z",
         "heart": {"source": "muse_optics", "bpm": 70.2, "trusted": True,
@@ -173,10 +169,10 @@ def test_a_row_can_carry_a_heart_rate_and_no_rmssd():
 
 
 def test_a_heart_row_is_stamped_by_the_reading_not_the_tick():
-    """The headband's block covers 25s, is recomputed every 10s and is held on
-    the payload in between -- so it rides ~40 consecutive ticks. Stamped from
-    the tick, one measurement becomes forty rows; stamped from itself, the
-    unique (session_id, source, ts) makes the repeats no-ops."""
+    """The headband's block covers 25s, is recomputed every 10s, and is held on
+    the payload in between, so it rides ~40 consecutive ticks. Stamped from the
+    tick, one measurement becomes forty rows; stamped from itself, the unique
+    (session_id, source, ts) makes the repeats no-ops."""
     row = signal_mapping.map_heart_to_heart_signal({
         "timestamp": "2026-08-09T10:00:07Z",
         "heart": {"source": "muse_optics", "bpm": 68.2,
@@ -203,11 +199,10 @@ def test_a_camera_heart_row_still_takes_the_ticks_stamp():
 
 
 def test_the_mapper_does_not_carry_a_retired_identity_confidence():
-    """#86 retired the column; a sidecar still sending it must not reach the row.
-
-    The two paths share this mapper, so asserting it here covers push and pull
-    at once -- and an older sidecar posting the old shape is the realistic case,
-    since the sidecar is a per-student local process that upgrades on its own
+    """`identity_confidence` was retired; a sidecar still sending it must not
+    reach the row. The two paths share this mapper, so this test covers push
+    and pull at once -- and an older sidecar sending the old shape is a real
+    case, since the sidecar is a per-student process that upgrades on its own
     schedule.
     """
     row = signal_mapping.map_face_to_face_signal({
@@ -221,11 +216,10 @@ def test_the_mapper_does_not_carry_a_retired_identity_confidence():
 
 
 def test_the_gaze_refusal_rides_in_raw_beside_the_emotion_one():
-    """Two measurements in one block, so one refusal field cannot serve both --
-    the same split as `rmssd_rejected_by` beside `rejected_by` on the heart row.
-
-    Collapsed into one, a rejected gaze on a well-classified face would read as
-    a rejected *emotion*, and the row would explain the wrong null.
+    """Two measurements in one block need two refusal fields -- the same split
+    as `rmssd_rejected_by` beside `rejected_by` on the heart row. Collapsed into
+    one, a rejected gaze on a well-classified face would read as a rejected
+    emotion, explaining the wrong null.
     """
     row = signal_mapping.map_face_to_face_signal({
         "face": {"emotion": "sad", "emotion_confidence": 0.81, "trusted": True,
@@ -235,28 +229,20 @@ def test_the_gaze_refusal_rides_in_raw_beside_the_emotion_one():
 
     assert row["gaze_x"] is None
     assert row["raw"]["gaze_rejected_by"] == "no_eye"
-    # `_raw` drops nulls so an absent field does not read as a recorded one, so
-    # the emotion refusal is *missing* rather than null here. That is the point:
-    # the row explains the gaze null and says nothing about the emotion, which
-    # succeeded.
+    # `_raw` drops nulls, so the emotion refusal is missing rather than null
+    # here. The row explains the gaze null and says nothing about the emotion,
+    # which succeeded.
     assert "rejected_by" not in row["raw"]
 
 
 def test_the_three_unproduced_face_columns_are_kept_on_purpose():
     """`attention`, `gaze_x` and `gaze_y` must survive the mapper.
 
-    They looked exactly like the column next to them that was retired --
-    unwritten since 20260625000000, rendering as "No sensor" everywhere -- and
-    the only thing separating them was a decision recorded in prose: identity
-    was out of scope, these were Phase 11 and waiting on a landmark model.
-
-    **Two of the three now have one.** Phase 11 step 2 wired the face-mesh
-    landmarker into the capture loop, so `gaze_x` and `gaze_y` are written.
-    `attention` is still unproduced and is still deliberate: it is step 3, and
-    it is blocked on a labelled reference rather than on code, because a
-    percentage inferred from head direction is least valid for exactly this
-    product's users. So this test keeps doing its original job for one column
-    and guards a live path for the other two.
+    `gaze_x`/`gaze_y` are now written -- the face-mesh landmarker feeds them.
+    `attention` is still unproduced on purpose: it's blocked on a labelled
+    reference, not on code, because a percentage inferred from head direction is
+    least valid for exactly this product's users. So this test guards a live
+    path for two columns and an intentionally-empty one for the third.
     """
     row = signal_mapping.map_face_to_face_signal({
         "face": {"emotion": "sad", "attention": 0.6, "gaze_x": -0.2,
@@ -265,19 +251,19 @@ def test_the_three_unproduced_face_columns_are_kept_on_purpose():
 
     for column in ("attention", "gaze_x", "gaze_y"):
         assert column in row, (
-            f"{column} was dropped. It has no producer yet -- that is Phase 11, "
-            "not dead weight. If it is genuinely being retired, that needs the "
-            "same scope decision identity_confidence got in #86, and this test "
-            "should be deleted deliberately rather than made to pass."
+            f"{column} was dropped. It has no producer yet, but it is planned, "
+            "not dead weight. If it is genuinely being retired, that needs a "
+            "deliberate scope decision, and this test should be deleted "
+            "deliberately rather than made to pass."
         )
     assert row["attention"] == 0.6
 
 
 def test_the_status_endpoint_does_not_contradict_the_409(push_mode, monkeypatch):
     """The 409 from /start says nothing is wrong with the headband. This is
-    polled every 3 seconds and rendered as "EEG service is down", so returning
-    a flat False under push contradicted it continuously -- the student got the
-    careful sentence once and the opposite reading forever after."""
+    polled every 3 seconds and rendered as "EEG service is down", so a flat
+    False here would contradict that -- the student would get the careful
+    sentence once, then the opposite reading forever after."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "user-1"})
     monkeypatch.setattr(main, "eeg_client",
                         type("C", (), {"is_alive": staticmethod(lambda: False),
@@ -311,11 +297,10 @@ def test_status_still_reports_liveness_under_pull(monkeypatch):
 
 
 def test_health_does_not_report_an_outage_under_push(push_mode):
-    """This is the poll that runs from page load -- /status is gated on a
-    session existing. Reporting `available: False` here put "EEG service not
-    reachable on port 8001" on the first screen a student sees, which is the
-    sentence the mode check exists to stop showing. Fixing /start and /status
-    alone only moved it."""
+    """This is the poll that runs from page load; /status only runs once a
+    session exists. Reporting `available: False` here would put "EEG service
+    not reachable on port 8001" on the first screen a student sees -- exactly
+    the sentence the mode check exists to stop showing."""
     out = main.eeg_health()
 
     assert out["available"] is None, "'not probed here' rendered as 'probed and down'"
@@ -334,11 +319,11 @@ def test_health_still_reports_a_real_outage_under_pull(monkeypatch):
 
 
 def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsys):
-    """A live poller for *this session*, not `INGEST_MODE == "pull"`. The mode
-    was a proxy and wrong in both directions: it fired on the hand-posted dev
-    batch the endpoint's openness exists for, and -- with a once-per-process
-    flag -- that benign post spent the warning so a genuine double-write later
-    was never reported."""
+    """The real condition is a live poller for this session, not
+    `INGEST_MODE == "pull"`. Using the mode as a proxy was wrong both ways: it
+    fired on the harmless hand-posted dev batch, and a once-per-process flag
+    meant that firing spent the warning, so a real double-write later went
+    unreported."""
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
@@ -350,13 +335,12 @@ def test_the_double_write_warning_fires_on_the_real_condition(monkeypatch, capsy
 
     batch = main.CognitiveBatch(session_id="sess-1", samples=[])
 
-    # Captured, not discarded. The claim is per *session*, so passing the wrong
-    # identifier -- the user id, say -- would warn once per user and then go
-    # quiet for every later session they run. A stub ignoring its argument
-    # cannot tell that apart from correct wiring.
+    # Captured, not discarded: the claim is per session, so passing the wrong id
+    # (e.g. the user id) would warn once per user then stay quiet for every
+    # later session. A stub that ignores its argument can't tell that apart.
     asked = []
 
-    # No poller for this session: the benign case, and it must stay quiet.
+    # No poller for this session: the benign case, must stay quiet.
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning",
                         lambda s: (asked.append(s), False)[1])
     main.ingest_cognitive(batch, None)
@@ -388,12 +372,9 @@ def test_the_claim_is_once_per_session_and_only_while_polling(monkeypatch):
 
 
 def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
-    """What makes the set bounded by concurrent sessions rather than by uptime.
-
-    It previously lived in `main` with nothing to evict it, so it grew with
-    every session ever double-written for the life of the process -- while the
-    comment beside it claimed the opposite, three lines below a note saying an
-    un-evicted set was "the wrong way round".
+    """This is what keeps the set bounded by concurrent sessions rather than by
+    process uptime. It used to live in `main` with nothing to evict it, so it
+    grew with every session ever double-written for the life of the process.
     """
     class _LivePoller:
         def is_alive(self):
@@ -414,11 +395,9 @@ def test_stopping_a_poller_evicts_its_warning_record(monkeypatch):
 
 
 # A down sidecar, so the pull half of each pair below sees a genuine outage and
-# the push half never reaches it. Only names that exist on the real module: an
-# earlier version declared `get_debug_snapshot`, which does not (the real call is
-# `get_state`) -- harmless, because `eeg_debug` returns before touching the
-# client under push, but a stub is a claim about an API and whoever copies it
-# next inherits the claim.
+# the push half never reaches it. Method names here must match the real module
+# exactly -- a stub is a claim about an API, and a wrong name here would be
+# copied by whoever reuses this stub next.
 class _StubClient:
     DEFAULT_DEVICE_ID = "station1"
     EEG_API_URL = "http://127.0.0.1:8001"
@@ -434,11 +413,10 @@ class _StubClient:
     @staticmethod
     def get_muse_status(*_a, **_k):
         # Raises, like the real one. `eeg_client._learner_headers()` throws when
-        # EEG_API_TOKEN is unset -- the normal state of a hosted push
-        # deployment -- and it throws outside the request try block, so the
-        # endpoint 500s. A stub returning `{}` made `/api/eeg/status` look
-        # mode-aware while the probe in front of the check was crashing it, and
-        # the parametrised test that exists to catch exactly that passed.
+        # EEG_API_TOKEN is unset (the normal state of a hosted push deployment),
+        # outside the request's try block, so the endpoint 500s. A stub that
+        # returned `{}` would hide that crash and let the mode check pass for
+        # the wrong reason.
         raise RuntimeError("Missing EEG_API_TOKEN environment variable")
 
     @staticmethod
@@ -461,9 +439,8 @@ class _StubClient:
 class _StubClientConfigured(_StubClient):
     """A pull deployment: EEG_API_TOKEN is set, so the probe runs and answers.
 
-    Separate from `_StubClient` because the two deployments differ in exactly
-    the way that mattered -- under push there is no token and the probe throws,
-    which is what the base stub models.
+    Separate from `_StubClient` because that's exactly how the two deployments
+    differ -- under push there's no token and the probe throws.
     """
 
     @staticmethod
@@ -471,13 +448,10 @@ class _StubClientConfigured(_StubClient):
         return {}
 
 
-# The family is eight, and it splits by how an endpoint answers rather than by
-# anything about the mode. Four return a payload carrying a liveness claim; four
-# raise. Both halves are tables because the signatures differ (`eeg_health`
-# takes nothing) and so does the key carrying the claim (`eeg_status` calls it
-# `service`) -- an earlier version listed the two that happened to share a
-# signature while the docstring claimed five, which is how three more went
-# unnoticed.
+# Eight mode-aware endpoints total, split by how they answer. Four return a
+# payload carrying a liveness claim; four raise instead. Each half is a table
+# because the signatures differ (`eeg_health` takes nothing) and so does the key
+# carrying the claim (`eeg_status` calls it `service`).
 #
 # Endpoints that return a payload:
 _MODE_AWARE = {
@@ -490,11 +464,8 @@ _MODE_AWARE = {
 
 @pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE))
 def test_every_endpoint_in_the_family_knows_the_mode(endpoint, push_mode, monkeypatch):
-    """Checked together rather than one per review round.
-
-    /start, /status, /health, /debug and /devices were each fixed separately for
-    the same reason, in four rounds; the table above is what stops a sixth from
-    being found the same way."""
+    """Checks every mode-aware endpoint together instead of one at a time, so a
+    new endpoint with the same bug can't slip through unnoticed."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
@@ -509,11 +480,10 @@ def test_every_endpoint_in_the_family_knows_the_mode(endpoint, push_mode, monkey
 
 @pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE))
 def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monkeypatch):
-    """The half that stops the one above passing for the wrong reason.
-
-    An unconditional `{"available": None, "ingest_mode": "push"}` in any of these
-    satisfies the push assertions completely. Only the pull side can tell a mode
-    check apart from a hardcoded answer."""
+    """Stops the test above from passing for the wrong reason: a hardcoded
+    `{"available": None, "ingest_mode": "push"}` would satisfy the push
+    assertions too. Only the pull side can tell a real mode check apart from a
+    hardcoded answer."""
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "can_use_device", lambda *_a: True)
@@ -527,20 +497,16 @@ def test_the_same_endpoints_still_report_a_real_outage_under_pull(endpoint, monk
     assert out["ingest_mode"] == "pull"
 
 
-# Endpoints that raise instead of returning a payload. Same reason, same check,
-# different shape of answer -- a 409 naming the configuration rather than the
-# 503 the liveness probe underneath would give.
+# Endpoints that raise instead of returning a payload. Same check, different
+# shape of answer: a 409 naming the configuration instead of the 503 the
+# liveness probe underneath would give.
 #
-# /start is in here too, though it has its own older test above. Left out, it
-# was the one endpoint of eight whose refusal was neither produced by the helper
-# nor asserted by these tests, so a change to the shared wording would have
-# diverged from it silently -- which is the failure the helper exists to stop,
-# reintroduced by the commit that added the helper.
+# /start is included here too, even though it also has its own dedicated test
+# above, so a change to the shared refusal wording can't drift between them.
 #
 # The three muse handlers are reachable only from `connectHeadband`, behind a
-# Connect button disabled under push. That was equally true of /start, which got
-# the 409 anyway: a true-and-misleading message should not exist in the codepath
-# at all.
+# Connect button disabled under push -- but /start gets the 409 anyway, since a
+# true-but-misleading message shouldn't exist in the codepath at all.
 _MODE_AWARE_RAISING = {
     "eeg_muse_refresh":    lambda: main.eeg_muse_refresh(None, body={}),
     "eeg_muse_connect":    lambda: main.eeg_muse_connect(None, body={"name": "Muse-1234"}),
@@ -563,19 +529,17 @@ class _OwnedSession:
 
 @pytest.mark.parametrize("endpoint", sorted(_MODE_AWARE_RAISING))
 def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monkeypatch):
-    """Not "EEG service not running on port 8001", which is what all three said.
+    """The refusal message must not say "EEG service not running on port 8001".
 
     Under push the sidecar owns the headband and lives on the student's own
-    device, so there is no bridge here to scan, connect or disconnect with.
+    device, so there's no bridge here to scan, connect, or disconnect.
 
-    No can_use_device/reserve_device mock needed: main.py now checks
-    _refuse_under_push before reserve_device precisely so a push-mode call
-    never touches the (mutating) reservation registry at all -- see the
-    comment in eeg_muse_refresh. This test would catch a regression on that
-    ordering, since an unmocked reserve_device call against real global state
-    would still pass here on its own (clean state, single caller) and mask
-    the real risk, which is a reservation with no way to be released under
-    push. Assert on the exception, not on whether a mock fired."""
+    No can_use_device/reserve_device mock is needed: main.py checks
+    _refuse_under_push before reserve_device, so a push-mode call never touches
+    the reservation registry at all. This catches a regression on that
+    ordering -- an unmocked reserve_device call would otherwise still pass here
+    (clean state, single caller) while masking a reservation that could never
+    be released under push."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "eeg_client", _StubClient)
     monkeypatch.setattr(main, "supabase",
@@ -587,8 +551,8 @@ def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monke
     assert exc.value.status_code == 409, f"{endpoint} still answers 503"
     assert "port 8001" not in str(exc.value.detail)
     assert "push ingestion" in str(exc.value.detail)
-    # The assertion this test's docstring promises: nothing got as far as
-    # claiming a reservation nobody under push could ever release.
+    # Confirms nothing got as far as claiming a reservation that could never be
+    # released under push.
     assert eeg_poller._reservations == {}
 
 
@@ -596,12 +560,11 @@ def test_the_raising_endpoints_name_the_configuration(endpoint, push_mode, monke
 def test_the_raising_endpoints_still_report_a_real_outage_under_pull(endpoint, monkeypatch):
     monkeypatch.setattr(eeg_poller, "INGEST_MODE", "pull")
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
-    # Real reserve_device, not a stub: eeg_muse_refresh/connect/disconnect
-    # call it directly now (#34), and eeg_start checks live pollers and
-    # _reservations itself without going through either helper -- so no
-    # mock here is actually load-bearing for any of the four endpoints in
-    # this table. Left unmocked deliberately so this stays true if that
-    # changes; state is clean per-test (see conftest.py's stop_all()).
+    # Real reserve_device, not a stub: eeg_muse_refresh/connect/disconnect call
+    # it directly, and eeg_start checks live pollers and _reservations itself.
+    # No mock is load-bearing here for any of the four endpoints; left unmocked
+    # so that stays visible if it changes. State is clean per-test (see
+    # conftest.py's stop_all()).
     monkeypatch.setattr(main, "eeg_client", _StubClient)
     monkeypatch.setattr(main, "_consent",
                         lambda _s: {"eeg_enabled": True, "retrieved": True})
@@ -633,7 +596,6 @@ def _capture_inserts(monkeypatch):
 
 def test_sensor_shaped_samples_are_converted_by_the_shared_mapper(monkeypatch):
     """The push client sends the sidecar's own payload and does no arithmetic.
-
     A /100 conversion on the sidecar would be a second copy of the poller's,
     which is how one path ends up storing percentages and the other ratios."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
@@ -667,17 +629,17 @@ def test_flat_samples_are_still_stored_as_given(monkeypatch):
 
 
 def test_the_cognitive_batch_is_length_bounded_like_the_others():
-    """It was the only ingest batch without a cap. Survivable while the sole
-    writer was the in-process poller; not once the writer is a process on a
-    student's machine and this endpoint is the trust boundary."""
+    """This was the only ingest batch without a cap. That was fine while the
+    sole writer was the in-process poller, but not once the writer is a process
+    on a student's machine and this endpoint is the trust boundary."""
     with pytest.raises(Exception):
         main.CognitiveBatch(session_id="s1",
                             samples=[{} for _ in range(main._INGEST_MAX_BATCH + 1)])
 
 
 def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
-    """Also the only one of the three without a limit, and for the same reason
-    it now needs one."""
+    """Also the only ingest endpoint of the three without a rate limit, for the
+    same reason it needs one now."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "flooder"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
     monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
@@ -695,11 +657,10 @@ def test_the_cognitive_endpoint_is_rate_limited(monkeypatch):
 
 
 def test_eeg_samples_are_dropped_when_the_student_has_not_consented(monkeypatch):
-    """The last line of defence, and the one this endpoint was missing.
-
-    The sidecar gates on consent too, but a stale one that kept sending after a
-    withdrawal would otherwise keep recording, and the withdrawal would look
-    respected from every surface that reads."""
+    """The last line of defense, and one this endpoint was missing. The sidecar
+    gates on consent too, but a stale sidecar that kept sending after a
+    withdrawal would otherwise keep recording, while every reporting surface
+    would still show the withdrawal as respected."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
     monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
@@ -733,9 +694,9 @@ def test_an_unreadable_consent_row_records_nothing(monkeypatch):
 
 
 def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
-    """`map_eeg_to_cognitive` built its `raw` inline and discarded whatever the
-    caller sent -- invisible while the poller, which sends none, was the only
-    caller."""
+    """`map_eeg_to_cognitive` used to build `raw` inline and discard whatever the
+    caller sent. That was invisible while the poller, which sends no raw, was
+    the only caller."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
     monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
@@ -748,20 +709,18 @@ def test_a_client_supplied_raw_survives_the_mapping(monkeypatch):
     ]), None)
 
     assert written[0]["raw"]["note"] == "kept"
-    # Derived keys win the collision: a client must not overwrite what was
-    # actually observed by choosing a key name. Only where there *is* a derived
-    # value -- `_raw` drops Nones so an absent field cannot read as a recorded
-    # null, which means a key the sidecar did not populate stays the client's.
-    # That is not a hole to close here: on this path the client *is* the
-    # sidecar, and the endpoint's defences are session ownership and consent.
+    # Derived keys win the collision: a client can't overwrite what was actually
+    # observed just by naming a key the same. Only where there's a derived value
+    # though -- `_raw` drops Nones, so a key the sidecar never populated stays
+    # the client's. Not a gap to close here: on this path the client is the
+    # sidecar, and session ownership plus consent are the real defenses.
     assert written[0]["raw"]["signal_quality"] == "good"
 
 
 @pytest.mark.parametrize("stopper", ["stop", "stop_for_user", "stop_all"])
 def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
-    """"Bounded by concurrent sessions" is only true if *every* way a poller
-    ends clears its record. `stop()` did it and the other two did not -- the
-    same shape as the bug that moved this set out of `main`, one layer along."""
+    """"Bounded by concurrent sessions" only holds if every way a poller can end
+    clears its record. `stop()` did; the other two didn't."""
     class _P:
         user_id = "u1"
         session_id = "s1"
@@ -789,11 +748,11 @@ def test_every_stop_path_evicts_the_warning_record(stopper, monkeypatch):
 
 
 def test_derived_keys_win_on_the_push_path_too(monkeypatch):
-    """"Derived keys win a collision" held on the pull path and silently did not
+    """"Derived keys win a collision" held on the pull path but silently didn't
     here. The push client nests device_id/channels/state/ingestion under `raw`,
-    so the mapper's top-level lookups all found None, `_raw` dropped the Nones,
-    and the client's values were stored -- one path differing from the other,
-    which is the thing `signal_mapping` exists to prevent."""
+    so the mapper's top-level lookups found None, `_raw` dropped those Nones,
+    and the client's values got stored instead -- the two paths disagreeing,
+    which is exactly what `signal_mapping` exists to prevent."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
     monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
@@ -858,18 +817,18 @@ def test_the_same_user_restart_path_evicts_too(monkeypatch):
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "oops", [1]])
 def test_unstorable_band_values_are_rejected_at_the_boundary(bad):
-    """The flat fields are typed and Pydantic rejects these; `features`/`bands`
-    were free-form dicts, so the same values reached the numeric columns and
-    failed at PostgREST -- taking the *whole batch* with them, valid samples
-    included, and reporting it as a 500 the client will retry."""
+    """The flat fields are typed, and Pydantic rejects these. `features`/`bands`
+    used to be free-form dicts, so the same bad values reached the numeric
+    columns and failed at PostgREST, taking the whole batch down (valid samples
+    included) as a 500 the client would retry."""
     with pytest.raises(Exception):
         main.CognitiveBatch(session_id="s", samples=[{"bands": {"alpha": bad}}])
 
 
 def test_non_column_keys_are_still_free_form():
-    """Only the keys that become columns are checked. The rest is metadata bound
-    for `raw`, which is jsonb and can hold it -- a sidecar gaining a feature
-    must not need this model changed in lockstep to keep posting."""
+    """Only keys that become columns are checked. The rest is metadata bound for
+    `raw` (jsonb), so a sidecar gaining a feature doesn't need this model
+    changed in lockstep just to keep posting."""
     batch = main.CognitiveBatch(session_id="s", samples=[
         {"features": {"focus_score": 50.0, "signal_quality": "good",
                       "quality_basis": "contact", "batch_size": 3}},
@@ -878,10 +837,10 @@ def test_non_column_keys_are_still_free_form():
 
 
 def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
-    """The probe ran *before* the mode check, so the rule this endpoint was
-    fixed to follow was defeated by statement order. With EEG_API_TOKEN unset --
-    the normal state of a hosted push deployment -- it 500s, and the frontend
-    polls it every 3 s, so the headband block never updates all lesson."""
+    """The probe used to run before the mode check, defeating the mode rule by
+    statement order. With EEG_API_TOKEN unset (the normal state of a hosted
+    push deployment) it would 500, and the frontend polls this every 3s, so the
+    headband block would never update for the whole lesson."""
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
     monkeypatch.setattr(eeg_poller, "status", lambda _u: {})
 
@@ -931,18 +890,16 @@ _LEGACY_POOR = {"timestamp": "t",
 
 def test_an_unworn_headband_produces_no_row():
     """Zeroed scores from a disconnected headset are not a reading of zero.
-
-    Worse than nulls: aggregates average zeros as real readings and exclude
-    nulls, so a headband on the desk read as sustained zero focus rather than as
-    no data -- the can't-tell-no-data-from-zero failure arriving through the
-    write side, where none of the reporting rules can see it."""
+    Worse than nulls: aggregates average zeros as real readings but exclude
+    nulls, so a headband left on the desk would read as sustained zero focus
+    instead of no data."""
     assert signal_mapping.map_eeg_to_cognitive(_UNWORN, "s", "u") is None
 
 
 def test_bad_contact_keeps_the_row_and_nulls_the_measurements():
-    """"We were recording but could not measure" is not "no session happened",
-    and `class_live` derives staleness from the newest row's ts -- dropping
-    these would age out a session the student is still working in."""
+    """"Recording but unable to measure" is not "no session happened". Dropping
+    these rows would age out a session the student is still working in, since
+    `class_live` derives staleness from the newest row's ts."""
     row = signal_mapping.map_eeg_to_cognitive(_BAD_CONTACT, "s", "u")
 
     assert row is not None
@@ -953,9 +910,9 @@ def test_bad_contact_keeps_the_row_and_nulls_the_measurements():
 
 
 def test_the_legacy_poor_heuristic_is_not_treated_as_bad_contact():
-    """It reports "poor" for any focused student and says nothing about
-    electrodes. Treating it as bad contact would silently disable collection for
-    a whole session."""
+    """The legacy heuristic reports "poor" for any focused student and says
+    nothing about electrodes. Treating it as bad contact would silently disable
+    collection for a whole session."""
     row = signal_mapping.map_eeg_to_cognitive(_LEGACY_POOR, "s", "u")
 
     assert row["focus"] == pytest.approx(0.848)

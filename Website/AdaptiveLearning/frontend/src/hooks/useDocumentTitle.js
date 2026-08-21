@@ -4,15 +4,12 @@ const SUFFIX = 'AdaptiveLearning'
 
 /** Set the document title for as long as this component is mounted.
  *
- * Every route rendered the same static title from index.html, so browser
- * history, bookmarks and open tabs were indistinguishable from one another --
- * a teacher with Live, a class and a student report open saw three identical
- * tabs. It is also the accessible name a screen reader announces on
- * navigation, so a single-page app with one title never announces the move.
+ * Without this every route shares the same static title from index.html,
+ * so open tabs and history entries are indistinguishable, and a screen
+ * reader never announces navigation in a single-page app.
  *
- * Restores the previous title on unmount rather than clearing it, so a route
- * that renders one nested inside a route that also does cannot leave the
- * outer page nameless on the way back out.
+ * Restores the previous title on unmount, not just clearing it, so a
+ * nested route with its own title doesn't blank the outer page's title.
  */
 export default function useDocumentTitle(title) {
   useEffect(() => {

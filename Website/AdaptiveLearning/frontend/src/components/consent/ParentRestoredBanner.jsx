@@ -1,19 +1,16 @@
 /**
  * Tells a student that a parent switched a sensor back on.
  *
- * A student may withdraw at any time and only a parent may restore. That
- * asymmetry is the right one, but it means a channel can start recording again
- * without the student doing anything — and discovering that by noticing data
- * reappear is a surprise, not consent. The backend raises `needs_student_ack`
- * when a parent re-enables; this is the surface that clears it.
+ * Only a parent may restore a withdrawn channel, so recording can resume
+ * without the student doing anything -- discovering that from data reappearing
+ * would be a surprise, not consent. The backend raises `needs_student_ack`
+ * when a parent re-enables; this clears it.
  *
- * A parent turning something *off* raises nothing. The student loses nothing
- * they had, and can see the state in settings.
+ * A parent turning something *off* raises nothing, since the student loses
+ * nothing they had.
  *
- * On the dashboard, deliberately not mid-question. A sensor resuming is worth
- * telling someone about; interrupting a maths question to do it is not, and the
- * plan rules out a first-run explainer or an acknowledgement gate for the same
- * reason.
+ * On the dashboard, not mid-question: worth telling someone about, not worth
+ * interrupting a maths question for.
  */
 
 import { useState, useEffect } from 'react'
@@ -29,11 +26,10 @@ export default function ParentRestoredBanner({ studentId }) {
     if (!studentId) return
     let cancelled = false
     apiFetch(`/api/consent/${studentId}`)
-      // Only on a genuine `true`. A failed read answers with defaults, and
-      // showing this off the back of one would tell a student something
-      // happened that may not have.
+      // Only on a genuine `true` -- a failed read answers with defaults, and
+      // must not tell a student something happened that may not have.
       .then(c => { if (!cancelled) setShow(c?.needs_student_ack === true) })
-      .catch(() => { /* silent: this is an advisory, not a blocker */ })
+      .catch(() => { /* advisory, not a blocker */ })
     return () => { cancelled = true }
   }, [studentId])
 
@@ -45,8 +41,7 @@ export default function ParentRestoredBanner({ studentId }) {
       await apiFetch('/api/consent/ack', { method: 'POST' })
       setShow(false)
     } catch {
-      // Left up. If the acknowledgement did not land, the student has not been
-      // told as far as the record is concerned, and hiding it would lose that.
+      // Left up: the student has not actually been told yet.
       setBusy(false)
     }
   }

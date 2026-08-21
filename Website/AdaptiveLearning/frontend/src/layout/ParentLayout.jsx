@@ -11,9 +11,7 @@ import useMobileDrawer from '../hooks/useMobileDrawer'
 const NAV = [
   { path: '/parent',      label: 'Dashboard',  icon: LayoutDashboard, exact: true },
   { path: '/parent/link', label: 'Link Child',  icon: LinkIcon },
-  // The only surface that can turn a withdrawn channel back on. Without it the
-  // student's "off" was effectively permanent, which is not what the consent
-  // model says and not what a parent was told.
+  // The only place a parent can turn a withdrawn consent channel back on.
   { path: '/parent/settings', label: 'Settings', icon: SettingsIcon },
 ]
 
@@ -80,13 +78,11 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 }
 
 export default function ParentLayout() {
-  // The page-transition key. `window.location.pathname` is read straight off
-  // the browser and is not React state, so navigating within the SPA did not
-  // change it during render -- the key stayed equal, AnimatePresence saw the
-  // same element, and the transition it exists for never played.
+  // Page-transition key. Must come from `useLocation()`, not
+  // `window.location.pathname` directly, or React never sees it change and
+  // the enter animation doesn't replay on navigation.
   const { pathname } = useLocation()
-  // Scoped, so collapsing this sidebar does not collapse the other three
-  // layouts' -- one key would be shared across the whole origin.
+  // Scoped key so collapsing this sidebar doesn't collapse the other layouts'.
   const [collapsed, toggleCollapsed] = useCollapsedSidebar('parent')
   const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
     useMobileDrawer()

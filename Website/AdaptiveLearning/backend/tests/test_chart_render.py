@@ -1,10 +1,9 @@
 """The archived SVGs: that they draw, and that they still mean what the app drew.
 
 These are re-renders from the same payload, not captures of the live component,
-so the failure mode is silent divergence: the archive keeps rendering, and the
-colour that meant "happy" last year means something else now. The drift test at
-the bottom is the one that matters most here -- the rest check that a chart
-appears at all.
+so the failure mode is silent divergence: the archive keeps rendering, but a
+colour that meant "happy" last year could mean something else now. The drift
+test at the bottom matters most; the rest just check that a chart appears.
 """
 
 import os
@@ -25,7 +24,7 @@ _JSX = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages"
 
 
 def _parses(svg: str):
-    """Every assertion depends on the output being real SVG, so parse it."""
+    """Confirms the output is valid SVG before checking anything else about it."""
     return ElementTree.fromstring(svg)
 
 
@@ -39,13 +38,10 @@ def test_a_pie_renders_a_slice_per_label():
 
 
 def test_a_single_slice_pie_is_not_blank():
-    """The reference renderer's one real bug, carried over fixed.
-
-    An arc of exactly 360 degrees starts and ends at the same point, so the path
-    degenerates and draws nothing -- a session where every window scored the
-    same renders as an empty chart, which reads as "no data" for the most
-    unambiguous data there is.
-    """
+    """An arc of exactly 360 degrees starts and ends at the same point, so the
+    path degenerates and draws nothing. A session where every window scored
+    the same would render as an empty chart -- "no data" for the most
+    unambiguous data there is."""
     svg = cr.pie_svg({"low": 12}, "Stress", cr.STRESS_COLOURS)
     _parses(svg)
     assert "<circle" in svg and cr.STRESS_COLOURS["low"] in svg
@@ -53,8 +49,8 @@ def test_a_single_slice_pie_is_not_blank():
 
 
 def test_an_unknown_label_is_visibly_unknown():
-    """Grey, not a rotating hue. A label the model gains later must not borrow
-    the colour that already means something else."""
+    """Unknown labels get grey, not a rotating hue -- a new label must not
+    borrow a colour that already means something else."""
     svg = cr.pie_svg({"smug": 4}, "Emotion", cr.EMOTION_COLOURS)
     assert cr.UNKNOWN_COLOUR in svg
 
@@ -66,8 +62,8 @@ def test_an_empty_pie_says_so_rather_than_drawing_nothing():
 
 
 def test_slice_order_does_not_depend_on_dict_order():
-    """Two renders of one session must be byte-identical, or an archive diff is
-    noise."""
+    """Two renders of one session must be byte-identical, or an archive diff
+    is just noise from dict ordering."""
     a = cr.pie_svg({"happy": 3, "sad": 1, "fear": 2}, "E", cr.EMOTION_COLOURS)
     b = cr.pie_svg({"fear": 2, "happy": 3, "sad": 1}, "E", cr.EMOTION_COLOURS)
     assert a == b
@@ -84,8 +80,8 @@ def test_a_line_chart_draws_one_series_per_key():
 
 
 def test_a_gap_breaks_the_line_rather_than_bridging_it():
-    """Joining across a null draws a measurement nobody took -- the chart-shaped
-    version of the rule that absence must not render as a value."""
+    """Joining across a null would draw a measurement nobody took -- absence
+    must not render as a value."""
     svg = cr.line_svg({"focus": [(0, 0.4), (1, None), (2, 0.6), (3, 0.7)]}, "C")
     _parses(svg)
     assert svg.count("<polyline") == 1, "the gap was bridged into one line"
@@ -94,7 +90,7 @@ def test_a_gap_breaks_the_line_rather_than_bridging_it():
 
 def test_a_single_reading_still_renders():
     """A polyline of one point draws nothing, which would make a session that
-    recorded once look like one that recorded never."""
+    recorded once look like one that never recorded at all."""
     svg = cr.line_svg({"heart_rate_bpm": [(0, 72.0)]}, "Heart", unit=" bpm")
     _parses(svg)
     assert "<circle" in svg
@@ -107,7 +103,7 @@ def test_a_flat_series_is_not_pinned_to_the_axis():
 
 
 def test_non_finite_values_are_dropped_not_drawn():
-    """NaN and inf survive float() and then produce path commands renderers
+    """NaN and inf survive float() and produce path commands renderers
     disagree about -- some clip, some blank the whole chart."""
     svg = cr.line_svg({"focus": [(0, 0.4), (1, float("nan")),
                                  (2, float("inf")), (3, 0.6)]}, "C")
@@ -135,12 +131,12 @@ def _jsx_map(name: str) -> dict:
     ("STRESS_COLOURS", "STRESS_COLOURS"),
 ])
 def test_the_archive_palette_matches_the_live_charts(name, mapping):
-    """The archive is a re-render, so nothing enforces this but a test.
+    """The archive is a re-render, so nothing but a test enforces this.
 
-    A drift here is silent and permanent: the SVG keeps rendering, and the
-    colour that meant `happy` in one year's archive means something else in the
-    next. Someone comparing two terms would be reading a difference that is
-    entirely ours.
+    A drift here is silent and permanent: the SVG keeps rendering, but a colour
+    that meant `happy` in one year's archive could mean something else the
+    next. Someone comparing two terms would see a difference that is entirely
+    our own bug.
     """
     assert _jsx_map(name) == getattr(cr, mapping), (
         f"{name} differs between SessionReview.jsx and chart_render.py. These "
@@ -152,10 +148,10 @@ def test_the_archive_palette_matches_the_live_charts(name, mapping):
 def _jsx_line_strokes(path: Path) -> dict:
     """`dataKey` -> `stroke` for every `<Line>` in a chart file.
 
-    These are not a `const NAME = {...}` object, so the map above cannot reach
-    them: they are inline attributes on Recharts elements, sometimes wrapped
-    across lines. That is exactly why they were the palette this module's drift
-    test missed -- and the one its own new line chart depends on.
+    These are not a `const NAME = {...}` object, so the map above can't reach
+    them -- they're inline attributes on Recharts elements, sometimes wrapped
+    across lines. That's why the drift test above missed this palette, and why
+    it matters for the line chart that depends on it.
     """
     source = path.read_text(encoding="utf-8")
     found = {}
@@ -168,12 +164,11 @@ def _jsx_line_strokes(path: Path) -> dict:
 
 
 def test_the_line_palette_matches_the_session_charts():
-    """The gap the const-parsing test above could not see.
+    """The gap the const-parsing test above couldn't see.
 
-    `SessionReview.jsx` is the reference deliberately: the archive is per
-    session, so the per-session charts are what an archived SVG is a re-render
-    *of*. See the cross-file test below for why that choice has to be stated
-    rather than assumed.
+    `SessionReview.jsx` is the reference on purpose: the archive is per
+    session, so the per-session charts are what an archived SVG is a
+    re-render *of*.
     """
     assert _jsx_line_strokes(_JSX) == cr.SERIES_COLOURS, (
         "line colours differ between SessionReview.jsx and chart_render.py. "
@@ -184,15 +179,14 @@ def test_the_line_palette_matches_the_session_charts():
 def test_the_two_chart_surfaces_agree_on_shared_series():
     """One colour, one meaning, across both places a line is drawn.
 
-    They disagreed: `SignalPanel.jsx` drew `focus` in #10b981, which is
+    These used to disagree: `SignalPanel.jsx` drew `focus` in #10b981, which is
     `SessionReview.jsx`'s colour for `engagement`. A parent reading the weekly
-    panel and then session review was shown one green line meaning two different
-    things. `SignalPanel` moved, because the archive re-renders the *session*
-    charts and so those are the reference.
+    panel and then session review would see one green line meaning two
+    different things. `SignalPanel` was changed to match, since the archive
+    re-renders the *session* charts, making those the reference.
 
-    This replaces a test that merely pinned the collision. Asserting agreement
-    is the stronger shape: it fails if either surface drifts, not just if the
-    known one does.
+    Asserting agreement rather than just pinning the known values means this
+    fails if either surface drifts, not only the one that drifted before.
     """
     panel = _jsx_line_strokes(
         _JSX.parents[2] / "components" / "signals" / "SignalPanel.jsx")
@@ -207,9 +201,9 @@ def test_the_two_chart_surfaces_agree_on_shared_series():
         "(SessionReview, SignalPanel). One colour must not mean two things."
     )
 
-    # And no colour is reused for two different series across the pair, which is
-    # the collision that made the original bug invisible: both files were
-    # internally consistent.
+    # No colour should be reused for two different series across the pair --
+    # that collision is what made the original bug invisible, since both files
+    # were internally consistent on their own.
     combined = {**session, **panel}
     by_colour: dict = {}
     for series, colour in combined.items():
@@ -219,7 +213,7 @@ def test_the_two_chart_surfaces_agree_on_shared_series():
 
 
 def test_every_named_chart_is_one_this_module_can_draw():
-    """`CHART_NAMES` is what `chart_paths` on the session row will hold, so a
-    name here with no renderer is a path promising a file nobody writes."""
+    """A name in `CHART_NAMES` with no renderer would be a path promising a
+    file nobody writes."""
     assert set(cr.CHART_NAMES) == {
         "cognitive_timeline", "heart_rate", "stress_pie", "emotion_pie"}

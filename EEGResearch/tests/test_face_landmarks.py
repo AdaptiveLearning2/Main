@@ -1,15 +1,12 @@
-"""Naming, scaling and sanity-checking mesh landmarks, without MediaPipe.
+"""Tests naming, scaling, and sanity-checking of mesh landmarks, without MediaPipe.
 
-`FaceMeshLandmarker` itself is not exercised — it needs MediaPipe and a camera,
-like `FaceLocator`, and belongs to the manual verification step. What is tested
-is everything it delegates to: which index becomes which name, how normalised
-coordinates become pixels, and the topology check that exists because the index
-table could not be verified against hardware.
+`FaceMeshLandmarker` itself needs MediaPipe and a camera, so it is not tested
+directly here. These tests cover what it delegates to: mapping index to name,
+converting normalised coordinates to pixels, and the topology check.
 
-That last one carries the weight here. The table is written from published Face
-Mesh topology rather than measured, so the tests treat it as suspect: they check
-that a wrong index is *caught*, not that the table is right — which is a claim
-only a camera can settle.
+The index table is written from published Face Mesh topology, not measured
+against hardware, so these tests only check that a wrong index gets caught,
+not that the table itself is correct.
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ from src.app.services.face_landmarks import (
 
 
 class _Point:
-    """What MediaPipe hands back: normalised coordinates, maybe a visibility."""
+    """What MediaPipe returns: normalised coordinates, and maybe a visibility."""
 
     def __init__(self, x: float, y: float, visibility=None):
         self.x = x
@@ -38,9 +35,9 @@ class _Point:
 
 
 # A plausible face in normalised coordinates: eyes above mouth, mouth above
-# chin, nose between the eyes. Built by name and then scattered into a mesh
-# array, so the test never depends on the index table being right — only on it
-# being *used* consistently.
+# chin, nose between the eyes. Built by name, then placed into a mesh array by
+# index, so tests don't depend on the index table being correct -- only used
+# consistently.
 FACE = {
     "left_eye_outer": (0.62, 0.40), "left_eye_inner": (0.545, 0.40),
     "left_eye_upper": (0.58, 0.385), "left_eye_lower": (0.58, 0.415),
@@ -58,9 +55,8 @@ def _mesh(face=FACE, visibility=None, size=478):
     points = [_Point(0.5, 0.5, visibility) for _ in range(size)]
     for name, (x, y) in face.items():
         index = MEDIAPIPE_INDICES[name]
-        # A mesh shorter than the iris indices is the real `refine_landmarks
-        # off` case, not a broken fixture -- skip rather than pad, or the test
-        # for it would be building a mesh that cannot exist.
+        # A mesh shorter than the iris indices is the real "refine_landmarks off"
+        # case, so skip rather than pad it.
         if index < size:
             points[index] = _Point(x, y, visibility)
     return points
@@ -81,9 +77,9 @@ def test_every_name_is_read_from_its_own_index():
 
 
 def test_coordinates_are_scaled_by_the_frame_not_left_normalised():
-    """Everything downstream works in pixels. Fitting a pose to normalised
-    coordinates stretches every face by the frame's aspect ratio — which looks
-    like a real, consistent head tilt rather than like a bug."""
+    """Downstream code works in pixels. Fitting a pose to normalised coordinates
+    would stretch faces by the frame's aspect ratio, which looks like a real
+    head tilt rather than a bug."""
     wide = named_landmarks(_mesh(), 1280, 480)
     tall = named_landmarks(_mesh(), 640, 960)
 
@@ -93,25 +89,25 @@ def test_coordinates_are_scaled_by_the_frame_not_left_normalised():
 
 def test_a_poorly_seen_landmark_is_omitted_not_placed():
     """Face Mesh reports every point whether or not it can see it, so an
-    occluded corner arrives as a confident coordinate somewhere plausible.
-    `face_geometry` counts the names it was given, so a present-but-invented
-    entry would be counted as supplied."""
+    occluded landmark still arrives as a plausible-looking coordinate.
+    `face_geometry` counts the names it receives, so a made-up entry would be
+    counted as real."""
     named = named_landmarks(_mesh(visibility=MIN_VISIBILITY - 0.1), 640, 480)
 
     assert named == {}
 
 
 def test_visibility_is_only_applied_when_the_detector_reports_it():
-    """Face Mesh landmarks often carry no visibility at all. Treating absent as
-    zero would reject every point on every frame."""
+    """Face Mesh landmarks often have no visibility value at all. Treating a
+    missing value as zero would reject every point on every frame."""
     named = named_landmarks(_mesh(visibility=None), 640, 480)
 
     assert len(named) == len(MEDIAPIPE_INDICES)
 
 
 def test_a_short_mesh_is_survived_rather_than_raising():
-    """Iris landmarks only exist with refine_landmarks on. A build without them
-    should lose the iris names, not the frame."""
+    """Iris landmarks only exist with refine_landmarks on. Without them, only
+    the iris names should be missing, not the whole frame."""
     named = named_landmarks(_mesh(size=468), 640, 480)
 
     assert "nose_tip" in named
@@ -135,8 +131,8 @@ def test_a_zero_sized_frame_yields_nothing():
 
 # ── the topology check ──────────────────────────────────────────────────────
 #
-# The index table is unverified against hardware, so these test that a wrong
-# index is caught — not that the table is right, which only a camera settles.
+# The index table is unverified against hardware, so these tests only check
+# that a wrong index gets caught, not that the table itself is correct.
 
 def test_a_plausible_face_passes():
     assert check_topology(_pixels()) is None
@@ -170,8 +166,8 @@ def test_a_nose_outside_the_eyes_is_refused():
 
 
 def test_an_iris_paired_with_the_wrong_eye_is_refused():
-    """Otherwise invisible: both are entirely plausible points on a face, and
-    the resulting gaze is wrong rather than absent."""
+    """Both points are plausible on their own, so this error would otherwise go
+    unnoticed and produce a wrong gaze reading instead of a missing one."""
     wrong = _pixels()
     wrong["left_iris"], wrong["right_iris"] = wrong["right_iris"], wrong["left_iris"]
 
@@ -179,9 +175,9 @@ def test_an_iris_paired_with_the_wrong_eye_is_refused():
 
 
 def test_a_hard_sideways_look_is_not_mistaken_for_a_wrong_index():
-    """The iris genuinely reaches the corner and detector wobble carries it
-    just past. A check that refused this would reject exactly the looks the
-    gaze signal exists to measure."""
+    """The iris genuinely reaches the eye corner, and detector noise can carry
+    it slightly past. Rejecting this would reject the exact looks gaze tracking
+    is meant to measure."""
     looking = _pixels()
     outer, inner = looking["left_eye_outer"][0], looking["left_eye_inner"][0]
     looking["left_iris"] = (outer + 0.2 * (outer - inner), looking["left_iris"][1])
@@ -190,8 +186,8 @@ def test_a_hard_sideways_look_is_not_mistaken_for_a_wrong_index():
 
 
 def test_a_partial_face_is_not_refused_for_what_it_lacks():
-    """Occlusion is ordinary. A check that needed every landmark would refuse
-    every frame where a hand crossed the chin."""
+    """Occlusion is normal. Requiring every landmark would reject every frame
+    where, say, a hand crosses the chin."""
     partial = {k: v for k, v in _pixels().items()
                if k not in ("chin", "left_iris", "mouth_left")}
 
@@ -199,8 +195,8 @@ def test_a_partial_face_is_not_refused_for_what_it_lacks():
 
 
 def test_topology_holds_for_a_tilted_face():
-    """Every relation must survive the head angles a neck allows, or the check
-    would reject real poses — which is worse than the mistake it guards."""
+    """The topology relations must survive normal head angles, or the check
+    would reject real poses instead of catching bad ones."""
     rolled = {name: (x + (y - 240.0) * 0.3, y) for name, (x, y) in _pixels().items()}
 
     assert check_topology(rolled) is None
@@ -209,17 +205,17 @@ def test_topology_holds_for_a_tilted_face():
 # ── the boundary, and the log ───────────────────────────────────────────────
 
 def test_a_landmark_exactly_at_the_threshold_is_visible():
-    """`< MIN_VISIBILITY` rejects, so the threshold itself is kept. Pinned
-    rather than left implied: flipping this to `<=` drops a whole band of
-    marginal-but-usable landmarks, and nothing else would notice."""
+    """The check is `< MIN_VISIBILITY`, so a value exactly at the threshold
+    should pass. Pinned here since flipping this to `<=` would silently drop a
+    band of usable landmarks."""
     named = named_landmarks(_mesh(visibility=MIN_VISIBILITY), 640, 480)
 
     assert len(named) == len(MEDIAPIPE_INDICES)
 
 
 class _FakeMesh:
-    """Stands in for MediaPipe. `locate()` is testable through this — only
-    constructing a real Face Mesh is not."""
+    """Stands in for MediaPipe so `locate()` can be tested without a real Face
+    Mesh."""
 
     def __init__(self, points):
         self._points = points
@@ -249,10 +245,10 @@ def test_a_good_frame_returns_named_landmarks():
 
 
 def test_a_bad_index_table_is_reported_once_not_once_per_frame(caplog):
-    """At the capture loop's rate this is tens of identical lines a second,
-    which buries the one thing worth reading. It is a standing condition, not
-    an event — but the count has to keep rising, or "wrong on one frame" and
-    "wrong on every frame all session" would read identically."""
+    """At the capture loop's frame rate, logging every rejection would produce
+    tens of identical lines a second. It should log once, but the rejection
+    count must keep rising so a one-off error is distinguishable from a
+    standing fault."""
     broken = _mesh({**FACE, "nose_tip": (0.95, 0.50)})   # nose outside the eyes
     landmarker = FaceMeshLandmarker(mesh=_FakeMesh(broken))
 
@@ -267,14 +263,13 @@ def test_a_bad_index_table_is_reported_once_not_once_per_frame(caplog):
 
 
 def test_an_empty_result_says_which_kind_of_empty_it_is():
-    """`{}` covers two unrelated events and a caller cannot act on them the
-    same way: the detector saw no face, or it saw one and the landmark set was
-    refused. Reported identically, a topology refusal reads as "no face" and
-    sends someone to check their lighting.
-
-    Not hypothetical. Near profile the nose tip crosses the far eye corner, so
-    `nose_outside_eyes` is the *correct* answer for a face plainly in frame —
-    which is the case where conflating the two is most misleading.
+    """An empty result can mean two different things: no face was detected, or
+    a face was found but its landmarks failed the topology check. These need
+    different reasons, or a topology refusal would look like "no face" and
+    send someone to check their lighting instead of the real cause. This is a
+    real case: a face near profile can put the nose tip past the far eye
+    corner, correctly triggering `nose_outside_eyes` on a face that is plainly
+    in frame.
     """
     no_face = FaceMeshLandmarker(mesh=_FakeMesh(None))
     refused = FaceMeshLandmarker(
@@ -291,8 +286,9 @@ def test_an_empty_result_says_which_kind_of_empty_it_is():
 
 
 def test_the_reason_is_cleared_by_a_good_frame():
-    """It describes the last frame, not the session. Left standing, a single
-    early refusal would keep explaining every subsequent success."""
+    """The reason describes only the last frame, not the whole session. If it
+    weren't cleared, one early refusal would keep being reported after later
+    frames succeed."""
     landmarker = FaceMeshLandmarker(mesh=_FakeMesh(None))
     landmarker.locate(object(), 640, 480)
     assert landmarker.last_reason == "no_face"
@@ -307,9 +303,9 @@ def test_the_reason_is_cleared_by_a_good_frame():
 
 def test_the_model_url_is_pinned_not_latest():
     """`/latest/` and `/1/` serve the same bytes today, but a checksum pinned
-    against a moving URL is a setup failure waiting for the next release --
-    and it would fail as "checksum mismatch", which reads as a compromised
-    download rather than an upstream version bump."""
+    to a moving URL would break on the next release, and fail as a "checksum
+    mismatch" that reads like a compromised download instead of a version
+    bump."""
     from src.app.services.face_landmarks import MODEL_URL
 
     assert "/latest/" not in MODEL_URL
@@ -327,9 +323,9 @@ def test_verify_rejects_a_file_of_the_wrong_size_without_hashing_it(tmp_path):
 
 
 def test_ensure_model_refuses_rather_than_downloading_when_told_not_to(tmp_path):
-    """The flag that lets a caller ask "is it here?" without reaching the
-    network -- which is what the sidecar needs, since it must never fetch during
-    a lesson."""
+    """Lets a caller check whether the model is present without reaching the
+    network. The sidecar needs this since it must never fetch during a
+    lesson."""
     from src.app.services.face_landmarks import ensure_model
 
     with pytest.raises(FileNotFoundError, match="missing or unverified"):
@@ -337,8 +333,8 @@ def test_ensure_model_refuses_rather_than_downloading_when_told_not_to(tmp_path)
 
 
 def test_a_corrupt_model_is_deleted_rather_than_left_to_be_trusted(tmp_path):
-    """`verify` checks existence before anything else, so a partial or
-    substituted file left on disk would be trusted by the next run."""
+    """A partial or substituted file left on disk would otherwise be trusted
+    on the next run."""
     from src.app.services.face_landmarks import MODEL_BYTES, ensure_model
 
     corrupt = tmp_path / "face_landmarker.task"
@@ -351,13 +347,11 @@ def test_a_corrupt_model_is_deleted_rather_than_left_to_be_trusted(tmp_path):
 
 
 def test_a_tampered_model_is_refused_at_load_not_only_at_setup(tmp_path, monkeypatch):
-    """`ensure_model` runs once, at install. On its own it protects that moment
-    and nothing after it — a truncated, half-written or hand-swapped `.task`
-    would load without complaint and produce landmarks that are wrong rather
-    than absent, which is the whole failure a checksum exists to prevent.
-
-    `face_emotion` verifies before constructing its session for the same reason;
-    this is the landmark half of that rule.
+    """`ensure_model` only checks the file at install time. Without a check at
+    load time too, a truncated or hand-swapped `.task` file would load without
+    complaint and produce wrong landmarks instead of an error -- exactly what
+    the checksum is meant to prevent. `face_emotion` verifies at load for the
+    same reason; this is the landmark equivalent.
     """
     from src.app.services.face_landmarks import MODEL_BYTES, _TasksMesh
 
@@ -369,10 +363,9 @@ def test_a_tampered_model_is_refused_at_load_not_only_at_setup(tmp_path, monkeyp
 
 
 def test_a_locked_model_file_reports_what_happened(tmp_path, monkeypatch):
-    """Windows locks an open file, and this project's convention is a sidecar
-    per window — so an earlier `-Gaze` session still holding the model turns a
-    designed failure mode into an unhandled PermissionError out of a setup
-    script."""
+    """Windows locks open files, and each sidecar runs in its own window, so an
+    earlier `-Gaze` session still holding the model file could turn this into
+    an unhandled PermissionError instead of a clear setup error."""
     from src.app.services import face_landmarks as fl
 
     stale = tmp_path / "face_landmarker.task"

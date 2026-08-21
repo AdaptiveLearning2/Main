@@ -84,6 +84,25 @@ there is also a `.venv` at the repo root with a different OpenCV. `pip install -
 has to run *from* `EEGResearch`, or pip resolves `.` to the repo root and reports "neither setup.py
 nor pyproject.toml found".
 
+**Both venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13). Every direct
+dependency in both trees already ships a `cp314`/`win_amd64` wheel or a version-agnostic
+`py3-none-any` one — `mediapipe`, `opencv-contrib-python`/`opencv-python` (the `<5` pin still
+resolves), `onnxruntime`, `numpy`, `scipy`, `jax`/`jaxlib`, `h5py`, `av` all installed clean.
+`EEGResearch/.venv` (`pip install -e ".[dev,face,gaze]"`) passed all 557 tests; the root venv
+passed all 814 backend tests, and `keras`/`jax` load fine once `KERAS_BACKEND` is set the way
+`rppg/models.py` already sets it at import. **Run `pytest` from the repo root, not from
+`EEGResearch`** — `Settings` loads `.env` relative to cwd, and a locally edited
+`EEGResearch/.env` (e.g. `FACE_EMOTION_ENABLED=false` left over from a camera-off `start.ps1`
+run) silently overrides field defaults for any test that constructs `Settings()` without passing
+that key, which reads as a code regression and isn't one.
+
+One pre-existing gap, unrelated to the version bump: neither venv has ever carried `setuptools`
+(Python's `venv` module stopped bundling it), so `import rppg` / `import heartpy` fail on a
+missing `pkg_resources` if run directly against either persistent venv. Not a regression — the
+`open-rppg` measurements in `EEGResearch/docs/RPPG_DEPENDENCY_COST.md` were always done in a
+throwaway `pip install --target ... "setuptools<81"` env for exactly this reason, never against
+the root venv.
+
 Individually, from each directory:
 
 ```bash
@@ -2209,6 +2228,41 @@ already constrains the topic to `+ - * / ( )`, so there is no third interpretati
 model follow it, and neither does an unambiguous instruction sitting next to a contradicting
 example.** Anything added to these prompts needs its effect read off generated output before it is
 believed — which is what `scripts/` has no home for yet and was done by hand here.
+
+### The question shown and the data scored are two fields, and they must agree
+
+Every generator returns a `question_text` the student reads and a separate structured field the
+solver computes from — `variables` for the dataset topics, `values` for `ordering`, `items` +
+`scenario` for `probability`. **Nothing checked that they described the same thing**, and
+`LLM_mode_generation.py` carried a stale note contemplating exactly that ("*POSSIBLY: manually
+generate solution using numbers from question_text*").
+
+Measured 2026-08-19 on llama3.1:8b, **2 wrong answers in 12 generated**:
+
+- **mode** — shown `8, 4, 12, 16, 4, 14, 8, 10, 20, 4`, answered `[8, 4]`. 4 occurs three times and
+  8 twice, so 4 is the only mode; the scored `variables` were not the numbers on screen.
+- **probability** — shown *"what is the probability of selecting an EDM band?"* over 17+23+14+15 = 69
+  bands, answered `18/23`. That is 54/69, the **complement**: the text asked a positive question
+  while the JSON said `scenario: not_probability_of`.
+
+**This is the worst failure shape available here** — the question is well-formed and answerable, the
+student answers it correctly, and is marked wrong against data they never saw. Worse than a refused
+question, which costs one retry and nothing else.
+
+`question_consistency.dataset_mismatch` compares the numbers **after the last colon** against the
+scored list (these prompts all put the dataset there, which is what makes locating it reliable);
+`negation_mismatch` requires a negated wording and `not_probability_of` to imply each other, **in
+both directions**, since a negated question scored as `probability_of` is wrong by the same amount.
+Wired into `mean`/`median`/`mode`/`ordering`/`probability` inside the existing retry loops.
+
+**Both fail open**, and that is what makes them safe to run on every question: order is ignored (the
+solvers sort anyway), non-numeric `variables` are skipped, and a question with no colon-delimited
+list is left alone rather than compared against stray numbers in the sentence ("during a school
+year", "for a week"). A false rejection burns retries and looks exactly like a model that cannot
+follow instructions — the same reasoning `grade_appropriateness` is built on. They catch a clear
+contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geometry` and
+`angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
+so there is no comparable multiset.
 
 ### A lesson-plan cell has four ways to contribute nothing, and they are named
 

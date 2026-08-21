@@ -3,60 +3,46 @@
 
 Why this exists
 ---------------
-`open-rppg` costs ~600 MB of new dependencies and ~34 s of start-up (see
+`open-rppg` costs ~600 MB of dependencies and ~34s of start-up (see
 docs/RPPG_DEPENDENCY_COST.md). Exported to ONNX it costs **nothing new** --
-onnxruntime is already a dependency of the `face` extra -- and loads in ~1.5 s.
-The exported file is 22 MB and agrees with the **unpatched** package at
-correlation 0.99985 (0.999998 comparing like for like at float32; the package
-ships at mixed_float16 and the export runs at float32).
+onnxruntime is already a dependency -- and loads in ~1.5s. The exported file is
+22 MB and agrees with the unpatched package at correlation 0.99985.
 
-That is the difference between camera rPPG being an affordable experiment and
-being a 600 MB commitment, so the recipe is kept rather than the result: the
-`.onnx` is not committed, because it is derived from weights whose licence
-terms belong to their authors, and because a binary nobody can regenerate is
-worse than a script.
+The `.onnx` file itself is not committed: it's derived from weights whose
+licence terms belong to their authors, and a binary nobody can regenerate is
+worse than a script that produces it.
 
 **This does not make camera rPPG work.** Accuracy against a reference is
-Phase 12's first blocker and is untouched by any of this -- it needs a
-synchronised video and ECG capture. All this establishes is that the *plumbing*
-is affordable.
+still unmeasured and needs a synchronised video and ECG capture. This only
+establishes that the plumbing is affordable.
 
-What it patches, and why each one
----------------------------------
-Five edits to a vendored `rppg/models.py`, applied to an installed copy. None
-is committed to that package; this script rewrites the file in place, so run it
-against a throwaway install.
+What it patches, and why
+-------------------------
+Five edits to a vendored `rppg/models.py`, applied to an installed copy (never
+committed to that package -- run against a throwaway install):
 
-1. **Don't force the JAX backend** (`models.py:2`). The module sets
-   `KERAS_BACKEND=jax` at import, overriding the caller.
-2. **Make the precision policy overridable** (`models.py:18`, `mixed_float16`).
-   The model leans on JAX's implicit float16/float32 promotion; TensorFlow
-   refuses to multiply across the two. Running at float32 avoids every one of
-   those sites -- there are at least four -- rather than patching each.
-3. **`Block_mamba.call`: replace three `.at[].set()` lines.** JAX-only indexed
-   update, over a *static* range: a temporal shift and a cumulative average,
-   both expressible as concat-of-slices. This is the only JAX binding in the
-   forward pass. (`selective_scan`, the Mamba scan itself, is already pure
-   `keras.ops` and needs nothing. `scale_seg` is dead code -- its call site is
-   commented out.)
-4. **`Mamba.call`: compute the grouped Conv1D explicitly.** `groups == filters
-   == channels`, so it *is* a depthwise convolution, but tf2onnx leaves Keras 3's
-   grouped Conv1D as an unconverted `StatefulPartitionedCall`. The layer is kept
-   so `load_weights` still matches by structure; only the computation is
-   replaced. A grouped kernel is `(k, 1, C)` and a depthwise one is `(k, C, 1)`,
-   so it is one transpose.
-5. **`Frequencydomain_FFN.call`: replace `rfft`/`irfft` with constant matmuls.**
-   tf2onnx does not convert TensorFlow's RFFT at any opset it supports (it caps
-   at 19). The transform length is fixed by the input signature, so the DFT is a
-   constant matrix and the transform is a matmul.
+1. **Don't force the JAX backend** (`models.py:2`) -- the module overrides the
+   caller's `KERAS_BACKEND` at import.
+2. **Make the precision policy overridable** (`models.py:18`) -- the model
+   relies on JAX's implicit float16/float32 promotion, which TensorFlow
+   refuses. Running at float32 sidesteps every such site at once.
+3. **`Block_mamba.call`: replace three `.at[].set()` lines** -- JAX-only
+   indexed updates over a static range (a temporal shift and a cumulative
+   average), rewritten as concat-of-slices. The only JAX binding in the
+   forward pass.
+4. **`Mamba.call`: compute the grouped Conv1D explicitly** -- it's really a
+   depthwise convolution (`groups == filters == channels`), but tf2onnx
+   leaves Keras 3's grouped Conv1D unconverted. The layer stays so
+   `load_weights` still matches by structure; only the computation changes.
+5. **`Frequencydomain_FFN.call`: replace `rfft`/`irfft` with constant
+   matmuls** -- tf2onnx can't convert TensorFlow's RFFT. Since the transform
+   length is fixed by the input signature, the DFT is just a constant matrix.
 
-All five are verified together rather than by inspection: the script captures
-the unpatched model's output *before* patching and the final check compares the
-ONNX graph against that. Measured on the same input, at float32 on both sides,
-the patches alone move the output by 1.1e-04 (correlation 0.9999999993) -- op
-reordering, not a change of function. At the package's own mixed_float16 the
-same patches move it by 1.8e-02, which is float16 accumulation and is the reason
-the export runs at float32.
+All five are verified together, not by inspection: the script captures the
+unpatched model's output before patching, and the final check compares the
+ONNX graph against that baseline. Measured on the same input at float32, the
+patches alone move the output by 1.1e-04 -- op reordering, not a behaviour
+change.
 
 Usage
 -----
@@ -68,8 +54,8 @@ Then it needs nothing but onnxruntime:
     sess = onnxruntime.InferenceSession("rm.onnx")
     bvp = sess.run(None, {sess.get_inputs()[0].name: frames})[0]   # (1, 160)
 
-`frames` is `(1, 160, 128, 128, 3)` float32. The shape is **static**: the export
-takes a fixed input signature, so a different window length needs a new export.
+`frames` is `(1, 160, 128, 128, 3)` float32. The shape is static: a different
+window length needs a new export.
 """
 
 from __future__ import annotations
@@ -135,13 +121,12 @@ PATCHES: list[tuple[str, str, str]] = [
     ),
 ]
 
-# The Mamba grouped-conv rewrite is applied separately: the same source line
-# appears in BiMamba, which RhythmMamba never calls and whose padding is
-# 'same' rather than 'causal', so a blind replace patches the wrong one and
-# silently changes a layer it should not touch.
+# Applied separately from PATCHES: the same source line also appears in
+# BiMamba (never called by RhythmMamba, different padding mode), so a blind
+# replace would silently patch the wrong layer.
 CONV_ORIGINAL = "        x = self.conv1d(x)[:, :seq_len]"
-CONV_PATCHED = """        # Never called now, so Keras never builds it -- but the weights still
-        # have to exist for load_weights to populate them.
+CONV_PATCHED = """        # Never called now, but the weights still need to exist for
+        # load_weights to populate them.
         if not self.conv1d.built:
             self.conv1d.build(x.shape)
         k = ops.transpose(self.conv1d.kernel, (0, 2, 1))
@@ -157,7 +142,7 @@ _DFT_CACHE = {}
 
 
 def _dft_matrices(L):
-    """Real and imaginary parts of the length-L RFFT as (L, L//2+1) matrices."""
+    """Real and imaginary parts of the length-L RFFT, as (L, L//2+1) matrices."""
     key = ("f", int(L))
     if key not in _DFT_CACHE:
         n = np.arange(L)[:, None]
@@ -203,7 +188,7 @@ def patch(models_py: pathlib.Path) -> None:
             )
         src = src.replace(old, new, 1)
 
-    # Second occurrence only: the first belongs to BiMamba.
+    # Second occurrence only -- the first belongs to BiMamba.
     if src.count(CONV_ORIGINAL) != 2:
         raise SystemExit(
             f"expected 2 conv1d call sites (BiMamba, Mamba), found "
@@ -279,12 +264,10 @@ VERIFY = textwrap.dedent("""
     print(f'  inference       {infer:.2f}s for 160 frames')
     print(f'  max abs diff    {diff:.3e}  (vs the UNPATCHED model)')
     print(f'  correlation     {corr:.8f}')
-    # Correlation, not absolute difference, and the bar is 0.999 rather than
-    # something tighter. The reference is the package as shipped, which runs at
-    # mixed_float16 while the export runs at float32, so individual samples move
-    # by ~5e-2 on a waveform spanning ~4 -- that is precision, not wiring.
-    # Measured on this input: 0.99984906. A wrongly wired graph does not score
-    # 0.999 on a biosignal waveform; it scores nothing like it.
+    # Correlation, not absolute difference: the reference package runs at
+    # mixed_float16 while the export runs at float32, so individual samples
+    # move by ~5e-2 on a waveform spanning ~4 -- that's precision, not a wiring
+    # bug. A genuinely broken graph would score nothing close to 0.999.
     assert corr > 0.999, f'exported waveform does not match the original ({corr})'
     print('  OK -- matches the unpatched model')
 """)
@@ -310,16 +293,14 @@ def main() -> int:
             f"to measure against. Reinstall open-rppg into a clean target."
         )
 
-    # The reference comes from the UNPATCHED model, before anything is
-    # rewritten. Capturing it afterwards would have the patched model grading
-    # itself: the comparison would only prove the ONNX graph faithfully
-    # reproduces the patched TensorFlow one, which says nothing about whether
-    # the patches preserved the original's behaviour. That was the shape of a
-    # real gap in an earlier version of this script.
+    # The reference must come from the UNPATCHED model. Capturing it after
+    # patching would have the patched model grading itself, proving only that
+    # ONNX matches the patched TensorFlow code, not that the patches preserved
+    # the original's behaviour.
     print("capturing the baseline from the unpatched model...")
     base_env = dict(os.environ, PYTHONPATH=args.rppg, KERAS_BACKEND="jax",
                     TF_CPP_MIN_LOG_LEVEL="3")
-    base_env.pop("RPPG_POLICY", None)      # the package's own mixed_float16
+    base_env.pop("RPPG_POLICY", None)      # use the package's own mixed_float16
     if subprocess.run([sys.executable, "-c", BASELINE, args.out],
                       env=base_env).returncode:
         return 1

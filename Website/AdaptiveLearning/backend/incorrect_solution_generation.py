@@ -1,9 +1,6 @@
-#Three options
-#Using this instead of creating w/ LLM for increased consistency and speed. 
-#1. Algebra, angles, geometry, mean, median, probability - take solution, add/subtract random number. 
-#2. Expressions - random term w/ 'x' as variable. 
-#3. Rationals - need random numerator and denominator.
-#Ordering already has solution generation, may move here. 
+# Generates wrong answer options directly instead of via LLM, for speed and consistency.
+# Algebra/angles/geometry/mean/median/probability: offset the solution.
+# Expressions: perturb the 'x' term. Rationals: random numerator/denominator.
 
 import random
 import sympy as sp 
@@ -12,18 +9,14 @@ from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
     implicit_multiplication_application
-) #treat 2x as 2*x for sympy parsing
+) # treat 2x as 2*x for sympy parsing
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 
-#POSSIBLY - for method 1, find how many decimal places answer has and round to match. 
-
-#method 1
 def generate_general_incorrect_answers(answer):
     generated_answers = []
 
-    # Always normalize to float for math
-    answer = float(sp.sympify(answer))    
+    answer = float(sp.sympify(answer))
     while len(generated_answers) < 3:
         operation = random.choice(["+", "-", "*"])
         if operation == "+":
@@ -31,28 +24,24 @@ def generate_general_incorrect_answers(answer):
             incorrect_answer = answer + offset
         elif operation == "-":
             offset = random.randint(1, 25)
-            # prevent negative results
             incorrect_answer = answer - offset
-            if incorrect_answer < 0:
+            if incorrect_answer < 0: # prevent negative results
                 incorrect_answer = random.randint(1, 5)
         elif operation == "*":
             factor = random.randint(2, 5)
             incorrect_answer = answer * factor
-        # round safely
         incorrect_answer = round(float(incorrect_answer), 2)
 
-        # normalize formatting (important for frontend equality checks)
+        # normalize formatting -- important for frontend equality checks
         formatted = f"{incorrect_answer:.2f}".rstrip('0').rstrip('.')
 
-        # compare numerically, store as string
         if incorrect_answer != answer and formatted not in generated_answers:
             generated_answers.append(formatted)
 
     return generated_answers
 
 
-#maybe take numerator/denomiator as input. 
-def generate_incorrect_rational(answer): 
+def generate_incorrect_rational(answer):
     generated_answers = []
 
     answer = sp.sympify(answer)
@@ -60,8 +49,8 @@ def generate_incorrect_rational(answer):
     while len(generated_answers) < 3:
         num = random.randint(1, 20)
         denom = random.randint(1, 20)
-        
-        #avoid "1" answers, some more randomness. 
+
+        # avoid landing on "1" too often
         if num == denom:
             if num <= 8:
                 num += random.randint(1, 5)
@@ -71,17 +60,16 @@ def generate_incorrect_rational(answer):
                 num += random.randint(-3, 3)
 
         incorrect_answer = sp.Rational(num, denom)
-        sp.sympify(incorrect_answer) #ensure answer is in simplest form
+        sp.sympify(incorrect_answer) # already in simplest form
 
-        if incorrect_answer != answer and incorrect_answer not in generated_answers: #ensure we dont add the correct answer or duplicates.
+        if incorrect_answer != answer and incorrect_answer not in generated_answers:
             generated_answers.append(str(incorrect_answer))
         else:
-            continue 
+            continue
 
     return generated_answers
 
 
-#expressions
 def extract_terms(expr):
     """
     Break expression into additive terms.

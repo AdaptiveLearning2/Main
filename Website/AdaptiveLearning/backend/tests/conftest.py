@@ -1,7 +1,7 @@
 """Shared test setup for the website backend.
 
-Nothing here is about a specific endpoint -- it puts the backend package on
-sys.path for every test module, and stops poller threads deterministically.
+Puts the backend package on sys.path for every test module, and stops poller
+threads deterministically after each test.
 """
 import os
 import sys
@@ -19,19 +19,12 @@ _CLOSE_HELPERS = ("_close_session", "_claim_session_close")
 
 
 def close_sites():
-    """Every function that ends a session, derived from the source.
+    """Every function that ends a session, found by scanning the source.
 
-    Three test modules each carried their own copy of this loop -- the archive
-    check, the rollup check and the credit check -- which is the duplication the
-    close sequence itself was consolidated to remove, reproduced in the tests
-    that verify the consolidation.
-
-    A site is a function that calls `_close_session(` **or** writes an
-    `"ended_at":` of its own. Both halves matter: the first catches an existing
-    site drifting away from the helper, and the second catches a *new* closer
-    that hand-rolls the stamp and never reaches the helper at all -- which is
-    what all three of these tests were originally written to find, and what
-    matching on the helper call alone would go blind to.
+    A site is a function that calls `_close_session(` **or** writes its own
+    `"ended_at":`. Both checks matter: one catches a site drifting away from
+    the helper, the other catches a new closer that hand-rolls the stamp
+    without ever calling the helper.
     """
     import inspect
 
@@ -56,16 +49,13 @@ def close_sites():
 def _join_poller_threads():
     """Stop and join every poller thread a test started, before the next test.
 
-    _Poller is a daemon thread that prints to stdout, including a block of
-    teardown lines emitted after its loop ends. Left to daemon-thread teardown,
-    one of those prints can land during interpreter shutdown while the stdout
-    BufferedWriter lock is already held, which CPython treats as fatal:
-    "_enter_buffered_busy: could not acquire lock for <_io.BufferedWriter
-    name='<stdout>'>", exit code 134, after the whole suite has passed. Joining
-    here means no poller outlives the test that made it.
+    A poller thread prints to stdout as it shuts down. Left to daemon-thread
+    teardown, one of those prints can land during interpreter shutdown while
+    the stdout lock is already held, which CPython treats as a fatal crash
+    after the whole suite has passed. Joining here stops that.
 
-    Same helper the server's own shutdown uses, so the tests exercise the path
-    that protects production rather than a parallel copy of it.
+    Uses the same helper the server's own shutdown uses, so tests exercise the
+    real production path.
     """
     yield
     eeg_poller.stop_all()
@@ -77,12 +67,10 @@ def _join_poller_threads():
 def _consent_allows_polling():
     """Wire a permissive consent check for tests that are not about consent.
 
-    `eeg_poller.start` refuses outright when none is wired, which is deliberate:
-    a default of "assume yes" in the module would make an unwired deployment
-    record against a refusal and look identical to a wired one. Tests need a
-    wired one, and the two that matter -- refused, and unwired -- assert the
-    real behaviour explicitly in test_consent_gates_polling.py rather than
-    relying on this.
+    `eeg_poller.start` refuses outright when no check is wired, on purpose:
+    defaulting to "assume yes" would make an unwired deployment record without
+    real consent. The refused and unwired cases are tested for real in
+    test_consent_gates_polling.py instead of relying on this fixture.
     """
     eeg_poller.set_consent_check(lambda _student_id: True)
     yield
@@ -93,20 +81,18 @@ def _consent_allows_polling():
 def _school_year_is_open(monkeypatch):
     """An open retention window for tests that are not about the window.
 
-    Recording is gated on the school year as well as consent (Phase 9), and it
-    fails closed the same way: no configured year means nothing records. Most
-    of these tests drive a fake Supabase with no `retention_window` table, so
-    without this they would keep passing while testing nothing -- every ingest
-    assertion satisfied by a refusal that had no connection to the thing under
-    test.
+    Recording is gated on the school year as well as consent, and fails closed
+    the same way: no configured year means nothing records. Most tests drive a
+    fake Supabase with no `retention_window` table, so without this they would
+    pass while testing nothing -- an ingest assertion satisfied by a refusal
+    unrelated to what the test is checking.
 
-    The same reasoning as `_consent_allows_polling` above, and the same escape
-    hatch: `test_retention_window.py` overrides this to exercise each state,
-    because a default that cannot be turned off is a rule nothing tests.
+    Same reasoning as `_consent_allows_polling` above. `test_retention_window.py`
+    overrides this fixture to exercise each state directly.
     """
     import main
-    # Cleared both sides of the test: the real reader caches successful reads,
-    # and a row cached by one test must not decide another's answer.
+    # Clear the cache on both sides: a row cached by one test must not decide
+    # another test's answer.
     main._retention_cache_clear()
     monkeypatch.setattr(main, "_retention_window",
                         lambda: {"state": main.WINDOW_OPEN,
@@ -127,22 +113,19 @@ def _default_flags():
 def _feature_flags_are_default():
     """The declared flag defaults for tests that are not about the flags.
 
-    Same reasoning as `_school_year_is_open` above: most tests drive a fake
-    Supabase with no `feature_flags` table, so the real reader would fall back
-    to defaults anyway -- but by way of a caught exception and a printed error
-    per call, which is noise that hides a real one. Pinning the defaults here
-    makes "the flags are not what this test is about" explicit.
+    Same reasoning as `_school_year_is_open` above: without this, the real
+    reader would fall back to defaults anyway, but only after a caught
+    exception and a printed error per call. Pinning the defaults here avoids
+    that noise and makes clear the flags are not what the test is checking.
 
-    The cache is cleared on both sides, because a successful read in one test
-    must not decide another's answer.
+    Cache is cleared on both sides so one test's successful read can't decide
+    another test's answer.
 
-    **Deliberately does not take `monkeypatch`,** unlike its neighbour above.
-    Requesting it from an autouse fixture that pytest orders early hoists
-    `monkeypatch`'s own setup ahead of `_join_poller_threads`, which inverts
-    their teardown: `live_pollers` was still patched when the poller check ran,
-    and three tests that patch it failed in teardown for a reason nothing in
-    their bodies could explain. Patch and restore by hand instead, so this
-    fixture's position cannot move another one's.
+    Deliberately does not take `monkeypatch`, unlike its neighbour above:
+    requesting it here would hoist `monkeypatch`'s setup ahead of
+    `_join_poller_threads` in fixture ordering, inverting their teardown and
+    breaking tests that patch `live_pollers` for reasons invisible in their own
+    bodies. Patching and restoring by hand avoids that.
     """
     import main
     main._feature_flags_cache_clear()

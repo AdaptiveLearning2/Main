@@ -1,34 +1,27 @@
 /**
  * The three consent switches, shared by the student and parent surfaces.
  *
- * One component because the *decision* is the same object on both sides —
- * `PUT /api/consent/{student_id}` — and two copies of that wiring is how the
- * two surfaces end up disagreeing about what a channel means.
+ * One component because the decision is the same object on both sides
+ * (`PUT /api/consent/{student_id}`) — two copies would drift apart.
  *
- * What differs is who may do what, and that is the backend's rule, not this
- * component's: a student may only move a flag **true → false**, and only a
- * linked parent may move it back. This renders that asymmetry (`role`) so the
- * student is told before they commit, but it does not enforce it — a UI that
- * enforces a permission is a UI that can be wrong about one.
+ * Who may do what is the backend's rule, not this component's: a student may
+ * only move a flag true → false, and only a linked parent may move it back.
+ * This shows that asymmetry via `role` but does not enforce it.
  *
- * Copy rules this has to hold to, from the plan:
- *  - Say **recorded**, never *included* or *shown*. The old control was a
- *    display filter and anyone who saw it will read the old vocabulary that way.
- *  - No disclaimer sentence about what the control *doesn't* do. Needing one is
- *    the signal the control is wrong.
- *  - The student strings are read by children, some with learning
- *    disabilities: short sentences, concrete verbs, and no "facial
- *    recognition" — say what it looks at and what it works out.
+ * Copy rules: say **recorded**, never *included* or *shown* (the old control was
+ * a display filter). No disclaimer about what the control doesn't do —
+ * needing one means the control is wrong. Student strings are read by
+ * children, some with learning disabilities: short, concrete, and say what
+ * the sensor looks at rather than naming it "facial recognition".
  */
 
 import { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '../../lib/api'
 
 /**
- * Named for the **sensor**, not the signal derived from it.
- * `headband_optical` is heart rate today; the Athena's OPTICS packet also
- * carries fNIRS, so a `_ppg_` name would go stale. The label can change without
- * the column changing.
+ * Named for the **sensor**, not the signal derived from it. `headband_optical`
+ * is heart rate today, but the headband's OPTICS packet also carries fNIRS,
+ * so a name tied to one signal would go stale.
  */
 export const CHANNELS = [
   {
@@ -72,14 +65,11 @@ export const CHANNELS = [
   },
 ]
 
-// The read failed and nothing was in flight, so the stored decision is whatever
-// it was. Safe to promise.
+// A plain failed read, nothing else in flight -- safe to promise nothing changed.
 const NOTHING_CHANGED = 'Could not load these settings. Nothing has been changed.'
 
-// The read failed *after* a 409, and the two halves of that are opposite:
-// someone else's change did land, and the parent's did not. Saying "nothing has
-// been changed" here would be false in both directions at once, which is why
-// this is a separate string rather than a suffix on the one above.
+// A failed read *after* a 409: someone else's change landed and this parent's
+// did not, so "nothing has changed" would be false in both directions.
 const CONFLICT_UNREADABLE =
   'Someone else changed these settings, so your change was not applied. '
   + 'They could not be reloaded just now — please try again in a moment.'
@@ -116,58 +106,38 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const [error, setError]       = useState(null)
   const [saving, setSaving]     = useState(null)
   const [confirming, setConfirming] = useState(null)
-  // Erasure is a separate decision from consent and gets separate state, so a
-  // half-finished erase confirmation can never be committed by a switch click
-  // or the reverse. `erasing` is the channel in flight; `erasureAck` is the
-  // checkbox, cleared whenever the panel opens or closes so it can never be
-  // inherited by the next channel.
+  // Erasure gets its own state, separate from consent, so a half-finished
+  // confirmation can't be committed by a switch click or vice versa. `erasing`
+  // is the channel in flight; `erasureAck` is the checkbox, reset on open/close
+  // so it never carries over to the next channel.
   const [erasureFor, setErasureFor] = useState(null)
   const [erasureAck, setErasureAck] = useState(false)
   const [erasing, setErasing] = useState(null)
   const [erasureNote, setErasureNote] = useState(null)
 
-  // Returns its promise, and takes the conflict message to leave in place. A
-  // reload triggered by a conflict would otherwise clear the very error that
-  // caused it -- the read succeeds, so `setError(null)` fires and the parent is
-  // told nothing went wrong while their change silently did not apply.
+  // Takes the conflict message to leave in place -- a reload triggered by a
+  // conflict would otherwise clear the very error that caused it, since the
+  // read succeeds and `setError(null)` fires as if nothing went wrong.
   const load = useCallback((conflict = null) => {
-    // No current state to show, whichever way the read failed.
-    //
-    // Dropping the switches matters most on the conflict path, where what is on
-    // screen is not merely unverified but *known superseded* -- the 409 is what
-    // told us so. Leaving it up would show a parent the one state we have
-    // positive evidence is wrong, under a banner saying we had reloaded.
-    //
-    // The message has to change with it. `NOTHING_CHANGED` is true of a first
-    // load and false after a conflict: something did change, which is why we
-    // are here, and the parent's own click is the thing that did not apply.
+    // No current state to show, whichever way the read failed. On the
+    // conflict path especially: the 409 told us the on-screen state is known
+    // superseded, not merely unverified, so it must not stay up.
     const failed = () => {
       setChannels(null)
       setError(conflict ? CONFLICT_UNREADABLE : NOTHING_CHANGED)
     }
     return apiFetch(`/api/consent/${studentId}`)
       .then(c => {
-        // `retrieved: false` means the read itself failed. Rendering that as
-        // "everything is off" would tell a parent their child's channels are
-        // disabled when we simply could not find out — the same three-state
-        // distinction the reporting surfaces keep.
-        //
-        // Which is why the banner alone was not enough. `_consent()` fails
-        // **closed**, so a failed read does not arrive as an error shape or a
-        // partial one — it is a complete, plausible payload with all three
-        // channels `enabled: false` and no `revoked_at` on any of them. Setting
-        // it drew the banner *and* three off switches; for `role="student"`,
-        // three locked ones reading "A parent can turn this back on for you",
-        // which is a claim about a decision nobody made, during what may be a
-        // few seconds of outage.
+        // `retrieved: false` means the read itself failed. Consent fails
+        // closed, so that arrives as a plausible payload -- all channels off,
+        // no revoked_at -- not an error shape. Rendering it as three off
+        // switches would claim a decision nobody made.
         if (c.retrieved === false) return failed()
         setChannels(c.channels)
         setError(conflict)
       })
-      // A thrown read leaves us knowing exactly what `retrieved: false` does,
-      // so it gets the same treatment. The raw message is kept only where there
-      // is nothing better to say: after a conflict, "Failed to fetch" is not
-      // the thing the parent needs to know.
+      // A thrown read gets the same treatment as retrieved: false. The raw
+      // message is kept only when there's nothing better to say.
       .catch(e => (conflict ? failed() : setError(String(e.message || e))))
   }, [studentId])
 
@@ -176,9 +146,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   const commit = async (key, next) => {
     setSaving(key)
     setError(null)
-    // A note about an erasure is stale the moment the parent does something
-    // else on this screen. Still true, but it reads as a result of whatever
-    // they just clicked.
+    // An erasure note is stale the moment the parent does something else --
+    // still true, but it would read as the result of the new action.
     setErasureNote(null)
     try {
       const updated = await apiFetch(`/api/consent/${studentId}`, {
@@ -186,10 +155,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
       })
       setChannels(updated.channels)
     } catch (e) {
-      // 409 is its own case: the decision moved under us — a student withdrew
-      // while a parent was re-enabling, or the reverse. Losing that silently
-      // is how someone records against a refusal, so it reloads rather than
-      // retrying.
+      // 409: the decision moved under us -- a student withdrew while a parent
+      // was re-enabling, or the reverse. Reload rather than retry.
       if (e.status === 409) {
         await load('This was changed somewhere else. Reloaded — please check and try again.')
       } else {
@@ -202,7 +169,7 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   }
 
   const openErasure = (key) => {
-    setErasureAck(false)      // never inherited from a panel opened earlier
+    setErasureAck(false)      // must not carry over from an earlier panel
     setErasureNote(null)
     setErasureFor(key)
   }
@@ -220,18 +187,15 @@ export default function ConsentChannels({ studentId, role, studentName = null })
       const out = await apiFetch(`/api/consent/${studentId}/erase`, {
         method: 'POST',
         // The channel name, not the flag: the endpoint takes `eeg`,
-        // `headband_optical`, `camera`, which is what CHANNELS keys are once
-        // the `_enabled` suffix is dropped.
+        // `headband_optical`, `camera` -- CHANNELS keys with `_enabled` dropped.
         body: { channel: key.replace('_enabled', ''), confirm: true },
       })
-      // Reload rather than patch the local copy: `erased_at` comes from the
-      // consent payload, and inventing it here would show a date the server
-      // has not confirmed for an action that cannot be repeated to check.
+      // Reload rather than patch locally -- `erased_at` should come from the
+      // server, not be guessed for an action that can't be re-checked.
       await load()
-      // Reported, not hidden. The rows are gone by the time storage is
-      // touched, so a chart that could not be removed is the one part of an
-      // erasure that can be incomplete -- and a parent who was told "erased"
-      // should not have to discover that from a chart that still loads.
+      // Reported, not hidden: the rows are gone by the time storage is
+      // touched, so a chart that couldn't be removed is the one part of an
+      // erasure that can stay incomplete.
       setErasureNote(out.charts_failed
         ? {
             failed: true,
@@ -249,9 +213,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   }
 
   const request = (key, next) => {
-    // Only the student's own switch-off needs confirming: it is the one action
-    // this UI cannot undo for them. A parent's change is reversible by the
-    // same parent on the same screen.
+    // Only the student's own switch-off needs confirming -- it's the one
+    // action this UI can't undo for them. A parent's change is reversible.
     if (role === 'student' && next === false) setConfirming(key)
     else commit(key, next)
   }
@@ -266,9 +229,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
   return (
     <div className="space-y-3">
       {error && <p className="text-sm text-rose-500">{error}</p>}
-      {/* Rose only when something actually failed. A parent glancing at a red
-          banner after a successful erasure reads it as an error, and
-          `charts_failed: 0` is the good outcome. */}
+      {/* Rose only when something actually failed -- charts_failed: 0 is the
+          good outcome and should not read as an error. */}
       {erasureNote && (
         <p className={`text-sm ${erasureNote.failed
           ? 'text-rose-600 dark:text-rose-400'
@@ -283,9 +245,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
         const on    = !!state.enabled
         const since = formatDate(state.revoked_at)
         const erasedOn = formatDate(state.erased_at)
-        // The student cannot re-enable. Shown as a disabled switch with the
-        // reason beside it rather than a hidden control: a switch that vanishes
-        // when you turn it off looks like a bug.
+        // The student cannot re-enable. Shown disabled with the reason beside
+        // it rather than hidden -- a switch that vanishes looks like a bug.
         const locked = role === 'student' && !on
 
         return (
@@ -312,12 +273,9 @@ export default function ConsentChannels({ studentId, role, studentName = null })
                     </p>
                   )}
 
-                  {/* Shown to the student as well as the parent, and
-                      independently of `on`. Erasure is a fact about the stored
-                      history, not about the current decision: a channel can be
-                      switched on and its past gone, and a student is entitled
-                      to know their readings were deleted even though only a
-                      parent can ask for it. */}
+                  {/* Shown to student and parent alike, independent of `on` --
+                      a channel can be switched on with its past erased, and
+                      the student is entitled to know that happened. */}
                   {erasedOn && (
                     <p className="text-xs font-bold text-rose-600 dark:text-rose-400 mt-2">
                       Readings recorded before {erasedOn} were erased
@@ -355,10 +313,8 @@ export default function ConsentChannels({ studentId, role, studentName = null })
               </div>
             )}
 
-            {/* Parent only, and not because the UI is enforcing anything --
-                the backend refuses a student outright. A student is shown that
-                an erasure happened (above) and not offered the action, because
-                a control that always fails is worse than no control. */}
+            {/* Parent only -- the backend refuses a student outright, and a
+                control that always fails is worse than no control. */}
             {role === 'parent' && erasureFor !== ch.key && (
               <button type="button"
                       onClick={() => openErasure(ch.key)}
@@ -372,11 +328,9 @@ export default function ConsentChannels({ studentId, role, studentName = null })
                 <p className="text-xs font-bold text-rose-800 dark:text-rose-200">
                   Erase {copy.title.toLowerCase()} readings?
                 </p>
-                {/* Says what goes and what stays, inside the confirmation
-                    rather than under the control. A permanent disclaimer would
-                    mean the control's name overpromised; a parent about to
-                    destroy something is owed the scope at the moment they
-                    decide. */}
+                {/* States scope here, in the confirmation, not as a permanent
+                    disclaimer under the control -- needing one there would
+                    mean the control's name overpromised. */}
                 <p className="text-xs text-rose-700 dark:text-rose-300 mt-1">
                   This deletes {copy.erase}, the daily summaries built from it,
                   and the charts saved from those sessions. It cannot be undone.

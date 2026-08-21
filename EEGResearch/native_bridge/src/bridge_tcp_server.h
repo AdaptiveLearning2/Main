@@ -17,15 +17,10 @@ public:
     bool poll_command(std::string& line_out);
 
     /**
-     * Lines discarded because the send buffer was full.
-     *
-     * Whole lines only -- a partial write closes the client instead, since
-     * resuming after one would splice the remainder of a truncated line onto
-     * the front of the next and corrupt every line after it.
-     *
-     * Surfaced because a consumer reconstructing a time base from sample index
-     * cannot see a dropped line in the data: it looks like the sensor simply
-     * produced fewer samples. This is the counter that says otherwise.
+     * Count of whole lines dropped because the send buffer was full.
+     * A partial write closes the client instead of resuming, since resuming
+     * would splice a truncated line onto the next one. Exposed so a consumer
+     * can tell a dropped line apart from the sensor just producing fewer samples.
      */
     long long dropped_lines() const noexcept { return dropped_lines_; }
 

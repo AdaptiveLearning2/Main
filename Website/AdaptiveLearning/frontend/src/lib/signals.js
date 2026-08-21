@@ -1,9 +1,9 @@
 import { apiFetch } from './api'
 
 /**
- * Real EEG recorder. Actual sample insertion is done by the BACKEND
- * (it polls the EEGResearch sidecar service on :8001 and writes to Supabase).
- * The frontend just toggles polling on/off for the current session.
+ * The backend does the actual sample writing — it polls the EEGResearch
+ * sidecar on :8001 and writes to Supabase. This just toggles that polling
+ * on/off for the current session.
  */
 export function createSignalRecorder({ sessionId, deviceId }) {
   let active = false

@@ -1,15 +1,12 @@
-"""Head pose and gaze from landmarks, without a landmark model.
+"""Tests head pose and gaze from landmarks, without a landmark model.
 
-Everything here is plain numpy on synthetic input, like `test_face_roi`. There
-is no detector involved: the module takes named landmarks and returns geometry,
-which is the half that can be wrong in a way a test catches.
+Everything here is plain numpy on synthetic input. There's no detector
+involved: the module takes named landmarks and returns geometry.
 
-**Poses are round-tripped, not asserted from a table.** A known rotation is
-applied to the canonical face, projected orthographically, and recovered — so
-the sign conventions are derived from the definition rather than copied from a
-docstring. A sign error is invisible in every aggregate and surfaces only as a
-mirrored gaze on somebody's dashboard, which is exactly the class of mistake a
-hand-written expectation reproduces instead of catching.
+Poses are round-tripped rather than asserted from a table: a known rotation
+is applied to the canonical face, projected orthographically, and recovered,
+so the sign conventions come from the definition itself, not a copied
+expectation that could reproduce the same sign error.
 """
 
 from __future__ import annotations
@@ -46,11 +43,9 @@ def _rotation(yaw_deg: float = 0.0, pitch_deg: float = 0.0,
 
 def _project(rotation: np.ndarray, scale: float = 2.0,
              offset=(320.0, 240.0), names=POSE_LANDMARKS) -> dict:
-    """The canonical face rotated, scaled, shifted, and flattened to the image.
-
-    Scale and offset are non-trivial on purpose: a fit that silently assumed a
-    centred, unit-scaled face would pass against (1.0, (0, 0)) and fail on any
-    real frame.
+    """The canonical face rotated, scaled, shifted, and flattened to the
+    image. Scale and offset are non-trivial on purpose, so a fit that
+    silently assumed a centred, unit-scaled face wouldn't pass.
     """
     out = {}
     for name in names:
@@ -59,7 +54,7 @@ def _project(rotation: np.ndarray, scale: float = 2.0,
     return out
 
 
-# ── pose round-trips ────────────────────────────────────────────────────────
+# -- pose round-trips --
 
 def test_a_face_looking_at_the_camera_reads_as_square_on():
     pose = head_pose(_project(_rotation()))
@@ -98,7 +93,7 @@ def test_roll_is_recovered_with_its_sign(roll):
 
 def test_three_rotations_at_once_are_all_recovered():
     """Axes are not independent, so recovering each alone proves less than it
-    looks: an extraction that mixed two of them would still pass every
+    looks -- an extraction that mixed two axes could still pass every
     single-axis case above."""
     pose = head_pose(_project(_rotation(yaw_deg=20.0, pitch_deg=-12.0, roll_deg=8.0)))
 
@@ -108,9 +103,8 @@ def test_three_rotations_at_once_are_all_recovered():
 
 
 def test_pose_is_independent_of_where_the_face_is_in_the_frame():
-    """A student sitting off to one side is not a student turning their head.
-    Centring is what separates them, and without it every off-centre face reads
-    as rotated."""
+    """A student sitting off to one side is not a student turning their
+    head. Without centring, every off-centre face would read as rotated."""
     rotation = _rotation(yaw_deg=18.0)
     near = head_pose(_project(rotation, offset=(100.0, 90.0)))
     far = head_pose(_project(rotation, offset=(540.0, 400.0)))
@@ -119,8 +113,8 @@ def test_pose_is_independent_of_where_the_face_is_in_the_frame():
 
 
 def test_pose_is_independent_of_how_close_the_face_is():
-    """Scale is solved for, so a child's smaller face and an adult leaning in
-    give the same angles from the same pose."""
+    """Scale is solved for, so a child's smaller face and an adult leaning
+    in should give the same angles for the same pose."""
     rotation = _rotation(pitch_deg=15.0)
     small = head_pose(_project(rotation, scale=1.0))
     large = head_pose(_project(rotation, scale=4.0))
@@ -128,12 +122,12 @@ def test_pose_is_independent_of_how_close_the_face_is():
     assert small.pitch == pytest.approx(large.pitch, abs=0.1)
 
 
-# ── refusals ────────────────────────────────────────────────────────────────
+# -- refusals --
 
 def test_too_few_landmarks_refuses_rather_than_guessing():
-    """Named, not silent. A pose from four coplanar eye corners is
-    under-determined about the axis through them while still looking
-    confident — the same shape as a confident wrong heart rate."""
+    """A pose from four coplanar eye corners is under-determined about the
+    axis through them while still looking confident, so it must be refused
+    with a named reason, not returned silently."""
     partial = _project(_rotation(), names=POSE_LANDMARKS[:MIN_POSE_POINTS - 1])
 
     pose = head_pose(partial)
@@ -144,8 +138,8 @@ def test_too_few_landmarks_refuses_rather_than_guessing():
 
 
 def test_a_missing_landmark_is_skipped_not_placed_at_the_origin():
-    """Absent is not zero. A landmark dropped to (0, 0) drags the fit toward
-    the top-left corner and still returns an answer."""
+    """Absent is not zero -- a landmark dropped to (0, 0) would drag the fit
+    toward the top-left corner while still returning an answer."""
     full = _project(_rotation(yaw_deg=15.0))
     without = {k: v for k, v in full.items() if k != "chin"}
 
@@ -166,9 +160,9 @@ def test_a_non_finite_landmark_is_refused():
 
 
 def test_collinear_landmarks_are_refused():
-    """Every point on one line leaves rotation about that line unobservable.
-    The fit still produces numbers, which is why this is checked rather than
-    left to the caller to notice."""
+    """Every point on one line leaves rotation about that line unobservable,
+    and the fit would still produce numbers -- so this must be checked
+    rather than left to the caller."""
     flat = {name: (float(i * 10), 100.0)
             for i, name in enumerate(POSE_LANDMARKS)}
 
@@ -179,16 +173,11 @@ def test_collinear_landmarks_are_refused():
 
 @pytest.mark.parametrize("yaw", [91.0, 100.0, 120.0, 150.0])
 def test_a_face_turned_past_ninety_degrees_is_refused_not_mirrored(yaw):
-    """The two-fold ambiguity, which no rotation matrix resolves on its own.
-
-    `cos_yaw` is a hypot and never negative, so the recovered yaw is always in
-    (-90, 90) — a face turned further comes back on the other branch, and
-    silently. Measured before the guard existed: a true 120 reported 60, with
-    `ok=True` and no reason.
-
-    A student turning to talk to someone beside them is exactly the population
-    this module is for, so this is not a corner case; it is the corner it will
-    meet first.
+    """`cos_yaw` is a hypot and never negative, so recovered yaw is always in
+    (-90, 90) -- a face turned further comes back on the other branch,
+    silently (a true yaw of 120 reported 60 with `ok=True`). A student
+    turning to talk to someone beside them will hit this regularly, so it
+    must be refused rather than reported wrong.
     """
     pose = head_pose(_project(_rotation(yaw_deg=yaw)))
 
@@ -197,10 +186,10 @@ def test_a_face_turned_past_ninety_degrees_is_refused_not_mirrored(yaw):
 
 
 def test_the_wrong_branch_corrupts_all_three_angles_and_is_caught():
-    """Not just yaw. Pitch and roll are recovered from terms carrying an
-    implicit cos(yaw), so crossing the boundary swings both by 180 degrees.
-    Measured before the guard: a true (91, 15, 10) reported (89, -165, -170) —
-    a 2 degree change in truth moving two angles by half a turn, confidently.
+    """Pitch and roll are recovered from terms carrying an implicit
+    cos(yaw), so crossing the boundary swings both by 180 degrees: a true
+    (91, 15, 10) reported (89, -165, -170) -- a 2 degree change in truth
+    moving two angles by half a turn, confidently.
     """
     pose = head_pose(_project(_rotation(yaw_deg=91.0, pitch_deg=15.0, roll_deg=10.0)))
 
@@ -208,8 +197,8 @@ def test_the_wrong_branch_corrupts_all_three_angles_and_is_caught():
 
 
 def test_a_steep_but_real_turn_still_measures():
-    """The guard must not eat the range it is protecting. 85 degrees is a hard
-    look sideways and is on the correct branch, so it has to survive."""
+    """The guard must not eat the range it protects -- 85 degrees is a hard
+    look sideways and is on the correct branch, so it must still measure."""
     pose = head_pose(_project(_rotation(yaw_deg=85.0, pitch_deg=10.0)))
 
     assert pose.ok
@@ -217,7 +206,7 @@ def test_a_steep_but_real_turn_still_measures():
     assert pose.pitch == pytest.approx(10.0, abs=3.0)
 
 
-# ── gaze ────────────────────────────────────────────────────────────────────
+# -- gaze --
 
 def _eye(side: str, iris_dx: float = 0.0, iris_dy: float = 0.0) -> dict:
     """One eye 40 wide and 16 tall, with the iris offset from its centre."""
@@ -249,8 +238,8 @@ def test_gaze_carries_the_sign_of_the_offset():
 
 
 def test_one_visible_eye_still_measures():
-    """A hand, hair or a head turn regularly hides one. Refusing the reading
-    for that discards a measurable eye."""
+    """A hand, hair or a head turn regularly hides one eye. Refusing the
+    whole reading for that would discard a perfectly measurable eye."""
     g = gaze(_eye("left", iris_dx=-10.0))
 
     assert g.ok and g.eyes_used == 1
@@ -258,8 +247,8 @@ def test_one_visible_eye_still_measures():
 
 
 def test_a_closed_eye_is_not_a_gaze_direction():
-    """Zero opening means there is nothing to measure a position within, and
-    dividing by it turns a blink into a large offset."""
+    """Zero eye opening means there's nothing to measure a position within,
+    and dividing by it would turn a blink into a large offset."""
     closed = _eye("left")
     closed["left_eye_upper"] = (200.0, 150.0)
     closed["left_eye_lower"] = (200.0, 150.0)
@@ -269,9 +258,9 @@ def test_a_closed_eye_is_not_a_gaze_direction():
 
 
 def test_gaze_is_clamped_rather_than_unbounded():
-    """An iris tracked just outside the corner landmarks is detector wobble at
-    the extreme of a real look, not a failure — but it must not scale without
-    limit either."""
+    """An iris tracked just outside the corner landmarks is detector wobble
+    at the extreme of a real look, not a failure -- but the value must not
+    scale without limit either."""
     g = gaze(_eye("left", iris_dx=200.0))
 
     assert g.x == 1.0
@@ -284,23 +273,23 @@ def test_no_eyes_reports_why():
     assert g.eyes_used == 0
 
 
-# ── against a real frame, not against the model ─────────────────────────────
+# -- against a real frame, not against the model --
 #
-# Everything above rotates CANONICAL_FACE and recovers the rotation. That is
-# self-consistent under a mirrored model, which is exactly how the handedness
-# stayed inverted through 32 passing tests until a camera found it: a person
-# sitting perfectly square on produced `implausible_pose` on 120 frames of 120.
+# Everything above rotates CANONICAL_FACE and recovers the rotation, which is
+# self-consistent even under a mirrored model and so cannot catch a mirrored
+# handedness on its own -- a real camera caught it instead: a person sitting
+# perfectly square on produced `implausible_pose` on 120 of 120 frames.
 #
-# These build the observed points from the *image* convention instead -- x
-# right, y down, frame not mirrored, so the subject's own left is on the image
-# right -- and assert what the module docstring promises about direction.
+# These tests build the observed points from the *image* convention instead
+# -- x right, y down, frame not mirrored, so the subject's own left is on the
+# image right -- and assert what the module docstring promises about
+# direction.
 
 def _facing_camera() -> dict:
     """A square-on face as a real non-mirrored frame presents it.
 
-    Written out by hand rather than projected from CANONICAL_FACE, because
-    deriving it from the model is what makes a test blind to the model being
-    wrong.
+    Written out by hand rather than projected from CANONICAL_FACE, so the
+    test isn't blind to the model itself being wrong.
     """
     return {
         # subject's RIGHT side -> image LEFT (smaller x)
@@ -314,12 +303,10 @@ def _facing_camera() -> dict:
 
 
 def test_the_model_handedness_matches_a_real_frame():
-    """The one the round trips cannot see.
-
-    A rotation cannot reflect. If CANONICAL_FACE puts the subject's left at
-    negative x while the camera puts it at positive x, no pose maps one to the
-    other and every frame is refused -- including a subject sitting perfectly
-    still, square on, in good light.
+    """A rotation cannot reflect. If CANONICAL_FACE puts the subject's left
+    at negative x while the camera puts it at positive x, no pose maps one
+    to the other and every frame is refused -- including a subject sitting
+    perfectly still, square on, in good light.
     """
     pose = head_pose(_facing_camera())
 
@@ -331,12 +318,9 @@ def test_the_model_handedness_matches_a_real_frame():
 
 
 def test_turning_toward_your_own_left_gives_positive_yaw():
-    """The docstring's convention, stated against a physical movement: the
-    subject's own left is the image right, so turning that way is a turn toward
-    the right-hand side of the image.
-
-    This is what the camera check's step 3 adjudicates, and it is the assertion
-    a mirrored index table would break.
+    """The subject's own left is the image right, so turning that way is a
+    turn toward the right-hand side of the image. A mirrored index table
+    would break this assertion.
     """
     turned = _facing_camera()
     # Turning toward their own left swings the nose toward the image right and
@@ -352,13 +336,10 @@ def test_turning_toward_your_own_left_gives_positive_yaw():
 
 
 def test_looking_toward_your_own_left_gives_positive_gaze_x():
-    """`gaze.x` is measured in image x -- `_eye_offset` divides by an absolute
-    width, so there is no per-eye sign flip. The subject's own left is the image
-    right, so looking that way moves both irises to larger x and gaze.x is
-    POSITIVE.
-
-    The camera check asserted negative here, and would have prescribed swapping
-    a correct index table on the strength of it.
+    """`gaze.x` is measured in image x -- `_eye_offset` divides by an
+    absolute width, so there is no per-eye sign flip. The subject's own left
+    is the image right, so looking that way moves both irises to larger x
+    and gaze.x should be positive.
     """
     lm = dict(_facing_camera())
     for side, (lo, hi) in (("right", (230.0, 290.0)), ("left", (350.0, 410.0))):
@@ -371,11 +352,8 @@ def test_looking_toward_your_own_left_gives_positive_gaze_x():
 
 def test_gaze_cannot_see_a_left_right_swap_and_must_not_claim_to():
     """Both eyes' offsets are computed identically in image coordinates and
-    averaged, so permuting the labels returns the same number to the last bit.
-
-    Kept as a test because the camera check used to advertise step 2 as the
-    mirror detector. It is not one, and a check that cannot fail on the fault
-    it names is worse than no check: it certifies.
+    averaged, so permuting the left/right labels returns the same number to
+    the last bit -- gaze alone cannot detect a mirrored index table.
     """
     lm = dict(_facing_camera())
     for side, (lo, hi) in (("right", (230.0, 290.0)), ("left", (350.0, 410.0))):
@@ -390,11 +368,9 @@ def test_gaze_cannot_see_a_left_right_swap_and_must_not_claim_to():
 
 
 def test_a_mirrored_index_table_is_refused_by_the_pose_fit():
-    """What *does* catch the mirror, now that the model has a handedness.
-
-    Mirrored labels make the correspondence unfittable by a rotation, so it is
-    refused rather than answered wrongly -- the same failure a wrong-handed
-    model produces, which is the point: one guard covers both.
+    """Mirrored labels make the correspondence unfittable by a rotation, so
+    the pose fit refuses rather than answering wrongly -- the same guard
+    that catches a wrong-handed model also catches this.
     """
     lm = _facing_camera()
     swapped = {k.replace("left", "TMP").replace("right", "left")

@@ -1,13 +1,13 @@
 """A session that recorded nothing is discarded at close, and only then.
 
-Pressing Connect Headband creates the session -- it has to, since signals need
-one to attach to. The cost was that every *failed* pairing attempt left a row,
-and History showed each as a practice session: on one afternoon four of five
-sessions had no questions and no samples of any kind.
+Pressing Connect Headband creates the session, since signals need one to
+attach to. That means every *failed* pairing attempt used to leave a row, so
+History showed empty practice sessions -- on one afternoon, four of five had
+no questions and no samples at all.
 
-This deletes on **absence**, which is the dangerous kind of job, so most of what
-is asserted here is the cases where it must *not* fire. A student who wore a
-headband and answered nothing is a real session; so is one who answered ten
+This deletes on **absence**, which is the dangerous kind of job, so most of
+what's asserted here is the cases where it must *not* fire. A student who wore
+a headband and answered nothing is a real session; so is one who answered ten
 questions with no headband. Only the row with nothing on either side goes.
 """
 
@@ -82,12 +82,11 @@ def test_an_answered_session_survives_a_counter_that_says_zero(_client):
     """The counter and the answer rows are written by two separate statements.
 
     `record_answer` inserts into `session_answers` and then bumps
-    `sessions.questions_answered`, with no transaction around the pair. The
-    update failing -- or the read it is computed from failing -- leaves real
-    answers behind a counter reading 0, and this job deletes on absence. Before
-    `session_answers` was consulted, a database hiccup mid-lesson could end with
-    a student's answered session deleted for looking empty, taking the answers
-    with it.
+    `sessions.questions_answered`, with no transaction around the pair. If the
+    update fails -- or the read it's computed from fails -- real answers sit
+    behind a counter reading 0. Since this job deletes on absence, a database
+    hiccup mid-lesson could otherwise delete an answered session for looking
+    empty, taking the answers with it.
 
     The counter is a denormalised cache. The rows are the record.
     """
@@ -98,9 +97,9 @@ def test_an_answered_session_survives_a_counter_that_says_zero(_client):
 
 
 def test_answering_questions_keeps_it_even_with_no_signals(_client):
-    """The student practised. That is the session, headband or not -- and this
-    is the case a careless implementation deletes, because it looks empty from
-    the signal tables' side."""
+    """The student practised. That is the session, headband or not -- but it
+    looks empty from the signal tables' side, so a careless implementation
+    would delete it."""
     c = _client()
 
     assert main._discard_if_nothing_recorded(SESSION, 10) is False
@@ -111,8 +110,8 @@ def test_answering_questions_keeps_it_even_with_no_signals(_client):
                                    "face_signals", "heart_signals"])
 def test_any_one_signal_table_with_a_row_keeps_it(_client, table):
     """A student who wore a headband and answered nothing recorded something
-    real. Parametrised over all three because 'the loop body is the same' is an
-    argument about the code, not about which tables it names."""
+    real. Parametrised over all three tables, since "the loop body is the
+    same" is an argument about the code, not about which table it checks."""
     c = _client(populated=[table])
 
     assert main._discard_if_nothing_recorded(SESSION, 0) is False
@@ -122,9 +121,9 @@ def test_any_one_signal_table_with_a_row_keeps_it(_client, table):
 @pytest.mark.parametrize("table", ["session_answers", "cognitive_signals",
                                    "face_signals", "heart_signals"])
 def test_a_failed_read_keeps_the_session(_client, table):
-    """The whole reason deleting on absence is dangerous. A table that cannot be
-    read is not a table with no rows in it, and treating the two the same is how
-    a student's session disappears because the database blinked."""
+    """The whole reason deleting on absence is dangerous: a table that can't be
+    read is not the same as a table with no rows. Treating them the same would
+    delete a student's session because the database blinked."""
     c = _client(raises=[table])
 
     assert main._discard_if_nothing_recorded(SESSION, 0) is False
@@ -132,7 +131,7 @@ def test_a_failed_read_keeps_the_session(_client, table):
 
 
 def test_a_failed_delete_reports_that_it_did_not_happen(_client):
-    """The caller skips the rollup and the archive when this returns True, so a
+    """The caller skips the rollup and archive when this returns True, so a
     delete that silently failed would leave a session with neither."""
     c = _client(raises=["sessions"])
 
@@ -140,10 +139,10 @@ def test_a_failed_delete_reports_that_it_did_not_happen(_client):
 
 
 def test_a_null_question_count_is_treated_as_none_answered(_client):
-    """PostgREST returns None for a column that was not selected, and the
-    stale-session sweep once selected only `id, started_at`. That made every
-    stale session look answer-free. The sweep now asks for the column; this
-    pins the behaviour it depends on rather than the bug."""
+    """PostgREST returns None for a column that wasn't selected. The
+    stale-session sweep used to select only `id, started_at`, which made every
+    stale session look answer-free. It now asks for the column; this pins the
+    behaviour it depends on."""
     c = _client()
 
     assert main._discard_if_nothing_recorded(SESSION, None) is True

@@ -1,17 +1,15 @@
-"""The admin dashboard: who reaches it, and what the flags are allowed to do.
+"""Tests for the admin dashboard: who can reach it, and what the flags can do.
 
-Two properties carry most of the weight here.
+Two things matter most here.
 
-The first is that a flag can only ever *withhold* recording. The kill switches
-are ANDed into `_may_record`, so no combination of them records something a
-student declined -- the same asymmetry `signal_fusion` documents, applied to a
-different control.
+A flag can only ever turn recording off, never on. The kill switches are ANDed
+into `_may_record`, so no combination of them can record something a student
+declined.
 
-The second is the consent bypass, which is the one control in this system that
-deliberately records without consent. Everything about it is built so it cannot
-be left on: it needs an explicit duration, the duration is capped, and expiry is
-evaluated on every read rather than by a job that could fail to run. The tests
-that matter are the ones proving it turns itself off.
+The consent bypass is the one control that deliberately records without
+consent. It needs an explicit, capped duration, and expiry is checked on every
+read rather than by a job that could fail to run. The important tests prove it
+turns itself off.
 """
 
 import os
@@ -90,8 +88,7 @@ class _Fake:
                 if table == "profiles":
                     uid = self._filters.get("id")
                     if uid is not None:
-                        # Admin is `profiles.role`, so the fake decides it the
-                        # same way production does rather than from a side table.
+                        # Admin status comes from `profiles.role`, same as production.
                         rows = [{"id": uid, "display_name": "Ada",
                                  "email": "ada@example.com",
                                  "role": ("admin" if uid in client.admins
@@ -121,9 +118,9 @@ def _flag_rows(**overrides):
     return rows
 
 
-# Captured at import, before conftest's autouse fixture swaps it out for the
-# duration of each test. `real_flags` puts this back for the few tests that are
-# about the reader itself rather than about what the flags decide.
+# Saved at import time, before conftest's autouse fixture replaces it for each
+# test. `real_flags` restores this for tests about the reader itself, not about
+# what the flags decide.
 _REAL_FEATURE_FLAGS = main._feature_flags
 
 
@@ -154,9 +151,8 @@ ADMIN_GETS = [
 
 @pytest.mark.parametrize("name,call", ADMIN_GETS, ids=[n for n, _ in ADMIN_GETS])
 def test_a_non_admin_is_refused_by_every_admin_endpoint(monkeypatch, name, call):
-    """The whole surface, not a sample. Each of these was written by hand, and
-    a new one that forgets `_require_admin` is exactly the omission this list
-    exists to catch -- the same exhaustiveness pattern as `_MODE_AWARE`."""
+    """Covers every admin endpoint, not just a sample, so a new one that
+    forgets `_require_admin` gets caught."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=[], flags=_flag_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
 
@@ -181,7 +177,7 @@ def test_the_write_endpoints_refuse_a_non_admin_too(monkeypatch):
 
 
 def test_every_admin_route_is_covered_by_the_refusal_test():
-    """The list above is only exhaustive while it keeps up with the router."""
+    """The list above stays exhaustive only if it's kept in sync with the router."""
     routed = {r.name for r in main.app.routes
               if getattr(r, "path", "").startswith("/api/admin")}
     covered = {n for n, _ in ADMIN_GETS} | {"admin_set_flag",
@@ -191,16 +187,16 @@ def test_every_admin_route_is_covered_by_the_refusal_test():
 
 
 def test_an_unreadable_admin_table_denies(monkeypatch):
-    """Fails closed, like `_consent`. This guard stands in front of the switch
-    that turns consent enforcement off, so a database blip must not open it."""
+    """Fails closed, like `_consent`. This guards the switch that turns off
+    consent enforcement, so a database blip must not open it."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"],
                                                 raises=["profiles"]))
     assert main._is_admin("admin-1") is False
 
 
 def test_an_admin_may_view_any_student(monkeypatch):
-    """Admin is the fourth relationship on the shared helper, so every endpoint
-    that already gates on it picks this up rather than growing its own copy."""
+    """Admin is a fourth relationship on the shared helper, so every endpoint
+    already gating on it picks this up automatically."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"]))
     assert main._can_view_student(ADMIN, STUDENT) is True
 
@@ -265,8 +261,8 @@ def test_a_recording_switch_denies_its_channel_for_a_consenting_student(
 
 
 def test_a_recording_switch_cannot_grant_what_consent_refused(monkeypatch, set_flag):
-    """ANDed, never ORed. Turning every switch on must not record for a student
-    who said no -- a flag can withhold recording and can never grant it."""
+    """ANDed, never ORed: turning every switch on must not record for a
+    student who said no."""
     monkeypatch.setattr(main, "supabase", _Fake(consent={
         "user_id": STUDENT, "eeg_enabled": False,
         "headband_optical_enabled": False, "camera_enabled": False}))
@@ -281,8 +277,8 @@ def test_a_recording_switch_cannot_grant_what_consent_refused(monkeypatch, set_f
 # ── the consent bypass ──────────────────────────────────────────────────────
 
 def test_disabling_consent_enforcement_requires_a_duration(monkeypatch):
-    """No default. A default here would be this file choosing how long consent
-    goes unenforced, which is the decision that should be made out loud."""
+    """No default duration -- that decision must be made explicitly, not
+    silently chosen by the code."""
     monkeypatch.setattr(main, "supabase", _Fake(admins=["admin-1"], flags=_flag_rows()))
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
 
@@ -305,8 +301,7 @@ def test_the_bypass_duration_is_bounded(monkeypatch, minutes):
 
 
 def test_a_live_bypass_records_for_a_student_who_never_consented(monkeypatch, set_flag):
-    """What the switch is for. Stated plainly so the next reader knows this is
-    the intended behaviour and not an escaped guard."""
+    """This is what the bypass switch is meant to do, not a bug."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() + timedelta(minutes=30)).isoformat())
@@ -320,8 +315,8 @@ def test_a_live_bypass_records_for_a_student_who_never_consented(monkeypatch, se
 
 
 def test_an_expired_bypass_denies_again_with_no_write(monkeypatch, set_flag):
-    """Expiry is evaluated on the read, so nothing has to run for enforcement to
-    come back. A job that failed would otherwise leave consent off for good."""
+    """Expiry is checked on read, so enforcement resumes with no job needed. A
+    failed job would otherwise leave consent unenforced forever."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() - timedelta(seconds=1)).isoformat())
@@ -332,8 +327,8 @@ def test_an_expired_bypass_denies_again_with_no_write(monkeypatch, set_flag):
 
 
 def test_a_bypass_with_no_expiry_is_treated_as_expired(monkeypatch, set_flag):
-    """An unbounded bypass is the state the column exists to prevent, so a row
-    hand-edited to remove it resumes enforcement rather than running for ever."""
+    """An unbounded bypass is what this column exists to prevent, so a row
+    with no expiry resumes enforcement instead of running forever."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False, bypass_until=None)
 
@@ -342,9 +337,9 @@ def test_a_bypass_with_no_expiry_is_treated_as_expired(monkeypatch, set_flag):
 
 
 def test_the_bypass_does_not_reach_the_consent_screen(monkeypatch, set_flag):
-    """`_consent` is read by the consent screen, the reporting surfaces and the
-    poller status. The bypass is a decision about whether to *ask*, not a claim
-    that anyone agreed, so it must not change what those show."""
+    """`_consent` feeds the consent screen, reports, and poller status. The
+    bypass only decides whether to skip asking -- it must not change what
+    those show as agreed."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     set_flag(main.CONSENT_ENFORCEMENT_FLAG, False,
              bypass_until=(main._utc_now() + timedelta(minutes=30)).isoformat())
@@ -353,8 +348,8 @@ def test_the_bypass_does_not_reach_the_consent_screen(monkeypatch, set_flag):
 
 
 def test_the_bypass_does_not_override_the_school_year(monkeypatch, set_flag):
-    """The window is a separate gate and stays closed. Bypassing consent must
-    not also start recording outside term."""
+    """The school-year window is a separate gate. Bypassing consent must not
+    also start recording outside term."""
     monkeypatch.setattr(main, "supabase", _Fake(consent=None))
     monkeypatch.setattr(main, "_retention_window",
                         lambda: {"state": main.WINDOW_AFTER, "starts_on": None,
@@ -369,9 +364,9 @@ def test_the_bypass_does_not_override_the_school_year(monkeypatch, set_flag):
 
 def test_an_unreadable_flag_table_falls_back_to_the_declared_defaults(
         monkeypatch, real_flags):
-    """Not to off, and not to on. An unreadable table is not a reconfiguration
-    -- and the direction that matters is that it cannot be why consent stops
-    being enforced."""
+    """An unreadable table falls back to the declared defaults, not to fully
+    off or fully on -- a database blip must not be why consent stops being
+    enforced."""
     monkeypatch.setattr(main, "supabase", _Fake(raises=["feature_flags"]))
 
     flags = main._feature_flags()
@@ -405,9 +400,9 @@ _SIGNAL_CONTENT = {"alpha", "beta", "theta", "delta", "gamma", "focus_score",
 class _LiveFake(_Fake):
     """`_Fake` plus one open session, and a record of every select it saw.
 
-    The selects are what the privacy assertion below reads: the endpoint asking
-    for less is a stronger property than the endpoint filtering afterwards, and
-    only the query shows which one is happening.
+    The tests below check the selects themselves: an endpoint that asks the
+    database for fewer columns is safer than one that fetches everything and
+    filters afterward, and only the query shows which one is happening.
     """
 
     def __init__(self, sessions=(), signals=None, **kw):
@@ -456,17 +451,17 @@ class _LiveFake(_Fake):
 
 
 def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
-    """The readings never leave the database, rather than being fetched and
-    dropped on the way out. An admin has no relationship to these students
-    entitling them to the values -- only to whether data is arriving."""
+    """The readings never leave the database -- they aren't fetched and then
+    dropped. An admin has no relationship to these students that entitles
+    them to the values, only to whether data is arriving."""
     ts = main._utc_now().isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
     fake = _LiveFake(
         admins=["admin-1"],
         sessions=[{"id": "s-1", "user_id": STUDENT, "started_at": ts}],
-        # Deliberately laden with content. If the endpoint ever selects `*`,
-        # this is what would ride out on the payload.
+        # Loaded with real content on purpose, so a `select *` mistake would
+        # leak into the payload and get caught below.
         signals={"cognitive_signals": [{"ts": ts, "focus_score": 88,
                                         "alpha": 0.5, "stress": 0.2}],
                  "face_signals": [{"ts": ts, "emotion": "negative",
@@ -486,11 +481,9 @@ def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
     flat = repr(out)
     for field in _SIGNAL_CONTENT:
         assert field not in flat, f"{field} reached an admin payload"
-    # A value, not just a field name -- a payload could carry the reading
-    # without naming it. Deliberately a distinctive string rather than a number:
-    # asserting `"88" not in flat` also matched the microseconds of the
-    # timestamp the payload legitimately carries, which made this pass or fail
-    # depending on what time the suite ran.
+    # Checks a value, not just a field name -- a payload could carry the
+    # reading without naming it. Uses a distinctive string rather than a
+    # number: a number like "88" can also match digits inside the timestamp.
     assert "negative" not in flat
     session = out["sessions"][0]
     assert session["eeg"]["flowing"] is True
@@ -501,8 +494,8 @@ def test_live_signals_asks_the_database_for_no_readings(monkeypatch):
 
 
 def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):
-    """Two different facts: a sensor that stopped, and a session that never had
-    one. Collapsing them is the absence-as-data failure in a new place."""
+    """A sensor that stopped and a session that never had one are different
+    facts, and must not be reported the same way."""
     old = (main._utc_now() - timedelta(hours=2)).isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
@@ -517,9 +510,9 @@ def test_a_channel_that_never_reported_is_not_the_same_as_stale(monkeypatch):
 
 
 def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
-    """The third state. A failed read has not earned "this session never had a
-    camera" -- that is a claim about the deployment, and it would send someone
-    looking for a hardware fault that is really a database blip."""
+    """A failed read is a third state, not "never had a camera" -- reporting
+    it that way would send someone chasing a hardware fault that's really a
+    database blip."""
     ts = main._utc_now().isoformat()
     monkeypatch.setattr(main, "get_user", lambda _r: ADMIN)
     monkeypatch.setattr(main, "_display_names", lambda _ids: {STUDENT: "Ada"})
@@ -534,18 +527,13 @@ def test_an_unreadable_channel_is_not_reported_as_never_reported(monkeypatch):
 
 
 def test_live_signals_submits_every_read_before_waiting_on_any():
-    """Nothing submitted to `_admin_live_pool` may block on anything else in it.
+    """Nothing submitted to `_admin_live_pool` may wait on something else in
+    the same pool.
 
-    This used to assert that `_admin_live_pool` and `_live_signals_pool` were
-    different objects, because `_latest_session_signals` blocked on futures it
-    had submitted to the second one -- so fanning this endpoint into that pool
-    would have put the waiters and the work they waited for in a single fixed
-    queue, which deadlocks rather than running slowly.
-
-    That pool is gone: `class_live` reads every open session's channels in one
-    SQL call now and needs no threads. The rule outlived it, and this is the
-    half that still has teeth -- gathering inside the submit loop would
-    reintroduce the same shape within this pool alone.
+    If a task submitted to a fixed-size pool blocks on another task in that
+    same pool, and the pool fills up with waiters, it deadlocks rather than
+    just running slowly. This checks that all reads are submitted before any
+    result is awaited, so that can't happen.
     """
     import inspect
 

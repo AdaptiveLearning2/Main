@@ -1,13 +1,11 @@
-"""The backstop on what a generated question contains, and the four ways a
-lesson-plan cell can decline to contribute anything.
+"""Checks what a generated question actually contains, and names the four
+ways a lesson-plan cell can fail to provide content.
 
-Both halves exist because a prompt instruction is not an enforcement
-mechanism against an 8B model -- the same reason `_safe_topic` and
-`_pick_scenario` exist. What is asserted here is narrow on purpose: the
-detector's value is entirely in its false-positive rate, since a check that
-rejects good questions burns retries and is indistinguishable from a model
-that cannot follow instructions. So the "must not flag" half of this file is
-the load-bearing half, and `6 x 4` is the case it exists for.
+A prompt instruction does not guarantee an 8B model follows it, so this
+backstops it in code. The detector's value depends on a low false-positive
+rate: rejecting a good question burns a retry and looks just like a model
+that can't follow instructions. So the "must not flag" tests matter as much
+as the "must flag" ones, and `6 x 4` is the case that must never be caught.
 """
 
 import os
@@ -40,9 +38,8 @@ def test_variable_notation_is_refused_where_the_band_forbids_it(text, topic, ban
 # --- the detector: what it must NOT catch --------------------------------
 
 @pytest.mark.parametrize("text,topic,band", [
-    # "x" as a multiplication sign, spaced and unspaced. This is the reason
-    # the patterns are anchored the way they are: a naive /x/ would reject
-    # every early-band multiplication question ever generated.
+    # "x" as a multiplication sign, spaced and unspaced. Patterns are
+    # anchored so a plain /x/ regex would not reject these.
     ("What is 6 x 4?", "expressions", "early"),
     ("What is 6x4?", "expressions", "early"),
     # Ordinary arithmetic that happens to contain the letters x, y or n.
@@ -59,11 +56,9 @@ def test_ordinary_questions_are_not_refused(text, topic, band):
 
 
 def test_algebra_is_exempt_at_every_band():
-    """algebra's own early-band content is one-step equations with x, framed
-    as a missing-number fact. A blanket rule would reject every question the
-    topic exists to ask, so the topic is absent from FORBIDDEN_BANDS -- and
-    the gate that protects grades 1-5 from algebra is `_allowed_topics`,
-    which stops the topic being chosen at all."""
+    """algebra's early-band content is one-step equations with x, so a
+    blanket rule would reject the topic's own questions. `_allowed_topics`
+    is what keeps grades 1-5 away from algebra, not this check."""
     assert "algebra" not in ga.FORBIDDEN_BANDS
     for band in ("early", "middle", "upper", "advanced"):
         assert ga.find_violation("Solve for x: x + 2 = 5.", "algebra", band) is None
@@ -71,12 +66,9 @@ def test_algebra_is_exempt_at_every_band():
 
 # --- early-band expressions: forbidden operators -------------------------
 #
-# Measured, not hypothetical. Against the seeded lesson plans on
-# llama3.1:8b (2026-08-18, grade 1 / easy), 2 of 8 generated questions came
-# back with parentheses -- "Solve 5 + (2 - 1)." -- and a separate run gave
-# "Evaluate (3+2)*4-1.", both while the prompt in the same call forbade
-# them. The scenario examples in expr_prompt are written for older students
-# and the model followed their shape over the constraint.
+# Measured, not hypothetical: on llama3.1:8b, 2 of 8 generated grade-1
+# questions used parentheses even though the prompt forbade them. The
+# model followed the older-student examples in expr_prompt over the rule.
 
 @pytest.mark.parametrize("text,difficulty", [
     ("Solve 5 + (2 - 1).",   "easy"),    # the real observed failure
@@ -104,10 +96,9 @@ def test_permitted_early_expressions_are_not_refused(text, difficulty):
 
 @pytest.mark.parametrize("band", ["middle", "upper", "advanced"])
 def test_older_bands_keep_their_operators(band):
-    """The operator rule is early-band only. Parentheses and multiplication
-    are the whole point of `order_of_operations`, which middle band upward
-    is meant to see -- a rule that leaked upward would reject every
-    question that scenario exists to ask."""
+    """The operator rule only applies to the early band. Middle band and up
+    must allow parentheses and multiplication, since `order_of_operations`
+    needs them."""
     assert ga.find_violation("Solve (2+15)*8-(49-23)+19.",
                              "expressions", band, "hard") is None
 
@@ -135,11 +126,10 @@ def test_a_grade_is_read_numerically(grade, number):
 
 @pytest.mark.parametrize("grade", ["Grade 1", "grade 1", "1", "", None, "no idea"])
 def test_a_grade_the_dropdown_did_not_write_is_still_kept_from_algebra(grade):
-    """`profiles.grade_level` is free text and only the frontend dropdown
-    keeps it to "1st grade" form. "Grade 1" used to miss every branch of
-    `_allowed_topics` and land in the fully-permissive one, making a 1st
-    grader eligible for algebra -- the single thing that gate exists to
-    prevent. An unreadable grade is now treated as the youngest."""
+    """`profiles.grade_level` is free text; only the dropdown writes "1st
+    grade" form. "Grade 1" used to miss every `_allowed_topics` branch and
+    fall through to the permissive default, making a 1st grader eligible
+    for algebra. An unreadable grade is now treated as the youngest."""
     allowed = td._allowed_topics(grade)
     assert "algebra" not in allowed
     assert "probability" not in allowed
@@ -148,9 +138,9 @@ def test_a_grade_the_dropdown_did_not_write_is_still_kept_from_algebra(grade):
 
 @pytest.mark.parametrize("grade", ["Grade 1", "1", "", None, "no idea"])
 def test_an_unreadable_grade_gets_early_content_not_advanced(grade):
-    """The sibling half of the same bug: fixing only the topic gate would
-    still have handed a 1st grader `advanced` complexity text in whichever
-    topic was chosen, because `_grade_band` fell through to "advanced"."""
+    """Fixing only the topic gate was not enough: `_grade_band` also fell
+    through to "advanced" for an unreadable grade, handing a 1st grader
+    advanced-complexity text."""
     assert grade_levels.grade_band(grade) == "early"
     assert ang._grade_band(grade) == "early"
 
@@ -161,8 +151,8 @@ def test_an_unreadable_grade_gets_early_content_not_advanced(grade):
     ("Highschool", False),
     # Read numerically, so the dropdown's exact wording is not load-bearing.
     ("Grade 1", True), ("grade 4", True), ("Grade 6", False), ("1", True),
-    # An unreadable grade is treated as the youngest, like everything else
-    # keyed on grade_levels -- it used to fall through to "decimals allowed".
+    # An unreadable grade is treated as the youngest; it used to fall
+    # through to "decimals allowed".
     ("", True), (None, True), ("no idea", True),
 ])
 def test_whole_number_answers_are_required_only_through_5th_grade(grade, required):
@@ -170,10 +160,9 @@ def test_whole_number_answers_are_required_only_through_5th_grade(grade, require
 
 
 def test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed():
-    """4th, 5th and 6th all sit in `middle`, and the rule divides them. No
-    band boundary is in the right place, so keying this on _grade_band()
-    would either impose whole numbers on a 6th grader or allow decimals for
-    a 4th -- the same reason _allowed_topics is grade-keyed."""
+    """4th, 5th and 6th grade all fall in `middle`, but the whole-number
+    rule splits them. No band boundary fits, so this is keyed on the raw
+    grade instead, like `_allowed_topics`."""
     bands = {g: ang._grade_band(g) for g in ("4th grade", "5th grade", "6th grade")}
     assert set(bands.values()) == {"middle"}
     assert ang._requires_whole_number_solution("5th grade") is True
@@ -181,8 +170,8 @@ def test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed():
 
 
 def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
-    """(5x + 15) + (3x - 20) = 90 gives 11.875 -- the real observed answer,
-    reported as 11.88. Whole through 5th grade, ordinary from 6th."""
+    """(5x + 15) + (3x - 20) = 90 gives 11.875, a real observed answer.
+    Whole numbers required through 5th grade, ordinary after."""
     solved = ang.normalize_solution(ang._solve_scenario(
         "algebra_complementary", ang.preprocess_variables(["5x + 15", "3x - 20"])))
     assert not float(solved).is_integer()
@@ -206,9 +195,8 @@ def _solved(scenario, variables):
 
 
 def test_the_measured_degenerate_triangle_is_refused():
-    """"A triangle has angles 75 and 105. What is the third angle?" was
-    generated with the answer 0 (2026-08-18). The arithmetic is right and
-    there is no such triangle."""
+    """A triangle with angles 75 and 105 was generated with a "third
+    angle" of 0. The arithmetic is correct; there is no such triangle."""
     scenario_name, parsed, solution = _solved("triangle_sum", ["75", "105"])
     assert solution == 0
     assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
@@ -223,8 +211,8 @@ def test_the_measured_degenerate_triangle_is_refused():
     ("linear_pair",   ["180"]),
 ])
 def test_degenerate_configurations_are_refused(scenario, variables):
-    """Keyed on each scenario's total rather than written for triangles
-    alone -- `complementary` with a given angle of 90 fails identically."""
+    """Keyed on each scenario's angle total, not just triangles --
+    `complementary` given 90 fails the same way."""
     scenario_name, parsed, solution = _solved(scenario, variables)
     assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
 
@@ -246,8 +234,7 @@ def test_algebra_complementary_is_judged_on_its_angles_not_on_x():
     wrong test. The two expressions evaluated at x are the angles."""
     scenario_name, parsed, solution = _solved("algebra_complementary", ["x + 20", "4x - 15"])
     assert ang._invalid_angle_reason(scenario_name, parsed, solution) is None
-    # x = 0 is a perfectly ordinary value; the angles it produces (100 and
-    # -10) are not, and that is what has to be caught.
+    # x = 0 is ordinary; the angles it produces (100 and -10) are not.
     bad_scenario, bad_parsed, bad_solution = _solved("algebra_complementary", ["2x + 100", "-x - 10"])
     assert bad_solution == 0
     assert ang._invalid_angle_reason(bad_scenario, bad_parsed, bad_solution) is not None
@@ -264,9 +251,9 @@ def test_a_topic_with_no_rule_is_never_a_violation():
 
 
 def test_empty_question_text_is_not_a_violation():
-    """A missing question_text is a JSON problem, caught by the key
-    validation above this check -- not something to report as a grade
-    violation, which would send a reader looking in the wrong place."""
+    """A missing question_text is a JSON problem caught elsewhere, not a
+    grade violation -- reporting it here would point a reader the wrong
+    way."""
     for empty in (None, ""):
         assert ga.find_violation(empty, "expressions", "early") is None
 

@@ -18,13 +18,9 @@ export default function Login() {
     setLoading(true)
     try {
       await signIn(email, password)
-      // `/` rather than a home computed here. This read `user_metadata.role`,
-      // which an account promoted in the SQL editor does not have -- so an
-      // administrator was sent to the student dashboard. It was also a second
-      // copy of the role-to-home map that `homeRoute.js` exists to be the only
-      // one of. `HomeRedirect` waits for the resolved role and knows all four,
-      // which is what let the 200ms sleep go too: it was here to give the
-      // session time to appear.
+      // Let HomeRedirect pick the destination from the resolved role, rather
+      // than computing it here from `user_metadata.role`, which an admin
+      // account may not have set.
       navigate('/')
       toast.success('Welcome back! 👋')
     } catch (err) {

@@ -19,8 +19,7 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import grade_levels
 import grade_appropriateness
- 
-# Enable implicit multiplication (2x â†’ 2*x)
+
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
 def extract_json(text):
@@ -40,11 +39,9 @@ def extract_json(text):
     return None
 
 def normalize_solution(sol):
-    # sympy solve() often returns lists
     if isinstance(sol, list):
         sol = sol[0]
 
-    # sympy types â†’ python scalar
     if isinstance(sol, (sp.Integer, sp.Float)):
         return float(sol)
 
@@ -57,10 +54,8 @@ def format_answer(x):
     if x is None:
         return None
     x = float(x)
-    # check if it's basically an integer
     if x.is_integer():
         return str(int(x))
-    # otherwise keep decimals clean
     return f"{round(x, 2)}"
 
 def preprocess_variables(vars):
@@ -73,7 +68,7 @@ def preprocess_variables(vars):
 def complementary_angle(a):
     return 90 - a
 
-def supplementary_angle(a): #POSSIBLY will change since its the same calculation as linear
+def supplementary_angle(a):
     return 180 - a
 
 def linear_pair(a):
@@ -166,15 +161,11 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [5],
 }
 
-# Scenario 5 (algebra_complementary) requires setting up and solving an
-# equation for x -- it was gated to "hard" difficulty only, but nothing kept
-# a grade-1 student marked "hard" from landing on it: difficulty and grade
-# are independent inputs, so a struggling-topic or randomized "hard" pick
-# could reach it regardless of grade. Withheld from "early"/"middle" bands
-# (grades 1-6) here, with a fallback to the medium tier's non-algebraic
-# scenarios; "angle_relationships" isn't in LLM_topic_decider's grade-1-3
-# allowlist either, so "early" reaching this function at all is already
-# defense-in-depth.
+# Scenario 5 (algebra_complementary) needs setting up and solving an
+# equation for x, so it's withheld from "early"/"middle" grades (1-6) here
+# regardless of difficulty -- difficulty alone isn't a safe gate, since a
+# struggling-topic or randomized "hard" pick could still reach it at any
+# grade. Falls back to the medium tier's non-algebraic scenarios instead.
 def _pick_scenario(difficulty, grade_band):
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
     if grade_band in ("early", "middle"):
@@ -182,9 +173,8 @@ def _pick_scenario(difficulty, grade_band):
     return random.choice(candidates)
 
 def _grade_band(grade):
-    # Delegated so ten copies of this cannot drift apart, and so an
-    # unreadable grade ("Grade 1") lands in "early" rather than
-    # "advanced" -- profiles.grade_level is free text. See grade_levels.
+    # Shared with the other generation files so they can't drift apart.
+    # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
     return grade_levels.grade_band(grade)
 
 GRADE_COMPLEXITY = {
@@ -194,22 +184,17 @@ GRADE_COMPLEXITY = {
     "advanced": "No additional restriction on angle measures.",
 }
 
-# Through 5th grade the ANSWER must come out to a whole number of degrees;
-# from 6th, a decimal answer is ordinary mathematics rather than a defect.
+# Through 5th grade, answers must be whole degrees; from 6th grade, a
+# decimal answer is ordinary mathematics, not a defect.
 #
-# Keyed on the raw grade string, NOT on _grade_band(), because the line falls
-# between grade 5 and grade 6 while the "middle" band spans 4, 5 AND 6 -- the
-# same reason LLM_topic_decider._allowed_topics is grade-keyed rather than
-# band-keyed. Using the band here would either impose whole numbers on a 6th
-# grader or allow decimals for a 4th grader; there is no band boundary in the
-# right place.
+# Keyed on the raw grade number, not _grade_band(), because the cutoff falls
+# between grade 5 and grade 6 while the "middle" band spans 4-6. A band-based
+# check would either force whole numbers on a 6th grader or allow decimals
+# for a 4th grader.
 #
-# Read numerically, so "Grade 1" is grade 1 rather than an unknown that
-# falls through. An *unreadable* grade requires whole numbers, matching
-# grade_levels' rule that an unknown student is treated as the youngest --
-# the earlier "leave the mathematics alone" default contradicted that and
-# would have handed a decimal answer to a grade this cannot identify.
-# Highschool and College still read as 9 and 13, so they are unaffected.
+# An unreadable grade defaults to requiring whole numbers, matching
+# grade_levels' rule that an unknown student is treated as the youngest.
+# Highschool and College still parse as grade 9 and 13, so they're unaffected.
 def _requires_whole_number_solution(grade):
     number = grade_levels.grade_number(grade)
     return number is None or number <= 5
@@ -227,25 +212,23 @@ _SCENARIO_TOTAL = {
 
 
 def _invalid_angle_reason(scenario, variables, solution):
-    """Why this is not a valid angle configuration, or None if it is fine.
+    """Why this angle configuration is invalid, or None if it's fine.
 
-    Measured 2026-08-18: "A triangle has angles 75 and 105. What is the
-    third angle?" was generated with the answer 0. The arithmetic is right
-    and the question is not a question -- 75 and 105 already use the whole
-    180, so no such triangle exists. `complementary` has the identical
-    failure at a given angle of 90, which is why this is keyed on the
-    scenario's total rather than written for triangles alone.
+    Measured 2026-08-18: a triangle question with angles 75 and 105 was
+    generated with the answer 0 -- correct arithmetic, but not a real
+    triangle, since 75 and 105 already use up the full 180 degrees.
+    `complementary` has the same failure at 90. Keyed on each scenario's
+    total (see _SCENARIO_TOTAL) so both are caught by one check.
 
-    Wrong at every grade, unlike the whole-number rule below, so it is
-    checked first and unconditionally.
+    This is wrong at every grade, so it's checked unconditionally, before
+    the whole-number rule below.
 
-    Takes the ALREADY-PARSED `variables` rather than the raw question, so
-    the sympy parse happens once per attempt instead of once here and again
-    in `_solve_scenario`.
+    Takes the already-parsed `variables` so sympy only parses once per
+    attempt, instead of again inside `_solve_scenario`.
     """
     if scenario == "algebra_complementary":
-        # Here `solution` is x, not an angle -- x itself is unbounded, so
-        # the check has to be on the two expressions evaluated at x.
+        # `solution` here is x, not an angle, and x itself has no bound --
+        # check the two angle expressions evaluated at x instead.
         x = sp.symbols('x')
         try:
             angles = [float(expr.subs(x, solution)) for expr in variables]
@@ -281,14 +264,13 @@ def _invalid_angle_reason(scenario, variables, solution):
 
 
 def _solve_scenario(scenario, variables):
-    """The numeric answer for one parsed question, or None for a scenario
-    this file does not recognise.
+    """The numeric answer for one parsed question, or None for an
+    unrecognised scenario.
 
-    Split out of the body below so the solve can happen INSIDE the retry
-    loop: whether the answer is a whole number is a property of the solved
-    value, not of the question text, so it cannot be checked until the
-    scenario has been evaluated -- and a question that fails that check has
-    to be regenerated rather than patched.
+    Split out so the solve happens inside the retry loop: whether the
+    answer is a whole number can only be checked once the scenario has
+    actually been solved, and a question that fails that check needs to be
+    regenerated, not patched after the fact.
     """
     match scenario:
         case "complementary":
@@ -304,9 +286,6 @@ def _solve_scenario(scenario, variables):
     return None
 
 
-#Potential improvements:
-#Maybe can store previously generated question, feed into LLM to ensure next question is not the same.
-#If solution is a fraction, at least one other generated response should be a fraction.
 def generate_angle_relationship_question(global_questions,prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
         if attempt > 0:
@@ -314,8 +293,7 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         else:
             prompt = angle_prompt
 
-
-        #select a scenario from the tier matching this question's difficulty and grade.
+        # select a scenario from the tier matching this question's difficulty and grade
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(difficulty, grade_band)
 
@@ -351,9 +329,9 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             model="llama3.1:8b",
             prompt=prompt,
             options={
-                "temperature": 1.1, #more creativity
-                "top_p": 0.95, #more diversity
-                "top_k": 100 #broader token sampling.
+                "temperature": 1.1,
+                "top_p": 0.95,
+                "top_k": 100
             }
         )
 
@@ -371,7 +349,6 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             print(response.response)
             continue
 
-        # Validate required keys
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
@@ -384,12 +361,10 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
                                         attempt + 1):
             continue
 
-        # Solved here rather than after the loop so a question whose ANSWER
-        # is wrong for the grade can be regenerated. The prompt asks for
-        # whole-number answers at these grades and is not reliably obeyed --
-        # measured 2026-08-18, (5x+15)+(3x-20)=90 gives 11.875 -- which is
-        # the same prompt-is-not-enforcement problem as everywhere else in
-        # this codebase, so it gets the same treatment.
+        # Solved here, inside the loop, so a question with a grade-inappropriate
+        # answer can be regenerated. The prompt asks for whole-number answers
+        # but isn't reliably obeyed -- measured 2026-08-18:
+        # (5x+15)+(3x-20)=90 came back as 11.875 -- so it's checked in code.
         scenario_name = question_data.get("scenario")
         try:
             # Parsed once and handed to both, rather than each re-parsing
@@ -422,93 +397,22 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
                   f"({solution}) for a {grade} student")
             continue
 
-        # If we reach here â†’ SUCCESS
         break
 
     else:
-        # All retries failed
         raise ValueError("Failed to generate valid JSON after retries")
 
     solution = format_answer(solution)
-    # solution = str(solution) if solution is not None else None
 
-    # for attempt in range(max_retries):
-    #     incorrect_solution_prompt = f"""
-    #     Generate three incorrect numerical answer options for a math problem.
-    #     Question:
-    #     {question_data["question_text"]}
-    #     Correct Answer:
-    #     {solution}
-
-    #     Rules:
-    #     - NO additional text, characters, or symbols should accompany this response. Response should strictly include JSON formatted data.
-    #     - The answers must NOT equal or simplify to {solution}
-    #     - Unique numbers only. NUMBERS must be represented as strings. For example, "0.5" or "14" are valid representations.
-    #     - Only numbers or simple numeric strings are allowed. Do NOT use brackets, fractions, or expressions.
-    #     - No fractions or expressions
-    #     - Return JSON format: each array value of incorrect_answers should be a separate incorrect answer
-    #     {{
-    #     "incorrect_answers": ["x","x","x"]
-    #     }}
-    #     """
-
-    #     if (solution != None):
-    #         answer_response = generate(model="llama3.1:8b",
-    #                                 prompt=incorrect_solution_prompt,
-    #                                 options = {"temperature": 0.4,
-    #                                             "top_p": 0.9,
-    #                                             "top_k": 40}) #slightly less randomness, 
-    #     if attempt > 0:
-    #         incorrect_solution_prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-
-    #     raw = extract_json(answer_response.response)
-
-    #     if not raw:
-    #         print(f"[Attempt {attempt+1}] No JSON found")
-    #         print(answer_response.response)
-    #         continue
-
-    #     try:
-    #         answer_data = json.loads(raw)
-    #     except Exception as e:
-    #         print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-    #         print(answer_response.response)
-    #         continue
-
-    #     # Validate required keys
-    #     required_keys = ["incorrect_answers"]
-    #     if not all(k in answer_data for k in required_keys):
-    #         print(f"[Attempt {attempt+1}] Missing keys:", answer_data)
-    #         continue
-
-    #     # If we reach here â†’ SUCCESS
-    #     break
-
-    # else:
-    #     # All retries failed
-    #     raise ValueError("Failed to generate valid JSON after retries")
-
-    # #combining generated incorrect responses with correct solution. 
-    # incorrect_data = answer_data
-    #answers = incorrect_data["incorrect_answers"] + [str(solution)]
     solution_float = float(solution) if solution is not None else None
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float) if solution_float is not None else []
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]
     random.shuffle(answers)
 
-    #Build final JSON
     return {
         "question_text": question_data["question_text"],
         "question_topic": "angle_relationships",
         "answer_options": answers,
         "correct_answer": solution
     }
-
-
-#display on flask
-# app= Flask(__name__)
-# CORS(app)
-# @app.route("/")
-# def display_question():
-#     return jsonify(generate_algebra_question())
 

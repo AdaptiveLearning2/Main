@@ -6,25 +6,20 @@ from ollama import ChatResponse
 import json
 from flask import Flask, jsonify,request
 from flask_cors import CORS #pip install flask-cors
-#python -m flask --app LLM_supabase_communication run
+# python -m flask --app LLM_supabase_communication run
 
-#CURRENTLY NOT IN USE IN APPLICATION
-
-#Setup Flask app and enable CORS to communicate with React frontend
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:5173"])
 
-#Obtain accuracy data from frontend. 
-load_dotenv() #need to create .env file in backend folder with SUPABASE_URL and SUPABASE_KEY
+load_dotenv() # needs a .env file in backend/ with SUPABASE_URL and SUPABASE_KEY
 url = os.getenv("VITE_SUPABASE_URL")
 key = os.getenv("VITE_SUPABASE_ANON_KEY")
-supabase = create_client(url, key)  
+supabase = create_client(url, key)
 
- 
+
 @app.route("/api/performance", methods=["POST"])
 def save_performance():
     data = request.json
-    #print("Receieved from fronted: ", data)
     return jsonify({"status": "saved"})
 
 @app.route("/api/performance", methods=["GET"])
@@ -43,19 +38,16 @@ def generate_question():
     print("GENERATING QUESTION")
     user_id = request.args.get("user_id")
 
-    #get performance data
     response = supabase.table("user_math_performance") \
         .select("accuracy, stress, math_topics(topic_name)") \
         .eq("user_id", user_id) \
         .execute()
 
-    data = response.data 
+    data = response.data
 
-    #filter out None default values 
     valid_accuracy = [x for x in data if x["accuracy"] is not None]
     valid_stress = [x for x in data if x["stress"] is not None]
 
-    #might be useful to find weakest subjects
     if valid_accuracy:
         lowest_acc_search = min(valid_accuracy, key=lambda x: x["accuracy"])
         lowest_acc = lowest_acc_search["math_topics"]["topic_name"]
@@ -67,10 +59,7 @@ def generate_question():
     else:
         highest_stress = "None"
 
-
-    #Works ok, gives incorrect answers fairly often though.
-    
-    prompt = f""" 
+    prompt = f"""
     Generate a math question for a 6-8th grade student. These students have special education needs and may be sensitive to stress. 
     Your goal is to provide a solvable math question that will be engaging without resulting in increased stress levels.
     Here is the student's data so far: {data}. Their lowest accuracy is in: {lowest_acc}. Their highest stress comes from: {highest_stress}
@@ -99,19 +88,17 @@ def generate_question():
     RETURN ONLY JSON, with no additional characters or symbols before or after. 
     """
 
-    #generate llm response
-    response = generate(model="llama3.1:8b", 
+    response = generate(model="llama3.1:8b",
                         prompt=prompt,
                         options = {"temperature": 0.7,
-                                    "top_p": 100} #increase randomness, may need to adjust values 
+                                    "top_p": 100}
                         )
-    
+
     print(response.response)
     parsed = json.loads(response.response)
     return jsonify(parsed)
 
 
-if __name__ == "__main__": #run flask app on port 5000, separate from React frontend which runs on 5173
+if __name__ == "__main__": # port 5000, separate from the React frontend on 5173
     app.run(debug=True, port=5000)
-
 

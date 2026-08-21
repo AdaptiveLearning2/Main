@@ -1,15 +1,12 @@
-"""An answer on the adaptive page reaches the database.
+"""Tests that an answer on the adaptive page reaches the database.
 
-It did not. `Adaptive.jsx` had no `/api/sessions/{id}/answer` call at all -- the
-only page that did was Practice.jsx -- so every question answered through the
-adaptive path was counted in that browser's localStorage and nowhere else.
-`session_answers`, `sessions.questions_answered`, `user_stats` and every report
-built on them read zero however long a student practised, while the page's own
-Topic Accuracy panel showed figures. Two records of the same afternoon, one of
-them private to a browser.
+`Adaptive.jsx` used to have no `/api/sessions/{id}/answer` call at all, so every
+question answered through the adaptive path was only counted in that browser's
+localStorage. `session_answers`, `sessions.questions_answered`, `user_stats`,
+and every report built on them read zero for that student.
 
-The half worth pinning is the per-topic attribution, because it decides what the
-adaptive engine serves next and because it is the half a client could get wrong.
+The half worth pinning most is per-topic attribution, since it decides what the
+adaptive engine serves next and is the half a client could get wrong.
 """
 
 import os
@@ -38,9 +35,8 @@ class _Client:
         self.rpcs = []
         self.inserts = []
         # (table, column, value) for every filter applied. The fake answers from
-        # canned data, so without recording this a test can assert on the result
-        # while the code under test looks up something else entirely -- which is
-        # exactly what the first version of the attribution test below did.
+        # canned data, so without recording this a test could assert on the
+        # right result while the code under test looked up the wrong thing.
         self.filters = []
 
     def rpc(self, name, params):
@@ -120,18 +116,17 @@ def _client(monkeypatch):
 
 
 def test_an_attempt_is_one_statement_in_the_database(_client):
-    """The arithmetic moved into `record_topic_attempt` (20260825000000).
+    """The topic-attempt arithmetic now runs as one call to
+    `record_topic_attempt` in the database.
 
-    It used to be four sequential round trips on the hottest path in the
-    product, and the last two of them were a read-modify-write with no lock: two
-    answers landing together both read the same counts and the second write
-    overwrote the first, so attempts disappeared from the table the adaptive
-    engine reads to choose what to serve next.
+    It used to be four sequential round trips, and the last two were an
+    unlocked read-modify-write: two answers landing together could both read
+    the same counts, and the second write would overwrite the first, silently
+    losing attempts from the table the adaptive engine reads from.
 
-    Whether the counters actually increment is Postgres's job now, and is
-    asserted against a real stack in `scripts/assert_signal_rls.sql`. What is
-    checkable here is that this makes one call and passes what the function
-    needs.
+    Whether the counters actually increment is Postgres's job now, checked
+    against a real stack in `scripts/assert_signal_rls.sql`. What's checkable
+    here is that this makes one call and passes what the function needs.
     """
     c = _client()
 
@@ -156,17 +151,16 @@ def test_a_wrong_answer_is_passed_through_as_an_attempt_that_was_not_correct(_cl
 
 def test_the_topic_comes_from_the_question_not_the_caller(_client):
     """The client already has to be trusted about correctness. Letting it name
-    the topic as well would let a page credit one subject for work done in
-    another -- and this table is what the adaptive engine reads to choose what
-    to serve next, so a wrong attribution steers a student's whole session."""
+    the topic too would let a page credit one subject for work done in another,
+    and this table is what the adaptive engine reads to pick what to serve
+    next -- a wrong attribution steers a student's whole session."""
     c = _client(subject="geometry", topics=("geometry",))
 
     main._record_topic_attempt(USER, QUESTION, correct=True)
 
-    # Structural now that the join is in SQL: the only identifiers crossing the
-    # boundary are the student, the question and whether it was right. A topic
-    # cannot be smuggled in because there is no parameter to put one in, which
-    # is a stronger guarantee than the query-shape check this replaces.
+    # The join is in SQL now, so the only identifiers crossing the boundary are
+    # the student, the question, and whether it was right. There's no parameter
+    # to smuggle a topic into.
     _, params = c.rpcs[0]
     assert set(params) == {"p_user_id", "p_question_id", "p_correct"}
     assert params["p_question_id"] == QUESTION
@@ -174,24 +168,22 @@ def test_the_topic_comes_from_the_question_not_the_caller(_client):
 
 
 def test_a_failed_attempt_never_raises(_client):
-    """This runs *after* the answer is written. `session_answers` is the record
-    that matters and it is already safe by this point, so an attribution that
-    fails must not turn a recorded answer into a 500 the page reports as
-    'that answer could not be saved'."""
+    """This runs after the answer is written, so `session_answers` is already
+    safe by this point. An attribution failure must not turn a recorded answer
+    into a 500 the page reports as "that answer could not be saved"."""
     _client(rpc_error="boom")
 
     main._record_topic_attempt(USER, QUESTION, correct=True)  # must not raise
 
 
 def test_a_missing_function_is_reported_as_a_missing_migration(_client, capsys):
-    """PGRST202 is the deploy-ordering trap, and it is silent by design.
-
-    This helper swallows its exceptions -- it must, because a failed lookup may
-    not cost a student the answer already recorded -- so code deployed ahead of
-    20260825000000 stops attributing anything with no symptom other than the
-    numbers not moving. Every other failure here is transient and the next
-    answer retries it; this one is every answer until somebody applies the
-    migration, so it gets its own sentence in the log.
+    """PGRST202 means the migration hasn't been applied, and it's silent by
+    design: this helper swallows its exceptions because a failed lookup must not
+    cost a student the answer already recorded. So code deployed ahead of the
+    migration stops attributing anything, with the numbers just not moving as
+    the only symptom. Every other failure here is transient and retries on the
+    next answer; this one repeats until someone applies the migration, so it
+    gets its own line in the log.
     """
     _client(rpc_error="{'code': 'PGRST202', 'message': 'no function'}")
 
@@ -202,8 +194,8 @@ def test_a_missing_function_is_reported_as_a_missing_migration(_client, capsys):
 
 
 def test_the_answer_endpoint_updates_the_topic_record(monkeypatch):
-    """Wiring, not arithmetic: the helper is only useful if `record_answer`
-    calls it, and that call is one line away from being dropped in a merge."""
+    """Wiring, not arithmetic: the helper only matters if `record_answer`
+    actually calls it."""
     seen = []
     monkeypatch.setattr(main, "get_user", lambda _r: {"id": USER})
     monkeypatch.setattr(main, "supabase", _Client())
@@ -269,14 +261,13 @@ class _SessionClient:
 
 
 def test_closing_a_session_twice_credits_it_once(monkeypatch):
-    """`/end` credits the session's *cumulative* counts, not a delta.
+    """`/end` credits the session's cumulative counts, not a delta.
 
-    So a session already closed by the stale sweep or by a teacher opening the
-    Live view -- both of which credit -- was credited a second time in full when
-    the student's page finally called `/end`, doubling every answer in the
-    lifetime totals and inflating the accuracy a parent reads. The student's
-    page has no way to know a teacher's view closed the session underneath it,
-    so this is an ordinary race, not a misuse.
+    A session already closed by the stale sweep or by a teacher's Live view
+    would otherwise get credited a second time when the student's page finally
+    calls `/end`, doubling every answer in the lifetime totals. The student's
+    page has no way to know a teacher's view already closed the session, so
+    this is an ordinary race, not misuse.
     """
     closed = {"id": "s-1", "user_id": USER, "questions_answered": 6,
               "correct_answers": 4, "started_at": "2026-08-15T10:00:00Z",
@@ -337,8 +328,8 @@ class _ClaimClient:
 
         class _R:
             def execute(self):
-                # `session_answer_counts` -- two integers, as the SQL returns
-                # them, rather than the answer rows the close used to sum here.
+                # `session_answer_counts` returns two integers from SQL now,
+                # instead of the answer rows the close used to sum itself.
                 assert name == "session_answer_counts", name
                 return type("R", (), {"data": [{
                     "total": len(client.answers),
@@ -414,12 +405,10 @@ def _close_with(monkeypatch, client, credited):
 
 def test_a_close_that_loses_the_stamp_credits_nothing(monkeypatch):
     """The guard is the conditional update, not `/end`'s read of `ended_at`.
-
-    That read and the write below it are two statements, so a `/end` arriving
-    while the stale sweep or `class_live` is closing the same session passes the
-    check and runs the whole sequence anyway. Both closes credit the session's
-    *cumulative* counts, so every answer in it landed twice in the lifetime
-    totals -- inflating exactly the accuracy figure a parent reads.
+    That read and the write are two separate statements, so a `/end` arriving
+    while the stale sweep or `class_live` is closing the same session can pass
+    the check and run the whole sequence anyway -- crediting the session's
+    cumulative counts twice.
     """
     credited = []
     client = _ClaimClient(
@@ -440,16 +429,16 @@ def test_a_close_that_loses_the_stamp_credits_nothing(monkeypatch):
 
 
 def test_postgrest_update_returns_the_updated_row():
-    """The assumption `_claim_session_close` rests on, pinned against the library.
+    """Pins the assumption `_claim_session_close` rests on against the library.
 
     It reads an empty `.data` from the conditional stamp as "zero rows matched",
     which is only true because postgrest-py defaults `update()` to
     `returning=representation`. If a dependency bump flips that default, every
-    close reads as lost and every session silently loses its credit, its rollup
-    and its archive -- no error, no symptom but the numbers not moving.
+    close would read as lost, silently losing its credit, rollup, and archive
+    with no error -- just numbers that stop moving.
 
-    The alternative was a confirming SELECT on every lost race, which paid a
-    round trip forever to guard against a change this catches at install time.
+    The alternative was a confirming SELECT on every lost race, paying a round
+    trip forever to guard against a change this catches at install time.
     """
     import inspect
 
@@ -465,8 +454,8 @@ def test_postgrest_update_returns_the_updated_row():
 
 
 def test_the_stamp_is_conditional(monkeypatch):
-    """Belt and braces on the mechanism itself: an unconditional update would
-    satisfy both tests above by never losing, and would race exactly as before.
+    """Checks the mechanism directly: an unconditional update would satisfy
+    both tests above by never losing, but would race exactly as before.
     """
     credited = []
     client = _ClaimClient({"id": "s-1", "user_id": USER, "questions_answered": 1,
@@ -487,16 +476,17 @@ def test_the_stamp_is_conditional(monkeypatch):
 
 
 def test_a_close_credits_the_answers_that_exist_not_the_counter(monkeypatch):
-    """`questions_answered` is a cache, and the close was the last thing trusting it.
+    """`questions_answered` is a cache, and the close used to be the last thing
+    trusting it.
 
     `record_answer` writes the answer row and bumps the counter in two separate
-    statements with nothing around them, so the counter can sit at zero while
-    real answers exist. `_discard_if_nothing_recorded` already knows that and
-    re-checks `session_answers` before deleting a session that looks empty -- so
-    the session was correctly saved, and then credited zero questions and zero
-    correct answers, because the credit was reading the same stale field. The
-    student's work survived in `session_answers` and never reached the lifetime
-    totals. Permanently: no later close revisits a session that is stamped.
+    unguarded statements, so the counter can sit at zero while real answers
+    exist. `_discard_if_nothing_recorded` already re-checks `session_answers`
+    before deleting a session that looks empty, so a correctly-saved session
+    could still get credited zero questions and zero correct answers by reading
+    that same stale counter. The student's work stayed in `session_answers` but
+    never reached the lifetime totals, permanently, since no later close
+    revisits a stamped session.
     """
     credited = []
     stale = {"id": "s-1", "user_id": USER, "questions_answered": 0,
@@ -513,12 +503,10 @@ def test_a_close_credits_the_answers_that_exist_not_the_counter(monkeypatch):
 
 
 def test_a_counter_ahead_of_the_rows_is_credited_rather_than_reduced(monkeypatch):
-    """The recount may only ever find *more*.
-
-    Rows are the record, but crediting fewer answers than a previous reading of
-    this session already showed is the direction that loses a student's work --
-    and a `session_answers` read that returns short looks exactly like one that
-    is right.
+    """The recount may only ever find more, never fewer. Rows are the record,
+    but crediting fewer answers than a previous reading already showed is the
+    direction that loses a student's work -- and a short `session_answers` read
+    looks exactly like a correct one.
     """
     credited = []
     stale = {"id": "s-1", "user_id": USER, "questions_answered": 9,
@@ -532,17 +520,15 @@ def test_a_counter_ahead_of_the_rows_is_credited_rather_than_reduced(monkeypatch
 
 
 def test_every_close_site_stops_the_poller_first():
-    """Derived, because this ordering was wrong at one of the three sites.
-
-    `class_live` stamped `ended_at` and ran the whole close before stopping the
-    poller. A tick landing in that gap inserts a `cognitive_signals` row for the
-    session *after* `_discard_if_nothing_recorded` has looked -- so an abandoned
-    pairing is deleted with a row pointing at it -- and the rollup is computed
-    from a day that gains a sample a moment later.
+    """This ordering was wrong at one close site: `class_live` used to stamp
+    `ended_at` and run the whole close before stopping the poller. A tick
+    landing in that gap could insert a `cognitive_signals` row after
+    `_discard_if_nothing_recorded` had already checked, so an abandoned pairing
+    got deleted with a row still pointing at it, and the rollup computed from a
+    day that gained a sample a moment later.
 
     Now that the stamp lives inside `_close_session`, "stop the poller before
-    you call it" is the whole of the ordering rule, which is what makes it
-    checkable rather than a sentence in a docstring.
+    calling it" is the whole rule, and this test checks that directly.
     """
     from conftest import close_sites
 
@@ -595,8 +581,8 @@ class _RosterClient:
 
 def test_a_roster_costs_two_queries_not_two_per_student(monkeypatch):
     """`class_students` and `my_children` call this inside a loop that already
-    makes several reads per student, so the per-student version turned a class
-    of thirty into sixty extra round trips on a page a teacher lives in."""
+    makes several reads per student, so a per-student version would turn a
+    class of thirty into sixty extra round trips."""
     ids = [f"s-{i}" for i in range(30)]
     c = _RosterClient(stats_rows=[{"user_id": "s-0", "total_questions": 4,
                                    "total_correct": 3}])
@@ -613,7 +599,7 @@ def test_a_roster_costs_two_queries_not_two_per_student(monkeypatch):
 
 def test_the_roster_adds_each_students_own_open_session(monkeypatch):
     """The whole point of the helper: `user_stats` is a session behind, and the
-    live delta must land on the student it belongs to rather than the roster."""
+    live delta must land on the student it belongs to, not the whole roster."""
     c = _RosterClient(
         stats_rows=[{"user_id": "a", "total_questions": 10, "total_correct": 6}],
         open_rows=[{"user_id": "a", "questions_answered": 3, "correct_answers": 2},
@@ -653,28 +639,24 @@ def test_a_failed_open_session_read_still_reports_the_stored_totals(monkeypatch)
 
 
 def test_only_one_place_reads_user_stats():
-    """`user_stats` gains a row when a session *closes*, so reading it directly
-    reports a student mid-lesson as having answered nothing.
+    """`user_stats` only gains a row when a session closes, so reading it
+    directly reports a student mid-lesson as having answered nothing.
 
-    Four surfaces did: `/api/stats/me`, `/api/stats/student`, the class roster
-    and the parent's children list. The teacher's dashboard showed a class
-    average of "—" for a class whose only student was sitting at 67% on the
-    Students page two clicks away, because the average came from one of the
-    readers and the tile from another.
+    Four surfaces used to do this: `/api/stats/me`, `/api/stats/student`, the
+    class roster, and the parent's children list -- causing mismatches between
+    surfaces reading different sources for the same student.
 
-    Derived from the source rather than listed, so a fifth reader cannot be
-    added quietly -- the same exhaustiveness pattern as `_MODE_AWARE` and
-    `test_every_recording_site_gates_on_the_window`. `_credit_session_to_user_stats`
-    is the writer and is allowed; `_stats_including_open_session` is the reader.
+    Derived from the source rather than a hand-kept list, so a new reader can't
+    be added quietly. `_credit_session_to_user_stats` is the writer and is
+    allowed; `_stats_including_open_session` is the reader.
     """
     import inspect
     import re
 
     source = inspect.getsource(main)
-    # `[\s\\]*`, not `\s*`. A backslash line continuation is not whitespace, so
-    # the original pattern silently skipped `leaderboard`, which splits the call
-    # across two lines exactly that way -- the one reader this test existed to
-    # catch was the one it could not see, and it passed while being blind.
+    # `[\s\\]*`, not `\s*`: a backslash line continuation isn't whitespace, and
+    # `leaderboard` splits its call across two lines that way. A plain `\s*`
+    # would miss it silently.
     readers = [m.start() for m in
                re.finditer(r'table\("user_stats"\)[\s\\]*\.?[\s\\]*select', source)]
     assert len(readers) >= 3, (
@@ -685,18 +667,18 @@ def test_only_one_place_reads_user_stats():
     # Two writers/readers own this table, plus one deliberate exception.
     #
     # `leaderboard` reads every user's row in one query to rank them. Routing it
-    # through `_stats_including_open_session` would mean a second query per user
-    # -- reintroducing the N+1 the profile lookup beside it was just batched out
-    # of -- to add an in-flight session to a *ranking*, where being one session
-    # stale is both harmless and uniform across everyone on the board. Listed
-    # with its reason rather than left to slip through a regex, so the next
-    # reader still has to justify itself.
+    # through `_stats_including_open_session` would mean a second query per
+    # user -- reintroducing the N+1 the profile lookup beside it was just
+    # batched out of -- just to add an in-flight session to a ranking, where
+    # being one session stale is harmless and uniform for everyone on the
+    # board. Listed here with its reason so a new reader still has to justify
+    # itself.
     ALLOWED = {"_stats_including_open_session", "_stats_including_open_session_many",
                "_credit_session_to_user_stats"}
     ALLOWLIST = {"leaderboard": "ranks all users; one query, staleness is uniform"}
 
     for pos in readers:
-        # Which function the read sits in, by walking back to the nearest def.
+        # Find which function the read sits in by walking back to the nearest def.
         head = source[:pos]
         enclosing = re.findall(r"^def (\w+)", head, re.MULTILINE)[-1]
         assert enclosing in ALLOWED or enclosing in ALLOWLIST, (
@@ -709,19 +691,16 @@ def test_only_one_place_reads_user_stats():
 def test_every_session_close_credits_the_lifetime_totals():
     """Derived from the closes themselves, not a hand-kept list.
 
-    There are three: `/end`, the stale sweep in `start_session`, and the one in
-    `class_live`. The stats update lived only in `/end`, so a student who shut
-    the tab -- or whose teacher opened the Live view -- had every answer in that
-    session dropped from Questions/Correct/Accuracy while `session_answers` kept
-    it. Fixing two of the three still left the class average reading "—" for a
-    class whose only student was at 67%, because the third was the one that had
-    actually closed the session.
+    There are three close sites: `/end`, the stale sweep in `start_session`,
+    and the one in `class_live`. The stats update used to live only in `/end`,
+    so a student who shut the tab -- or whose teacher opened the Live view --
+    had every answer in that session dropped from Questions/Correct/Accuracy
+    while `session_answers` kept it.
 
-    The three copies have since been folded into `_close_session`, because each
-    one drifted separately: the sweep credited a `correct_answers` it had never
-    selected, so every tab-close added questions and zero correct answers to a
-    student's record. So the check is now that every closer reaches the helper,
-    and that the helper still credits.
+    The three copies are now folded into `_close_session`, since each one had
+    drifted separately (the sweep credited a `correct_answers` it never
+    selected). So the check is that every closer reaches the helper, and the
+    helper still credits.
     """
     import inspect
 
@@ -751,19 +730,18 @@ def _safe_source(fn):
 
 
 def test_the_close_reads_every_column_it_credits():
-    """The stale sweep credited a column it had not selected.
+    """The stale sweep used to credit a column it hadn't selected.
 
     `select("id, started_at, questions_answered")` with no `correct_answers`
-    means the key is simply absent, `or 0` reads that as an honest zero, and
-    every session closed by the sweep -- which is every session of a student who
-    shuts the tab -- credited its questions and none of its correct answers.
-    Nothing raises; a student's accuracy just falls.
+    means that key is simply absent; `or 0` reads that as an honest zero, so
+    every session the sweep closed -- every student who shuts the tab --
+    credited its questions and none of its correct answers. Nothing raises; a
+    student's accuracy just falls.
 
-    Derived from what the close reads off the row, so a column added to it has
-    to be added to the selects too. Both halves are read: `_answer_counts` is
-    where the counters are now read from, and deriving `needed` from
-    `_close_session` alone would have quietly stopped checking anything the
-    moment they moved.
+    Derived from what the close actually reads off the row, so a new column
+    has to be added to the selects too. Both `_close_session` and
+    `_answer_counts` are scanned, since the counters are read from the latter
+    now.
     """
     import inspect
     import re
@@ -775,12 +753,11 @@ def test_the_close_reads_every_column_it_credits():
     assert "correct_answers" in needed and "questions_answered" in needed, (
         "the close stopped reading the counts; this test is looking at nothing")
 
-    # Scanned per function that actually closes a session, rather than over the
-    # whole module. The rule is about rows that reach `_close_session`, and
-    # `id` + `started_at` is only a proxy for that -- a read-only query wanting
-    # a session's start time matches the proxy while being unable to credit
-    # anything (`/api/admin/live-signals` is one). Narrowing to the callers
-    # keeps the guard pointed at the bug and stops it firing on reads.
+    # Scanned per function that actually closes a session, not over the whole
+    # module. `id` + `started_at` alone is only a proxy for that -- a read-only
+    # query wanting a session's start time matches the proxy without crediting
+    # anything (e.g. `/api/admin/live-signals`). Narrowing to actual closers
+    # keeps this from firing on plain reads.
     closers = [fn for fn in vars(main).values()
                if inspect.isfunction(fn)
                and getattr(fn, "__module__", None) == "main"
@@ -802,7 +779,7 @@ def test_the_close_reads_every_column_it_credits():
                 "turns that into a zero that looks measured"
             )
 
-    # The regex has to keep matching how the selects are actually written -- the
+    # The regex must keep matching how selects are actually written -- the
     # stale sweep's is split across a line continuation, and a pattern that
     # stopped handling that would leave this test green while checking nothing.
     assert scanned, (

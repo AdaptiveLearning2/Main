@@ -1,15 +1,10 @@
-"""Six simultaneous ECGs across one recording -- the honest validation.
-
-The earlier paired capture (test_hrv_against_ecg.py) had three references, which
-was enough to see that RMSSD was roughly right and not enough to tell an
-improvement from a reshuffle. Every candidate fix tested against it moved which
-window was wrong. This capture has six, spaced ~50s across 8 minutes, with a
-final stretch deliberately free of ECGs as a control.
+"""Validates HRV (RMSSD) against six simultaneous ECG readings across one
+8-minute recording, spaced ~50s apart, with a final stretch deliberately free
+of ECGs as a control.
 
 Alignment: each export's `Created time` landed 40-43s after the mark taken when
-the reading was called, consistently across all six, which places the 30s
-recording at `Created time - 35s`. The offset is derived from the data rather
-than assumed.
+the reading was called, consistently across all six, placing the 30s recording
+at `Created time - 35s`. The offset is derived from the data, not assumed.
 
 Result
 ------
@@ -23,28 +18,22 @@ Result
 
 r = 0.75, mean bias -1.3ms, RMS error 4.7ms. Heart rate within 1 bpm on all six.
 
-Two corrections this capture forced
------------------------------------
-**The true RMSSD moves much more than the first capture suggested.** It spans
-29.2-48.9ms here across 4.5 minutes. The earlier capture measured 2.0ms across
-95 seconds, and that got generalised into "the true value is constant, so the
-spread in the derived value is entirely error". True at 95 seconds, false at
-five minutes. A substantial part of the 29-63ms spread previously attributed to
-the estimator was the wearer's actual heart.
+Two things this capture showed, versus an earlier smaller one
+---------------------------------------------------------------
+**True RMSSD moves a lot over minutes**: 29.2-48.9ms here across 4.5 minutes,
+at a near-constant heart rate. An earlier, shorter capture (2.0ms over 95
+seconds) had suggested the true value was roughly constant and any longer-range
+spread was estimator error -- that doesn't hold at this timescale.
 
-**The 50% outlier in the first capture did not recur.** Five of five reported
-windows here land within 15%. That was one window in one recording, not a
-characteristic failure -- so a discriminator built to catch it would have been
-fitted to noise.
+**The 50% outlier from the earlier capture did not recur.** All six windows
+here land within 15%, so that earlier outlier looks like a one-off, not a
+characteristic failure.
 
 What is still unvalidated
 -------------------------
-The no-ECG control stretch at the end shows lower, tighter values (18-28ms),
-which was initially read as evidence that reaching for the watch was corrupting
-the signal. That reading is now doubtful: the ECG-phase estimates turn out to be
-largely correct, so the control-stretch values may simply be a lower true RMSSD
-as heart rate climbed 70 -> 76. There is no ground truth in that stretch by
-construction, so it cannot settle the question either way.
+The no-ECG control stretch at the end shows lower, tighter values (18-28ms).
+There's no ground truth for that stretch, so it's unclear whether that's
+cleaner signal or a genuinely lower RMSSD as heart rate rose 70 -> 76.
 """
 
 from __future__ import annotations
@@ -69,8 +58,8 @@ PAIRS = [("ecg_dense_t52.csv.gz", 52), ("ecg_dense_t100.csv.gz", 100),
          ("ecg_dense_t150.csv.gz", 150), ("ecg_dense_t199.csv.gz", 199),
          ("ecg_dense_t250.csv.gz", 250), ("ecg_dense_t299.csv.gz", 299)]
 
-# No ECG was taken here -- the wearer sat still with hands down. It exists as a
-# control, and deliberately has no ground truth.
+# No ECG was taken here -- the wearer sat still with hands down. This is a
+# control stretch and deliberately has no ground truth.
 CONTROL_START = 335
 
 
@@ -81,7 +70,8 @@ def _load_ecg(name: str) -> np.ndarray:
 
 
 def _ecg_beats(x: np.ndarray) -> list[float]:
-    """R-peak times, by a different algorithm from the optical beat detector."""
+    """Finds R-peak times, using a different algorithm than the optical beat
+    detector."""
     b, a = butter(3, [5 / (ECG_FS / 2), 40 / (ECG_FS / 2)], btype="band")
     y = np.abs(filtfilt(b, a, x) / np.std(filtfilt(b, a, x)))
     peaks, _ = find_peaks(y, distance=int(0.3 * ECG_FS), prominence=2.0)
@@ -103,19 +93,17 @@ def _optics(offset_s: int):
 
 @pytest.mark.parametrize("name,offset", PAIRS)
 def test_heart_rate_matches_the_ecg(name, offset):
-    """Six more windows on the strongest result. Rate is product-grade."""
+    """Heart rate matches ECG within 2 bpm across all six windows."""
     ecg_bpm = 60.0 / np.median(np.diff(_ecg_beats(_load_ecg(name))))
     rate, _ = _optics(offset)
     assert rate.bpm == pytest.approx(ecg_bpm, abs=2.0)
 
 
 def test_the_true_rmssd_moves_a_lot_over_minutes():
-    """The measurement that corrects the earlier capture's conclusion.
-
-    29.2-48.9ms across 4.5 minutes, at a near-constant heart rate. So a derived
-    value that varies over minutes is not thereby wrong, and the earlier
-    inference -- 2.0ms over 95 seconds, therefore all longer-range spread is
-    error -- does not hold. Timescale has to be stated with any such claim."""
+    """True RMSSD spans 29.2-48.9ms across 4.5 minutes at near-constant heart
+    rate, so a derived value that varies over minutes isn't necessarily wrong
+    -- the earlier "spread over time means estimator error" conclusion only
+    held at the shorter 95-second timescale it was measured at."""
     values = [rmssd_from_beats(_ecg_beats(_load_ecg(n)))[0] for n, _ in PAIRS]
     assert max(values) - min(values) > 15.0, (
         f"expected substantial real variation, got {values}"
@@ -123,13 +111,10 @@ def test_the_true_rmssd_moves_a_lot_over_minutes():
 
 
 def test_rmssd_tracks_the_reference_within_fifteen_percent():
-    """Every reported window, not most of them.
-
-    The first capture had one window 50% high, and no in-window property
-    separated it. It did not recur here. Asserted as a blanket tolerance now,
-    which the earlier data could not support -- if this starts failing, the
-    honest response is to check whether a real defect returned before loosening
-    it."""
+    """Checks every reported window, not just most. An earlier capture had one
+    window 50% high with no way to detect it in advance; that didn't recur
+    here. If this starts failing, check for a real defect before loosening the
+    tolerance."""
     errors = []
     for name, offset in PAIRS:
         ecg_rmssd, _ = rmssd_from_beats(_ecg_beats(_load_ecg(name)))
@@ -145,10 +130,9 @@ def test_rmssd_tracks_the_reference_within_fifteen_percent():
 
 
 def test_the_estimate_follows_the_reference_rather_than_the_mean():
-    """A tolerance alone would pass an estimator that always returned 39ms.
-
-    Correlation across the paired windows is what shows the derivation is
-    responding to the wearer rather than sitting near the middle of the range."""
+    """A tolerance check alone would pass an estimator that always returned
+    39ms. Correlation across the paired windows shows it's actually responding
+    to the wearer, not just sitting near the middle of the range."""
     ecg_vals, optic_vals = [], []
     for name, offset in PAIRS:
         _, hrv = _optics(offset)
@@ -161,11 +145,8 @@ def test_the_estimate_follows_the_reference_rather_than_the_mean():
 
 
 def test_the_bias_is_small_relative_to_the_error():
-    """No calibration constant is available to remove.
-
-    Mean bias -1.3ms against an RMS error of 4.7ms: the residual is scatter, not
-    a scale factor. Anything proposing to calibrate this should be checked
-    against that first."""
+    """Mean bias -1.3ms against an RMS error of 4.7ms: the residual is scatter,
+    not a scale factor, so there's no calibration constant to remove."""
     diffs = []
     for name, offset in PAIRS:
         _, hrv = _optics(offset)
@@ -177,11 +158,8 @@ def test_the_bias_is_small_relative_to_the_error():
 
 
 def test_the_control_stretch_reports_without_ground_truth():
-    """Pinned as a behaviour, explicitly not as an accuracy claim.
-
-    No ECG was taken here, so nothing about correctness can be asserted. It is
-    kept because a future capture with references in this stretch would settle
-    whether the lower values are cleaner signal or a genuinely lower rate."""
+    """Pins the behaviour, not an accuracy claim -- there's no ECG reference
+    for this stretch, so correctness can't be asserted here."""
     data, fs = _load("optics_ecg_dense.jsonl.gz")
     values = []
     for start in range(CONTROL_START, int(len(data) / fs) - WINDOW_S, 10):

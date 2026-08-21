@@ -114,8 +114,7 @@ function SidebarContent({ collapsed, mobile, onClose }) {
 export default function StudentLayout() {
   // See ParentLayout: the key has to come from router state, not the browser.
   const { pathname } = useLocation()
-  // Scoped, so collapsing this sidebar does not collapse the other three
-  // layouts' -- one key would be shared across the whole origin.
+  // Scoped key so collapsing this sidebar doesn't collapse the other layouts'.
   const [collapsed, toggleCollapsed] = useCollapsedSidebar('student')
   const { open: mobileOpen, onOpen: openMobile, onClose: closeMobile } =
     useMobileDrawer()

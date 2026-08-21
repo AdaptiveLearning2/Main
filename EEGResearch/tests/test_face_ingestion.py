@@ -1,12 +1,12 @@
-"""Headless capture, with the camera faked.
+"""Tests headless capture, with the camera faked.
 
 The frame source and the face locator are both injected, so the adapter's
-threading, bounded buffering, quality gating and teardown are exercised without
-OpenCV — which is absent from CI by design and would make these silently skip.
+threading, bounded buffering, quality gating and teardown are exercised
+without OpenCV, which is absent from CI by design.
 
-Fakes are inline and duck-typed, matching the existing convention for adapter
-tests (`FailingAdapter` in test_app.py) rather than introducing a base class the
-production code does not have either.
+Fakes are inline and duck-typed, matching the existing convention for
+adapter tests rather than introducing a base class the production code
+doesn't have either.
 """
 
 from __future__ import annotations
@@ -37,19 +37,16 @@ FACE_BOX = (20, 10, 100, 100)
 class FakeSource:
     """Yields a fixed frame, optionally failing or ending.
 
-    `read()` sleeps for a beat, because a real one blocks until the sensor has a
-    frame -- and since the capture loop is now paced by that block rather than
-    by a sleep of its own, a source returning instantly is not a fast camera but
-    an impossible one. Returning with no delay put many samples on the same
-    `time.monotonic()` value, which made the median frame interval zero and the
-    measured rate unmeasurable: a real duplicate-timestamp failure, reachable
-    only through a fake.
+    `read()` sleeps for a beat, because a real one blocks until the sensor
+    has a frame, and the capture loop is paced by that block. A source
+    returning instantly would put many samples on the same
+    `time.monotonic()` value, making the median frame interval zero and the
+    measured rate unmeasurable.
     """
 
     # Slow enough that the loop runs at a rate a camera could plausibly hit.
-    # At 2 ms the fake reached ~365 Hz, which is not a fast camera -- it is a
-    # source no hardware can imitate, and it made the buffer's size cap bind
-    # before its time bound, which is the thing under test here.
+    # At 2ms the fake reached ~365 Hz, which no hardware can match, and made
+    # the buffer's size cap bind before its time bound.
     READ_SECONDS = 0.008
 
     def __init__(self, frame=None, fail_after=None, raise_after=None):
@@ -88,17 +85,16 @@ def _flat_frame(colour=(180, 120, 110)):
 
 def _adapter(source=None, locator=None, fps=500.0, buffer_seconds=2.0,
              queue_max=QUEUE_MAX, error_backoff=0.0, warmup_seconds=0.0):
-    """fps is deliberately high and the buffer deliberately small so tests run
-    in milliseconds; nothing under test depends on the wall-clock rate.
+    """fps is deliberately high and the buffer deliberately small so tests
+    run in milliseconds; nothing under test depends on the wall-clock rate.
 
-    `error_backoff` is zero here and 0.1 s in production. The backoff exists so
-    a camera that is gone cannot spin a core; in a test the only effect is to
-    multiply the tolerance for consecutive failures by a tenth of a second
-    apiece, which turns a millisecond assertion into a three-second one.
+    `error_backoff` is zero here (0.1s in production) -- the backoff exists
+    so a dead camera can't spin a core, but in a test it would turn a
+    millisecond assertion into a multi-second one.
 
-    `warmup_seconds` is zero for the same reason -- production discards 8 s of
-    auto-exposure ramp before buffering anything, and no test wants to wait for
-    it. The warm-up has its own tests below."""
+    `warmup_seconds` is zero for the same reason -- production discards 8s
+    of auto-exposure ramp before buffering anything. The warm-up has its own
+    tests below."""
     src = source or FakeSource()
     loc = locator or FakeLocator()
     adapter = FaceCaptureAdapter(lambda: src, lambda: loc, fps=fps,
@@ -118,7 +114,7 @@ def _wait_for(predicate, timeout=3.0):
     return False
 
 
-# ── lifecycle ────────────────────────────────────────────────────────────────
+# -- lifecycle --
 
 def test_captures_and_emits_samples():
     adapter, _, _ = _adapter()
@@ -130,9 +126,9 @@ def test_captures_and_emits_samples():
 
 
 def test_disconnect_joins_the_thread_and_releases_the_camera():
-    """A daemon thread that logs during interpreter shutdown, while the stdout
-    lock is held, is a fatal abort that reads as unrelated flake -- the failure
-    `eeg_poller.stop_all()` exists to prevent. Joining is not optional."""
+    """A daemon thread that logs during interpreter shutdown, while the
+    stdout lock is held, causes a fatal abort that reads as unrelated flake.
+    Joining is not optional."""
     adapter, source, _ = _adapter()
     adapter.connect()
     assert _wait_for(lambda: source.reads > 2)
@@ -160,11 +156,11 @@ def test_disconnect_before_connect_is_harmless():
 
 
 def test_disconnect_clears_buffered_state():
-    """A second session must not inherit the first one's colour history -- POS
-    would splice two unrelated recordings across the join."""
-    # fps=20 so one POS window is 32 frames rather than 800. The loop paces on
-    # Event.wait, whose resolution on Windows is ~15 ms, so a nominal 500 fps
-    # actually runs near 65 and a full window would take 12 s to fill.
+    """A second session must not inherit the first one's colour history --
+    POS would splice two unrelated recordings across the join."""
+    # fps=20 so one POS window is 32 frames rather than 800. The loop paces
+    # on Event.wait, whose resolution on Windows is ~15ms, so a nominal
+    # 500 fps actually runs near 65 and a full window would take 12s to fill.
     adapter, _, _ = _adapter(fps=20.0, buffer_seconds=2.0)
     adapter.connect()
     assert _wait_for(adapter.has_full_window, timeout=6.0)
@@ -174,21 +170,21 @@ def test_disconnect_clears_buffered_state():
     assert adapter.drain_samples(100) == []
 
 
-# ── the capture thread never blocks and never grows ──────────────────────────
+# -- the capture thread never blocks and never grows --
 
 def test_the_buffer_is_bounded():
-    """An eight-hour session must cost the same per frame as the first minute.
-    The original re-scanned every snapshot on every tick, which is O(n^2) in
+    """An eight-hour session must cost the same per frame as the first
+    minute -- a re-scan of every snapshot on every tick would be O(n^2) in
     session length."""
     held = 2.5
     adapter, _, _ = _adapter(fps=20.0, buffer_seconds=held)
     adapter.connect()
     try:
         # Bounded by elapsed time, not by a sample count against nominal fps.
-        # The count bound was reachable-and-wrong once the capture loop stopped
-        # pacing: OpenCV hands buffered frames over ~6 ms apart, so a burst
-        # fills the slots with less history than the rate window needs and the
-        # heart channel stalls in warming_up permanently.
+        # A count bound is wrong once the capture loop stops pacing: OpenCV
+        # hands buffered frames over ~6ms apart, so a burst fills the slots
+        # with less history than the rate window needs, stalling the heart
+        # channel in warming_up permanently.
         assert _wait_for(lambda: len(adapter.rgb_buffer()) > 5, timeout=5.0)
         time.sleep(held + 0.5)
 
@@ -232,16 +228,15 @@ def test_the_queue_never_exceeds_its_bound():
 
 
 def test_a_buffer_too_short_for_one_pos_window_is_rejected():
-    """Found by a test that expected has_full_window() to become true and waited
-    forever. Without the guard, such an adapter connects, reports healthy and
-    counts frames while never producing a reading -- indistinguishable from a
-    student who is not there."""
+    """Without this guard, an adapter with too small a buffer connects, reports
+    healthy and counts frames while never producing a reading -- indistinguishable
+    from a student who is not there."""
     with pytest.raises(ValueError, match="shorter than one POS window"):
         FaceCaptureAdapter(FakeSource, FakeLocator,
                            buffer_seconds=WINDOW_SECONDS / 2)
 
 
-# ── failure handling ─────────────────────────────────────────────────────────
+# -- failure handling --
 
 def test_a_camera_that_stops_yielding_frames_does_not_kill_the_thread():
     adapter, source, _ = _adapter(source=FakeSource(fail_after=3))
@@ -254,9 +249,8 @@ def test_a_camera_that_stops_yielding_frames_does_not_kill_the_thread():
 
 
 def test_an_exception_is_caught_at_the_thread_boundary_and_surfaced():
-    """Not by installing a process-wide threading.excepthook, which is what the
-    original did -- that silences every other thread's errors in the process,
-    including ones unrelated to the camera."""
+    """A process-wide threading.excepthook would also silence every other
+    thread's errors, including ones unrelated to the camera."""
     adapter, _, _ = _adapter(source=FakeSource(raise_after=2))
     adapter.connect()
     try:
@@ -311,7 +305,7 @@ def test_one_missed_frame_does_not_trip_degraded():
         adapter.disconnect()
 
 
-# ── the contract with the rest of the pipeline ───────────────────────────────
+# -- the contract with the rest of the pipeline --
 
 def test_rgb_window_returns_a_copy_not_a_view():
     """The capture thread mutates the buffer. Handing out a view would let a
@@ -328,9 +322,8 @@ def test_rgb_window_returns_a_copy_not_a_view():
 
 
 def test_meta_names_quality_as_quality_not_as_confidence():
-    """In the original, SQI was surfaced under `quality.confidence` while
-    downstream read `features.confidence` as a generic confidence in the
-    reading, so a well-lit face and a trusted heart rate became one field."""
+    """SQI (face/lighting quality) and confidence in the heart-rate reading are
+    different things and must not share a field name."""
     adapter, _, _ = _adapter()
     adapter.connect()
     try:
@@ -342,7 +335,7 @@ def test_meta_names_quality_as_quality_not_as_confidence():
 
 
 def test_a_pulse_survives_the_full_capture_chain():
-    """Frames in, heart rate out, through every layer this phase adds."""
+    """Frames in, heart rate out, through every layer of the pipeline."""
     from src.app.services.ppg_processing import estimate_window
     from src.app.services.pos_rppg import pos_pulse
 
@@ -380,7 +373,7 @@ def test_a_pulse_survives_the_full_capture_chain():
     assert estimate_window(pos_pulse(rgb, fps), fps).bpm == pytest.approx(bpm, abs=3.0)
 
 
-# ── the two channels, independently switchable ───────────────────────────────
+# -- the two channels, independently switchable --
 
 class FakeClassifier:
     """Counts calls so the emotion cadence can be measured."""
@@ -410,9 +403,7 @@ def test_opening_a_camera_with_every_channel_off_is_refused():
 
 def test_a_gaze_only_camera_is_allowed():
     """Gaze needs no 35 MB FER+ model, so emotion-off/gaze-on is a coherent
-    deployment — and `build_camera_payload` already carried a comment saying
-    so while this guard, written before the channel existed, refused to
-    construct one. The comment was right and the guard was stale."""
+    deployment and must not be refused."""
     adapter = FaceCaptureAdapter(
         FakeSource, FakeLocator, heart_enabled=False, emotion_enabled=False,
         gaze_enabled=True, landmarker_factory=lambda: FakeLandmarker())
@@ -482,9 +473,9 @@ def test_heart_only_never_classifies():
 
 
 def test_meta_reports_which_channels_are_on():
-    """Before connect() the classifier does not exist yet -- it is built there,
+    """Before connect() the classifier doesn't exist yet -- it's built there
     so a registry can name a camera on a machine with no model provisioned --
-    so its own meta is absent rather than fabricated."""
+    so its meta must be absent rather than fabricated."""
     clf = FakeClassifier()
     adapter = FaceCaptureAdapter(
         lambda: FakeSource(), lambda: FakeLocator(),
@@ -522,8 +513,7 @@ def test_disconnect_forgets_the_last_emotion():
 
 def test_degraded_names_which_of_three_causes_it_was():
     """A disconnected webcam, a student who left, and bad lighting are three
-    different problems. One string for all of them is the conflation this module
-    argues against elsewhere."""
+    different problems and must produce three different reasons."""
     cases = {
         "no frames from the camera": (FakeSource(fail_after=0), FakeLocator()),
         "no face detected": (FakeSource(), type("N", (), {"locate": lambda s, g: None})()),
@@ -573,13 +563,9 @@ def test_the_measured_rate_reflects_reality_not_the_setting():
 
 
 def test_buffered_seconds_reports_measured_time_not_a_frame_count():
-    """The field someone reads while diagnosing a stalled heart channel.
-
-    It was `len(buffer) / nominal_fps`, the same computation removed from the
-    deque bound, `has_full_window` and the window slice -- a 22 fps camera
-    holding a full 40 s reported 29.3 s. Wrong anywhere, but worst here: it sits
-    beside `buffer_capped`, which exists so that stall can be diagnosed at all.
-    """
+    """The field someone reads while diagnosing a stalled heart channel, so it
+    must measure real elapsed time, not `len(buffer) / nominal_fps` -- that
+    computation reported 29.3 s for a 22 fps camera holding a full 40 s."""
     held = 2.0          # the floor: buffer_seconds must cover one POS window
     adapter, _, _ = _adapter(fps=20.0, buffer_seconds=held)
     adapter.connect()
@@ -600,22 +586,17 @@ def test_buffered_seconds_is_zero_before_anything_is_captured():
     assert adapter.get_ingestion_meta()["buffered_seconds"] == 0.0
 
 
-# ── the exposure warm-up ─────────────────────────────────────────────────────
+# -- the exposure warm-up --
 
 def test_the_exposure_ramp_is_discarded_before_anything_is_buffered():
-    """The measurement behind this is the difference between the camera heart
-    channel working and not.
+    """This is the difference between the camera heart channel working and not.
 
     A webcam's auto-exposure climbs mean green 17% over the first ~5 s after
     opening, against a pulse under 1%. The same recording scored confidence 0.05
-    with that ramp inside the window and 0.81 on a clean stretch after it. It
-    cannot be prevented -- CAP_PROP_AUTO_EXPOSURE reads back -1.0 whatever it is
-    set to -- so the frames are thrown away instead.
-
-    This test exists because the discard was written into the offline capture
-    script first and not into the adapter, which would have left the first ~40 s
-    of every real lesson reporting a confidence near 0.05 -- read downstream as
-    a camera that cannot get a reading.
+    with that ramp inside the window and 0.81 on a clean stretch after it.
+    CAP_PROP_AUTO_EXPOSURE can't be read back reliably, so the ramp can't be
+    detected -- the frames are just thrown away instead. Without this, the
+    first ~40 s of every real lesson would report a confidence near 0.05.
     """
     source = FakeSource()
     adapter, _, _ = _adapter(source=source, warmup_seconds=0.4)
@@ -674,14 +655,15 @@ def test_disconnecting_during_warm_up_is_prompt():
     assert time.perf_counter() - started < 2.0, "disconnect waited for the warm-up"
 
 
-# ── the heart channel is dormant ─────────────────────────────────────────────
+# -- the heart channel is dormant --
 
 def test_the_heart_channel_is_off_by_default():
-    """It failed ECG validation and must not come back on by drift.
+    """Failed ECG validation and must not come back on by drift.
 
-    Measured 2026-08-08: 47.7 bpm at confidence 0.74 against a watch ECG's 88,
-    on five minutes with the face found in 8988 of 8988 frames. The pulse was
-    absent from the video, not mis-derived. tests/fixtures/FACE_RPPG_ECG.md.
+    Measured 2026-08-08: 47.7 bpm at confidence 0.74 against a watch ECG's
+    88, over five minutes with the face found in 8988 of 8988 frames. The
+    pulse was absent from the video, not mis-derived (see
+    tests/fixtures/FACE_RPPG_ECG.md).
     """
     from src.app.config import Settings
 
@@ -691,11 +673,10 @@ def test_the_heart_channel_is_off_by_default():
 
 
 def test_enabling_the_heart_channel_is_never_quiet(caplog):
-    """Not refused -- better hardware deserves a retry -- but not silent either.
-
-    A confident wrong heart rate reaching a report is the failure the derived-BPM
-    rule in CLAUDE.md exists to prevent, and the confidence gate cannot catch
-    this one: its terms assume the headband's four contact channels.
+    """Enabling it must warn, not be refused outright -- better hardware
+    deserves a retry, but a confident wrong heart rate reaching a report is
+    what this guards against, and the confidence gate can't catch it since
+    its terms assume the headband's four contact channels.
     """
     import logging
 
@@ -707,7 +688,7 @@ def test_enabling_the_heart_channel_is_never_quiet(caplog):
     )
 
 
-# ── gaze (Phase 11, step 2) ─────────────────────────────────────────────────
+# -- gaze --
 
 class FakeLandmarker:
     """Stands in for MediaPipe. Returns whatever named landmarks it is given."""
@@ -768,10 +749,10 @@ def test_gaze_is_sampled_from_the_capture_loop():
 
 def test_a_haar_miss_does_not_suppress_gaze():
     """The landmarker runs its own detection on the full frame, so the Haar
-    box says nothing about whether a mesh is available. Sampling gaze after the
-    `box is None` early return would make the channel silently depend on a
-    detector it does not use — and it would fail exactly when a face is hard to
-    find, which is when gaze is most interesting."""
+    box says nothing about whether a mesh is available. Sampling gaze after
+    the `box is None` early return would make the channel silently depend on
+    a detector it doesn't use, and fail exactly when a face is hardest to
+    find."""
     class NeverFinds:
         def locate(self, gray):
             return None
@@ -786,21 +767,17 @@ def test_a_haar_miss_does_not_suppress_gaze():
     finally:
         adapter.disconnect()
 
-    # Read inside the try and asserted here: `disconnect()` clears the reading,
-    # so `adapter.latest_gaze() is None` after teardown is unconditionally true
-    # and any assertion tolerating it passes without testing anything.
+    # Read inside the try and asserted here: `disconnect()` clears the
+    # reading, so an assertion after teardown would pass unconditionally
+    # without testing anything.
     assert reading.x is not None and reading.x > 0
 
 
 def test_a_landmarker_that_raises_costs_only_gaze():
-    """It runs before the colour sample, so an escaping exception would cost
-    the heart channel every frame rather than merely blanking gaze.
-
-    Read inside the try, like its neighbours. This assertion used to sit after
-    `disconnect()`, where it was vacuous — teardown clears the reading, so it
-    held whatever the landmarker did — and after `landmarker_failed` was added
-    it was vacuous *and* wrong, reading as "gaze stays unset on failure" when
-    the failure now stores an explicit refusal.
+    """Gaze sampling runs before the colour sample, so an escaping exception
+    would cost the heart channel every frame rather than merely blanking
+    gaze. Read inside the try, like its neighbours, since `disconnect()`
+    clears the reading and would make the assertion vacuous otherwise.
     """
     lm = FakeLandmarker(raises=True)
     adapter, _ = _gaze_adapter(lm)
@@ -813,8 +790,8 @@ def test_a_landmarker_that_raises_costs_only_gaze():
     finally:
         adapter.disconnect()
 
-    # The containment claim: the exception became a refusal on this channel
-    # rather than escaping. What that refusal *says* is the next test's job.
+    # The exception became a refusal on this channel rather than escaping.
+    # What the refusal *says* is the next test's job.
     assert contained is not None, "a raising landmarker produced no state at all"
     assert contained.x is None
 
@@ -850,8 +827,8 @@ def test_gaze_runs_on_its_own_interval_not_every_frame():
 
 def test_disconnect_drops_the_reading_but_keeps_the_model():
     """A gaze from before the camera was released is not a gaze now. The
-    landmarker itself is kept — it holds a loaded model and MediaPipe takes
-    seconds to build one."""
+    landmarker itself is kept, since it holds a loaded model and MediaPipe
+    takes seconds to build one."""
     lm = FakeLandmarker(_eyes_looking(+6.0))
     adapter, _ = _gaze_adapter(lm)
     adapter.connect()
@@ -863,10 +840,10 @@ def test_disconnect_drops_the_reading_but_keeps_the_model():
 
 
 def test_a_landmarker_that_always_fails_says_so_rather_than_warming_up():
-    """`_latest_gaze` left at None reports as `no_reading` -- the warming-up
-    state. A landmarker that raises every frame would then claim to be warming
-    up for the whole session, which is the broken-versus-not-started confusion
-    this codebase refuses everywhere else."""
+    """`_latest_gaze` left at None reports as `no_reading`, the warming-up
+    state. A landmarker that raises every frame must not claim to be warming
+    up for the whole session -- broken and not-yet-started are different
+    states."""
     lm = FakeLandmarker(raises=True)
     adapter, _ = _gaze_adapter(lm)
     adapter.connect()
@@ -882,18 +859,16 @@ def test_a_landmarker_that_always_fails_says_so_rather_than_warming_up():
 
 
 def test_a_missing_landmark_model_costs_gaze_and_not_the_camera():
-    """The blast-radius decision, made deliberately.
+    """`connect()` builds the landmarker, and the model file it needs is
+    provisioned by `start.ps1 -Gaze` (a hand-edited `.env` does not provision
+    it). Letting that raise would take the whole camera device down, heart
+    and emotion with it, for a channel that is off by default and that
+    nothing yet renders -- emotion is the camera's primary measurement and
+    can justify refusing to start, gaze cannot.
 
-    `connect()` builds the landmarker, and the model file it needs is
-    provisioned by `start.ps1 -Gaze` — a hand-edited `.env` does not provision
-    it. Letting that raise would take the whole camera device down, heart and
-    emotion with it, for a channel that is off by default and that nothing yet
-    renders. Emotion is the camera's primary measurement and can justify
-    refusing to start; gaze cannot.
-
-    Not silent, though: the channel stays enabled and says why, so the payload
-    reads "gaze on, unavailable" rather than "gaze off" — which would be a
-    false claim about how the deployment is configured.
+    Not silent, though: the channel stays enabled and says why, so the
+    payload reads "gaze on, unavailable" rather than "gaze off", which would
+    be a false claim about how the deployment is configured.
     """
     def explode():
         raise FileNotFoundError("no face landmark model at models/…")
@@ -939,8 +914,8 @@ def test_head_pose_is_stored_alongside_gaze():
 
 
 def test_disconnect_drops_the_pose_too():
-    """A head pose from before the camera was released is not a pose now — the
-    same reason the gaze reading is dropped."""
+    """A head pose from before the camera was released is not a pose now,
+    the same reason the gaze reading is dropped."""
     adapter, _ = _gaze_adapter(FakeLandmarker(_eyes_looking(+6.0)))
     adapter.connect()
     assert _wait_for(lambda: adapter.latest_pose() is not None)
@@ -972,9 +947,8 @@ def test_a_missing_landmark_model_names_the_pose_refusal_too():
 
 def test_a_failure_in_one_derivation_keeps_the_other():
     """`gaze()` and `head_pose()` both return named refusals rather than
-    raising, so reaching the handler at all means a code defect — but marking
-    both dead when one had already returned would discard a good reading and
-    blame it on the other's bug."""
+    raising. Marking both dead when only one raised would discard a good
+    reading and blame it on the other's bug."""
     class HalfBroken:
         """Landmarks that gaze can read and that make head_pose explode."""
         def locate(self, frame, w, h):

@@ -3,24 +3,18 @@ import { useCallback, useEffect, useState } from 'react'
 /**
  * Load one admin resource, and mutate it, with the same three states each time.
  *
- * `AdminFlags` and `AdminSchoolYear` each wrote this out: a `busy` flag, an
- * `error` string, a fetch that catches into the error, a save that clears the
- * error and sets busy and clears busy in a `finally`, and the same two early
- * returns underneath. Two copies of a state machine is how one of them comes to
- * clear `error` on save and the other does not.
+ * Shared by `AdminFlags` and `AdminSchoolYear`, which each used to write out
+ * their own copy of this state machine and drifted (one cleared `error` on
+ * save, the other didn't).
  *
- * **`error` and `data` are independent, deliberately.** A failed *refresh*
- * leaves the last good payload in place, so a page that was correct a moment
- * ago does not blank because one poll missed -- the caller decides whether to
- * render the error as a banner over live data or as the whole page, and it can
- * only make that choice if both are still here. The same reasoning as the
- * teacher dashboard keeping its questions on a failed refresh.
+ * `error` and `data` are kept independent on purpose: a failed refresh
+ * leaves the last good payload in place, so the caller can show the error
+ * as a banner over live data instead of blanking the page.
  *
  * @param load    a function returning a promise of the payload. Memoise it, or
  *                the effect below re-runs on every render.
- * @param pollMs  re-read on an interval. `AdminFlags` needs it because the
- *                consent bypass expires on the clock rather than on a write, so
- *                nothing tells the page it is over.
+ * @param pollMs  re-read on an interval, for values (like the consent
+ *                bypass) that can expire on the clock without a write.
  */
 export default function useAdminResource({ load, pollMs = 0 }) {
   const [data, setData] = useState(null)
@@ -40,10 +34,9 @@ export default function useAdminResource({ load, pollMs = 0 }) {
   }, [refresh, pollMs])
 
   /**
-   * Run a write and adopt what it returns. Resolves true if it landed, so a
-   * caller can show its own "saved" confirmation without repeating the
-   * try/catch -- and false rather than throwing, because every caller here
-   * wants the error rendered rather than propagated.
+   * Run a write and adopt what it returns. Resolves to true on success, or
+   * false on failure (never throws), so callers render the error instead of
+   * catching it themselves.
    */
   const mutate = useCallback(async (write) => {
     setBusy(true)

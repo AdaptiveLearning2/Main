@@ -3,11 +3,8 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import ParentDashboard from './Dashboard'
 
-// This page shows a Face Attention tile per child, sourced from the batch
-// summary RPC. It is the page a parent lands on, so a facial-recognition
-// opt-out honoured on the child's report but ignored here would put the data
-// back on screen the moment they hit back -- a guarantee the app would not be
-// keeping.
+// A facial-recognition opt-out honoured on the child's report but ignored
+// here would put the data back on screen the moment a parent hits back.
 
 vi.mock('../../lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('../../context/AuthContext', () => ({
@@ -28,9 +25,7 @@ const withFace = [{
   },
 }]
 
-// What the backend returns with the opt-out on: the aggregate never read a
-// facial row, so the average is null and the sample count zero -- which on
-// their own are indistinguishable from a child the camera never saw.
+// What the backend returns with the opt-out on: null average, zero samples.
 const withoutFace = [{
   ...withFace[0],
   signal_summary: {
@@ -62,11 +57,8 @@ function renderDashboard() {
 
 
 it('does not read a pre-flag payload as facial data being withheld', async () => {
-  // Was asserted through the Face Attention tile, which is gone -- `attention`
-  // has no producer. The behaviour it guarded is still live: a payload built
-  // before `emotion_included` existed must not be reported as a channel the
-  // parent switched off, so the note below the tiles keeps its "not read"
-  // wording for genuine exclusions only.
+  // A payload built before `emotion_included` existed must not be reported
+  // as a channel the parent switched off.
   apiFetch.mockImplementation(() => {
     const { face_included, ...summary } = withFace[0].signal_summary
     return Promise.resolve([{ ...withFace[0], signal_summary: summary }])
@@ -77,11 +69,8 @@ it('does not read a pre-flag payload as facial data being withheld', async () =>
 })
 
 it('does not show a row of N/As for a reading it has no tile for', async () => {
-  // hasSignalSummary tracks what the tiles can render, not what the summary
-  // carries. engagement is in the payload but has no tile on this page, so a
-  // child whose only reading is engagement has nothing to show here -- and
-  // admitting it would produce four N/As, the "something is broken" display
-  // the check exists to avoid.
+  // engagement is in the payload but has no tile on this page, so a child
+  // whose only reading is engagement should show nothing here, not N/As.
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],
     signal_summary: {
@@ -98,9 +87,6 @@ it('does not show a row of N/As for a reading it has no tile for', async () => {
 })
 
 it('says facial signals were not read when there is nothing else to show', async () => {
-  // hasSignalSummary reaches "no data" without consulting a single facial
-  // reading, so the copy has to be clear that is the scope of the claim --
-  // otherwise a parent reads it as covering everything.
   const empty = [{
     ...withFace[0],
     signal_summary: {
@@ -113,16 +99,12 @@ it('says facial signals were not read when there is nothing else to show', async
   renderDashboard()
 
   await screen.findByText(/no weekly EEG signal data yet, and facial signals were not read/i)
-  // The absence it must not report is the one it never measured.
   expect(screen.queryByText(/facial-recognition signal data yet/i)).not.toBeInTheDocument()
 })
 
 it('does not tell a parent their child recorded nothing when the read failed', async () => {
-  // The endpoint swallows a failed aggregate so one broken RPC does not blank
-  // the dashboard, and answers 200 with an all-default summary. Every check on
-  // this page read that as a quiet week, so a broken read reached a parent as
-  // "no weekly EEG or facial-recognition signal data yet" -- an absence
-  // asserted from data that never loaded.
+  // A failed aggregate still answers 200 with an all-default summary, which
+  // must not read as a genuine quiet week.
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],
     signal_summary: {
@@ -136,14 +118,12 @@ it('does not tell a parent their child recorded nothing when the read failed', a
 
   await screen.findByText(/signal data couldn't be loaded/i)
   expect(screen.queryByText(/no weekly EEG or facial-recognition signal data yet/i)).not.toBeInTheDocument()
-  // The academic figures come from user_stats and are unaffected by it.
+  // Academic figures come from user_stats and are unaffected.
   expect(tile('Questions').getByText('10')).toBeInTheDocument()
   expect(tile('Accuracy').getByText('60%')).toBeInTheDocument()
 })
 
 it('still reports a genuine quiet week when the read succeeded', async () => {
-  // The mirror of the above, so the new flag cannot be satisfied by treating
-  // every empty summary as a failure.
   apiFetch.mockImplementation(() => Promise.resolve([{
     ...withFace[0],
     signal_summary: {
@@ -161,8 +141,7 @@ it('still reports a genuine quiet week when the read succeeded', async () => {
 
 
 it('still takes over the page when the very first load fails', async () => {
-  // With nothing on screen there is nothing to preserve, and a bare banner over
-  // an empty page would read as "no children linked".
+  // Nothing on screen to preserve, so a full-page error is appropriate here.
   apiFetch.mockImplementation(() => Promise.reject(new Error('backend down')))
   renderDashboard()
 
@@ -171,8 +150,8 @@ it('still takes over the page when the very first load fails', async () => {
 })
 
 it('asks for the children without a viewer-side flag', async () => {
-  // The parent's control over what is recorded now lives on the Settings page
-  // and is stored consent, not a per-browser switch that narrowed the query.
+  // What's recorded is controlled by consent on the Settings page, not a
+  // per-browser switch on this query.
   renderDashboard()
 
   await waitFor(() => expect(apiFetch).toHaveBeenCalled())

@@ -8,15 +8,12 @@ import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 
-// One second is what a live monitor is for. `POLL_MAX_MS` is where the backoff
-// stops when the endpoint is failing -- far enough out that a broken backend
-// costs a handful of requests a minute rather than sixty, close enough that a
-// teacher who fixes it sees the page recover without reloading.
+// POLL_MAX_MS caps the backoff when the endpoint is failing, so a broken
+// backend costs a handful of requests a minute instead of sixty.
 const POLL_MS = 1_000
 const POLL_MAX_MS = 30_000
 
-// Spelled out rather than shown raw. `muse_optics` means nothing to a teacher,
-// and the distinction that matters to them is headband versus camera.
+// Teachers see "headband" vs "camera", not raw source names like muse_optics.
 const SOURCE_LABEL = {
   muse_optics: 'Heart · headband',
   muse_ppg:    'Heart · headband',
@@ -98,13 +95,8 @@ function StudentCard({ student, history }) {
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
         </span>
-        {/* Named, not just present. Accuracy differs materially by sensor, and
-            a session can fail over mid-way -- a teacher watching the trace
-            change shape needs to be able to see the sensor changed rather than
-            read it as the student changing. `trusted: false` is shown as
-            "weak signal" rather than hidden: a card that goes blank while a
-            sensor is still producing readings is indistinguishable from one
-            that stopped. */}
+        {/* Names the sensor so a mid-session failover reads as a source change, not a student change.
+            Shown as "weak signal" rather than hidden when untrusted, so the card doesn't look dead. */}
         {heart && (
           <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
             heart.trusted === false
@@ -123,10 +115,7 @@ function StudentCard({ student, history }) {
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
       </div>
 
-      {/* Absolute units, so it is stated rather than drawn on the 0..1
-          gauges above -- a bpm on a ratio scale is either invisible at the
-          floor or a lie about the axis. Null bpm on a present row means the
-          window was rejected, which is not a reading of zero. */}
+      {/* Shown as a number rather than on the 0..1 gauges above, since bpm isn't a ratio. */}
       {typeof heart?.heart_rate_bpm === 'number' && (
         <div className="flex items-center gap-2 mb-4 text-sm">
           <Heart size={16} className="text-purple-500" />
@@ -155,10 +144,7 @@ function StudentCard({ student, history }) {
         headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
         rows={history} columns={SPARK_COLUMNS}>
           <LineChart data={history}>
-            {/* Two hidden axes with explicit ids. Heart rate is bpm and the
-                others are ratios; sharing one axis would flatten the ratios
-                against the floor. No pie or legend here -- the card is small,
-                and a pie of a 60-point rolling window misleads. */}
+            {/* Two axes because bpm and the 0..1 ratios would flatten together on one scale. */}
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
@@ -171,8 +157,7 @@ function StudentCard({ student, history }) {
       {active && (
         <Link
           to={`/teacher/sessions/${active.id}`}
-          // So the review's "Back" returns here rather than to whichever page
-          // it happened to be hardcoded to.
+          // So the session review's "Back" link returns here.
           state={{ from: '/teacher/live' }}
           className="mt-4 block text-center text-xs font-bold text-violet-600 hover:text-violet-700 dark:text-violet-400"
         >
@@ -188,9 +173,7 @@ export default function Live() {
   const [classId, setClassId]     = useState('')
   const [students, setStudents]   = useState([])
   const [error, setError]         = useState(null)
-  // Three states, not two. `classes` starts empty and the render below treats
-  // empty as "no classes yet, create one" -- so every visit flashed that
-  // invitation at a teacher who has classes, for as long as the request took.
+  // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, engagement, stress}]
 
@@ -208,96 +191,54 @@ export default function Live() {
   useEffect(() => {
     if (!classId) return
     let killed = false
-    // Per-student signal history is keyed by user id and was never cleared, so
-    // switching class kept every student ever viewed -- and each of those keeps
-    // 60 points. A teacher moving between classes for a lesson accumulated the
-    // whole school. The sparkline only ever draws the class on screen.
+    // Reset so switching class doesn't keep dragging along every student ever viewed.
     historyRef.current = {}
 
-    // How long to wait before the next poll. One second while the endpoint is
-    // answering; doubling up to a cap once it is not. A fixed 1s retry against
-    // a backend that is down is sixty failing requests a minute for as long as
-    // the tab is open, and the teacher already has the error on screen after
-    // the first one.
     let delay = POLL_MS
     let timer = null
 
     const tick = async () => {
-      // Nothing to watch while the tab is hidden, and a live monitor left open
-      // on a second screen otherwise polls all day. The `visibilitychange`
-      // listener below restarts it.
+      // Pause polling while the tab is hidden; visibilitychange below restarts it.
       if (document.hidden) {
         timer = setTimeout(tick, POLL_MS)
         return
       }
       try {
-        // Reads facial signals (the attention gauge, the current emotion and
-        // the camera badge below) and deliberately does NOT honour the
-        // "Hide sensor data" switch in lib/viewPrefs.js -- that control covers
-        // the reporting surfaces, which render it, and this page does not.
-        // See the scope note there before wiring it in: doing so also means
-        // putting the switch on this page, because a control that silently
-        // changes a page it is absent from is worse than one with a stated
-        // edge.
+        // Deliberately ignores the "Hide sensor data" viewer switch -- that
+        // control covers reporting surfaces, not this live monitor.
         const rows = await apiFetch(`/api/teacher/classes/${classId}/live`)
         if (killed) return
-        // append to per-student history (last 60 points)
         rows.forEach(r => {
           const c = r.latest_cognitive
           const h = r.latest_heart
-          // Not `if (!c) return`: a student can consent to the heart sensor
-          // without EEG (independent switches), in which case c is always
-          // null while h keeps arriving. Skipping the whole tick on c alone
-          // left that student's badge showing a live bpm with a permanently
-          // empty trend line beneath it.
+          // A student can consent to heart without EEG, so c and h can be
+          // independently null -- only skip the tick if both are missing.
           if (!c && !h) return
-          // Copied, never mutated in place. This array is handed to the chart
-          // as a prop on line 269, and once it has been rendered something
-          // downstream makes it non-extensible -- so the next tick's `push`
-          // threw `Cannot add property 1, object is not extensible`, which the
-          // catch below turned into a banner across the whole page.
-          //
-          // It needed two ticks of data for one student to appear, so it stayed
-          // hidden until a session was actually streaming. Rebuilding rather
-          // than chasing who freezes it: a published array should not be edited
-          // afterwards regardless, and this removes the question.
+          // Rebuilt, never mutated: React can freeze an array after it's
+          // rendered, so pushing onto the old one would throw.
           const arr = historyRef.current[r.user_id] || []
-          // Null, not 0. A row can exist with null measurements when the
-          // headband reported bad electrode contact -- the row is kept so the
-          // session's timeline stays intact, but there is no measurement.
-          // Coercing that to 0 draws it as "totally unfocused, perfectly calm",
-          // which is a fabricated reading presented as a real one. recharts
-          // leaves a gap for null (connectNulls defaults to false).
+          // Null (not 0) when a measurement is missing or its window was
+          // rejected -- recharts leaves a gap for null instead of drawing a fake reading.
           const point = {
             focus:      c?.focus ?? null,
             engagement: c?.engagement ?? null,
             stress:     c?.stress ?? null,
-            // Null when there is no heart row for this tick, or when the row
-            // exists with a rejected window. Same reasoning as the three above:
-            // recharts leaves a gap for null, and a 0 here would draw a
-            // flatlined heart rate that never happened.
             bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
           }
-          // `slice(-60)` rather than a shift loop, for the same reason: it
-          // returns a new array instead of editing the one already on screen.
           historyRef.current[r.user_id] = [...arr, point].slice(-60)
         })
         setStudents(rows)
-        // Recovered: back to the fast cadence, and drop the error that is no
-        // longer true rather than leaving it on screen over live data.
         delay = POLL_MS
         if (!killed) setError(null)
       } catch (e) {
         if (!killed) setError(e.message)
         delay = Math.min(delay * 2, POLL_MAX_MS)
       }
-      // Scheduled from the end of the request rather than on a fixed interval,
-      // so a slow response cannot stack polls on top of each other -- the
-      // reason this is a chained timeout and not `setInterval`.
+      // Chained timeout, not setInterval, so a slow response can't stack polls.
       if (!killed) timer = setTimeout(tick, delay)
     }
 
-    // Waking the tab should not wait out whatever backoff it went to sleep on.
+    // Resume at full speed when the tab becomes visible again, ignoring any backoff.
     const onVisible = () => {
       if (document.hidden || killed) return
       delay = POLL_MS
@@ -342,8 +283,6 @@ export default function Live() {
       {error && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
 
       {loadingClasses ? (
-        // Before this, "No classes yet — create one" was drawn for the length
-        // of the request, on every visit, to teachers who have classes.
         <SkeletonList count={3} height="h-28" />
       ) : !classes.length ? (
         <div className="text-center py-16">

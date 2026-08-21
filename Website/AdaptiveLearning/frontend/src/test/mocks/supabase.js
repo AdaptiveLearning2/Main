@@ -7,15 +7,14 @@ import { vi } from 'vitest'
  *     import { setSession, fireAuthEvent, authFns, resetSupabaseMock,
  *              buildAuthSession } from '../../test/mocks/supabase'
  *
- * Mocking the module (rather than the client it builds) also sidesteps
+ * Mocking the module (not the client it builds) also avoids
  * `lib/supabase.js` throwing at import when `VITE_SUPABASE_URL` /
- * `VITE_SUPABASE_ANON_KEY` are unset -- which they are in CI, where the build
- * step supplies them and the test step does not.
+ * `VITE_SUPABASE_ANON_KEY` are unset, which is the case in CI's test step.
  */
 
-/** Every auth method as its own spy, so a test can assert on the call as well
- *  as steer the answer. Exposed rather than reached through `supabase.auth`,
- *  because the object below delegates lazily and is not itself a spy. */
+/** Every auth method as its own spy, so a test can assert on calls and
+ *  steer responses. Exposed separately since `supabase.auth` below just
+ *  delegates to these and isn't itself a spy. */
 export const authFns = {
   getSession: vi.fn(),
   signUp: vi.fn(),
@@ -50,9 +49,9 @@ export const supabase = {
 
 /** A session with a role claim on it.
  *
- *  `user_metadata.role` is what `AuthContext` falls back to and what the backend
- *  refuses to trust -- it is client-writable, so a test that wants to prove a
- *  guard is not fooled by it sets it here and expects to be ignored.
+ *  `user_metadata.role` is what `AuthContext` falls back to, but is
+ *  client-writable and not trusted by the backend — set it here to test
+ *  that a guard isn't fooled by it.
  */
 export function buildAuthSession({
   role = 'student',
@@ -66,9 +65,8 @@ export function buildAuthSession({
     user: {
       id,
       email,
-      // Absent rather than null when no role is claimed: an account promoted in
-      // the SQL editor has no `role` key at all, which is the shape that made
-      // an administrator render as a student.
+      // Absent, not null, when no role is claimed — matches a real account
+      // promoted directly in the database, which has no `role` key at all.
       user_metadata: role === null ? {} : { role },
     },
     ...rest,
@@ -82,18 +80,17 @@ export function setSession(session) {
 
 /** Deliver an auth event to every live `onAuthStateChange` subscriber.
  *
- *  Several properties are only reachable this way: the `SIGNED_OUT` cleanup
- *  that an expired refresh token triggers without anyone calling `signOut()`,
- *  and the `TOKEN_REFRESHED` handling that must not await anything reading the
- *  session (supabase-js holds an auth lock while dispatching, so awaiting
- *  `getSession()` inside the callback deadlocks).
+ *  Needed to reach cases like `SIGNED_OUT` from an expired refresh token
+ *  (no one calls `signOut()`), and `TOKEN_REFRESHED` handling, which must
+ *  not await `getSession()` inside the callback since supabase-js holds an
+ *  auth lock during dispatch and that would deadlock.
  */
 export function fireAuthEvent(event, session = null) {
   for (const cb of [...subscribers]) cb(event, session)
 }
 
-/** True while something is still subscribed -- for asserting a provider
- *  unsubscribes on unmount rather than leaving a callback holding stale state. */
+/** True while something is still subscribed — asserts a provider
+ *  unsubscribes on unmount instead of leaking a stale callback. */
 export function subscriberCount() {
   return subscribers.length
 }
@@ -101,8 +98,8 @@ export function subscriberCount() {
 export function resetSupabaseMock() {
   subscribers = []
   for (const fn of Object.values(authFns)) fn.mockReset()
-  // Signed out unless a test says otherwise, so a file that forgets to set a
-  // session gets the honest empty case rather than an undefined destructure.
+  // Signed out by default, so a test that forgets to set a session gets a
+  // real empty case instead of an undefined destructure.
   setSession(null)
   authFns.signOut.mockResolvedValue({ error: null })
   authFns.signUp.mockResolvedValue({ data: {}, error: null })

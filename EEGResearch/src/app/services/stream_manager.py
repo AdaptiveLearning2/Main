@@ -20,10 +20,9 @@ from src.app.services.signal_processing import SignalProcessor
 
 logger = logging.getLogger(__name__)
 
-# 1.3.0 removed `question_policy`. It is a breaking removal from the EEG
-# payload, so the version says so, even though nothing gates on this string --
-# a consumer diffing two recordings should not have to guess why a field
-# vanished.
+# Bumped whenever a field is removed from the EEG payload, even though
+# nothing in code gates on this string -- a consumer diffing two recordings
+# shouldn't have to guess why a field vanished.
 CONTRACT_VERSION = "1.3.0"
 
 
@@ -56,12 +55,12 @@ class DeviceSession:
         self.adaptation = AdaptationEngine()
         # Heart rate off the headband's optical channels. Held per session
         # because continuity -- the only check that catches an octave error --
-        # compares each window against the last one *this device* produced.
+        # compares each window against the last one this device produced.
         self._heart_tracker: HeartRateTracker | None = None
         self._heart_block: dict[str, Any] | None = None
-        # Two clocks, because they answer different questions: when the window
-        # was last *recomputed* (the emit cadence) and when a rate was last
-        # *accepted* (how stale the continuity anchor is).
+        # Two clocks for two different questions: when the window was last
+        # recomputed (the emit cadence), and when a rate was last accepted
+        # (how stale the continuity anchor is).
         self._heart_emitted_at: float | None = None
         self._heart_accepted_at: float | None = None
         self.latest_payload: dict[str, Any] = {}
@@ -71,8 +70,8 @@ class DeviceSession:
         self.running = False
         # Set by StreamManager when push ingestion is on. A plain callable
         # rather than a reference to the push client, so this module stays
-        # unaware of how -- or whether -- anything is shipped off the machine;
-        # the sampling loop must not be able to fail because of the network.
+        # unaware of whether anything is shipped off the machine -- the
+        # sampling loop must not be able to fail because of the network.
         self.on_payload: Callable[[dict[str, Any]], None] | None = None
 
     async def _emit(self) -> None:
@@ -83,23 +82,18 @@ class DeviceSession:
         running: losing the local stream to fix up a remote write is strictly
         worse than losing the remote write.
 
-        `snapshot()` off the event loop thread. It calls
-        `adapter.get_ingestion_meta()`, which is the very call `_loop` already
-        wraps in `to_thread` because it can block on lock contention in the TCP
-        adapter -- taking it inline here put it straight back on the loop and
-        made every API request wait behind a tick.
+        Runs `snapshot()` off the event loop thread, since it calls
+        `adapter.get_ingestion_meta()` -- the same call `_loop` already wraps
+        in `to_thread` because it can block on lock contention in the TCP
+        adapter. Calling it inline here would put it back on the loop and
+        make every API request wait behind a tick.
         """
         if self.on_payload is None:
             return
         try:
-            # `snapshot()`, not `latest_payload`. The two are not the same
-            # record: `bands` and `ingestion` are assembled in snapshot() and
-            # were never in latest_payload, so emitting the raw payload gave the
-            # push path EEG rows with null alpha/beta/theta/delta/gamma while
-            # the pull path -- which reads /api/v1/state, i.e. snapshot() --
-            # stored them. One deployment silently recording less than the
-            # other is exactly the divergence the shared mapping was meant to
-            # rule out, reintroduced one layer upstream of it.
+            # snapshot(), not latest_payload -- bands and ingestion are only
+            # assembled in snapshot(), so emitting latest_payload directly
+            # would ship EEG rows with null band powers.
             self.on_payload(await asyncio.to_thread(self.snapshot))
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.warning("payload consumer failed for device %s: %s: %s",
@@ -108,27 +102,26 @@ class DeviceSession:
     def _optical_heart_block(self) -> dict[str, Any] | None:
         """The `heart` block for this tick, or None if this device has no optics.
 
-        Two properties, both of which the ingestion paths depend on.
-
-        **Recomputed on a cadence, not per tick.** It is a 25s window either
-        way, so a 4Hz tick would run an autocorrelation over 1600x4 samples
-        sixteen times to produce the same answer -- and `MAX_BPM_CHANGE_PER_S`,
-        the continuity rule that rejects octave errors, is calibrated against
-        the 10s step the estimator was validated on. A quarter-second step
+        **Recomputed on a cadence, not per tick.** It's a 25s window either
+        way, so a 4Hz tick would run an autocorrelation over the same samples
+        sixteen times for the same answer. `MAX_BPM_CHANGE_PER_S`, the
+        continuity rule that rejects octave errors, is calibrated against the
+        10s step the estimator was validated on -- a quarter-second step
         would make every window's predecessor 99% itself.
 
         **Held between recomputes, and carrying its own `ts`.** A block that
-        appeared for one tick and vanished would be seen by a 4Hz push consumer
-        and mostly missed by a 1Hz poller, so the two deployments would record
-        different sessions from the same headband. Holding it means both see
-        every reading; the stamp is what lets both write it exactly once.
+        appeared for one tick and vanished would be seen by a 4Hz push
+        consumer and mostly missed by a 1Hz poller, so the two deployments
+        would record different sessions from the same headband. Holding it
+        means both see every reading; the stamp is what lets both write it
+        exactly once.
         """
         window_fn = getattr(self.adapter, "optics_window", None)
         if window_fn is None:
-            # Not a headband, or a headband whose adapter cannot buffer optics.
-            # The simulator is deliberately included in that: it does not model
-            # an optical channel, and a simulated pulse would be a number on a
-            # parent's chart with nothing behind it.
+            # Not a headband, or a headband whose adapter can't buffer
+            # optics. The simulator is included deliberately: it doesn't
+            # model an optical channel, and a simulated pulse would be a
+            # number on a parent's chart with nothing behind it.
             return None
 
         now = time.monotonic()
@@ -136,17 +129,17 @@ class DeviceSession:
             return self._heart_block
         if self._heart_tracker is None:
             self._heart_tracker = HeartRateTracker()
-        # Time since the last **accepted** rate, not since the last recompute.
-        # The tracker uses it to size how far a heart is allowed to have moved
-        # from its anchor, and the anchor is the last accepted rate -- so
-        # measuring from the recompute holds the allowance at one step's worth
-        # however long the refusals ran, and judges the first good window in a
-        # minute against 30 bpm of movement. It self-corrects within a window or
-        # two either way, but in the direction of discarding good readings.
+        # Time since the last accepted rate, not since the last recompute.
+        # The tracker uses this to size how far a heart is allowed to have
+        # moved from its anchor, so measuring from the recompute would hold
+        # the allowance at one step's worth however long refusals ran, and
+        # judge the first good window in a minute against only 30 bpm of
+        # movement. Self-corrects within a window or two, but in the
+        # direction of discarding good readings, so it's worth getting right.
         #
-        # On the first window there is no anchor at all; the nominal step is the
-        # honest answer for "nothing measured yet", and the tracker ignores the
-        # value entirely until it has one.
+        # On the first window there's no anchor at all; the nominal step is
+        # the honest answer for "nothing measured yet", and the tracker
+        # ignores the value entirely until it has one.
         since = (EMIT_EVERY_SECONDS if self._heart_accepted_at is None
                  else now - self._heart_accepted_at)
         self._heart_emitted_at = now
@@ -160,29 +153,29 @@ class DeviceSession:
     def _drop_held_heart_block(self) -> None:
         """Stop publishing the held reading, without restarting the cadence.
 
-        Called on an EEG no-data tick. The block describes a stretch of signal
-        that may have ended, so publishing it on would keep a rate on the
-        dashboard -- and, under fresh timestamps, in the database -- for a
-        headband that is off.
+        Called on an EEG no-data tick. The block describes a stretch of
+        signal that may have ended, so publishing it on would keep a rate on
+        the dashboard -- and, under fresh timestamps, in the database -- for
+        a headband that is off.
 
-        **The clock is deliberately left running, and that is the whole point
-        of splitting this from `_reset_heart`.** `drain_samples` raises whenever
-        no EEG sample arrives within its timeout, so flapping electrode contact
-        or a stalled bridge takes this path repeatedly. Clearing
-        `_heart_emitted_at` here made the next good tick recompute immediately
-        and mint a **new `ts`** for materially the same 25 seconds of optical
-        signal; since both writers dedupe on `ts`, `heart_session_source_ts_key`
-        could not collapse those, and a flapping session wrote up to four
-        near-identical rows a second, every one counted as a sample by the
-        aggregates.
+        **The clock is deliberately left running -- that's the whole point of
+        splitting this from `_reset_heart`.** `drain_samples` raises whenever
+        no EEG sample arrives within its timeout, so flapping electrode
+        contact or a stalled bridge takes this path repeatedly. Clearing
+        `_heart_emitted_at` here instead would make the next good tick
+        recompute immediately and mint a new `ts` for essentially the same 25
+        seconds of optical signal -- and since both writers dedupe on `ts`,
+        `heart_session_source_ts_key` can't collapse those, so a flapping
+        session would write up to four near-identical rows a second, each
+        counted as a real sample by the aggregates.
 
-        The tracker is left alone too. EEG dropping out says nothing about the
-        optical emitters -- the optics buffer is untouched here, and is cleared
-        only by a real disconnect -- so discarding the continuity anchor would
-        throw away the one test that catches an octave error, on evidence that
-        is not about the heart channel at all. A genuinely stale anchor is
-        already handled: `HeartRateTracker` re-acquires after repeated
-        continuity rejections.
+        The tracker is left alone too. EEG dropping out says nothing about
+        the optical emitters -- the optics buffer is untouched here and is
+        cleared only by a real disconnect -- so discarding the continuity
+        anchor would throw away the one test that catches an octave error,
+        over evidence that isn't about the heart channel at all. A genuinely
+        stale anchor is already handled: `HeartRateTracker` re-acquires after
+        repeated continuity rejections.
         """
         self._heart_block = None
 
@@ -201,20 +194,19 @@ class DeviceSession:
     def _face_payload(self, samples: list[Any], raw_meta: dict[str, Any]) -> dict[str, Any]:
         """The camera equivalent of the EEG payload.
 
-        Deliberately carries the same envelope fields -- contract_version,
-        device_id, timestamp -- so a consumer does not need to know which kind
-        of device produced a record. `channels`, `features`, `state` and
-        `question_policy` are absent rather than faked: a camera has no
-        electrode channels and no cognitive state, and inventing empty ones
-        would let a caller average them into an EEG session's numbers.
+        Carries the same envelope fields -- contract_version, device_id,
+        timestamp -- so a consumer doesn't need to know which kind of device
+        produced a record. `channels`, `features` and `state` are absent
+        rather than faked: a camera has no electrode channels and no
+        cognitive state, and inventing empty ones would let a caller average
+        them into an EEG session's numbers.
         """
-        # Imported here rather than at module scope. It is cheap and pulls in no
-        # camera dependency -- face_processing -> face_ingestion -> face_roi ->
-        # pos_rppg are all plain numpy, and the no-dependency import test proves
-        # it. But that chain only stays safe by convention, and a module-scope
-        # import would put it on every sidecar start including headband-only
-        # ones. Keeping it local means the property is enforced by structure
-        # rather than by remembering.
+        # Imported here rather than at module scope. It's cheap and pulls in
+        # no camera dependency -- the whole chain down to face_processing is
+        # plain numpy, proven by the no-dependency import test -- but that
+        # only holds by convention, and a module-scope import would put it on
+        # every sidecar start, including headband-only ones. A local import
+        # enforces it structurally instead of by remembering.
         from src.app.services.face_processing import (  # noqa: PLC0415
             RATE_WINDOW_SECONDS,
             build_camera_payload,
@@ -222,8 +214,8 @@ class DeviceSession:
 
         rgb, measured, quality, stamps = self.adapter.rgb_window(RATE_WINDOW_SECONDS)
         payload: dict[str, Any] = {
-            # Names the shape, so the API union and any consumer can branch on
-            # it rather than probing for which fields happen to be present.
+            # Names the shape, so the API union and any consumer can branch
+            # on it rather than probing for which fields happen to be present.
             "kind": "camera",
             "contract_version": self.CONTRACT_VERSION,
             "device_id": self.device_id,
@@ -245,13 +237,12 @@ class DeviceSession:
                 emotion_enabled=self.adapter.emotion_enabled,
                 emotion_meta=raw_meta,
                 # getattr, unlike `latest_emotion` beside it, because the
-                # adapters here are duck-typed with no base class and the
-                # payload builder's caller **swallows exceptions into a
-                # warning**. A missing attribute would therefore not fail
-                # loudly -- it would drop the entire camera payload, every
-                # tick, heart and emotion with it, for the sake of a channel
-                # that is off by default. Degrading gaze to "off" is the
-                # smaller and more honest failure.
+                # adapters here are duck-typed with no base class, and the
+                # caller swallows exceptions into a warning. A missing
+                # attribute would silently drop the entire camera payload
+                # every tick -- heart and emotion included -- for the sake of
+                # a channel that's off by default. Degrading gaze to "off"
+                # instead is the smaller, more honest failure.
                 gaze=getattr(self.adapter, "latest_gaze", lambda: None)(),
                 gaze_enabled=getattr(self.adapter, "gaze_enabled", False),
                 pose=getattr(self.adapter, "latest_pose", lambda: None)(),
@@ -284,10 +275,10 @@ class DeviceSession:
             # Stopping an active stream is itself a "no data" condition --
             # without this, snapshot() would keep returning the last reading
             # from before stop() forever, indistinguishable from a live
-            # session. Skip this when stop() is called without an active
-            # stream (e.g. a duplicate stop, or one that races ahead of
-            # start()) so a session that was never started still reports
-            # "idle" via /api/v1/state instead of a fabricated zero reading.
+            # session. Skipped when stop() is called with no active stream
+            # (a duplicate stop, or one racing ahead of start()) so a session
+            # that never started reports "idle" rather than a fabricated
+            # zero reading.
             self.processor.reset()
             self.adaptation.reset_for_signal_loss()
             self._reset_heart()
@@ -297,27 +288,29 @@ class DeviceSession:
         period = 1 / max(1, self.settings.eeg_sample_hz)
         while self.running:
             try:
-                # Adapter reads can block (especially TCP bridge mode before first EEG frame),
-                # so move them off the event loop thread to keep API endpoints responsive.
-                # Adapters backed by a queue (TcpMuseBridgeAdapter) support draining every
-                # frame buffered since the last tick; others (SimulatedMuseIngestionAdapter)
-                # only ever produce one sample per read, so fall back to that.
+                # Adapter reads can block (especially TCP bridge mode before the first
+                # EEG frame), so move them off the event loop thread to keep API
+                # endpoints responsive. Queue-backed adapters (TcpMuseBridgeAdapter)
+                # drain every frame buffered since the last tick; others
+                # (SimulatedMuseIngestionAdapter) only ever produce one sample per
+                # read, so fall back to that.
                 if hasattr(self.adapter, "drain_samples"):
                     samples = await asyncio.to_thread(self.adapter.drain_samples, self.DRAIN_MAX_BATCH)
                 else:
                     samples = [await asyncio.to_thread(self.adapter.read_sample)]
-                # Metadata access can also block (e.g., lock contention in TCP adapter),
-                # so keep it off the event loop thread as well.
+                # Metadata access can also block (lock contention in the TCP
+                # adapter), so keep it off the event loop thread too.
                 raw_meta = (
                     await asyncio.to_thread(self.adapter.get_ingestion_meta)
                     if hasattr(self.adapter, "get_ingestion_meta")
                     else {}
                 )
             except Exception as exc:
-                # No EEG data arrived this cycle (headset unplugged, bridge idle, etc.).
-                # Zero the reported scores instead of leaving the last successful
-                # reading frozen in place, and reset the processor/adaptation state so
-                # real scores don't resume by blending pre-gap and post-gap samples.
+                # No EEG data arrived this cycle (headset unplugged, bridge idle,
+                # etc.). Zero the reported scores instead of leaving the last
+                # successful reading frozen in place, and reset processor/adaptation
+                # state so real scores don't resume by blending pre-gap and
+                # post-gap samples.
                 self.errors_seen += 1
                 logger.debug(
                     "EEG read failed for device %s, reporting no signal: %s: %s",
@@ -325,22 +318,18 @@ class DeviceSession:
                 )
                 self.processor.reset()
                 self.adaptation.reset_for_signal_loss()
-                # Not `_reset_heart()`. This path is taken on every tick that
-                # reads no EEG sample, which flapping contact does repeatedly;
-                # restarting the cadence there re-stamps the same window every
-                # tick and neither dedupe can collapse the rows. See the method.
+                # Not `_reset_heart()`: this path runs on every tick with no EEG
+                # sample, which flapping contact does repeatedly, and restarting
+                # the cadence would re-stamp the same window each tick with
+                # neither dedupe able to collapse the rows. See that method.
                 self._drop_held_heart_block()
                 self.latest_payload = self._no_signal_payload()
                 await asyncio.sleep(period)
                 continue
 
             if self.device_config.kind == "face":
-                # A camera produces colour, not EEG channels, so it cannot go
-                # through SignalProcessor at all. Before this branch existed the
-                # loop reached for sample.channel_tp9 on a FaceSample and raised
-                # every tick -- swallowed by the handler below into errors_seen
-                # and a warning, so the session looked alive and produced
-                # nothing.
+                # A camera produces colour, not EEG channels, so it can't go
+                # through SignalProcessor at all.
                 try:
                     self.latest_payload = self._face_payload(samples, raw_meta)
                     self.samples_processed += len(samples)
@@ -357,17 +346,15 @@ class DeviceSession:
             try:
                 # Feed only the freshest drained sample through the processor.
                 # SignalProcessor's rolling window and per-session baseline
-                # (window_size, BASELINE_SAMPLES) are calibrated in *ticks*, not
-                # raw samples -- one processor.update() call per tick is the
-                # invariant those constants assume. Calling update() once per
-                # drained sample broke that: at the bridge's native rate a
-                # single tick can carry dozens of samples sharing the same
-                # raw_meta (fetched once per tick, see above), so the baseline
-                # would latch after one tick instead of ~15s, and the window
-                # would span milliseconds instead of ~5s. Draining the queue
-                # every tick already fixes the original bug (unbounded backlog
-                # / ever-staler reads); it doesn't require re-processing every
-                # buffered sample, just always processing the newest one.
+                # (window_size, BASELINE_SAMPLES) are calibrated in ticks, not
+                # raw samples -- they assume one processor.update() call per
+                # tick. Calling update() once per drained sample would break
+                # that: a single tick can carry dozens of samples at the
+                # bridge's native rate, so the baseline would latch after one
+                # tick instead of ~15s, and the window would span
+                # milliseconds instead of ~5s. Draining the queue every tick
+                # already prevents an unbounded backlog; it doesn't require
+                # re-processing every buffered sample, just the newest one.
                 sample = samples[-1]
                 features = self.processor.update(sample, raw_meta)
                 features["batch_size"] = len(samples)
@@ -391,12 +378,12 @@ class DeviceSession:
                         "calm_score": state.calm_score,
                     },
                 }
-                # Alongside the cognitive block, not inside it. Two sensors on
+                # Alongside the cognitive block, not inside it: two sensors on
                 # one device, separately consented and separately capable of
-                # failing, so the key is absent rather than null when the
-                # device has no optical channel at all -- "switched off" and
-                # "could not measure" are the distinction the camera payload
-                # keeps for the same reason.
+                # failing. The key is absent rather than null when the device
+                # has no optical channel, keeping "switched off" distinct
+                # from "could not measure" -- same reasoning as the camera
+                # payload.
                 heart = self._optical_heart_block()
                 if heart is not None:
                     self.latest_payload["heart"] = heart
@@ -424,9 +411,9 @@ class DeviceSession:
                 "calm_score": 0.0,
                 "confidence": 0.0,
                 "signal_quality": "no_signal",
-                # 0 samples drained/processed this tick. Present (not omitted)
-                # so the features shape is identical on signal and no-signal
-                # ticks, and consumers never have to special-case its absence.
+                # Present, not omitted, so the features shape is identical on
+                # signal and no-signal ticks and consumers never have to
+                # special-case its absence.
                 "batch_size": 0,
             },
             "state": {
@@ -450,8 +437,8 @@ class DeviceSession:
             if no_signal:
                 # Adapters cache their last-known band values and don't reset
                 # them on disconnect, so pulling live meta here would keep
-                # showing stale non-zero bands even though features/scores
-                # have already been zeroed for the same no-signal condition.
+                # showing stale non-zero bands even though features/scores are
+                # already zeroed for the same no-signal condition.
                 out["bands"] = {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
             else:
                 out["bands"] = {
@@ -503,7 +490,7 @@ class StreamManager:
     def __init__(self) -> None:
         self.settings = get_settings()
         # _sessions is populated once below and never mutated afterward, so
-        # this lock guards nothing today -- it's future-proofing for runtime
+        # this lock guards nothing today. It's future-proofing for runtime
         # device (de)registration, which doesn't exist yet.
         self._lock = threading.Lock()
         device_configs = parse_eeg_devices(self.settings)
@@ -514,10 +501,10 @@ class StreamManager:
     def set_payload_consumer(self, consumer: Callable[[dict[str, Any]], None] | None) -> None:
         """Route every device's ticks to one consumer, or to none.
 
-        Every device, because a student's own machine can have both a headband
-        and a camera registered and both feed the same session. Setting it to
-        None detaches cleanly, which is what stopping push ingestion does -- the
-        sampling loops carry on serving the local dashboard either way.
+        Every device, because a student's machine can have both a headband
+        and a camera registered, both feeding the same session. Setting it to
+        None detaches cleanly -- what stopping push ingestion does -- and the
+        sampling loops keep serving the local dashboard either way.
         """
         with self._lock:
             sessions = list(self._sessions.values())

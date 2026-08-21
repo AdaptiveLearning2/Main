@@ -4,8 +4,7 @@ import RecordingIndicator from './RecordingIndicator'
 
 describe('RecordingIndicator', () => {
   it('renders nothing when nothing is recording', () => {
-    // The default state for a student with no headband and no camera. A
-    // permanent empty badge on their screen is worse than silence.
+    // The default state for a student with no headband and no camera.
     const { container } = render(<RecordingIndicator channels={[]} />)
     expect(container).toBeEmptyDOMElement()
   })
@@ -16,9 +15,8 @@ describe('RecordingIndicator', () => {
   })
 
   it('names the channels and nothing else', () => {
-    // No values, no status colour, no route to the data. It states *that*
-    // recording is happening, not *what* was recorded, and that distinction is
-    // what makes it compatible with students seeing no signal data.
+    // No values, no status colour, no route to the data -- states *that*
+    // recording is happening, not *what* was recorded.
     render(<RecordingIndicator channels={['Headband', 'Camera']} />)
 
     expect(screen.getByRole('status')).toHaveTextContent('Recording: Headband · Camera')
@@ -32,8 +30,8 @@ describe('RecordingIndicator', () => {
   })
 
   it('does not render a reading', () => {
-    // A guard against the obvious future edit: someone adds "72 bpm" or a focus
-    // percentage here because the data is to hand.
+    // Guards against a future edit adding "72 bpm" or a focus percentage
+    // here just because the data is to hand.
     render(<RecordingIndicator channels={['Heart sensor']} />)
 
     expect(screen.getByRole('status').textContent).not.toMatch(/\d/)

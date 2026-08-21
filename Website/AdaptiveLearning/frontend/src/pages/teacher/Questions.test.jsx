@@ -29,8 +29,7 @@ async function openModal() {
 
 describe('the question modal', () => {
   it('is a dialog, and names itself', async () => {
-    // Without `role="dialog"` a screen reader announces a plain group and
-    // gives no sign that the page behind is no longer the thing in front.
+    // role="dialog" is what tells a screen reader the page behind is no longer in front.
     const dialog = await openModal()
 
     expect(dialog).toHaveAttribute('aria-modal', 'true')
@@ -38,8 +37,7 @@ describe('the question modal', () => {
   })
 
   it('closes on Escape', async () => {
-    // The backdrop click was the only way out, so a keyboard-only teacher
-    // could open this and be stuck in it.
+    // Without this, a keyboard-only user has no way to close the modal.
     await openModal()
 
     await userEvent.keyboard('{Escape}')
@@ -48,19 +46,17 @@ describe('the question modal', () => {
   })
 
   it('keeps Tab inside the dialog', async () => {
-    // Otherwise tabbing walks out into the page behind -- still there, still
-    // scrollable, with nothing to say focus has left the thing on top.
+    // Otherwise tabbing walks out into the page behind it.
     const dialog = await openModal()
 
-    // Tab far enough to have escaped several times over had it not wrapped.
+    // Enough tabs to have escaped several times over if it didn't wrap.
     for (let i = 0; i < 6; i += 1) await userEvent.tab()
 
     expect(dialog).toContainElement(document.activeElement)
   })
 
   it('gives focus back to what opened it', async () => {
-    // Focus otherwise resets to the top of the document and the reader has to
-    // find their place again.
+    // Otherwise focus resets to the top of the document.
     render(<Questions />)
     const row = await screen.findByText('What is 7 x 8?')
     const opener = row.closest('[role="button"], button, div')
@@ -70,7 +66,6 @@ describe('the question modal', () => {
     await userEvent.keyboard('{Escape}')
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    // Back inside the row that was clicked, rather than on document.body.
     expect(document.body).not.toBe(document.activeElement)
     expect(opener).toBeTruthy()
   })

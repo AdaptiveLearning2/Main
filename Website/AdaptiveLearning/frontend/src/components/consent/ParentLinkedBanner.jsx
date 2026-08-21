@@ -1,21 +1,16 @@
 /**
  * Tells a student that a parent has linked to their account.
  *
- * `POST /api/parent/link-child` needs nothing from the child — a parent who
- * knows their user id creates the link — and from that moment
- * `_verify_can_view_student` reads it as entitlement to their reports, and a
- * sensor the student switched off can be switched back on over their head.
- * Nothing told them it had happened.
+ * A parent can link to a child's account knowing only their user id, and from
+ * that moment can read their reports and switch a sensor back on. Nothing
+ * told the student until this existed.
  *
- * **Notify, not block**, which is a decision rather than the easier option. An
- * acknowledgement gate would put a child between a parent and reports the
- * parent is entitled to, and this product's students are children — some of
- * whom would never clear it. So this says what happened, is dismissible, and
- * nothing anywhere waits on it.
+ * **Notify, not block.** An acknowledgement gate would put a child between a
+ * parent and reports the parent is entitled to, and some children would
+ * never clear it. So this is dismissible and nothing waits on it.
  *
- * On the dashboard, deliberately not mid-question, for the same reason
- * `ParentRestoredBanner` sits there: worth telling someone about, not worth
- * interrupting a maths question for.
+ * On the dashboard, not mid-question, same as `ParentRestoredBanner`: worth
+ * telling someone about, not worth interrupting a maths question for.
  */
 
 import { useEffect, useState } from 'react'
@@ -39,11 +34,10 @@ export default function ParentLinkedBanner({ studentId }) {
     if (!studentId) return undefined
     let cancelled = false
     apiFetch('/api/student/parent-links')
-      // Only on a genuine retrieved read. The endpoint fails open to an empty
-      // list, and drawing this off the back of a failure would tell a child
-      // something happened to their account that may not have.
+      // Only on a genuine retrieved read -- a failed read must not tell a
+      // child something happened to their account that may not have.
       .then(r => { if (!cancelled && r?.retrieved) setLinks(r.links || []) })
-      .catch(() => { /* silent: this is an advisory, not a blocker */ })
+      .catch(() => { /* advisory, not a blocker */ })
     return () => { cancelled = true }
   }, [studentId])
 
@@ -55,8 +49,7 @@ export default function ParentLinkedBanner({ studentId }) {
       await apiFetch('/api/student/parent-links/ack', { method: 'POST' })
       setLinks([])
     } catch {
-      // Left up. If the acknowledgement did not land, the student has not been
-      // told as far as the record is concerned, and hiding it would lose that.
+      // Left up: the student has not actually been told yet.
       setBusy(false)
     }
   }
@@ -76,10 +69,8 @@ export default function ParentLinkedBanner({ studentId }) {
               : `${names} linked to your account`}
             {when && <span className="font-normal"> on {when}</span>}
           </p>
-          {/* What the link actually grants, in the two sentences that matter to
-              a student: they can see your work, and they can turn a sensor back
-              on that you turned off. Both are true the moment the link exists,
-              so saying only "a parent is now linked" would understate it. */}
+          {/* Both powers are real the moment the link exists, so naming only
+              "a parent is now linked" would understate it. */}
           <p className="text-xs text-emerald-800 dark:text-emerald-200 mt-1">
             They can see your progress reports, and can turn a sensor back on
             if you have turned one off. You will always be told when that

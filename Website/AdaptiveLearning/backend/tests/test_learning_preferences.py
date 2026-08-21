@@ -1,13 +1,13 @@
 """The Preferences tab controls something now.
 
-All three wrote `al_prefs` to localStorage and nothing read it back: difficulty
-never reached the LLM decider, duration was enforced by nothing, and there was
-no notification system for the notification toggle to switch. Decoration, the
-same as the Connect buttons removed from the Devices tab.
+All three settings used to write `al_prefs` to localStorage with nothing
+reading it back: difficulty never reached the LLM decider, duration was
+enforced by nothing, and there was no notification system for the toggle to
+switch. Pure decoration.
 
-What is asserted here is the half that can silently regress -- the endpoint's
+What's asserted here is the half that can silently regress -- the endpoint's
 bounds, the failed-read fallback, and the prewarm, which serves the *first*
-questions of every session and so is exactly where a difficulty setting would
+questions of every session and is exactly where a difficulty setting would
 appear not to work.
 """
 
@@ -78,11 +78,11 @@ def _with_profile(monkeypatch, **fields):
 
 @pytest.mark.parametrize("saved", [-1, 0, 1])
 def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch, saved):
-    """The prewarm ran at a hardcoded 0.
+    """The prewarm used to run at a hardcoded 0.
 
     QUEUE_SIZE questions are generated before the student answers anything and
-    served first, so a setting ignored here is a setting that does nothing for
-    the opening of every session -- the part of a lesson most likely to be the
+    served first, so ignoring the setting here means it does nothing for the
+    opening of every session -- the part of a lesson most likely to be the
     only part.
     """
     _with_profile(monkeypatch, difficulty_bias=saved)
@@ -93,11 +93,10 @@ def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch
 
 
 def test_a_corrupt_saved_bias_cannot_shift_difficulty_off_the_end(_stubbed, monkeypatch):
-    """`profiles` carries a FOR ALL own-row policy, so a student reaches this
+    """`profiles` carries a FOR ALL own-row policy, so a student can reach this
     column through PostgREST directly. The CHECK constraint is the real guard;
     this is the second one, because `_shift_difficulty` clamps rather than
-    raising -- a bias of 7 would read as "always hard" for ever, which is a
-    wrong value that works."""
+    raising -- a bias of 7 would silently mean "always hard" forever."""
     _with_profile(monkeypatch, difficulty_bias=7)
 
     main.start_session(main.StartSessionRequest(title=None), request=None)
@@ -106,10 +105,10 @@ def test_a_corrupt_saved_bias_cannot_shift_difficulty_off_the_end(_stubbed, monk
 
 
 def test_a_failed_profile_read_still_carries_usable_preferences():
-    """`_profile` swallows its exception and returns a default, and the caller
-    cannot tell that from a real profile. Without the preference keys the page
-    gets `undefined` for three controls and renders them unset -- which reads as
-    a student who turned everything off."""
+    """`_profile` swallows its exception and returns a default that the caller
+    can't tell apart from a real profile. Without the preference keys, the page
+    gets `undefined` for three controls and renders them unset -- which reads
+    as a student who turned everything off."""
     fallback = main._profile("nobody")
 
     assert fallback["difficulty_bias"] == 0
@@ -124,8 +123,8 @@ def test_a_failed_profile_read_still_carries_usable_preferences():
     ("session_duration_minutes", 10_000),
 ])
 def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
-    """Bounded here as well as by the CHECK, so the answer is a 422 naming the
-    field rather than a 500 out of the client library."""
+    """Bounded here as well as by the database CHECK, so a bad value gets a
+    422 naming the field instead of a 500 from the client library."""
     with pytest.raises(ValidationError):
         main.UpdateProfileRequest(**{field: value})
 
@@ -135,10 +134,10 @@ def test_the_endpoint_refuses_values_the_column_would_refuse(field, value):
     ("practice_reminders", False),
 ])
 def test_the_falsy_settings_are_sent_rather_than_filtered_out(field, value):
-    """`update_my_profile` drops fields that are None, which is right -- but 0 is
-    the adaptive bias and False is reminders off, and both are choices. If they
-    were filtered as falsy instead, neither could ever be saved: a student could
-    turn reminders on and never off again."""
+    """`update_my_profile` drops fields that are None, which is right -- but 0
+    is the adaptive bias and False is reminders off, and both are real choices.
+    Filtering them as falsy would mean neither could ever be saved: a student
+    could turn reminders on and never off again."""
     payload = main.UpdateProfileRequest(**{field: value})
     fields = {k: v for k, v in payload.dict().items() if v is not None}
 

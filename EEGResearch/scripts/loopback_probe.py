@@ -1,11 +1,10 @@
 """Stand in for the sidecar: loopback-only HTTP on 8001, CORS open to the caller.
 
-The question is whether an HTTPS page may reach http://127.0.0.1 at all. Chrome
-treats loopback as a potentially-trustworthy origin and exempts it from the
-mixed-content block, but that is a browser policy rather than a spec guarantee,
-and the fallback if it fails is a tray app -- a much larger change to discover
-late. So it gets checked against a real HTTPS page before anything is built on
-top of it.
+Checks whether an HTTPS page can reach http://127.0.0.1 at all. Chrome exempts
+loopback from the mixed-content block, but that's browser policy, not a spec
+guarantee, so it's worth confirming against a real HTTPS page before building
+anything on top of it -- the fallback if it doesn't work is a much bigger
+change (a tray app).
 
 Run this, then open any HTTPS page and paste into its console:
 
@@ -13,9 +12,9 @@ Run this, then open any HTTPS page and paste into its console:
         headers: {"Content-Type": "application/json"}, body: "{}"})
     await fetch("http://neverssl.com/")   // the control: must be blocked
 
-The second call is the whole test. Four successes without it are equally
-consistent with a browser not enforcing mixed content at all, which would say
-nothing about loopback being special. Result: docs/LOOPBACK_FROM_HTTPS.md.
+The second call is the actual test -- without it, success would be equally
+explained by the browser not enforcing mixed content at all. Result recorded
+in docs/LOOPBACK_FROM_HTTPS.md.
 """
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -33,7 +32,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        # Drain the body first, or the connection stalls waiting on it.
+        # Must drain the body, or the connection stalls waiting on it.
         n = int(self.headers.get("Content-Length") or 0)
         if n:
             self.rfile.read(n)

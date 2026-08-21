@@ -25,20 +25,17 @@ export default function Achievements() {
   const [loading, setLoading] = useState(true)
   const [failed, setFailed]   = useState(false)
 
-  // See History.jsx: already true on mount, so setting it here would be a
-  // synchronous setState inside an effect.
+  // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     apiFetch('/api/stats/me')
-      // The backend reports its own failed read this way rather than raising.
+      // A failed read reports itself as retrieved: false instead of throwing.
       .then(s => {
         if (s?.retrieved === false) { setFailed(true); setStats(null) }
         else { setStats(s); setFailed(false) }
         setLoading(false)
       })
-      // Catching to zeros re-locked every achievement the student had already
-      // earned and drew the progress bar at 0% -- not a blank page but a
-      // confident, wrong one, on the screen a child is most likely to take
-      // personally.
+      // Falling back to stats of 0 would re-lock achievements the student
+      // already earned, which reads as a wrong answer, not a loading error.
       .catch(e => { console.error('Failed to load stats:', e); setFailed(true); setLoading(false) })
   }
 
@@ -99,10 +96,7 @@ export default function Achievements() {
         </div>
       )}
 
-      {/* `!failed` as well as a non-empty list: with no stats every threshold
-          compares against 0, so a failed read renders the entire set as
-          locked -- the most discouraging possible reading of a network
-          error. */}
+      {/* Hidden on failure too: with no stats every threshold reads as 0/locked, showing every achievement as lost. */}
       {!failed && locked.length > 0 && (
         <div>
           <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔒 Locked <span className="text-sm font-semibold text-gray-400">({locked.length})</span></h2>

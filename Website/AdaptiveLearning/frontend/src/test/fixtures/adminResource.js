@@ -19,11 +19,10 @@ export function buildFlags(overrides = {}) {
 /**
  * `GET /api/admin/retention-window`.
  *
- * `state` is the part with six values and only two of them record: `open` and
- * `not_enforced` do, while `before_year`, `after_year`, `unconfigured` and
- * `unreadable` each deny for a different reason a reader has to be able to tell
- * apart -- "the year hasn't started" and "we couldn't read the setting" send a
- * parent to different places.
+ * `state` has six values but only `open` and `not_enforced` permit
+ * recording. The other four each deny for a different reason (e.g. "year
+ * hasn't started" vs "couldn't read the setting") that a reader must be
+ * able to tell apart.
  */
 export function buildRetentionWindow(overrides = {}) {
   return {

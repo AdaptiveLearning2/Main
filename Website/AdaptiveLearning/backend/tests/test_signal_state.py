@@ -1,10 +1,10 @@
-"""`get_session_signal_state` — the database half of fusion.
+"""`get_session_signal_state` -- the database half of fusion.
 
-The rule itself is tested exhaustively in `test_signal_fusion.py` without a
-database. What is tested here is what gets *read*, which is the part consent
-governs: a revoked channel must never be queried, not merely ignored after the
-fact. An empty result cannot distinguish "asked and got nothing" from "never
-asked", so these assert on `table_calls`.
+The fusion rule itself is tested exhaustively in `test_signal_fusion.py`
+without a database. This file tests what gets read, which is the part
+consent governs: a revoked channel must never be queried, not just ignored
+after the fact. An empty result can't tell "asked and got nothing" apart from
+"never asked", so these tests check `table_calls` directly.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ def _install(monkeypatch, consent, **tables):
 
 
 def test_a_revoked_channel_is_never_queried(monkeypatch):
-    """Not read-then-discard. The read itself is what consent governs, and a
-    row that was never fetched cannot be acted on by a later edit."""
+    """Not read-then-discard. Consent governs the read itself, so a row that
+    was never fetched can't be acted on by a later edit."""
     fake = _install(
         monkeypatch,
         {"eeg_enabled": True, "headband_optical_enabled": False,
@@ -63,7 +63,7 @@ def test_a_revoked_heart_channel_cannot_change_the_difficulty(monkeypatch):
 
 
 def test_a_consented_heart_channel_does_change_it(monkeypatch):
-    """The same rows, with consent, must reach the opposite conclusion --
+    """Same rows, with consent, must reach the opposite conclusion --
     otherwise the test above proves nothing about consent."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM, heart=HEART_HIGH)
     state = decider.get_session_signal_state(SESSION, USER)
@@ -73,9 +73,9 @@ def test_a_consented_heart_channel_does_change_it(monkeypatch):
 
 
 def test_consent_fails_closed_when_it_cannot_be_read(monkeypatch):
-    """A database problem must suppress signals, never enable ones the student
-    may have refused. Same direction as main's `_consent()`, opposite to the
-    reporting helpers, and deliberately so."""
+    """A database problem must suppress signals, never enable ones the
+    student may have refused -- same fail-closed direction as main's
+    `_consent()`, opposite to the reporting helpers."""
     fake = _FakeSupabase({}, table_raises={"signal_consent"})
     monkeypatch.setattr(decider, "supabase", fake)
 
@@ -96,7 +96,7 @@ def test_an_absent_consent_row_means_the_same_as_all_false(monkeypatch):
 
 def test_heart_consent_follows_the_sensor_that_produced_the_reading(monkeypatch):
     """One flag per sensor, and the heart channel can arrive from either.
-    Camera consent alone still permits a heart reading -- from the camera."""
+    Camera consent alone still permits a heart reading, from the camera."""
     fake = _install(monkeypatch,
                     {"eeg_enabled": False, "headband_optical_enabled": False,
                      "camera_enabled": True, "user_id": USER},
@@ -109,8 +109,8 @@ def test_heart_consent_follows_the_sensor_that_produced_the_reading(monkeypatch)
 
 
 def test_no_signals_at_all_behaves_as_it_did_before_fusion(monkeypatch):
-    """Phase 5 lands before heart and facial are fed by anything. With only EEG
-    present the outcome must be identical to the EEG-only implementation."""
+    """With only EEG present, the outcome must match the old EEG-only
+    behaviour, before heart and facial fusion were added."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM)
     assert decider.get_session_signal_state(SESSION, USER).label == "focused"
 
@@ -127,8 +127,8 @@ def test_no_session_reads_nothing(monkeypatch):
 
 
 def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
-    """One failed query must degrade that channel only. The reporting rule,
-    applied to the read side."""
+    """One failed query must degrade only that channel -- the reporting
+    helpers' rule, applied here to the read side."""
     fake = _FakeSupabase(
         {"signal_consent": [CONSENT_ALL], "cognitive_signals": EEG_CALM},
         table_raises={"heart_signals"},
@@ -140,13 +140,12 @@ def test_a_broken_signals_table_does_not_retract_the_others(monkeypatch):
 
 
 def test_a_heart_row_from_a_declined_sensor_is_never_read(monkeypatch):
-    """The mirror of the test above, and the one that was missing.
-
-    Consent is per *sensor*. A student who allowed the headband and declined the
-    camera must not have an rppg-sourced row acted on. The first version ORed the
-    two flags into a single boolean and then never looked at `source` again, so
-    it did. Latent, because nothing writes rppg today -- which is precisely how
-    it would have survived to the point where something does.
+    """Mirrors the test above. Consent is per sensor: a student who allowed
+    the headband and declined the camera must not have an rppg-sourced row
+    acted on. An earlier version ORed the two flags into one boolean and
+    never looked at `source` again, so it did -- a latent bug, since nothing
+    writes rppg today, which is exactly how it would have gone unnoticed
+    until something did.
     """
     _install(monkeypatch,
              {"eeg_enabled": False, "headband_optical_enabled": True,
@@ -160,7 +159,8 @@ def test_a_heart_row_from_a_declined_sensor_is_never_read(monkeypatch):
 
 
 def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
-    """The filter must narrow, not block. Same consent as above, headband row."""
+    """The consent filter must narrow, not block outright. Same consent as
+    above, but a headband row this time."""
     _install(monkeypatch,
              {"eeg_enabled": False, "headband_optical_enabled": True,
               "camera_enabled": False, "user_id": USER},
@@ -171,15 +171,13 @@ def test_a_permitted_sensor_is_still_read_when_another_is_declined(monkeypatch):
 
 
 def test_a_low_confidence_emotion_does_not_withhold_the_increase(monkeypatch):
-    """The gate is `emotion_confidence`, and a bad FER+ label must not act.
-
-    This began as a two-confidence test: `face_signals` also carried
-    `identity_confidence` -- how sure we are whose face this is -- and reading it
-    here let a clearly-identified face with a garbage label withhold an
-    increase, while discarding a well-classified expression on a poorly
-    identified face. Both silent. #86 retired that column, so the mix-up is no
-    longer expressible and the fixture no longer sets it; what remains is the
-    property the mix-up was violating, which is worth keeping on its own.
+    """The gate is `emotion_confidence`; a low-confidence FER+ label must not
+    act. `face_signals` used to also carry `identity_confidence` (how sure we
+    are whose face this is), and reading that here let a clearly-identified
+    face with a garbage label withhold an increase, while a well-classified
+    expression on a poorly identified face was silently discarded. That
+    column is gone now, but the property it was violating is still worth
+    testing on its own.
     """
     fake = _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
                     face=[{"session_id": SESSION, "emotion": "sad",
@@ -193,8 +191,8 @@ def test_a_low_confidence_emotion_does_not_withhold_the_increase(monkeypatch):
 
 
 def test_an_untrusted_emotion_is_rejected_outright(monkeypatch):
-    """Matching how the heart channel treats `trusted`. A classifier saying it
-    does not stand behind a label is not answered by a confidence figure."""
+    """Matches how the heart channel treats `trusted`: a classifier saying it
+    doesn't stand behind a label can't be overridden by a confidence figure."""
     _install(monkeypatch, CONSENT_ALL, eeg=EEG_CALM,
              face=[{"session_id": SESSION, "emotion": "sad",
                     "emotion_confidence": 0.99, "emotion_trusted": False}])

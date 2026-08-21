@@ -11,9 +11,8 @@ export function buildSession(overrides = {}) {
   }
 }
 
-/** Open: no `ended_at`. The counters are still real -- an in-progress session
- *  is not an empty one, and the close path recounts from `session_answers`
- *  rather than trusting these. */
+/** Open: no `ended_at`. Counters are still real values — an in-progress
+ *  session isn't an empty one. */
 export function buildOpenSession(overrides = {}) {
   return buildSession({ ended_at: null, questions_answered: 2, correct_answers: 1, ...overrides })
 }

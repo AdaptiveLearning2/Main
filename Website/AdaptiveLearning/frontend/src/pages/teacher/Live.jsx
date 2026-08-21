@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Activity, Camera, Brain, Heart, Radio } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts'
+import { LineChart, Line, YAxis } from 'recharts'
+import AccessibleChart from '../../components/charts/AccessibleChart'
+import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 
@@ -44,12 +46,29 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
   )
 }
 
+// No `rowKey`, so no table: a 60-point rolling window has no meaningful row
+// labels, and tabulating it would be noise rather than an alternative. The
+// summary is the reading.
+const SPARK_COLUMNS = [
+  { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
+  { key: 'engagement', label: 'Engagement', unit: '%',    scale: asPercent },
+  { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
+  { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
+]
+
 function StudentCard({ student, history }) {
   const active = student.active_session
   const cog    = student.latest_cognitive
   const face   = student.latest_face
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
+
+  // Percentages, because the rolling window holds raw 0..1 ratios -- the chart
+  // plots them against `domain={[0, 1]}`. Unscaled this said "Focus 0 to 1" for
+  // every student on the page, whatever they were doing.
+  //
+  // Named per student: a screen-reader user reaching this card has no other way
+  // to tell whose reading it is, since the heading is several elements back.
 
   return (
     <motion.div
@@ -116,8 +135,14 @@ function StudentCard({ student, history }) {
         </div>
       )}
 
-      <div className="h-12 -mx-1">
-        <ResponsiveContainer width="100%" height="100%">
+      {/* A sparkline is still a chart. It was a bare `<svg>` with no name, so
+          the live monitor announced a student's card and then silence where
+          the reading is. No data table: this is a 60-point rolling window with
+          no meaningful row labels, and a table of it would be noise rather than
+          the alternative the trend chart's is. The summary is the reading. */}
+      <AccessibleChart className="h-12 -mx-1"
+        headline={`${student.name || 'This student'}: signal trend over the last ${history?.length || 0} readings.`}
+        rows={history} columns={SPARK_COLUMNS}>
           <LineChart data={history}>
             {/* Two axes because bpm and the 0..1 ratios would flatten together on one scale. */}
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
@@ -127,8 +152,7 @@ function StudentCard({ student, history }) {
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
-        </ResponsiveContainer>
-      </div>
+      </AccessibleChart>
 
       {active && (
         <Link

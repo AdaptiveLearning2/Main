@@ -3,9 +3,11 @@ import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
+import AccessibleChart from '../../components/charts/AccessibleChart'
+import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 
 // Fixed per label so the same emotion is always the same colour across sessions.
@@ -259,6 +261,38 @@ function SessionReviewBody({ sessionId }) {
   const correctAnswers = answers.filter(a => a.correct).length
   const acc = totalAnswers ? Math.round((correctAnswers / totalAnswers) * 100) : 0
 
+  // One spec, driving the summary sentence and the sr-only table alike.
+  //
+  // `asPercent` because this page's cognitive rows are raw 0..1 ratios -- the
+  // chart plots them against `domain={[0, 1]}` -- so describing them with a `%`
+  // unit and no scaling announced a session ranging 42-78% as "Focus 0% to 1%".
+  // `SignalPanel` scales on the way into its chart data and so never hit this;
+  // here the chart wants ratios and only the text wants percentages.
+  //
+  // `heart_rate_bpm` and `rmssd_ms` are the field names the chart plots. Named
+  // `bpm` at first, which made a visibly-drawn heart line read as "not
+  // recorded" in both the sentence and the table -- and RMSSD was absent from
+  // the table entirely while being plotted beside it.
+  // The columns are the series this chart draws. `focus`, `engagement` and
+  // `stress` always have a `<Line>`; the two heart series are gated on
+  // `hasHeart`, so their columns are too.
+  //
+  // Left unconditional, the sentence was fine — `describeSeries` drops a series
+  // with no readings — but the table still emitted "Heart rate: not recorded"
+  // and "RMSSD: not recorded" on every row of a session that never had a
+  // headband, which is noise in the one surface that cannot be skimmed past.
+  // Same class as the `engagement` column removed from `SignalPanel`, one file
+  // over: that fix was applied where it was found rather than generalised.
+  const TIMELINE_COLUMNS = [
+    { key: 'focus',      label: 'Focus',      unit: '%', scale: asPercent },
+    { key: 'stress',     label: 'EEG stress', unit: '%', scale: asPercent },
+    { key: 'engagement', label: 'Engagement', unit: '%', scale: asPercent },
+    ...(hasHeart ? [
+      { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
+      { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
+    ] : []),
+  ]
+
   const hasChart = series.length >= 2
 
   // Five distinct states, so a backend hiccup or a missing archive is never
@@ -363,8 +397,10 @@ function SessionReviewBody({ sessionId }) {
             )}
           </div>
         ) : (
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <AccessibleChart className="h-72"
+            headline={`Session replay over ${series.length} readings.`}
+            rows={series} rowKey="t" rowLabel="Seconds in"
+            columns={TIMELINE_COLUMNS}>
               <LineChart data={series} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                 <XAxis
@@ -428,8 +464,7 @@ function SessionReviewBody({ sessionId }) {
                   )
                 })}
               </LineChart>
-            </ResponsiveContainer>
-          </div>
+          </AccessibleChart>
         )}
         {hasChart && answers.length > 0 && (
           <p className="text-[11px] text-gray-400 mt-2">
@@ -487,8 +522,8 @@ function SessionReviewBody({ sessionId }) {
                   ? <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
+              <AccessibleChart className="h-52"
+                {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
                   <PieChart>
                     <Pie data={emotionSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -499,8 +534,7 @@ function SessionReviewBody({ sessionId }) {
                     <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
-                </ResponsiveContainer>
-              </div>
+              </AccessibleChart>
               )}
             </div>
           )}
@@ -514,8 +548,8 @@ function SessionReviewBody({ sessionId }) {
                   ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
                   : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
               ) : (
-              <div className="h-52">
-                <ResponsiveContainer width="100%" height="100%">
+              <AccessibleChart className="h-52"
+                {...sliceSpec('Heart-rate stress', stressSlices, 'windows', { rowLabel: 'Band' })}>
                   <PieChart>
                     <Pie data={stressSlices} dataKey="value" nameKey="name"
                          innerRadius="45%" outerRadius="75%" paddingAngle={2}>
@@ -526,8 +560,7 @@ function SessionReviewBody({ sessionId }) {
                     <Tooltip formatter={(v, n) => [`${v} windows`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
-                </ResponsiveContainer>
-              </div>
+              </AccessibleChart>
               )}
             </div>
           )}

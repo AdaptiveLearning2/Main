@@ -161,7 +161,7 @@ def pie_svg(counts: dict, title: str, colours: dict) -> str:
         colour = colours.get(label.lower(), UNKNOWN_COLOUR)
         out.append(f'<rect x="286" y="{y - 9}" width="11" height="11" rx="2" fill="{colour}"/>')
         out.append(f'<text x="304" y="{y}" font-family="sans-serif" font-size="11" '
-                   f'fill="#334155">{html.escape(label)} — {value}</text>')
+                   f'fill="#334155">{html.escape(label)} -- {value}</text>')
 
     return _svg("".join(out), title)
 

@@ -6,7 +6,7 @@ needs the actual pixels, which `capture_face_rgb.py` throws away when it
 reduces each frame to three numbers.
 
 The product's rule is that no webcam footage is stored. This doesn't break
-that rule — it's not the product, it's a consenting **adult** recording
+that rule -- it's not the product, it's a consenting **adult** recording
 themselves for one measurement, kept only as long as the analysis takes and
 deleted afterwards. That second half (deleting it) is the part this script is
 built to make hard to skip.
@@ -16,20 +16,20 @@ What it writes
 Not video. **128x128 face crops** (what RhythmMamba consumes), stored
 losslessly as raw uint8:
 
-- `<out>.npy`      — (N, 128, 128, 3) uint8, N = frames actually captured.
+- `<out>.npy`      -- (N, 128, 128, 3) uint8, N = frames actually captured.
                      Allocated for the worst case and trimmed on close, since
                      an untrimmed tail reads back as black frames
                      indistinguishable from real footage.
-- `<out>.jsonl`    — one line per frame: elapsed seconds, face box, whether the
+- `<out>.jsonl`    -- one line per frame: elapsed seconds, face box, whether the
                      detector found one
-- `<out>.json`     — header: wall-clock start, nominal fps, camera, exposure lock
+- `<out>.json`     -- header: wall-clock start, nominal fps, camera, exposure lock
 
 Lossless because rPPG reads colour variation under 1%, and every lossy codec is
 designed to discard exactly that variation. Crops rather than full frames
 because that's what the model takes, and because 128x128 is ~1.5 MB/s versus
 raw 640x480 at ~27 MB/s (five minutes: 440 MB vs 8 GB).
 
-Storing crops bakes in the ROI choice — a later analysis wanting a different
+Storing crops bakes in the ROI choice -- a later analysis wanting a different
 region has to re-capture. Accepted trade: the alternative is storing far more
 of a person than the measurement needs.
 
@@ -104,7 +104,7 @@ def truncate_npy(path: pathlib.Path, rows: int) -> None:
     """Shrink a preallocated `.npy` to the rows that were actually written.
 
     The array is sized for the worst case, so unwritten tail rows are
-    zero-filled and read back as pure black frames — indistinguishable from a
+    zero-filled and read back as pure black frames -- indistinguishable from a
     covered lens. A windowing script would feed those to the model as real
     data, and a hard step to black is exactly what a frequency-domain
     estimator turns into a confident wrong rate. Trimming makes the file mean
@@ -177,7 +177,7 @@ class Gui:
     redo, and problems like the face drifting out of frame or exposure lock
     failing are otherwise invisible until it's too late.
 
-    Draws and drops frames like the capture loop does — never a second
+    Draws and drops frames like the capture loop does -- never a second
     persisting call, which a test asserts. It also shows the actual stored
     crop next to the full frame, since judging framing from the full frame can
     hide that the model was fed a chin.
@@ -211,7 +211,7 @@ class Gui:
         """The warm-up, shown instead of a frozen window for 8 seconds.
 
         Drawn differently from `frame` so the subject doesn't mistake this for
-        the capture starting — nothing is being written yet.
+        the capture starting -- nothing is being written yet.
         """
         cv2 = self._cv2
         img = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -334,7 +334,7 @@ def capture(args) -> int:
 
     # Warm-up happens before the clock starts, so `t` in the .jsonl is time
     # since the first usable frame, not since the lens opened. `wall_start` is
-    # stamped after warm-up for the same reason — an 8s offset baked silently
+    # stamped after warm-up for the same reason -- an 8s offset baked silently
     # into one side would show up as alignment error against the ECG, not as
     # a reported bug.
     if not args.no_warmup:
@@ -356,7 +356,7 @@ def capture(args) -> int:
         gui.close()
         # The array is allocated before warm-up (so a full disk is caught
         # before the subject waits through it), which means an abort here
-        # would otherwise leave a full-capacity zero-filled file — half a
+        # would otherwise leave a full-capacity zero-filled file -- half a
         # gigabyte of black frames with no header. Delete it instead of
         # relying on `truncate_npy`, which this path skips.
         mapping = getattr(frames, "_mmap", None)
@@ -364,7 +364,7 @@ def capture(args) -> int:
         if mapping is not None:
             mapping.close()
         pathlib.Path(f"{out}.npy").unlink(missing_ok=True)
-        # No header either — nothing was captured, so there's nothing to
+        # No header either -- nothing was captured, so there's nothing to
         # record. `--delete` keeps a header because it removes real frames.
         print("aborted during warm-up; nothing was recorded")
         return 1
@@ -431,7 +431,7 @@ def capture(args) -> int:
         if gui is not None:
             gui.close()
         frames.flush()
-        # Release the mapping before truncating — Windows refuses to shorten
+        # Release the mapping before truncating -- Windows refuses to shorten
         # a file that's still mapped.
         mapping = getattr(frames, "_mmap", None)
         del frames

@@ -36,7 +36,7 @@ class _Point:
 
 # A plausible face in normalised coordinates: eyes above mouth, mouth above
 # chin, nose between the eyes. Built by name, then placed into a mesh array by
-# index, so tests don't depend on the index table being correct — only used
+# index, so tests don't depend on the index table being correct -- only used
 # consistently.
 FACE = {
     "left_eye_outer": (0.62, 0.40), "left_eye_inner": (0.545, 0.40),
@@ -349,7 +349,7 @@ def test_a_corrupt_model_is_deleted_rather_than_left_to_be_trusted(tmp_path):
 def test_a_tampered_model_is_refused_at_load_not_only_at_setup(tmp_path, monkeypatch):
     """`ensure_model` only checks the file at install time. Without a check at
     load time too, a truncated or hand-swapped `.task` file would load without
-    complaint and produce wrong landmarks instead of an error — exactly what
+    complaint and produce wrong landmarks instead of an error -- exactly what
     the checksum is meant to prevent. `face_emotion` verifies at load for the
     same reason; this is the landmark equivalent.
     """

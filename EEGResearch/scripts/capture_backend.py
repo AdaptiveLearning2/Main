@@ -1,6 +1,6 @@
 """Stands in for the website backend's ingest endpoints, recording the wire.
 
-Not a mock of the sidecar's client — the real sidecar, with a real sampling
+Not a mock of the sidecar's client -- the real sidecar, with a real sampling
 loop, posts to this over real HTTP. Proves what no unit test can: the process
 boots with PUSH_ENABLED on and its payloads actually reach the push client.
 

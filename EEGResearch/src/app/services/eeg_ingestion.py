@@ -645,7 +645,7 @@ class TcpMuseBridgeAdapter:
             return
         if not self._try_connect():
             print(
-                f"[bridge] Native bridge not available on {self.host}:{self.port} — "
+                f"[bridge] Native bridge not available on {self.host}:{self.port} -- "
                 "will retry each poll cycle. Start muse_native_bridge.exe to begin streaming.",
                 flush=True,
             )

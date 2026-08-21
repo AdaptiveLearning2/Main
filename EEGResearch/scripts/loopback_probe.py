@@ -3,7 +3,7 @@
 Checks whether an HTTPS page can reach http://127.0.0.1 at all. Chrome exempts
 loopback from the mixed-content block, but that's browser policy, not a spec
 guarantee, so it's worth confirming against a real HTTPS page before building
-anything on top of it — the fallback if it doesn't work is a much bigger
+anything on top of it -- the fallback if it doesn't work is a much bigger
 change (a tray app).
 
 Run this, then open any HTTPS page and paste into its console:
@@ -12,7 +12,7 @@ Run this, then open any HTTPS page and paste into its console:
         headers: {"Content-Type": "application/json"}, body: "{}"})
     await fetch("http://neverssl.com/")   // the control: must be blocked
 
-The second call is the actual test — without it, success would be equally
+The second call is the actual test -- without it, success would be equally
 explained by the browser not enforcing mixed content at all. Result recorded
 in docs/LOOPBACK_FROM_HTTPS.md.
 """

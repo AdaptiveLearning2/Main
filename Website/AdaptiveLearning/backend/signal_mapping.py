@@ -2,9 +2,9 @@
 
 Two paths reach these tables and both need the same arithmetic:
 
-- **pull** — `eeg_poller` runs inside this backend and polls the sidecar over
+- **pull** -- `eeg_poller` runs inside this backend and polls the sidecar over
   HTTP. Works only because `start.ps1` puts backend and sidecar on one machine.
-- **push** — the sidecar runs on the student's own device and POSTs to
+- **push** -- the sidecar runs on the student's own device and POSTs to
   `/api/signals/*` with the student's bearer token. This is the deployment the
   camera forces: a hosted backend has no route to a laptop.
 

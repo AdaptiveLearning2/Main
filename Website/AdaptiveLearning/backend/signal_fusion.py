@@ -10,14 +10,14 @@ available channel must agree. To *lower* it, any one trusted channel is enough.
 
 This is the only shape that fails safely. A wrong ease-off costs a student one
 question below their level. A wrong push costs a struggling student a harder
-one, and the signals are least reliable exactly when a student is agitated —
+one, and the signals are least reliable exactly when a student is agitated --
 which is when a false `focused` is most likely and most damaging.
 
 What each combination does
 --------------------------
 | channels present | behaviour |
 | --- | --- |
-| none | correctness, topic history and manual bias only — today's behaviour |
+| none | correctness, topic history and manual bias only -- today's behaviour |
 | EEG only | today's behaviour |
 | heart only | can ease difficulty alone; **cannot raise it** |
 | facial only | weak modifier; never decides alone |
@@ -31,7 +31,7 @@ The facial caveat, stated where it is enforced
 FER+ is trained mostly on adult faces, and is least reliable on this product's
 users: children, and children with learning disabilities, whose expressions are
 more variable and more often misclassified. So emotion is deliberately the
-weakest input here — it can *withhold* a difficulty increase and can never
+weakest input here -- it can *withhold* a difficulty increase and can never
 cause one, and it cannot trigger an ease-off by itself either.
 
 It should not become a primary adaptation signal without validation on the

@@ -1772,14 +1772,14 @@ def generate_question(
         question = queue.pop(0) if queue else None
 
     if not question:
-        print(f"[generate] cache miss for {user_id[:8]} — generating inline")
+        print(f"[generate] cache miss for {user_id[:8]} -- generating inline")
         question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
             user_id, effective_grade, session_id, manual_bias
         )
         if not question:
             raise HTTPException(500, "Failed to generate question")
     else:
-        print(f"[generate] cache hit for {user_id[:8]} — instant serve")
+        print(f"[generate] cache hit for {user_id[:8]} -- instant serve")
 
     question["effective_grade"] = effective_grade
     question["bias"]            = manual_bias
@@ -2460,7 +2460,7 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
     if weakest:
         label = str(weakest.get("topic_name") or "the weakest topic").replace("_", " ")
         strategies.append(
-            f"Spend 10-15 minutes on {label} before new material — it is currently "
+            f"Spend 10-15 minutes on {label} before new material -- it is currently "
             f"the lowest-scoring topic at {weakest.get('accuracy')}%."
         )
     else:
@@ -2473,7 +2473,7 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
     if stress is not None and float(stress) >= 0.65:
         strategies.append(
             "Break practice into shorter blocks with a two-minute pause between "
-            "them — stress indicators ran high this week."
+            "them -- stress indicators ran high this week."
         )
     else:
         strategies.append(
@@ -2485,7 +2485,7 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
     if focus is not None and float(focus) < 0.45:
         strategies.append(
             "Clear the workspace of phones and second screens, and set one small "
-            "goal per block — focus indicators were low this week."
+            "goal per block -- focus indicators were low this week."
         )
     else:
         strategies.append(
@@ -2501,7 +2501,7 @@ def _rule_based_strategies(report: dict, topics: list[dict]) -> list[str]:
 
     strategies.append(
         "Close each session by asking which problem felt hardest and what helped "
-        "most — it makes the next session easier to plan."
+        "most -- it makes the next session easier to plan."
     )
     return strategies[:_STRATEGY_COUNT]
 
@@ -2530,7 +2530,7 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
     return (
         "You are helping a parent support their child's maths practice at home.\n"
         "Use only the weekly summary below. These are classroom learning "
-        "indicators, not medical measurements — do not diagnose, do not name any "
+        "indicators, not medical measurements -- do not diagnose, do not name any "
         "condition, and do not give medical advice.\n"
         f"Return exactly {_STRATEGY_COUNT} short, practical, at-home strategies as "
         "a numbered list. One sentence each, no preamble.\n\n"
@@ -2906,7 +2906,7 @@ def join_class(payload: JoinClassRequest, request: Request):
     user = get_user(request)
     cls  = supabase.table("classes").select("*").eq("join_code", payload.join_code.upper()).execute()
     if not cls.data:
-        raise HTTPException(404, "Class not found — check the code")
+        raise HTTPException(404, "Class not found -- check the code")
     class_id = cls.data[0]["id"]
     already = supabase.table("class_memberships").select("id") \
         .eq("class_id", class_id).eq("student_id", user["id"]).execute()
@@ -3290,7 +3290,7 @@ def update_consent(student_id: str, payload: ConsentUpdate, request: Request):
         if not requested:
             # Also recorded as an event: `*_revoked_at` is nulled when the
             # channel comes back on, so it can't answer "what happened" on its
-            # own -- a re-enable would erase the withdrawal notice.
+            # own -- a re-enable would wipe the withdrawal notice.
             withdrawn.append(c)
         # State this decision was made against, asserted on the write below.
         guards[f"{c}_enabled"] = was
@@ -4284,7 +4284,7 @@ def eeg_devices(request: Request):
 
 @app.get("/api/eeg/debug")
 def eeg_debug(request: Request, device_id: str = eeg_client.DEFAULT_DEVICE_ID):
-    """Raw EEG snapshot for local development — returns the full state from EEGResearch."""
+    """Raw EEG snapshot for local development -- returns the full state from EEGResearch."""
     user = get_user(request)
     if eeg_poller.INGEST_MODE == "push":
         return {"available": None, "ingest_mode": "push"}

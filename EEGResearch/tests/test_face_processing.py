@@ -1,7 +1,7 @@
 """Tests converting camera samples into payload records.
 
-The gates matter more than the arithmetic here. Each state — "switched off",
-"warming up", "no face", "poor light", "not confident", "a real reading" —
+The gates matter more than the arithmetic here. Each state -- "switched off",
+"warming up", "no face", "poor light", "not confident", "a real reading" --
 must stay distinct, since a downstream viewer can't recover a distinction lost
 at this layer.
 """
@@ -61,7 +61,7 @@ def test_the_source_is_on_every_payload_including_failures():
 
 def test_warming_up_is_distinguishable_from_no_samples():
     """The first 25s of a session, and any gap after the student looks away,
-    are partial windows, not faults — and neither is the same as a camera that
+    are partial windows, not faults -- and neither is the same as a camera that
     produced nothing at all."""
     assert build_heart_record(np.empty((0, 3)), FPS)["rejected_by"] == "no_samples"
     partial = build_heart_record(_rgb_window(seconds=5.0), FPS)
@@ -78,7 +78,7 @@ def test_a_partial_window_never_reports_a_rate():
 
 def test_poor_face_quality_stops_the_estimate_before_it_is_made():
     """Cheaper than deriving a rate and discarding it, and names the real
-    problem — poor lighting, not the heart."""
+    problem -- poor lighting, not the heart."""
     record = build_heart_record(
         _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         samples=_samples(750, quality=MIN_MEAN_USABLE_FRACTION / 2)
@@ -340,7 +340,7 @@ def test_quality_gating_uses_the_window_not_the_tick():
     """A tick that drained no samples must not skip the gate. If quality were
     derived only from samples drained since the last tick, a tick that drained
     nothing would leave face_quality None even while the 25s colour buffer was
-    full and scored — silently skipping the gate."""
+    full and scored -- silently skipping the gate."""
     record = build_heart_record(
         _rgb_window(72.0), FPS, measured_fps=FPS, timestamps=_stamps(FPS),
         window_quality=MIN_MEAN_USABLE_FRACTION / 2,
@@ -423,7 +423,7 @@ def test_before_the_first_reading_is_not_a_refusal():
 
 
 def test_attention_stays_null_and_is_nobody_s_to_fill():
-    """`attention` is blocked on getting a labelled reference, not on code — it
+    """`attention` is blocked on getting a labelled reference, not on code -- it
     would render to a parent as an objective-looking percentage, and head
     direction is a weak proxy for attention. The key is still emitted so a
     consumer can tell "no producer yet" from "a key I forgot to read"."""
@@ -460,7 +460,7 @@ def test_gaze_alone_still_produces_a_face_block():
 # ── head pose ────────────────────────────────────────────────────────────
 #
 # `gaze_x`/`gaze_y` are eye-in-head, so without pose they say nothing about
-# where the head points — a student turned away with centred eyes would read
+# where the head points -- a student turned away with centred eyes would read
 # the same as one facing the screen.
 
 from src.app.services.face_geometry import HeadPose      # noqa: E402
@@ -479,7 +479,7 @@ def test_a_pose_reading_reaches_the_record():
 
 def test_pose_keys_are_absent_when_gaze_is_off():
     """Pose uses the same landmark set and enable flag as gaze, so it's absent
-    for the same reason gaze is — not nulled."""
+    for the same reason gaze is -- not nulled."""
     record = build_face_record(EmotionResult("happy", 0.82, True))
 
     for key in ("head_yaw", "head_pitch", "head_roll", "pose_rejected_by"):
@@ -487,7 +487,7 @@ def test_pose_keys_are_absent_when_gaze_is_off():
 
 
 def test_a_refused_pose_is_null_with_a_reason_never_zero():
-    """0.0 yaw means facing the camera square on — the most common real
+    """0.0 yaw means facing the camera square on -- the most common real
     reading. Recording a refusal as 0.0 would misreport a window the fit
     couldn't solve at all as "facing the camera"."""
     record = build_face_record(EmotionResult("happy", 0.82, True),

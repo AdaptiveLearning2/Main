@@ -2,7 +2,7 @@
 """Confirm the face-mesh index table against a real face.
 
 `face_landmarks.MEDIAPIPE_INDICES` maps mesh indices onto named face parts and
-**has never been checked against hardware** — MediaPipe 1.0.0 ships no
+**has never been checked against hardware** -- MediaPipe 1.0.0 ships no
 canonical mesh file and CI has no camera. `check_topology` catches a grossly
 wrong index, but not the mistake that matters most: a left/right swap, which a
 mirrored face satisfies just as well.
@@ -22,7 +22,7 @@ Needs both camera extras:
 
 Also cross-checks the **Haar cascade** against the mesh on the same frames
 before the three steps, since `face_roi.FaceLocator` had no camera check at
-all and depends on `cv2.data.haarcascades` shipping inside the wheel — which a
+all and depends on `cv2.data.haarcascades` shipping inside the wheel -- which a
 packaging change can move silently (and did, when `face` moved from
 `opencv-python` to `opencv-contrib-python`).
 
@@ -32,25 +32,25 @@ Three prompted steps, each with an automatic verdict:
 
 1. **Square on** -- pose should read near zero on all three angles. Failing
    here means the canonical model or the pose maths is wrong, or the index
-   table is mirrored — both make the fit unresolvable and surface as
+   table is mirrored -- both make the fit unresolvable and surface as
    `implausible_pose`. Confirmed against hardware 2026-08-12: a wrong-handed
    model refused all 120 frames.
 2. **Eyes hard left, head still** -- `gaze.x` must go positive, since the
    frame isn't mirrored and gaze is measured in image x. Checks iris tracking
-   and sign convention. **Cannot detect a left/right swap** — both eyes are
+   and sign convention. **Cannot detect a left/right swap** -- both eyes are
    averaged in image coordinates, so permuting the labels returns the same
    number.
 3. **Turn your head left** -- `yaw` must go positive, for the same reason.
    This is the step that actually adjudicates the mapping, because yaw comes
-   from a pose fit that has a handedness — a mirrored table makes that fit
+   from a pose fit that has a handedness -- a mirrored table makes that fit
    fail rather than just read wrong. A modest turn: the bar is 10 degrees, and
    past roughly 70 degrees the landmark set stops being usable at all
    (`check_topology` refuses as `nose_outside_eyes`).
 
-Steps 2 and 3 test different things over different parts of the table — iris
+Steps 2 and 3 test different things over different parts of the table -- iris
 tracking and sign for one, the pose fit's handedness for the other.
 
-**Don't judge direction from another app's camera preview** — video-call
+**Don't judge direction from another app's camera preview** -- video-call
 software usually mirrors the image; this reads the raw, unmirrored frame.
 "My left" below always means the left side of your own body.
 """
@@ -88,7 +88,7 @@ class Gui:
     """A live preview of the three steps, drawn with OpenCV. Opt-in (`--gui`).
 
     This check hunts a sign error, and the headless version asks you to move
-    blind and reads the verdict back four seconds later — a FAIL can't tell a
+    blind and reads the verdict back four seconds later -- a FAIL can't tell a
     wrong mapping from someone who looked the wrong way. Watching the number
     move live fixes that.
 
@@ -141,7 +141,7 @@ class Gui:
         """RGB in, BGR out.
 
         Every layer above `OpenCvFrameSource.read()` assumes RGB, but `imshow`
-        wants BGR — skip the conversion and the preview looks blue-tinted in
+        wants BGR -- skip the conversion and the preview looks blue-tinted in
         a way that gets blamed on the camera.
         """
         return self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)

@@ -120,7 +120,7 @@ def largest_gap(timestamps: np.ndarray) -> float:
 def pos_pulse(rgb: np.ndarray, fps: float) -> np.ndarray:
     """Pulse waveform from a sequence of mean-RGB samples.
 
-    `rgb` is (n_frames, 3) in R, G, B order — one mean colour per frame over the
+    `rgb` is (n_frames, 3) in R, G, B order -- one mean colour per frame over the
     face region. Returns a 1-D waveform of the same length, suitable for
     `ppg_processing.estimate_window`.
 

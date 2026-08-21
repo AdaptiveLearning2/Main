@@ -2,7 +2,7 @@
 """Capture mean face colour to a fixture, for validating POS against ECG.
 
 Records **no video**. Each frame is reduced to three numbers and a quality
-figure, then dropped, exactly as the live adapter does — so the fixture is
+figure, then dropped, exactly as the live adapter does -- so the fixture is
 safe to commit and read in a test.
 
 Uses the product's own `FaceLocator` and `mean_rgb`, so a result here is a
@@ -22,7 +22,7 @@ a sample.
 
 `t` is seconds since capture start, from the same `perf_counter` clock the
 adapter stamps samples with, so samples are placed by timestamp rather than by
-index — matching how the shipped path works.
+index -- matching how the shipped path works.
 
 Uses `perf_counter`, not `time.monotonic()`: on Windows the latter resolves
 only 15.625 ms, which can make an evenly-running camera look like it stutters.
@@ -102,7 +102,7 @@ def main() -> int:
                     continue
                 frames += 1
 
-                # Luma weights, matching the adapter exactly — a flat channel
+                # Luma weights, matching the adapter exactly -- a flat channel
                 # mean would be a different (redder) image and would break
                 # detection the same way it would in production.
                 gray = frame.astype(np.float32) @ LUMA_WEIGHTS

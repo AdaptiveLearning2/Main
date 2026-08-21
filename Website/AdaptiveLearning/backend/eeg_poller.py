@@ -1,4 +1,4 @@
-"""Background pollers — VERBOSE diagnostic version."""
+"""Background pollers -- VERBOSE diagnostic version."""
 from __future__ import annotations
 
 import os

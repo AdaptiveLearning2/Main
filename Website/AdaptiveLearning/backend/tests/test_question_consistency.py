@@ -187,3 +187,14 @@ def test_a_mixed_number_inside_the_list_fails_open():
 
 def test_a_zero_denominator_fails_open_rather_than_raising():
     assert qc.dataset_mismatch("Order these: 1/0, 3/4", ["1/0", "3/4"]) is None
+
+
+def test_an_oversized_fraction_fails_open_rather_than_raising():
+    """float() of a Fraction with an oversized numerator raises OverflowError,
+    where the equivalent plain decimal degrades to inf -- so this is specific
+    to the fraction path. Nothing here may raise: these run inside the
+    generation retry loops, and an escaping exception kills the generation
+    instead of retrying it."""
+    huge = "1" + "0" * 400
+    assert qc._as_floats([huge + "/1", "2"]) is None
+    assert qc.dataset_mismatch("Order these: 3/4, 0.5", [huge + "/1", "2"]) is None

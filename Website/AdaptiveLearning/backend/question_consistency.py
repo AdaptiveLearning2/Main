@@ -64,7 +64,11 @@ def _as_floats(values):
         s = s.replace(" ", "")
         try:
             out.append(float(Fraction(s)) if "/" in s else float(s))
-        except (ValueError, ZeroDivisionError):
+        except (ValueError, ZeroDivisionError, OverflowError):
+            # OverflowError is specific to the fraction path: float() of an
+            # absurd decimal degrades to inf, but float() of a Fraction with
+            # an oversized numerator raises. Nothing in this module may raise
+            # -- it runs inside the generation retry loops.
             return None
     return out
 

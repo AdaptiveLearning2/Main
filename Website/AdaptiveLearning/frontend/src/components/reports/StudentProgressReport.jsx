@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
-import { WeeklySignalReport, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
+import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 // Persisted so the choice survives navigation between students. Shared with
@@ -56,6 +56,9 @@ export default function StudentProgressReport({
   const [name, setName]           = useState(initialName)
   const [signalReport, setSignalReport] = useState(null)
   const [signalError, setSignalError]   = useState(null)
+  // Its own state, and no error twin: the trend carries `retrieved`, so a
+  // failed read is a state of the payload rather than the absence of one.
+  const [trend, setTrend]               = useState(null)
   const [loadError, setLoadError]       = useState(null)
   const [strategies, setStrategies]     = useState(null)
   const [strategySource, setStrategySource]   = useState(null)
@@ -124,6 +127,20 @@ export default function StudentProgressReport({
     // student and show one student's report under another's name.
     return () => { cancelled = true }
   }, [studentId, nameFetch])
+
+  // Separate from the weekly report: a different endpoint over a different
+  // table, and neither should be able to blank the other. On failure the
+  // payload's own `retrieved: false` is what the panel renders, so there is
+  // nothing to catch into a second error state -- but a *thrown* request has
+  // no payload at all, so it is given one rather than left null, which the
+  // panel would read as "still loading" for ever.
+  useEffect(() => {
+    let cancelled = false
+    apiFetch(`/api/students/${studentId}/signal-trend`)
+      .then(r => { if (!cancelled) setTrend(r) })
+      .catch(() => { if (!cancelled) setTrend({ weeks: [], retrieved: false }) })
+    return () => { cancelled = true }
+  }, [studentId])
 
 
 
@@ -219,6 +236,11 @@ export default function StudentProgressReport({
               <WeeklySignalReport report={signalReport} title="Weekly EEG & Face Report" />
             </div>
           )}
+
+          {/* Outside the `signalReport` gate above: the trend reads a
+              different table through a different endpoint, so a weekly report
+              that failed says nothing about whether the term history loaded. */}
+          {showSignals && trend && <SignalTrend trend={trend} />}
 
           {showStrategies && (
             <StrategyPanel

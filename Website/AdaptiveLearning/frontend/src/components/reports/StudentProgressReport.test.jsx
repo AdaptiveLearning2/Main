@@ -25,12 +25,18 @@ function urlsFor(fragment) {
   return apiFetch.mock.calls.map(c => String(c[0])).filter(u => u.includes(fragment))
 }
 
+// The trend reads a different table through a different endpoint, so it has
+// its own empty fixture rather than sharing the weekly report's.
+const emptyTrend = { weeks: [], retrieved: true, heart_included: false,
+                     emotion_included: true }
+
 // The default responses, so a test overriding one endpoint can defer the
 // rest here rather than restating all four.
 function defaultFetch(url) {
   const u = String(url)
   if (u.includes('/stats/'))                return Promise.resolve({ total_questions: 4, total_correct: 2, current_streak: 1 })
   if (u.includes('/weekly-report'))         return Promise.resolve(emptyReport)
+  if (u.includes('/signal-trend'))          return Promise.resolve(emptyTrend)
   if (u.includes('/learning-strategies'))   return Promise.resolve({ strategies: ['Review fractions'], source: 'rule-based' })
   return Promise.resolve([]) // sessions + performance
 }
@@ -151,4 +157,20 @@ it('hides the sensor panels when the caller asks, without changing the request',
   // Still fetched -- the request is unchanged; only rendering is.
   await waitFor(() => expect(urlsFor('/weekly-report')).toHaveLength(1))
   expect(screen.queryByText(/Weekly EEG/)).not.toBeInTheDocument()
+})
+
+
+it('a failed trend does not blank the weekly report, or the other way round', async () => {
+  // Two endpoints over two tables. Sharing one error state would let either
+  // failure claim the other channel had nothing to show.
+  apiFetch.mockImplementation(url => {
+    const u = String(url)
+    if (u.includes('/signal-trend')) return Promise.reject(new Error('down'))
+    return defaultFetch(u)
+  })
+
+  renderReport()
+
+  expect(await screen.findByText(/term trend could not be loaded/i)).toBeInTheDocument()
+  expect(screen.getByText(/Weekly EEG & Face Report/i)).toBeInTheDocument()
 })

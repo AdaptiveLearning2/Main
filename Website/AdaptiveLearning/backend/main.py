@@ -1138,6 +1138,171 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
     return out
 
 
+# How many weeks a trend may span. Bounded like every other report window --
+# the read is one query whatever the range, but the payload is per week and a
+# caller asking for 500 would build a chart nobody can read.
+_TREND_MAX_WEEKS = 26
+
+
+def _week_start(day: date) -> date:
+    """The Monday of `day`'s week.
+
+    Weeks start on Monday rather than Sunday because the buckets are school
+    weeks and `day` is already a school day resolved in the school's own
+    timezone -- see `_school_day`. Using the raw date is safe here for exactly
+    that reason: the timezone was applied when the rollup row was written.
+    """
+    return day - timedelta(days=day.weekday())
+
+
+def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
+                  include_emotion: bool = True,
+                  consent_retrieved: bool = True,
+                  emotion_revoked_at: str | None = None,
+                  heart_revoked_at: str | None = None):
+    """Week-over-week averages, read from the rollup and nothing else.
+
+    Deliberately not built on `_weekly_signal_report`. That one reads the
+    per-sample tables under a row cap, which is right for a week and wrong for
+    six months: the cap trims oldest-first, so the early weeks of a long range
+    would come back empty and read as a quiet term. `signal_daily_rollup` has
+    one row per student per day per channel, so a half-year is a few hundred
+    rows and no cap is needed.
+
+    It is also the only source that outlives `expire_signal_rows`. A trend is
+    the surface most likely to be read *after* a school year ends, which is
+    precisely when the raw rows are gone.
+
+    Weighted by `trusted_sample_count`, and that is not a preference -- it is
+    what the stored averages were computed over. `rollup_signal_day` writes
+    `avg(focus)` for cognitive and `avg(...) FILTER (WHERE trusted)` for heart;
+    Postgres `avg()` skips nulls, so both denominators are the trusted count.
+    Weighting by `sample_count` would divide by rows the average never saw.
+
+    One approximation, stated rather than hidden: `avg_rmssd_ms` has a smaller
+    true denominator than the other heart averages, because roughly one trusted
+    window in five is gated out of RMSSD (see CLAUDE.md on `rmssd_rejected_by`)
+    and the rollup stores no separate count for it. So a week's RMSSD is
+    weighted by a number slightly larger than its own n. The error is between
+    days, never within one, and correcting it needs a column the schema does
+    not have and a backfill that deleted rows cannot supply.
+    """
+    tz = _school_timezone()
+    school_today = _utc_now().astimezone(tz).date()
+    # Whole weeks back from the Monday of the current week, so the range always
+    # starts on a week boundary. Counting back `weeks * 7` days from today
+    # would put a part-week at each end and make the first bar a fraction of
+    # the others while looking like a full one.
+    first_monday = _week_start(school_today) - timedelta(weeks=weeks - 1)
+
+    rows: list = []
+    retrieved = True
+    try:
+        rows = (supabase.table("signal_daily_rollup").select("*")
+                .eq("user_id", student_id)
+                .gte("day", first_monday.isoformat())
+                .lte("day", school_today.isoformat())
+                .execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        # Same three-state rule as every other reporting helper: an empty list
+        # is also what a genuinely quiet term looks like, so the flag is the
+        # only thing that tells them apart.
+        print(f"[signal_trend] {student_id}: {e}")
+        retrieved = False
+
+    # Every week in range, including the empty ones. A week with no rows has to
+    # appear as a gap in the series rather than be dropped, or a fortnight off
+    # school renders as the weeks either side sitting next to each other.
+    buckets: dict[date, dict] = {}
+    for i in range(weeks):
+        monday = first_monday + timedelta(weeks=i)
+        buckets[monday] = {
+            "week_start": monday.isoformat(),
+            "sums": {k: [0.0, 0] for k in ("focus", "stress", "engagement",
+                                           "heart_rate_bpm", "rmssd_ms")},
+            "cognitive_samples": 0,
+            "heart_samples": 0,
+            "emotion_samples": 0,
+            "days_with_data": set(),
+            "heart_sources": set(),
+            "emotion_counts": {},
+        }
+
+    COLUMNS = {
+        "cognitive": (("focus", "avg_focus"), ("stress", "avg_stress"),
+                      ("engagement", "avg_engagement")),
+        "heart": (("heart_rate_bpm", "avg_heart_rate_bpm"),
+                  ("rmssd_ms", "avg_rmssd_ms")),
+    }
+
+    for r in rows:
+        channel = r.get("channel")
+        if channel == "heart" and not include_heart:
+            continue
+        if channel == "emotion" and not include_emotion:
+            continue
+        try:
+            day = date.fromisoformat(str(r.get("day")))
+        except (TypeError, ValueError):
+            continue
+        b = buckets.get(_week_start(day))
+        if b is None:
+            continue
+
+        n = r.get("trusted_sample_count") or 0
+        b["days_with_data"].add(day.isoformat())
+        if channel == "cognitive":
+            b["cognitive_samples"] += n
+        elif channel == "heart":
+            b["heart_samples"] += n
+            for s in (r.get("heart_sources") or []):
+                b["heart_sources"].add(s)
+        elif channel == "emotion":
+            b["emotion_samples"] += n
+            for label, count in (r.get("emotion_counts") or {}).items():
+                b["emotion_counts"][label] = b["emotion_counts"].get(label, 0) + count
+
+        for key, column in COLUMNS.get(channel, ()):
+            value = r.get(column)
+            # A null average is a day the channel recorded nothing usable, not
+            # a zero. Contributing 0 would drag the week down by exactly the
+            # days that measured nothing.
+            if isinstance(value, (int, float)) and n > 0:
+                b["sums"][key][0] += float(value) * n
+                b["sums"][key][1] += n
+
+    def _mean(pair):
+        total, n = pair
+        return round(total / n, 4) if n else None
+
+    out = []
+    for monday in sorted(buckets):
+        b = buckets[monday]
+        out.append({
+            "week_start": b["week_start"],
+            **{k: _mean(v) for k, v in b["sums"].items()},
+            "cognitive_samples": b["cognitive_samples"],
+            "heart_samples": b["heart_samples"],
+            "emotion_samples": b["emotion_samples"],
+            "days_with_data": len(b["days_with_data"]),
+            # Sorted so a week's sources are stable between reads -- this rides
+            # on a chart caption, and an order that shuffles reads as a change.
+            "heart_sources": sorted(b["heart_sources"]),
+            "emotion_distribution": b["emotion_counts"],
+        })
+
+    return {
+        "weeks": out,
+        "retrieved": retrieved,
+        "heart_included": include_heart,
+        "emotion_included": include_emotion,
+        "consent_retrieved": consent_retrieved,
+        "emotion_revoked_at": emotion_revoked_at,
+        "heart_revoked_at": heart_revoked_at,
+        "timezone": str(tz),
+    }
+
+
 def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = True,
                           include_emotion: bool = True,
                           consent_retrieved: bool = True,
@@ -2198,6 +2363,25 @@ def student_performance(student_id: str, request: Request):
         .select("*, math_topics(topic_name)") \
         .eq("user_id", student_id).execute()
     return res.data or []
+
+
+@app.get("/api/students/{student_id}/signal-trend")
+def student_signal_trend(student_id: str, request: Request, weeks: int = 8,
+                         include_face: bool = True):
+    """Week-over-week signal averages for a student.
+
+    Same access rule and same consent gating as the weekly report -- it is the
+    same data one aggregation coarser, so nothing here may be readable by
+    anyone who could not read that.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    channels = _reportable_channels(student_id, include_face)
+    return _signal_trend(student_id, max(2, min(weeks, _TREND_MAX_WEEKS)),
+                         include_heart=channels.heart,
+                         include_emotion=channels.emotion,
+                         consent_retrieved=channels.consent_retrieved,
+                         emotion_revoked_at=channels.emotion_revoked_at,
+                         heart_revoked_at=channels.heart_revoked_at)
 
 
 @app.get("/api/students/{student_id}/weekly-report")

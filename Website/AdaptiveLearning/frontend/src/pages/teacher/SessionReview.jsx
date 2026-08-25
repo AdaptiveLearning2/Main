@@ -40,7 +40,7 @@ function ArchivedChart({ url, label }) {
     <figure className="mt-3">
       <img src={url} alt={label} loading="lazy"
            className="w-full max-w-2xl mx-auto rounded-xl border border-gray-100 dark:border-gray-800 bg-white" />
-      <figcaption className="text-[11px] text-gray-400 text-center mt-2">
+      <figcaption className="text-[11px] text-gray-600 text-center mt-2 dark:text-gray-400">
         Archived chart — rendered when the session closed
       </figcaption>
     </figure>
@@ -115,7 +115,7 @@ function SessionReviewBody({ sessionId }) {
 
   if (loading) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-gray-500 dark:text-gray-400">
         <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
           className="w-10 h-10 border-4 border-violet-600 border-t-transparent rounded-full mx-auto mb-3" />
         Loading session…
@@ -352,7 +352,7 @@ function SessionReviewBody({ sessionId }) {
           { label: 'Accuracy',          value: totalAnswers ? `${acc}%` : '—', icon: <CheckCircle2 size={16} className="text-violet-500" /> },
         ].map(t => (
           <div key={t.label} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-4 shadow-sm">
-            <div className="flex items-center gap-2 mb-1">{t.icon}<span className="text-[11px] uppercase tracking-wider text-gray-400 font-bold">{t.label}</span></div>
+            <div className="flex items-center gap-2 mb-1">{t.icon}<span className="text-[11px] uppercase tracking-wider text-gray-600 font-bold dark:text-gray-400">{t.label}</span></div>
             <div className="text-2xl font-black text-gray-900 dark:text-white">{t.value}</div>
           </div>
         ))}
@@ -368,7 +368,7 @@ function SessionReviewBody({ sessionId }) {
                 archive keeps cognitive and heart separate, unlike the live merged trace. */}
             {isUrl(archivedChart('cognitive_timeline')) || isUrl(archivedChart('heart_rate')) ? (
               <>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   The per-sample rows for this session have expired. These are the
                   charts as they were when it closed.
                 </p>
@@ -388,11 +388,11 @@ function SessionReviewBody({ sessionId }) {
             ) : (
               <>
                 <div className="text-5xl mb-2">🧠</div>
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
                   {noChartCopy(['cognitive_timeline', 'heart_rate'])}
                 </p>
                 {/* Only shown here, not beside an archived chart -- that would tell a teacher to wait on a session that already ended. */}
-                <p className="text-[11px] text-gray-400 mt-1">Once a sensor starts streaming, it'll show up here.</p>
+                <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">Once a sensor starts streaming, it'll show up here.</p>
               </>
             )}
           </div>
@@ -467,7 +467,7 @@ function SessionReviewBody({ sessionId }) {
           </AccessibleChart>
         )}
         {hasChart && answers.length > 0 && (
-          <p className="text-[11px] text-gray-400 mt-2">
+          <p className="text-[11px] text-gray-600 mt-2 dark:text-gray-400">
             Vertical lines = answer events · <span className="text-emerald-500">green</span> correct ·{' '}
             <span className="text-rose-500">red</span> incorrect
           </p>
@@ -483,7 +483,7 @@ function SessionReviewBody({ sessionId }) {
             <div className="text-4xl mb-2">📷</div>
             {/* No archived equivalent here, deliberately: the archive only kept the proportion pie (shown below), not the sequence this section shows. */}
             {/* Compared against the state, not the rendered string, since two states can share wording. */}
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
               {isUrl(archivedChart('emotion_pie'))
                 ? 'The per-sample rows have expired, so the moment-by-moment timeline is gone. The emotion mix is below.'
                 : archivedChart('emotion_pie') === 'unavailable'
@@ -499,7 +499,7 @@ function SessionReviewBody({ sessionId }) {
               <div key={i} title={`${fmtTime(r.t)} — ${r.emotion || 'unknown'}`}
                    className="flex flex-col items-center text-xs flex-shrink-0 w-14">
                 <span className="text-2xl">{EMOJI[r.emotion] || '🙂'}</span>
-                <span className="text-[9px] text-gray-400 mt-0.5">{fmtTime(r.t)}</span>
+                <span className="text-[9px] text-gray-600 mt-0.5 dark:text-gray-400">{fmtTime(r.t)}</span>
               </div>
             ))}
           </div>
@@ -520,7 +520,7 @@ function SessionReviewBody({ sessionId }) {
               {emotionSlices.length === 0 ? (
                 isUrl(archivedChart('emotion_pie'))
                   ? <ArchivedChart url={archivedChart('emotion_pie')} label="Emotion mix" />
-                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
+                  : <p className="text-sm text-gray-600 py-6 text-center dark:text-gray-400">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
                 {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
@@ -546,7 +546,7 @@ function SessionReviewBody({ sessionId }) {
               {stressSlices.length === 0 ? (
                 isUrl(archivedChart('stress_pie'))
                   ? <ArchivedChart url={archivedChart('stress_pie')} label="Autonomic arousal" />
-                  : <p className="text-sm text-gray-400 py-6 text-center">{NO_CHART_COPY.unavailable}</p>
+                  : <p className="text-sm text-gray-600 py-6 text-center dark:text-gray-400">{NO_CHART_COPY.unavailable}</p>
               ) : (
               <AccessibleChart className="h-52"
                 {...sliceSpec('Heart-rate stress', stressSlices, 'windows', { rowLabel: 'Band' })}>
@@ -570,11 +570,11 @@ function SessionReviewBody({ sessionId }) {
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
         <h2 className="font-black text-gray-900 dark:text-white px-5 pt-5 mb-3">Answers</h2>
         {answers.length === 0 ? (
-          <p className="px-5 pb-5 text-sm text-gray-400">No answers recorded.</p>
+          <p className="px-5 pb-5 text-sm text-gray-600 dark:text-gray-400">No answers recorded.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-[11px] uppercase tracking-wider text-gray-400">
+              <thead className="text-left text-[11px] uppercase tracking-wider text-gray-600 dark:text-gray-400">
                 <tr>
                   <th className="px-5 py-2 font-bold">Time</th>
                   <th className="font-bold">Question ID</th>
@@ -587,7 +587,7 @@ function SessionReviewBody({ sessionId }) {
                   const t = new Date(a.answered_at).getTime()
                   return (
                     <tr key={i} className="border-t border-gray-50 dark:border-gray-800">
-                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap">{fmtTime(t)}</td>
+                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap dark:text-gray-400">{fmtTime(t)}</td>
                       <td className="text-gray-700 dark:text-gray-300 font-mono text-xs">{(a.question_id || '').slice(0, 12)}…</td>
                       <td className="text-gray-700 dark:text-gray-300">{a.selected_index ?? '—'}</td>
                       <td className="pr-5">

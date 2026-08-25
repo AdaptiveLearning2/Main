@@ -79,7 +79,7 @@ export default function TeacherAnalytics() {
           >
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">{c.label}</p>
+                <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-1 dark:text-gray-400">{c.label}</p>
                 <p className="text-3xl font-black text-gray-900 dark:text-white">{loading || failed ? '—' : c.value}</p>
               </div>
               <div className={`w-10 h-10 bg-gradient-to-br ${c.color} rounded-xl flex items-center justify-center text-lg shadow`}>{c.emoji}</div>
@@ -98,9 +98,9 @@ export default function TeacherAnalytics() {
               <div className="w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : failed ? (
-            <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Not loaded</div>
+            <div className="h-64 flex items-center justify-center text-gray-600 text-sm dark:text-gray-400">Not loaded</div>
           ) : topicData.length === 0 ? (
-            <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No questions yet</div>
+            <div className="h-64 flex items-center justify-center text-gray-600 text-sm dark:text-gray-400">No questions yet</div>
           ) : (
             <AccessibleChart
               height={280} className=""
@@ -124,7 +124,7 @@ export default function TeacherAnalytics() {
           className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
           <h3 className="font-black text-gray-900 dark:text-white mb-6">Difficulty Split</h3>
           {loading || diffData.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-gray-400 text-sm">No data yet</div>
+            <div className="h-48 flex items-center justify-center text-gray-600 text-sm dark:text-gray-400">No data yet</div>
           ) : (
             <AccessibleChart
               height={200} className=""

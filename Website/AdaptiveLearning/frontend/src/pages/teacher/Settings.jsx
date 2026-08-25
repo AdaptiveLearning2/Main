@@ -129,7 +129,7 @@ export default function TeacherSettings() {
                 <div>
                   <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1.5">Email</label>
                   <input defaultValue={user?.email} disabled
-                    className="w-full px-4 py-2.5 bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-400 cursor-not-allowed" />
+                    className="w-full px-4 py-2.5 bg-gray-100 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-600 cursor-not-allowed dark:text-gray-400" />
                 </div>
                 <button onClick={saveName} disabled={savingName || displayName === null}
                   className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-sm font-bold transition shadow disabled:opacity-50">

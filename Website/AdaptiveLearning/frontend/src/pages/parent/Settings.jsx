@@ -131,7 +131,7 @@ export default function ParentSettings() {
             placeholder={displayName === null ? 'Loading…' : 'Your name'}
             className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition text-sm disabled:opacity-60"
           />
-          <p className="text-xs text-gray-400 mt-1.5">
+          <p className="text-xs text-gray-600 mt-1.5 dark:text-gray-400">
             What your children see when you turn a sensor back on.
           </p>
 
@@ -162,7 +162,7 @@ export default function ParentSettings() {
           <h2 className="font-black text-gray-900 dark:text-white flex items-center gap-2 mb-1">
             <Users size={16} className="text-indigo-500" /> Your children
           </h2>
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="text-xs text-gray-600 mb-4 dark:text-gray-400">
             Unlinking removes your access to a child&apos;s reports and to their
             sensor settings. Nothing already recorded is deleted, and their own
             choices are unchanged.
@@ -187,7 +187,7 @@ export default function ParentSettings() {
                     {child.name || child.email || 'Child'}
                   </p>
                   {fmtDate(child.linked_at) && (
-                    <p className="text-xs text-gray-400">Linked {fmtDate(child.linked_at)}</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">Linked {fmtDate(child.linked_at)}</p>
                   )}
                 </div>
                 {confirmingUnlink === child.user_id ? (
@@ -246,7 +246,7 @@ export default function ParentSettings() {
                   step, since a parent can reverse their own change here. */}
               <ConsentChannels studentId={child.user_id} role="parent"
                                studentName={child.name || null} />
-              <p className="text-xs text-gray-400 mt-4">
+              <p className="text-xs text-gray-600 mt-4 dark:text-gray-400">
                 Turning something back on tells {child.name || 'your child'} the
                 next time they open the app.
               </p>

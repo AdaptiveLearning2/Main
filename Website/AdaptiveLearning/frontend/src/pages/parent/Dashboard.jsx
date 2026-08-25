@@ -103,7 +103,7 @@ export default function ParentDashboard() {
                     </div>
                     <div>
                       <h3 className="font-black text-gray-900 dark:text-white">{child.name || 'Student'}</h3>
-                      <p className="text-xs text-gray-400">{child.email || 'No email available'}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">{child.email || 'No email available'}</p>
                     </div>
                   </div>
                   <Link to={`/parent/child/${child.user_id}`}>
@@ -182,11 +182,11 @@ export default function ParentDashboard() {
                           <div key={s.id} className="flex items-center justify-between p-2.5 bg-slate-50 dark:bg-gray-800 rounded-xl">
                             <div>
                               <p className="text-xs font-semibold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>
-                              <p className="text-xs text-gray-400">{new Date(s.started_at).toLocaleDateString()}</p>
+                              <p className="text-xs text-gray-600 dark:text-gray-400">{new Date(s.started_at).toLocaleDateString()}</p>
                             </div>
                             <div className="text-right">
                               <p className={`text-sm font-black ${sAcc >= 70 ? 'text-green-500' : sAcc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{sAcc}%</p>
-                              <p className="text-xs text-gray-400">{s.questions_answered}q</p>
+                              <p className="text-xs text-gray-600 dark:text-gray-400">{s.questions_answered}q</p>
                             </div>
                           </div>
                         )
@@ -198,7 +198,7 @@ export default function ParentDashboard() {
             )
           })}
 
-          <Link to="/parent/link" className="flex items-center justify-center gap-2 p-4 bg-white dark:bg-gray-900 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 text-gray-400 hover:border-emerald-400 hover:text-emerald-600 transition font-semibold text-sm">
+          <Link to="/parent/link" className="flex items-center justify-center gap-2 p-4 bg-white dark:bg-gray-900 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 text-gray-600 hover:border-emerald-400 hover:text-emerald-600 transition font-semibold text-sm dark:text-gray-400">
             <Users size={16} /> Link another child
           </Link>
         </div>

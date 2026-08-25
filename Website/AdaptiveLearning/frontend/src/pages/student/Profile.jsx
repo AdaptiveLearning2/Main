@@ -195,7 +195,7 @@ export default function Profile() {
                     <motion.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
                       initial={{ width: 0 }} animate={{ width: `${acc}%` }} transition={{ duration: 0.8 }} />
                   </div>
-                  <p className="text-xs text-gray-400 mt-2">
+                  <p className="text-xs text-gray-600 mt-2 dark:text-gray-400">
                     {acc >= 70 ? '🔥 Crushing it!' : acc >= 40 ? '👍 Solid work!' : '💪 Keep grinding!'}
                   </p>
                 </div>
@@ -212,7 +212,7 @@ export default function Profile() {
                   <input value={editName} onChange={e => setEditName(e.target.value)}
                     className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     placeholder="What should we call you?" />
-                  <p className="text-[11px] text-gray-400 mt-1">This is what teachers and the leaderboard see.</p>
+                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">This is what teachers and the leaderboard see.</p>
                 </div>
 
                 <div>
@@ -222,7 +222,7 @@ export default function Profile() {
                     <option value="">— not set —</option>
                     {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                   </select>
-                  <p className="text-[11px] text-gray-400 mt-1">Used in Solo mode. Class mode uses the class's grade instead.</p>
+                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">Used in Solo mode. Class mode uses the class's grade instead.</p>
                 </div>
 
                 <button onClick={saveProfile} disabled={saving}
@@ -237,7 +237,7 @@ export default function Profile() {
               <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm">
                 {/* Show a loading message instead of default controls, so a tap
                     here can't save a setting the student never chose. */}
-                <p className="text-sm text-gray-400">Loading your preferences…</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Loading your preferences…</p>
               </div>
             )}
             {tab === 'Preferences' && prefs && (
@@ -259,7 +259,7 @@ export default function Profile() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">
                     Where each session starts. You can still change it while you practise — and
                     if the sensors show you are struggling, questions get easier whatever this says.
                   </p>
@@ -276,7 +276,7 @@ export default function Profile() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">
                     You are asked when you reach it, between questions. Nothing stops on its own.
                   </p>
                 </div>
@@ -287,7 +287,7 @@ export default function Profile() {
                         push notification -- there's no service worker or
                         scheduled fan-out behind it. */}
                     <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Practice reminder</p>
-                    <p className="text-xs text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">Show a nudge on your dashboard when you have not practised today</p>
                   </div>
                   <Toggle checked={prefs.practice_reminders}
                           onChange={v => savePrefs({ ...prefs, practice_reminders: v })} />

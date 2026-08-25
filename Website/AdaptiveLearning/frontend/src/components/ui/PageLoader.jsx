@@ -8,7 +8,7 @@ export default function PageLoader() {
         transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
         className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full"
       />
-      <p className="text-sm text-gray-400 dark:text-gray-500 tracking-wide">Loading...</p>
+      <p className="text-sm text-gray-600 dark:text-gray-400 tracking-wide">Loading...</p>
     </div>
   )
 }

@@ -45,7 +45,7 @@ export default function Leaderboard() {
                   {(p.display_name || '?')[0].toUpperCase()}
                 </div>
                 <p className="text-xs font-black text-gray-900 dark:text-white text-center leading-tight">{p.display_name}</p>
-                <p className="text-xs text-gray-400 mb-2">{p.total_correct} pts</p>
+                <p className="text-xs text-gray-600 mb-2 dark:text-gray-400">{p.total_correct} pts</p>
                 <div className={`w-full ${heights[i]} ${colors[i]} rounded-t-xl flex items-center justify-center text-white font-black text-lg shadow`}>
                   {p.rank}
                 </div>
@@ -79,7 +79,7 @@ export default function Leaderboard() {
                 className={`flex items-center justify-between px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 transition-colors hover:bg-slate-50 dark:hover:bg-gray-800 ${isMe ? 'ring-2 ring-inset ring-indigo-400' : ''}`}
               >
                 <div className="flex items-center gap-4">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${RANK_BADGE[p.rank] || 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-sm flex-shrink-0 ${RANK_BADGE[p.rank] || 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
                     {p.rank <= 3 ? MEDALS[p.rank - 1] : p.rank}
                   </div>
                   <div className="w-9 h-9 bg-gradient-to-br from-indigo-400 to-violet-500 rounded-full flex items-center justify-center text-white text-xs font-black flex-shrink-0">
@@ -90,17 +90,17 @@ export default function Leaderboard() {
                       {p.display_name}
                       {isMe && <span className="ml-2 text-indigo-600 text-xs font-semibold">(You)</span>}
                     </p>
-                    <p className="text-xs text-gray-400">🔥 {p.current_streak} day streak</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">🔥 {p.current_streak} day streak</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-6 text-right">
                   <div className="hidden sm:block">
                     <p className="text-sm font-black text-gray-900 dark:text-white">{acc}%</p>
-                    <p className="text-xs text-gray-400">accuracy</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">accuracy</p>
                   </div>
                   <div>
                     <p className="text-lg font-black text-indigo-600">{p.total_correct}</p>
-                    <p className="text-xs text-gray-400">correct</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">correct</p>
                   </div>
                 </div>
               </motion.div>

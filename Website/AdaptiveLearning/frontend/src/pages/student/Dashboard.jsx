@@ -333,11 +333,11 @@ export default function StudentDashboard() {
                     >
                       <div>
                         <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.title || 'Session'}</p>
-                        <p className="text-xs text-gray-400">{new Date(s.started_at).toLocaleDateString()}</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">{new Date(s.started_at).toLocaleDateString()}</p>
                       </div>
                       <div className="text-right">
                         <p className={`text-sm font-black ${pct >= 70 ? 'text-green-500' : pct >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{pct}%</p>
-                        <p className="text-xs text-gray-400">{s.questions_answered}q</p>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">{s.questions_answered}q</p>
                       </div>
                     </motion.div>
                   )

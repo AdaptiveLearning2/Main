@@ -120,7 +120,7 @@ export default function AdminLayout() {
         <button
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={toggleCollapsed}
-          className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-slate-700 transition z-10"
+          className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-slate-700 transition z-10 dark:text-gray-400"
         >
           {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
         </button>
@@ -137,7 +137,7 @@ export default function AdminLayout() {
           </button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Admin <span className="text-slate-600 dark:text-slate-400">Console</span></span>
           <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
-            {dark ? <Sun size={18} className="text-gray-500" /> : <Moon size={18} className="text-gray-500" />}
+            {dark ? <Sun size={18} className="text-gray-500 dark:text-gray-400" /> : <Moon size={18} className="text-gray-500 dark:text-gray-400" />}
           </button>
         </div>
 

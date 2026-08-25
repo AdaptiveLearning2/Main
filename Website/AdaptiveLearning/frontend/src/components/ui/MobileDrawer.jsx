@@ -57,7 +57,7 @@ export default function MobileDrawer({ open, onClose, label = 'Navigation', chil
               aria-label="Close menu"
               className="absolute top-4 right-4 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
             >
-              <X size={18} className="text-gray-500" />
+              <X size={18} className="text-gray-500 dark:text-gray-400" />
             </button>
             {children}
           </motion.aside>

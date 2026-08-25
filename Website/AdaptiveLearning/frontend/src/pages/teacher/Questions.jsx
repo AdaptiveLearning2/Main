@@ -45,7 +45,7 @@ function QuestionModal({ question, onClose }) {
               <span className={`text-xs font-bold px-2.5 py-1 rounded-full capitalize ${DIFF_STYLE[question.difficulty] || ''}`}>{question.difficulty}</span>
             )}
           </div>
-          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 hover:text-gray-700 dark:hover:text-gray-200 transition dark:text-gray-400">
             <X size={18} />
           </button>
         </div>
@@ -54,7 +54,7 @@ function QuestionModal({ question, onClose }) {
           {question.options?.map((opt, i) => (
             <div key={i}
               className={`flex items-center gap-3 p-3 rounded-xl text-sm border ${i === question.correct_index ? 'border-green-400 bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-200' : 'border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
-              <span className="w-6 h-6 flex-shrink-0 rounded-lg bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 flex items-center justify-center text-xs font-bold text-gray-500 dark:text-gray-400">
+              <span className="w-6 h-6 flex-shrink-0 rounded-lg bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 flex items-center justify-center text-xs font-bold text-gray-600 dark:text-gray-300">
                 {String.fromCharCode(65 + i)}
               </span>
               <span>{opt}</span>
@@ -62,7 +62,7 @@ function QuestionModal({ question, onClose }) {
             </div>
           ))}
         </div>
-        <p className="text-xs text-gray-400">ID: {question.id}</p>
+        <p className="text-xs text-gray-600 dark:text-gray-400">ID: {question.id}</p>
       </motion.div>
     </motion.div>
   )
@@ -117,7 +117,7 @@ export default function Questions() {
 
       <div className="flex flex-wrap gap-3 mb-6">
         <div className="relative">
-          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
           <input value={search} onChange={e => { setSearch(e.target.value); setPage(1) }}
             className="pl-9 pr-4 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 transition w-48"
             placeholder="Search questions..." />
@@ -128,7 +128,7 @@ export default function Questions() {
             className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 capitalize cursor-pointer">
             {TOPICS.map(t => <option key={t} value={t}>{t === 'all' ? 'All Topics' : t.replace('_', ' ')}</option>)}
           </select>
-          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none dark:text-gray-400" />
         </div>
 
         <div className="relative">
@@ -136,7 +136,7 @@ export default function Questions() {
             className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 capitalize cursor-pointer">
             {DIFFS.map(d => <option key={d} value={d}>{d === 'all' ? 'All Difficulties' : d}</option>)}
           </select>
-          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none dark:text-gray-400" />
         </div>
 
         {hasFilters && (
@@ -169,7 +169,7 @@ export default function Questions() {
                 onClick={() => setSelected(q)}
                 className="w-full flex items-start gap-4 px-5 py-4 border-b border-gray-50 dark:border-gray-800 last:border-0 hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors text-left"
               >
-                <span className="text-xs font-black text-gray-400 w-7 flex-shrink-0 pt-0.5">
+                <span className="text-xs font-black text-gray-600 w-7 flex-shrink-0 pt-0.5 dark:text-gray-400">
                   {(page - 1) * PER_PAGE + i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
@@ -183,7 +183,7 @@ export default function Questions() {
                     )}
                   </div>
                 </div>
-                <span className="text-xs text-gray-300 dark:text-gray-600 flex-shrink-0 pt-0.5">→</span>
+                <span className="text-xs text-gray-600 dark:text-gray-400 flex-shrink-0 pt-0.5">→</span>
               </motion.button>
             ))}
           </div>

@@ -30,7 +30,7 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
   return (
     <div>
       <div className="flex justify-between mb-1">
-        <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold">{label}</span>
+        <span className="text-[11px] uppercase tracking-wider text-gray-500 font-bold dark:text-gray-400">{label}</span>
         <span className="text-[11px] font-black text-gray-800 dark:text-gray-200">
           {value == null ? '—' : `${pct}%`}
         </span>
@@ -81,18 +81,18 @@ function StudentCard({ student, history }) {
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-black text-gray-900 dark:text-white truncate">{student.name}</p>
-          <p className="text-[11px] text-gray-400 truncate">{student.email}</p>
+          <p className="text-[11px] text-gray-600 truncate dark:text-gray-400">{student.email}</p>
         </div>
-        <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${active ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'}`}>
+        <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${active ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
           {active ? '● LIVE' : 'idle'}
         </span>
       </div>
 
       <div className="flex gap-2 mb-4 text-[10px]">
-        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${cog ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`}>
+        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${cog ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Brain size={11} /> Headband {cog ? 'on' : 'off'}
         </span>
-        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}`}>
+        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
         </span>
         {/* Names the sensor so a mid-session failover reads as a source change, not a student change.
@@ -100,7 +100,7 @@ function StudentCard({ student, history }) {
         {heart && (
           <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
             heart.trusted === false
-              ? 'bg-gray-100 text-gray-400 dark:bg-gray-800'
+              ? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
               : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
           }`}>
             <Heart size={11} /> {SOURCE_LABEL[heart.source] || heart.source}
@@ -123,7 +123,7 @@ function StudentCard({ student, history }) {
             {Math.round(heart.heart_rate_bpm)} bpm
           </span>
           {typeof heart.rmssd_ms === 'number' && (
-            <span className="text-xs text-gray-400">HRV {Math.round(heart.rmssd_ms)} ms</span>
+            <span className="text-xs text-gray-600 dark:text-gray-400">HRV {Math.round(heart.rmssd_ms)} ms</span>
           )}
         </div>
       )}
@@ -288,13 +288,13 @@ export default function Live() {
         <div className="text-center py-16">
           <div className="text-6xl mb-3">🏫</div>
           <p className="font-black text-gray-900 dark:text-white">No classes yet</p>
-          <p className="text-sm text-gray-500 mt-1">Create a class first under the Classes tab.</p>
+          <p className="text-sm text-gray-500 mt-1 dark:text-gray-400">Create a class first under the Classes tab.</p>
         </div>
       ) : students.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">👀</div>
           <p className="font-black text-gray-900 dark:text-white">Nobody's joined yet</p>
-          <p className="text-sm text-gray-500 mt-1">Share the join code so students can hop in.</p>
+          <p className="text-sm text-gray-500 mt-1 dark:text-gray-400">Share the join code so students can hop in.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">

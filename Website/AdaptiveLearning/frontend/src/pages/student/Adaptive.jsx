@@ -859,8 +859,8 @@ export default function Adaptive() {
             Muse Headband
             {headband.connected && <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● STREAMING</span>}
             {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
-            {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">offline</span>}
-            {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">on your device</span>}
+            {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
+            {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
             {/* Three states: push === null renders nothing (not asked yet), a
                 known not-recording state is amber, and only reachable +
                 running shows RECORDING. */}
@@ -872,7 +872,7 @@ export default function Adaptive() {
               <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
             )}
           </p>
-          <p className="text-[11px] text-gray-400 mt-0.5">
+          <p className="text-[11px] text-gray-600 mt-0.5 dark:text-gray-400">
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
             {headband.phase === 'connecting' && `🔗 Connecting to ${headband.deviceName || 'headband'}...`}
             {headband.phase === 'starting'   && 'Starting EEG session...'}
@@ -965,9 +965,9 @@ export default function Adaptive() {
                 ? <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● RECORDING</span>
                 : camera.running
                   ? <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">on, not recording</span>
-                  : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full">off</span>}
+                  : <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">off</span>}
             </p>
-            <p className="text-[11px] text-gray-400 mt-0.5">
+            <p className="text-[11px] text-gray-600 mt-0.5 dark:text-gray-400">
               {!headband.pushMode
                 ? 'The camera records through the app on this computer, which this deployment is not set up for. Nothing would be saved.'
                 : camera.busy
@@ -1105,7 +1105,7 @@ export default function Adaptive() {
                       <Plus size={14} /> Harder
                     </button>
                   </div>
-                  <p className="text-[11px] text-gray-400 mt-2 text-center">
+                  <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
                     Generating <strong>{biasLabel}</strong> questions for <strong>{effectiveGrade}</strong>
                   </p>
                 </div>
@@ -1211,7 +1211,7 @@ export default function Adaptive() {
                       {correct ? '🎉 Correct! Great job!' : '❌ Not quite — keep going!'}
                     </div>
                     <div className="flex items-center justify-center gap-2">
-                      <span className="text-xs text-gray-400">Next question:</span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Next question:</span>
                       <button onClick={() => setBias(-1)} className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${bias === -1 ? 'bg-emerald-500 text-white border-emerald-500' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>Easier</button>
                       <button onClick={() => setBias(0)}  className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${bias === 0 ? 'bg-indigo-600 text-white border-indigo-600' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>Auto</button>
                       <button onClick={() => setBias(1)}  className={`text-xs px-3 py-1.5 rounded-lg font-bold border ${bias === 1 ? 'bg-rose-500 text-white border-rose-500' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>Harder</button>
@@ -1241,7 +1241,7 @@ export default function Adaptive() {
                     <span className="text-xs font-medium text-gray-600 dark:text-gray-400 flex items-center gap-1">
                       {ICONS[topic]} {SHORT[topic] || topic.replace('_', ' ')}
                     </span>
-                    <span className={`text-xs font-black ${acc === null ? 'text-gray-400' : acc >= 70 ? 'text-green-600 dark:text-green-400' : acc >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                    <span className={`text-xs font-black ${acc === null ? 'text-gray-600' : acc >= 70 ? 'text-green-600 dark:text-green-400' : acc >= 40 ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}`}>
                       {acc === null ? '—' : `${acc}%`}
                     </span>
                   </div>
@@ -1253,7 +1253,7 @@ export default function Adaptive() {
                       transition={{ duration: 0.5 }}
                     />
                   </div>
-                  {s?.attempts > 0 && <p className="text-[10px] text-gray-400 mt-0.5">{s.correct}/{s.attempts} correct</p>}
+                  {s?.attempts > 0 && <p className="text-[10px] text-gray-600 mt-0.5 dark:text-gray-400">{s.correct}/{s.attempts} correct</p>}
                 </div>
               )
             })}
@@ -1321,13 +1321,13 @@ export default function Adaptive() {
                   )
                 }
 
-                const stateColor = { focused: 'text-green-400', stressed: 'text-red-400', neutral: 'text-yellow-400', insufficient_signal: 'text-gray-500' }
+                const stateColor = { focused: 'text-green-400', stressed: 'text-red-400', neutral: 'text-yellow-400', insufficient_signal: 'text-gray-400' }
 
                 return (
                   <>
                     {/* Row 0 — pipeline status */}
                     <div className="border border-gray-700 rounded p-2 space-y-1">
-                      <p className="text-gray-500 text-[10px] uppercase tracking-widest mb-1">Pipeline</p>
+                      <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Pipeline</p>
                       <div className="flex flex-wrap gap-x-6 gap-y-1">
                         <span><span className="text-green-400">✓</span> EEGResearch :8001</span>
                         <span className={museSvcRunning ? 'text-green-400' : 'text-yellow-400'}>
@@ -1342,7 +1342,7 @@ export default function Adaptive() {
                         <span className={ing.muse_connected ? 'text-green-400' : 'text-red-400'}>
                           {ing.muse_connected ? '✓' : '✗'} Headband BT{ing.muse_connected ? ` (${ing.active_muse_name || 'connected'})` : ' — not paired'}
                         </span>
-                        <span className={snap ? 'text-green-400' : 'text-gray-500'}>
+                        <span className={snap ? 'text-green-400' : 'text-gray-400'}>
                           {snap ? '✓' : '○'} EEG samples flowing
                         </span>
                       </div>
@@ -1351,21 +1351,21 @@ export default function Adaptive() {
                     {/* Row 1 — connection */}
                     <div className="flex flex-wrap gap-4">
                       <div>
-                        <p className="text-gray-500 mb-1">EEG Source</p>
+                        <p className="text-gray-400 mb-1">EEG Source</p>
                         <p className="text-white">{ing.eeg_source || '—'}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Bridge Mode</p>
+                        <p className="text-gray-400 mb-1">Bridge Mode</p>
                         <p className="text-white">{ing.bridge_mode || '—'}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Signal Quality</p>
+                        <p className="text-gray-400 mb-1">Signal Quality</p>
                         <p className={{ good: 'text-green-400', degraded: 'text-yellow-400', poor: 'text-red-400' }[feat.signal_quality] || 'text-gray-400'}>
                           {feat.signal_quality || (snap ? 'no data' : museSvcRunning ? 'waiting for bridge' : 'no session')}
                         </p>
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Learner State</p>
+                        <p className="text-gray-400 mb-1">Learner State</p>
                         <p className={stateColor[state.label] || 'text-gray-400'}>{state.label || '—'}</p>
                       </div>
                       {/* No difficulty tile here -- difficulty is chosen by
@@ -1377,19 +1377,19 @@ export default function Adaptive() {
                     {/* Row 2 — scores */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <p className="text-gray-500 mb-1">Focus <span className="text-white">{untrusted ? '—' : pct(feat.focus_score)}</span></p>
+                        <p className="text-gray-400 mb-1">Focus <span className="text-white">{untrusted ? '—' : pct(feat.focus_score)}</span></p>
                         {bar(untrusted ? null : feat.focus_score, 'bg-blue-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Calm <span className="text-white">{untrusted ? '—' : pct(feat.calm_score)}</span></p>
+                        <p className="text-gray-400 mb-1">Calm <span className="text-white">{untrusted ? '—' : pct(feat.calm_score)}</span></p>
                         {bar(untrusted ? null : feat.calm_score, 'bg-emerald-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Confidence <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
+                        <p className="text-gray-400 mb-1">Confidence <span className="text-white">{untrusted ? '—' : pct(feat.confidence)}</span></p>
                         {bar(untrusted ? null : feat.confidence, 'bg-violet-500')}
                       </div>
                       <div>
-                        <p className="text-gray-500 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !untrusted ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
+                        <p className="text-gray-400 mb-1">Stress (derived) <span className="text-white">{feat.calm_score != null && !untrusted ? pct(1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score)) : '—'}</span></p>
                         {bar(feat.calm_score != null && !untrusted ? 1 - (feat.calm_score > 1 ? feat.calm_score / 100 : feat.calm_score) : null, 'bg-red-500')}
                       </div>
                     </div>
@@ -1397,7 +1397,7 @@ export default function Adaptive() {
                     {/* Row 3 — bands */}
                     {Object.keys(bands).length > 0 && (
                       <div>
-                        <p className="text-gray-500 mb-1">EEG Bands</p>
+                        <p className="text-gray-400 mb-1">EEG Bands</p>
                         <div className="flex flex-wrap gap-x-4 gap-y-1">
                           {['delta','theta','alpha','beta','gamma'].map(b => (
                             <span key={b} className="text-white">{b}: <span className="text-yellow-300">{bands[b] != null ? bands[b].toFixed(3) : '—'}</span></span>
@@ -1408,7 +1408,7 @@ export default function Adaptive() {
 
                     {/* Row 4 — raw state reason */}
                     {state.reason && (
-                      <p className="text-gray-500">Reason: <span className="text-white">{state.reason}</span></p>
+                      <p className="text-gray-400">Reason: <span className="text-white">{state.reason}</span></p>
                     )}
                   </>
                 )

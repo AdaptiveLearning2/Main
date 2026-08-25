@@ -67,7 +67,7 @@ export default function AdminSchoolYear() {
   }
 
   if (error && !data) return <div className="p-6 text-sm text-rose-600">{error}</div>
-  if (!data || !form) return <div className="p-6 text-sm text-gray-400">Loading…</div>
+  if (!data || !form) return <div className="p-6 text-sm text-gray-600 dark:text-gray-400">Loading…</div>
 
   const tzValid = isValidTimezone(form.timezone)
 
@@ -164,7 +164,7 @@ export default function AdminSchoolYear() {
               recording for every student until it is corrected.
             </p>
           )}
-          <p id="school-timezone-hint" className="mt-1 text-xs text-gray-500">
+          <p id="school-timezone-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             The school’s own zone. It sets both the term boundaries and the day buckets on every
             report, so a wrong one moves a lesson onto the wrong day of a parent’s chart.
           </p>

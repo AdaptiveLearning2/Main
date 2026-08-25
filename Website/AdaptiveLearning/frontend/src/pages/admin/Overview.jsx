@@ -8,7 +8,7 @@ const STATUS = {
   degraded: { Icon: AlertTriangle, cls: 'text-amber-600 dark:text-amber-400' },
   // A check that could not run is `unknown`, never `ok` — a checkmark would
   // wrongly claim it passed.
-  unknown:  { Icon: HelpCircle,    cls: 'text-gray-400 dark:text-gray-500' },
+  unknown:  { Icon: HelpCircle,    cls: 'text-gray-600 dark:text-gray-400' },
 }
 
 const CHECK_LABELS = {
@@ -29,8 +29,8 @@ function HealthStrip() {
       .catch(() => setFailed(true))
   }, [])
 
-  if (failed) return <p className="text-sm text-gray-500">Could not read system health.</p>
-  if (!checks) return <p className="text-sm text-gray-400">Checking…</p>
+  if (failed) return <p className="text-sm text-gray-500 dark:text-gray-400">Could not read system health.</p>
+  if (!checks) return <p className="text-sm text-gray-600 dark:text-gray-400">Checking…</p>
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -62,8 +62,8 @@ function ConsentCounts() {
       .catch(() => setFailed(true))
   }, [])
 
-  if (failed) return <p className="text-sm text-gray-500">Could not read consent counts.</p>
-  if (!data) return <p className="text-sm text-gray-400">Loading…</p>
+  if (failed) return <p className="text-sm text-gray-500 dark:text-gray-400">Could not read consent counts.</p>
+  if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
 
   const tiles = [
     ['Students', data.students],
@@ -128,7 +128,7 @@ function StudentSearch() {
   return (
     <div>
       <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
         <input
           value={term}
           onChange={e => setTerm(e.target.value)}
@@ -137,7 +137,7 @@ function StudentSearch() {
         />
       </div>
       {searching && (
-        <p className="mt-2 text-xs text-gray-400">
+        <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
           Searching…{results.length > 0 && <> showing results for &ldquo;{hits.q}&rdquo;</>}
         </p>
       )}
@@ -162,9 +162,9 @@ function StudentSearch() {
               >
                 <span className="min-w-0">
                   <span className="block text-sm font-bold text-gray-900 dark:text-white truncate">{s.display_name}</span>
-                  <span className="block text-xs text-gray-500 truncate">{s.email}</span>
+                  <span className="block text-xs text-gray-500 truncate dark:text-gray-400">{s.email}</span>
                 </span>
-                <ExternalLink size={14} className="text-gray-400 flex-shrink-0" />
+                <ExternalLink size={14} className="text-gray-600 flex-shrink-0 dark:text-gray-400" />
               </Link>
             </li>
           ))}
@@ -185,20 +185,20 @@ export default function AdminOverview() {
       </div>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">System health</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">System health</h2>
         <HealthStrip />
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">Consent</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Consent</h2>
         <ConsentCounts />
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-600 dark:text-gray-400">
           Counts only. Which student agreed to what is not shown here.
         </p>
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">Find a student</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Find a student</h2>
         <StudentSearch />
       </section>
     </div>

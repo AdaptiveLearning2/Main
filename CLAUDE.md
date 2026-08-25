@@ -1988,6 +1988,53 @@ nullish `rows` internally, so deriving the flag *outside* it moved that check
 away from the guard and crashed on a comparison. Moving a derivation out of a
 function moves it out of that function's guards.
 
+### Muted text is `text-gray-600 dark:text-gray-400`, and a test does the arithmetic
+
+Contrast is one of the few accessibility properties a source check can settle outright, so
+`src/test/contrast.test.js` computes it rather than trusting a convention. Measured against the
+surfaces this app paints (Tailwind 3.4 stock `gray`):
+
+| | best surface | worst surface | AA 4.5 |
+| --- | --- | --- | --- |
+| light `gray-400` | 2.54 on white | 1.72 on gray-300 | fails everywhere |
+| light `gray-500` | 4.83 on white | 3.28 on gray-300 | fails from gray-100 down |
+| light `gray-600` | 7.56 on white | 5.13 on gray-300 | passes |
+| dark `gray-500` | 4.16 on gray-950 | 2.13 on gray-700 | fails everywhere |
+| dark `gray-400` | 7.93 on gray-950 | 4.06 on gray-700 | passes except on gray-700 |
+
+**The dark half has to be added, not just the light half darkened.** 138 of the 146 sites named no
+`dark:` variant at all, so they rendered gray-400 in *both* modes — where it already passes. A
+straight `gray-400 → gray-600` substitution would have fixed light mode by breaking dark mode, which
+is why the fix is a pair.
+
+**A dark class in one ternary branch says nothing about the grey in another.** Asking whether the
+className *string* contains `dark:text-` is the mistake that shipped a regression: three badges
+reading `${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}` looked
+paired, so the grey branch was darkened without a companion and dark mode went from 5.78 to **1.94**
+— worse than before the fix. Resolve each branch separately, and model the fallback: an element with
+no `dark:text-` renders its bare colour in dark mode too.
+
+**Compute the ratio, never match a class name.** The first version of the test grepped for the
+literal `dark:text-gray-500`, so `dark:text-gray-600` — worse, at 2.35 — went straight through a
+green suite, and so did the regression above. Both were found by review, not by the test that
+existed to find them.
+
+`text-gray-500` on white is fine at 4.83 and is left alone; it is only wrong on a `bg-gray-100` card
+(4.39). A bare grey with **no** dark companion is a separate failure the same-element check cannot
+see — it renders gray-500 on the gray-900 card at 3.67 — so the last test asks whether *the file*
+ever paints a dark surface. Coarse on purpose: it is what separates a page whose cards flip from
+`MainLayout`, the permanently-white marketing shell, where adding a companion would put gray-400 on
+white at 2.54. **Where the background comes from a parent, no source check can see it.**
+
+**`Adaptive.jsx`'s debug readout is exempt and is the only exemption.** It paints `bg-gray-950` with
+no `dark:` prefix, so it is dark in both modes and every rule above reverses inside it: gray-400
+passes at 7.93 and gray-600 would be unreadable. Its `gray-500` was raised *to* gray-400 — the
+opposite direction to the rest of the app. Check for an unprefixed dark background before assuming a
+grey is too light.
+
+`text-[10px]` (31 uses) is **not** a contrast failure — WCAG sets no minimum font size — so it was
+left alone. What mattered was the combination, and the tiny badges that were also sub-AA are fixed.
+
 ### The three consent notices share `NoticeBanner`, and a tone is a whole class name
 
 `ChildWithdrewBanner`, `ParentRestoredBanner` and `ParentLinkedBanner` were one component wearing

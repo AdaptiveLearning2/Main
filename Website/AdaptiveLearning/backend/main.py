@@ -782,6 +782,46 @@ def _session_had_signals(session_id: str) -> bool | None:
         return None
 
 
+def _recording_was_expected(user_id: str) -> bool | None:
+    """Whether EEG *should* have been recording. None when that cannot be told.
+
+    Three states, deliberately the same shape as `_session_had_signals` beside
+    it, because `signals_missing` is the conjunction of the two and either one
+    being unknown makes the alert a guess.
+
+    **A try/except is not enough here, which is the whole reason this is a
+    function.** `_consent()` catches its own read failure and returns a
+    fail-closed dict rather than raising, and `_may_record` spreads that dict
+    straight through -- so an unreadable `signal_consent` arrives as
+    `record_eeg: False` with nothing thrown. Read as a bool that is
+    indistinguishable from a student who declined the headband, and it is the
+    likelier failure of the two.
+
+    `_retention_window()` has exactly the same shape: `WINDOW_UNREADABLE`
+    denies, so a failed read of the school year also lands as `record_eeg:
+    False` without raising.
+
+    Both already carry the flag that tells them apart -- `retrieved` and
+    `window_state` -- so this reads them rather than inferring from the
+    composed answer. A genuinely declined channel, a closed year and a
+    disabled recording flag all still return False: nothing was supposed to
+    arrive in any of those, and alerting would train a teacher to ignore the
+    feed.
+    """
+    try:
+        gate = _may_record(user_id)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not read recording state for {user_id[:8]}: {e}")
+        return None
+    # `is False`, not falsiness: a payload predating the flag has no opinion
+    # and must not be read as a failed read.
+    if gate.get("retrieved") is False:
+        return None
+    if gate.get("window_state") == WINDOW_UNREADABLE:
+        return None
+    return bool(gate.get("record_eeg"))
+
+
 def _raise_session_alerts(user_id: str, session: dict,
                           closed_by: str, answered: int) -> None:
     """Emit whatever operational alerts this close earned.
@@ -816,18 +856,14 @@ def _raise_session_alerts(user_id: str, session: dict,
             "detail": {"questions_answered": answered},
         })
 
-    # Consent is read, not assumed: a student who declined EEG and recorded no
-    # EEG is working exactly as configured, and alerting on it would train a
-    # teacher to ignore the feed. `_may_record` rather than `_consent`, so a
-    # closed school year or a disabled recording flag is not reported as a
-    # fault either -- in both cases nothing was supposed to arrive.
-    try:
-        expected = bool(_may_record(user_id).get("record_eeg"))
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[alerts] could not read recording state for {user_id[:8]}: {e}")
-        expected = False
-
-    if expected:
+    expected = _recording_was_expected(user_id)
+    if expected is None:
+        # Unknown, not "no". Logged because this is the one branch with nothing
+        # to show for it -- no alert, and a real recording outage during a
+        # database blip would otherwise pass in silence.
+        print(f"[alerts] cannot tell whether recording was expected for "
+              f"{user_id[:8]}; withholding {ALERT_SIGNALS_MISSING}")
+    elif expected:
         had = _session_had_signals(sid)
         # `is False`, never falsiness: None means the count failed, and that
         # is not evidence of a silent recording failure.

@@ -1807,6 +1807,20 @@ and the first would leak a consent decision as an incident. And `_session_had_si
 `True`/`False`/`None` — `None` is a failed count, which must not become an accusation that recording
 is broken, the same error as reporting a failed read as a quiet week.
 
+**A `try/except` around `_may_record` catches almost nothing, and that is the trap.** Both helpers
+behind it fail closed by *returning*, not raising: `_consent()` catches its own read error and
+answers `retrieved: False`, and `_retention_window()` answers `WINDOW_UNREADABLE` — and `_may_record`
+spreads both straight through as `record_*: False`. Read as a plain bool, an outage is
+indistinguishable from a student who declined, and the outage is the likelier of the two. The
+three-state signal is already in the dict; `_recording_was_expected` reads `retrieved` and
+`window_state` rather than inferring from the composed answer, and returns `None` for either.
+
+This generalises: **anywhere a `record_*` flag decides whether to report a fault, the `False` is
+three different facts.** Withholding is the right outcome for the unknown one — nobody can act on a
+database blip — but it has to be *logged*, because that branch has no other trace. And the test has
+to assert on the log: the outcome is identical either way, so a test checking only that no alert was
+raised passes against the bug.
+
 **Don't put a literal end-stamp key in a payload here.** `conftest.close_sites()` finds closers by
 scanning for that hand-written key, so a `detail` dict carrying one reads as a fourth close site —
 which happened, and then happened again in the comment explaining it. The timestamps are columns on

@@ -171,6 +171,99 @@ def test_an_unreadable_consent_state_raises_nothing(monkeypatch):
     assert sink.written == []
 
 
+# `_recording_was_expected` is its own function because a try/except cannot
+# see either of these: both helpers fail closed by *returning*, not raising.
+# Read as a plain bool, an outage is indistinguishable from a student who
+# declined the headband -- and the outage is the likelier of the two.
+
+def test_an_unreadable_consent_record_is_unknown_not_a_decline(monkeypatch):
+    """`_consent()` catches its own read failure and returns a fail-closed
+    dict, which `_may_record` spreads straight through. Nothing is thrown, so
+    the surrounding try never fires and `record_eeg` is False for a reason
+    that is not a decision anyone made."""
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": False, "window_state": main.WINDOW_OPEN})
+    assert main._recording_was_expected(ALICE) is None
+
+
+def test_an_unreadable_school_year_is_unknown_too(monkeypatch):
+    """`WINDOW_UNREADABLE` denies, so a failed read of the retention window
+    lands as `record_eeg: False` by the same route."""
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": True,
+        "window_state": main.WINDOW_UNREADABLE})
+    assert main._recording_was_expected(ALICE) is None
+
+
+@pytest.mark.parametrize("window_state", [
+    main.WINDOW_AFTER, main.WINDOW_BEFORE, main.WINDOW_UNCONFIGURED])
+def test_a_closed_year_is_a_real_no_not_an_unknown(monkeypatch, window_state):
+    """The distinction the fix must not blur: these are all states where
+    nothing was *supposed* to arrive, so they stay False and stay silent."""
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": True, "window_state": window_state})
+    assert main._recording_was_expected(ALICE) is False
+
+
+def test_a_declined_channel_is_a_real_no(monkeypatch):
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": True, "window_state": main.WINDOW_OPEN})
+    assert main._recording_was_expected(ALICE) is False
+
+
+def test_a_payload_with_no_retrieved_flag_is_not_read_as_a_failure(monkeypatch):
+    """`is False`, not falsiness -- an older payload has no opinion."""
+    monkeypatch.setattr(main, "_may_record",
+                        lambda _u: {"record_eeg": True, "window_state": main.WINDOW_OPEN})
+    assert main._recording_was_expected(ALICE) is True
+
+
+def test_an_unknown_recording_state_is_logged_not_just_withheld(monkeypatch, capsys):
+    """The *outcome* is the same either way -- no alert -- which is why the
+    log line is what this test asserts on.
+
+    Withholding is correct: a teacher cannot act on a database blip, and an
+    alert kind for it would be noise. What was wrong before is that the
+    unknown was silently spelled as a decline, so a real recording outage
+    during a consent-read failure left no trace anywhere. Assert on the
+    outcome alone and this test passes against the bug it exists to catch.
+    """
+    sink = _AlertSink(has_signals=False)
+    monkeypatch.setattr(main, "supabase", sink)
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": False, "window_state": main.WINDOW_OPEN})
+    main._raise_session_alerts(ALICE, SESSION, main.CLOSED_BY_STUDENT, 5)
+
+    assert sink.written == []
+    # And it did not go and count signals for a session it cannot judge.
+    assert "cognitive_signals" not in sink.tables
+    out = capsys.readouterr().out
+    assert "cannot tell whether recording was expected" in out
+    assert main.ALERT_SIGNALS_MISSING in out
+
+
+def test_a_real_decline_is_not_logged_as_an_unknown(monkeypatch, capsys):
+    """The other half: an ordinary declined channel must stay quiet, or the
+    log fills with one line per closed session and stops being read."""
+    sink = _AlertSink(has_signals=False)
+    monkeypatch.setattr(main, "supabase", sink)
+    monkeypatch.setattr(main, "_may_record", lambda _u: {
+        "record_eeg": False, "retrieved": True, "window_state": main.WINDOW_OPEN})
+    main._raise_session_alerts(ALICE, SESSION, main.CLOSED_BY_STUDENT, 5)
+    assert "cannot tell whether recording was expected" not in capsys.readouterr().out
+
+
+def test_the_real_consent_helper_fails_closed_without_raising(monkeypatch):
+    """The premise of all of the above, asserted against the real `_consent`
+    rather than assumed. If it ever starts raising, the tests above go on
+    passing while describing a function that no longer behaves that way."""
+    monkeypatch.setattr(main, "supabase",
+                        _FakeSupabase({}, table_raises=["signal_consent"]))
+    out = main._consent(ALICE)
+    assert out["retrieved"] is False
+    assert out.get("eeg_enabled") is False
+
+
 def test_both_kinds_can_fire_for_one_session(monkeypatch):
     sink = _emit(monkeypatch, closed_by=main.CLOSED_BY_SWEEP,
                  record_eeg=True, has_signals=False)

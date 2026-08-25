@@ -171,15 +171,23 @@ restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` 
 `offLabel` four-state matrix, named for the state each input must produce rather than for its field
 values, since that mapping is the thing under test.
 
-**`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` flakes on Windows, not in CI.**
-It asserts `monotonic() - started >= 0.15` against a `threading.Timer` that releases the semaphore,
-and Windows' default timer resolution is ~15.6 ms — so the wait can return a hair early and the
-exact-boundary comparison fails. Measured 2026-08-25: **2 of 5 runs failed on a clean checkout**, and
-3 of 5 with an unrelated change present, which is the same rate and is what makes it look caused by
-whatever you are working on. CI is Linux and has not failed it. Re-run before believing it, and
-compare against a stashed tree rather than against memory. The second assertion on the next line —
-that the model call was charged less than the full budget — is the one carrying the actual claim and
-does not depend on the clock.
+**Assert an ordering, not a duration, when a test synchronises on a thread.**
+`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` checked that a queued call had
+waited with `monotonic() - started >= 0.15`, against a `threading.Timer(0.15)` releasing the
+semaphore. Windows' default timer resolution is ~15.6 ms, so the timer fires a hair early and the
+exact-boundary comparison fails **against a correct implementation** — measured 2026-08-25 at **2
+failures in 5 runs on a clean checkout**, and 3 in 5 with an unrelated change present. Identical
+rates, but the second reads as a regression you just caused, which is where the time goes.
+
+The fix was to notice the assertion and the claim were different things. The claim is that the call
+could not proceed until the slot was free, which is an ordering: the releasing thread records
+`monotonic()` as it lets go, and the test asserts the call returned *after* that. Two readings of one
+clock with a real happens-before between them compare exactly, at any timer resolution. The teeth are
+unchanged and were re-checked both ways — a `generate_text` that never acquires returns before the
+timer fires, so the recorded release is missing and the assertion still fires.
+
+CI is Linux and never failed the old form, so the whole cost of this landed on local runs. Prefer a
+recorded event over an elapsed-time threshold whenever a test waits on another thread.
 
 **A daemon thread that prints must be joined before the process exits.** A print landing during
 interpreter shutdown, while the stdout `BufferedWriter` lock is already held, is a fatal

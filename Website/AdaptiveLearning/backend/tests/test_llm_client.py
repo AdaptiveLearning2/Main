@@ -261,11 +261,36 @@ def test_time_spent_queueing_comes_out_of_the_budget_it_was_promised(monkeypatch
 
     llm_client._generation_slots.acquire()
     held = 0.15
-    threading.Timer(held, llm_client._generation_slots.release).start()
 
-    started = _time.monotonic()
-    llm_client.generate_text("p", timeout=1.0)
-    assert _time.monotonic() - started >= held      # it really did queue
+    # The releasing thread records the moment it let go. "Did this really
+    # queue" is then a question about *ordering* -- the call cannot have
+    # acquired the only slot before it was released -- rather than about a
+    # duration, and ordering between two readings of one clock with a genuine
+    # happens-before between them is exact.
+    #
+    # It was `monotonic() - started >= held`, which is not the same claim and
+    # flaked on Windows: the default timer resolution there is ~15.6 ms, so a
+    # `Timer(0.15)` can fire a hair early and the exact-boundary comparison
+    # fails against a correct implementation. Measured 2 failures in 5 runs on
+    # a clean checkout, which reads as caused by whatever you are working on.
+    released_at = []
+
+    def _release():
+        released_at.append(_time.monotonic())
+        llm_client._generation_slots.release()
+
+    timer = threading.Timer(held, _release)
+    timer.start()
+    try:
+        llm_client.generate_text("p", timeout=1.0)
+        finished = _time.monotonic()
+    finally:
+        timer.cancel()
+
+    # Teeth: drop the semaphore acquire from `generate_text` and it returns
+    # immediately, long before the timer fires, so nothing was ever appended.
+    assert released_at, "the call did not queue -- it returned without waiting for a slot"
+    assert finished >= released_at[0], "the call returned before the slot was released"
 
     charged = fake.options[-1]["timeout"]
     assert charged < 1.0 - held / 2, f"model call was charged {charged}s of a 1.0s budget"

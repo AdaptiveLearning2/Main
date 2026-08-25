@@ -192,17 +192,28 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
     # Acquired with a deadline rather than blockingly: a caller that waits out
     # its whole budget for a slot has spent the student's time and still has no
     # question to show for it.
+    queued_at = time.monotonic()
     if not _generation_slots.acquire(timeout=budget):
         raise GenerationUnavailable(
             f"no model slot free within {budget}s "
             f"({GENERATION_MAX_CONCURRENCY} concurrent)"
         )
     try:
+        # What is LEFT of the budget, not the budget again. Charging the model
+        # call the full amount after queueing for a slot lets one caller block
+        # for nearly twice `budget` -- and `budget` is what the caller was told
+        # it would wait. `_llm_strategies` had exactly this bug against its own
+        # pool; this is the same fix one layer down, and it has to be here
+        # rather than at the call site because the queueing happens here.
+        remaining = budget - (time.monotonic() - queued_at)
+        if remaining <= 0:
+            raise GenerationUnavailable(
+                f"budget of {budget}s spent waiting for a model slot")
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
             temp = CLAUDE_TEMPERATURE if claude_temperature is None \
                 else min(1.0, max(0.0, claude_temperature))
-            client = _get_anthropic_client().with_options(timeout=budget)
+            client = _get_anthropic_client().with_options(timeout=remaining)
             resp = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=max_tokens,
@@ -223,7 +234,7 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
         # temperature, and adding a top_p/top_k it never sent would change what
         # that endpoint returns as a side effect of moving it onto this module.
         options = {"temperature": temperature, "top_p": top_p, "top_k": top_k}
-        resp = Client(timeout=budget).generate(
+        resp = Client(timeout=remaining).generate(
             model=ollama_model,
             prompt=prompt,
             options={k: v for k, v in options.items() if v is not None},

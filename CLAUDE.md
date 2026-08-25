@@ -2085,6 +2085,13 @@ the hottest path in the product and had none:
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (5000/24h, Claude only) | Nothing bounded it; free against a local model |
 
+**The budget covers the whole call, so time spent queueing for a slot comes out of it** — the model
+call is charged the *remainder*, and a caller that queues its budget away is refused rather than
+started with no deadline left. Charged twice, one caller blocks for nearly double what it asked for;
+`_llm_strategies` had that bug against its own pool and this is the same fix one layer down. It
+belongs here rather than at a call site, because this is where the queueing happens. Tests on both
+must therefore assert `<=` the budget, never `==` it.
+
 `_ensure_queue` submits to a pool sized to `GENERATION_MAX_CONCURRENCY` instead of spawning a bare
 daemon thread per question. The daily ceiling is **Claude-only** on purpose: Ollama is local and
 free, so a call ceiling there would refuse a child a question to protect nothing.

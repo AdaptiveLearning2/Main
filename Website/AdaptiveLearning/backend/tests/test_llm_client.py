@@ -165,10 +165,15 @@ def test_an_out_of_range_claude_temperature_is_clamped_rather_than_sent(monkeypa
 
 def test_the_timeout_reaches_the_client_rather_than_the_request(monkeypatch):
     """The SDK's own default is ten minutes; a prefetch worker blocked that
-    long never refills the queue."""
+    long never refills the queue.
+
+    Never *more* than the budget, and not exactly it either: the uncontended
+    acquire above still takes a few microseconds, and those come out of the
+    budget rather than being added to it. See the queueing test below.
+    """
     fake = _claude(monkeypatch)
     llm_client.generate_text("p", timeout=12.0)
-    assert fake.options[-1]["timeout"] == 12.0
+    assert 11.9 < fake.options[-1]["timeout"] <= 12.0
 
 
 def test_max_tokens_is_passed_through(monkeypatch):
@@ -240,6 +245,42 @@ def test_an_api_error_releases_its_slot_too(monkeypatch):
         llm_client.generate_text("p")
     assert llm_client._generation_slots.acquire(blocking=False)
     llm_client._generation_slots.release()
+
+
+def test_time_spent_queueing_comes_out_of_the_budget_it_was_promised(monkeypatch):
+    """Charged twice, one caller blocks for nearly double what it asked for.
+
+    The budget is a promise about the whole call. `_llm_strategies` had this
+    exact bug against its own pool -- a queued call held a worker for nearly
+    twice STRATEGY_LLM_TIMEOUT -- and the fix has to live here rather than at
+    the call site, because this is where the queueing happens.
+    """
+    import time as _time
+    fake = _claude(monkeypatch)
+    monkeypatch.setattr(llm_client, "_generation_slots", threading.BoundedSemaphore(1))
+
+    llm_client._generation_slots.acquire()
+    held = 0.15
+    threading.Timer(held, llm_client._generation_slots.release).start()
+
+    started = _time.monotonic()
+    llm_client.generate_text("p", timeout=1.0)
+    assert _time.monotonic() - started >= held      # it really did queue
+
+    charged = fake.options[-1]["timeout"]
+    assert charged < 1.0 - held / 2, f"model call was charged {charged}s of a 1.0s budget"
+
+
+def test_a_call_that_queues_out_its_whole_budget_is_refused_not_started(monkeypatch):
+    """Zero left is not a reason to start a call with no deadline."""
+    fake = _claude(monkeypatch)
+    monkeypatch.setattr(llm_client, "_generation_slots", threading.BoundedSemaphore(1))
+
+    llm_client._generation_slots.acquire()
+    threading.Timer(0.06, llm_client._generation_slots.release).start()
+    with pytest.raises(llm_client.GenerationUnavailable):
+        llm_client.generate_text("p", timeout=0.05)
+    assert fake.calls == []
 
 
 def test_a_caller_that_cannot_get_a_slot_is_refused_within_its_budget(monkeypatch):

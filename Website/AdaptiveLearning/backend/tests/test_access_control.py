@@ -2142,7 +2142,11 @@ def test_llm_strategies_bounds_the_call_with_a_timeout(monkeypatch):
         "Take a short break between sets",
         "Ask which problem felt hardest",
     ]
-    assert client.last_kwargs.get("timeout") == 7.5
+    # At most the budget, and not exactly it: `llm_client` charges the model
+    # call what is *left* after queueing for a concurrency slot, so an
+    # uncontended acquire still costs a few microseconds. Asserting equality
+    # here would pin the double-charge this endpoint was fixed for once already.
+    assert 7.4 < client.last_kwargs.get("timeout") <= 7.5
 
 
 def test_llm_call_is_abandoned_once_it_outlives_the_deadline(monkeypatch, set_flag):

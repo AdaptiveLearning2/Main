@@ -85,3 +85,50 @@ it('does not blame the class for a 404 from the roster', async () => {
   expect(await screen.findByText(/couldn't load this class/i)).toBeInTheDocument()
   expect(screen.queryByText('Class not found.')).not.toBeInTheDocument()
 })
+
+// ─── the last-active column ───────────────────────────────────────────────
+//
+// Three states, and the two that collapse most easily are the two that matter:
+// a student who has genuinely never worked, and a read that failed. Reporting
+// the second as the first tells a teacher the class has stopped working, which
+// is both wrong and something they would act on.
+
+it('shows how long ago a student was last active', async () => {
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  mockLoad(
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
+    [{ user_id: 's1', name: 'Ada', last_active: hourAgo, last_active_retrieved: true }],
+  )
+  renderAt()
+  expect(await screen.findByText('Active 1h ago')).toBeInTheDocument()
+})
+
+it('a student who has never worked is not a failed read', async () => {
+  mockLoad(
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
+    [{ user_id: 's1', name: 'Ada', last_active: null, last_active_retrieved: true }],
+  )
+  renderAt()
+  expect(await screen.findByText('Never active')).toBeInTheDocument()
+})
+
+it('a failed read says so rather than claiming the student is idle', async () => {
+  mockLoad(
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
+    [{ user_id: 's1', name: 'Ada', last_active: null, last_active_retrieved: false }],
+  )
+  renderAt()
+  expect(await screen.findByText('Last active unknown')).toBeInTheDocument()
+  expect(screen.queryByText('Never active')).not.toBeInTheDocument()
+})
+
+it('survives a roster from before the column existed', async () => {
+  // An older payload carries neither key. Absent must not read as a failure,
+  // and must not read as a timestamp either.
+  mockLoad(
+    { id: CLASS_ID, name: 'Algebra', join_code: 'ABC123' },
+    [{ user_id: 's1', name: 'Ada' }],
+  )
+  renderAt()
+  expect(await screen.findByText('Never active')).toBeInTheDocument()
+})

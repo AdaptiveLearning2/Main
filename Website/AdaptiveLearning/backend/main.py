@@ -2255,6 +2255,29 @@ def list_sessions(request: Request):
 
 # ─── stats ───────────────────────────────────────────────────────────────
 
+def _topic_performance_rows(student_ids) -> tuple[list, bool]:
+    """The raw per-topic rows for several students, and whether the read worked.
+
+    Split out from `_topic_performance_many` because the two callers need
+    different things from a failure. A Topic Accuracy panel can degrade to
+    empty -- "no attempts" is what an empty panel already means there. A
+    heatmap cannot: an all-blank grid and a grid nobody could fetch look
+    identical, which is the three-state rule every reporting helper here
+    carries. So the flag is returned rather than swallowed, and the helper
+    below drops it for the callers that genuinely do not need it.
+    """
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return [], True
+    try:
+        rows = supabase.table("user_math_performance") \
+            .select("*, math_topics(topic_name)").in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[perf] could not batch-read topic performance for {len(ids)}: {e}")
+        return [], False
+    return rows, True
+
+
 def _topic_performance_many(student_ids) -> dict[str, list]:
     """Per-topic performance for several students, in one query rather than N.
 
@@ -2262,15 +2285,7 @@ def _topic_performance_many(student_ids) -> dict[str, list]:
     it, and an empty panel already means "no attempts", so this degrades
     safely.
     """
-    ids = _unique_ids(student_ids)
-    if not ids:
-        return {}
-    try:
-        rows = supabase.table("user_math_performance") \
-            .select("*, math_topics(topic_name)").in_("user_id", ids).execute().data or []
-    except Exception as e:                                     # noqa: BLE001
-        print(f"[perf] could not batch-read topic performance for {len(ids)}: {e}")
-        return {}
+    rows, _ = _topic_performance_rows(student_ids)
     return _group_by_user(rows)
 
 
@@ -3324,6 +3339,7 @@ def class_students(class_id: str, request: Request):
     # Three reads for the whole roster, not three per student.
     all_stats = _stats_including_open_session_many(roster)
     profiles = _profiles_many(roster)
+    last_active = _last_active_many(roster)
     for m in (memberships.data or []):
         sid = m["student_id"]
         stats = all_stats.get(sid) or {}
@@ -3333,9 +3349,425 @@ def class_students(class_id: str, request: Request):
             "name":      p.get("display_name") or "Student",
             "email":     p.get("email") or "",
             "joined_at": m["joined_at"],
+            # Three states, not two. A timestamp, `None` for a student who has
+            # never started a session, and `last_active_retrieved: False` when
+            # the read itself failed -- a roster that quietly shows everyone as
+            # never-active is how a teacher decides nobody is working.
+            **last_active.get(sid, _LAST_ACTIVE_UNKNOWN),
             **stats,
         })
     return students
+
+
+# ─── teacher analytics ────────────────────────────────────────────────────
+#
+# Class-scoped aggregates behind the teacher analytics panels. Four rules
+# apply to every one of them and are not repeated in each docstring:
+#
+#   * The access check is `_verify_class_owner`, before any read. These go
+#     through the service-role client, so it is the only thing enforcing that
+#     a teacher reads their own class.
+#   * Every payload carries `retrieved`, on both the populated and the empty
+#     branch. A failed read must never render as a quiet week.
+#   * Anything bucketed by time is bucketed at the school's timezone, through
+#     `_school_timezone`, never against a UTC clock.
+#   * Anything that aggregates over answers does it in Postgres. The raw
+#     reporting reads are capped and the cap trims oldest-first, so a
+#     Python-side average over a month would describe the recent tail while
+#     the early days read as a quiet term.
+
+# Below this many attempts a topic's accuracy is one or two answers wide and
+# reads as 0% or 100%. The figure is still returned -- withholding real data is
+# not this layer's decision -- but it rides out beside the threshold so the
+# grid can render a thin cell differently from a confident one, in one named
+# place rather than as a magic number in the markup.
+_MIN_TOPIC_ATTEMPTS = 4
+
+# How far back the class-level series look by default, and the ceiling on what
+# a caller may ask for. Bounded like every other report window: the read is one
+# query whatever the range, but a caller asking for two years would build a
+# chart nobody can read.
+_CLASS_TREND_DEFAULT_DAYS = 30
+_CLASS_TREND_MAX_DAYS = 180
+
+# Focus-vs-accuracy. `_FOCUS_MIN_PAIRS` is the point below which no
+# correlation is shown at all: this renders to a teacher as a single
+# objective-looking number, and r over a handful of answers is noise. It is
+# deliberately far above the two pairs `corr()` itself needs.
+_FOCUS_MIN_PAIRS = 30
+_FOCUS_BUCKETS = 5
+# How near in time a focus reading has to be to count as "during" an answer.
+# The poller writes at roughly 1 Hz, so this is generous rather than tight --
+# it is bridging a gap in the samples, not defining a window.
+_FOCUS_MATCH_SECONDS = 30
+
+_LAST_ACTIVE_UNKNOWN = {"last_active": None, "last_active_retrieved": False}
+
+
+def _last_active_many(student_ids) -> dict[str, dict]:
+    """When each student was last doing anything, for a whole roster.
+
+    "Newest row per student" has no PostgREST form -- one `in_` query ordered
+    by time returns the newest rows overall, which is one busy student's -- so
+    this goes through an RPC. That is also why the column was simply absent
+    from the roster before rather than being wrong.
+
+    A student with no sessions comes back `last_active: None` with
+    `last_active_retrieved: True`: never active is a real fact about a roster
+    and must stay distinguishable from a read that failed.
+    """
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return {}
+    try:
+        rows = supabase.rpc("last_active_for_users",
+                            {"p_user_ids": ids}).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        # PGRST202 means the migration has not been applied, so *every* roster
+        # reads as unknown until it is -- unlike an ordinary error, which is
+        # one-off. Named here because the symptom is a column that degrades
+        # quietly rather than a request that fails.
+        if "PGRST202" in str(e):
+            print(f"[last_active] last_active_for_users is missing from the "
+                  f"database -- apply 20260828000000; the roster will show "
+                  f"'unknown' until then: {e}")
+        else:
+            print(f"[last_active] could not read for {len(ids)}: {e}")
+        return {sid: dict(_LAST_ACTIVE_UNKNOWN) for sid in ids}
+    found = {r.get("user_id"): r.get("last_active") for r in rows}
+    return {sid: {"last_active": found.get(sid), "last_active_retrieved": True}
+            for sid in ids}
+
+
+def _class_roster(class_id: str) -> list[str]:
+    """The student ids in a class, in join order.
+
+    Errors are deliberately not caught. Every caller's next step is an
+    aggregate over this roster, and an empty roster produces a perfectly
+    well-formed payload describing a class with no students -- which is a
+    claim about the class, not about a failed query.
+    """
+    rows = supabase.table("class_memberships").select("student_id") \
+        .eq("class_id", class_id).execute().data or []
+    return _unique_ids(r.get("student_id") for r in rows)
+
+
+def _class_topic_heatmap(class_id: str) -> dict:
+    """Per-student, per-topic accuracy for a class.
+
+    Read from `user_math_performance`, which already holds the counts -- this
+    is a reshape of one query, not a new aggregate. `record_topic_attempt`
+    keeps that table current on every answered question.
+
+    Cells come back as a list aligned to `topics`, built from the same list in
+    the same pass, so a row cannot drift out of step with its headings. Keying
+    them by topic id would be equally safe and much more awkward to render as
+    a grid; what is not safe is two independently ordered lists, which is the
+    same failure `AccessibleChart`'s single `columns` spec exists to prevent.
+
+    An untouched topic is `null`, never 0 -- a topic a student has never been
+    served is not a topic they got wrong.
+    """
+    roster = _class_roster(class_id)
+    profiles = _profiles_many(roster)
+    rows, retrieved = _topic_performance_rows(roster)
+    by_student = _group_by_user(rows)
+
+    # Topic identity comes from the rows themselves rather than from a read of
+    # `math_topics`: the grid should show the topics this class has actually
+    # been served, not every topic that exists. A class three weeks into term
+    # would otherwise open on a wall of empty columns.
+    topic_names: dict[int, str] = {}
+    for r in rows:
+        tid = r.get("topic_id")
+        if tid is None:
+            continue
+        joined = r.get("math_topics") or {}
+        topic_names.setdefault(tid, joined.get("topic_name") or f"Topic {tid}")
+    topic_ids = sorted(topic_names, key=lambda t: topic_names[t])
+
+    def _cell(perf: dict | None) -> dict | None:
+        if not perf:
+            return None
+        attempted = perf.get("attempted_questions") or 0
+        if not attempted:
+            return None
+        correct = perf.get("correct_questions") or 0
+        return {"attempted": attempted, "correct": correct,
+                "accuracy": round(correct / attempted, 4)}
+
+    students = []
+    for sid in roster:
+        perf_by_topic = {p.get("topic_id"): p for p in by_student.get(sid, [])}
+        cells = [_cell(perf_by_topic.get(tid)) for tid in topic_ids]
+        attempted = sum(c["attempted"] for c in cells if c)
+        correct = sum(c["correct"] for c in cells if c)
+        students.append({
+            "user_id": sid,
+            "name": (profiles.get(sid) or {}).get("display_name") or "Student",
+            "cells": cells,
+            "attempted": attempted,
+            "accuracy": round(correct / attempted, 4) if attempted else None,
+        })
+
+    topics = []
+    for i, tid in enumerate(topic_ids):
+        attempted = sum(s["cells"][i]["attempted"] for s in students if s["cells"][i])
+        correct = sum(s["cells"][i]["correct"] for s in students if s["cells"][i])
+        topics.append({
+            "topic_id": tid,
+            "topic_name": topic_names[tid],
+            "attempted": attempted,
+            "correct": correct,
+            "accuracy": round(correct / attempted, 4) if attempted else None,
+        })
+
+    return {"topics": topics, "students": students,
+            "min_attempts": _MIN_TOPIC_ATTEMPTS, "retrieved": retrieved}
+
+
+def _answer_buckets(roster: list[str], days: int, tz: tzinfo) -> tuple[list, bool]:
+    """Answers per school day and hour for a roster, from the RPC.
+
+    Shared by the accuracy trend and the time-of-day heatmap -- they are two
+    readings of one grouping. Called once per endpoint rather than cached
+    between them, so a failure in either cannot blank the other; the two
+    panels load independently on the page for the same reason.
+    """
+    if not roster:
+        return [], True
+    school_today = _utc_now().astimezone(tz).date()
+    start = school_today - timedelta(days=days - 1)
+    # Half-open on the far end, and the end is *tomorrow* at local midnight so
+    # today's answers are in range. Converting a local date back to an instant
+    # here rather than in SQL keeps the boundary in the same place as
+    # `_school_day` puts it.
+    #
+    # `datetime.min.time()` rather than `time.min`: the module-level `time` here
+    # is the stdlib module, not `datetime.time`, and importing the latter would
+    # shadow it for the whole file.
+    midnight = datetime.min.time()
+    try:
+        rows = supabase.rpc("class_answer_buckets", {
+            "p_user_ids": roster,
+            "p_from": datetime.combine(start, midnight, tzinfo=tz).isoformat(),
+            "p_to": datetime.combine(school_today + timedelta(days=1),
+                                     midnight, tzinfo=tz).isoformat(),
+            "p_timezone": str(tz),
+        }).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[class_analytics] answer buckets failed for {len(roster)}: {e}")
+        return [], False
+    return rows, True
+
+
+def _class_accuracy_trend(class_id: str, days: int) -> dict:
+    """Class accuracy per school day.
+
+    Every day in the range appears, including the ones with no answers. A day
+    dropped from the series renders as the days either side sitting adjacent,
+    so a week of half-term reads as a smooth run rather than as a gap -- the
+    same reason `_signal_trend` emits its empty weeks.
+
+    `accuracy` is null on a day nobody answered, never 0. Zero is a real and
+    bad reading; it is not what "nobody was in" looks like.
+    """
+    tz = _school_timezone()
+    roster = _class_roster(class_id)
+    rows, retrieved = _answer_buckets(roster, days, tz)
+
+    school_today = _utc_now().astimezone(tz).date()
+    start = school_today - timedelta(days=days - 1)
+    buckets = {start + timedelta(days=i): [0, 0] for i in range(days)}
+    for r in rows:
+        try:
+            day = date.fromisoformat(str(r.get("day")))
+        except (TypeError, ValueError):
+            continue
+        b = buckets.get(day)
+        if b is None:
+            continue
+        b[0] += r.get("attempted") or 0
+        b[1] += r.get("correct") or 0
+
+    series = [{"day": day.isoformat(), "attempted": a, "correct": c,
+               "accuracy": round(c / a, 4) if a else None}
+              for day, (a, c) in sorted(buckets.items())]
+    answered = sum(d["attempted"] for d in series)
+    correct = sum(d["correct"] for d in series)
+    return {
+        "days": series,
+        "attempted": answered,
+        "correct": correct,
+        "accuracy": round(correct / answered, 4) if answered else None,
+        "days_with_data": sum(1 for d in series if d["attempted"]),
+        "student_count": len(roster),
+        "timezone": str(tz),
+        "retrieved": retrieved,
+    }
+
+
+def _class_time_of_day(class_id: str, days: int) -> dict:
+    """When in the week a class actually works, as weekday x hour.
+
+    Weekday is derived from the school-local date the RPC already bucketed on,
+    so it needs no second timezone conversion -- and must not get one, or the
+    hour and the day it belongs to would be resolved against different clocks.
+
+    Only the hours the class has ever worked in are emitted. A grid spanning
+    midnight to midnight is 168 cells of which a school uses perhaps thirty,
+    and the empty rows are not a finding.
+    """
+    tz = _school_timezone()
+    roster = _class_roster(class_id)
+    rows, retrieved = _answer_buckets(roster, days, tz)
+
+    grid: dict[tuple[int, int], list[int]] = {}
+    for r in rows:
+        try:
+            day = date.fromisoformat(str(r.get("day")))
+            hour = int(r.get("hour"))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= hour <= 23:
+            continue
+        cell = grid.setdefault((day.weekday(), hour), [0, 0])
+        cell[0] += r.get("attempted") or 0
+        cell[1] += r.get("correct") or 0
+
+    cells = [{"weekday": wd, "hour": hour, "attempted": a, "correct": c,
+              "accuracy": round(c / a, 4) if a else None}
+             for (wd, hour), (a, c) in sorted(grid.items())]
+    return {
+        "cells": cells,
+        "hours": sorted({c["hour"] for c in cells}),
+        "attempted": sum(c["attempted"] for c in cells),
+        "days": days,
+        "student_count": len(roster),
+        "timezone": str(tz),
+        "retrieved": retrieved,
+    }
+
+
+def _focus_accuracy(student_id: str, days: int) -> dict:
+    """Whether this student answers better when the headband reads focused.
+
+    Gated on EEG consent by the caller, which skips the read entirely rather
+    than discarding the result -- an absent figure cannot otherwise tell
+    "asked and found nothing" from "never asked".
+
+    `correlation` is withheld below `_FOCUS_MIN_PAIRS` even when the database
+    computed one. It reaches a teacher as a single number with no visible
+    denominator, and r over a dozen answers is noise wearing the costume of a
+    finding. `pairs` rides alongside so the surface can say why it is absent,
+    and the per-bucket accuracies are still returned: a bar chart of five bins
+    shows its own sample sizes, which a scalar cannot.
+    """
+    since = (_utc_now() - timedelta(days=days)).isoformat()
+    try:
+        data = supabase.rpc("focus_accuracy_for_user", {
+            "p_user_id": student_id,
+            "p_from": since,
+            "p_bucket_count": _FOCUS_BUCKETS,
+            "p_match_seconds": _FOCUS_MATCH_SECONDS,
+        }).execute().data or {}
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[focus_accuracy] {student_id}: {e}")
+        return _focus_accuracy_payload(None, days, retrieved=False)
+    return _focus_accuracy_payload(data, days, retrieved=True)
+
+
+def _focus_accuracy_payload(data: dict | None, days: int, retrieved: bool,
+                            eeg_enabled: bool = True,
+                            eeg_revoked_at: str | None = None,
+                            consent_retrieved: bool = True) -> dict:
+    """One shape for every outcome, so no caller sees a field only sometimes.
+
+    Built on both branches for the same reason `_shape_summary` is: a consumer
+    that has to check whether a key exists before reading it will eventually
+    treat "absent" as a fourth state.
+    """
+    data = data or {}
+    pairs = data.get("n") or 0
+    r = data.get("r")
+    buckets = [
+        {"focus_low": b.get("focus_low"), "focus_high": b.get("focus_high"),
+         "answered": b.get("answered") or 0, "correct": b.get("correct") or 0,
+         "accuracy": round((b.get("correct") or 0) / b["answered"], 4)
+         if b.get("answered") else None}
+        for b in (data.get("buckets") or [])
+    ]
+    sufficient = pairs >= _FOCUS_MIN_PAIRS
+    return {
+        "correlation": round(float(r), 4)
+        if sufficient and isinstance(r, (int, float)) else None,
+        "pairs": pairs,
+        "sufficient": sufficient,
+        "min_pairs": _FOCUS_MIN_PAIRS,
+        "buckets": buckets,
+        "days": days,
+        "retrieved": retrieved,
+        "eeg_enabled": eeg_enabled,
+        "eeg_revoked_at": eeg_revoked_at,
+        "consent_retrieved": consent_retrieved,
+    }
+
+
+def _clamp_days(days: int) -> int:
+    return max(1, min(days, _CLASS_TREND_MAX_DAYS))
+
+
+@app.get("/api/classes/{class_id}/topic-heatmap")
+def class_topic_heatmap(class_id: str, request: Request):
+    """Per-student, per-topic accuracy across a class."""
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    return _class_topic_heatmap(class_id)
+
+
+@app.get("/api/classes/{class_id}/accuracy-trend")
+def class_accuracy_trend(class_id: str, request: Request,
+                         days: int = _CLASS_TREND_DEFAULT_DAYS):
+    """Class accuracy per school day, over the last `days`."""
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    return _class_accuracy_trend(class_id, _clamp_days(days))
+
+
+@app.get("/api/classes/{class_id}/time-of-day")
+def class_time_of_day(class_id: str, request: Request,
+                      days: int = _CLASS_TREND_DEFAULT_DAYS):
+    """When in the week a class works, as weekday x hour of the school day."""
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    return _class_time_of_day(class_id, _clamp_days(days))
+
+
+@app.get("/api/students/{student_id}/focus-accuracy")
+def student_focus_accuracy(student_id: str, request: Request, days: int = 30):
+    """Answer accuracy against the EEG focus reading at the time.
+
+    Student-scoped rather than class-scoped, and so gated by
+    `_verify_can_view_student` -- this is one child's cognitive data joined to
+    their answers, which is the weekly report's access rule, not the roster's.
+
+    A student who has not consented to EEG is never queried. The payload comes
+    back with `eeg_enabled: false` and no buckets, which is a different claim
+    from an empty result and has to stay one: never fall back to a query that
+    reads what the caller opted out of.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    window = _clamp_days(days)
+    channels = _reportable_channels(student_id)
+    if not channels.eeg:
+        return _focus_accuracy_payload(
+            None, window, retrieved=True, eeg_enabled=False,
+            eeg_revoked_at=channels.eeg_revoked_at,
+            consent_retrieved=channels.consent_retrieved)
+    return {**_focus_accuracy(student_id, window),
+            "eeg_enabled": True,
+            "eeg_revoked_at": channels.eeg_revoked_at,
+            "consent_retrieved": channels.consent_retrieved}
 
 
 # ─── consent: what may be recorded, per student ───────────────────────────

@@ -1988,6 +1988,24 @@ nullish `rows` internally, so deriving the flag *outside* it moved that check
 away from the guard and crashed on a comparison. Moving a derivation out of a
 function moves it out of that function's guards.
 
+### The three consent notices share `NoticeBanner`, and a tone is a whole class name
+
+`ChildWithdrewBanner`, `ParentRestoredBanner` and `ParentLinkedBanner` were one component wearing
+three colours. What they each restated was the part worth having in one place: **a failed
+acknowledgement leaves the banner standing**, because the person has not been told yet and a notice
+that dismisses itself on a failed write is one nobody sees again. Stated three times is two more
+places for the fourth notice's author to drop it.
+
+`onAcknowledge` clears whatever made the banner render; the shell owns the pending flag and
+swallows the rejection. `busy` is cleared in a `finally`, not only on the failure path — a caller
+that acknowledges without unmounting would otherwise be left with a permanently dead button.
+
+**Tone classes are full strings in a map, never interpolated.** Tailwind decides what CSS to ship by
+scanning source text for complete class names, so `bg-${tone}-50` renders markup pointing at a rule
+that was never generated — a banner with no background at all, **in production only**, since the dev
+server is not what does the scan. No test can catch it either: the rendered class string is identical
+either way and jsdom has no stylesheet. Source review is the only check, which is why the map exists.
+
 ### A tile never says "no data" for something that was not recorded
 
 `SignalPanel`'s `offLabel` picks between four states, and every tile goes through

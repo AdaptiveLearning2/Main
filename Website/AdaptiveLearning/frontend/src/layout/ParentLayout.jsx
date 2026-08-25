@@ -95,7 +95,7 @@ export default function ParentLayout() {
         <SidebarContent collapsed={collapsed} />
         <button aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           onClick={toggleCollapsed}
-          className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-emerald-600 transition z-10">
+          className="absolute -right-3 top-20 w-6 h-6 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full shadow flex items-center justify-center text-gray-500 hover:text-emerald-600 transition z-10 dark:text-gray-400">
           {collapsed ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
         </button>
       </motion.aside>
@@ -106,9 +106,9 @@ export default function ParentLayout() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="md:hidden flex items-center justify-between px-4 py-3 bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
-          <button aria-label="Open menu" onClick={openMobile} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Menu size={20} className="text-gray-600" /></button>
+          <button aria-label="Open menu" onClick={openMobile} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"><Menu size={20} className="text-gray-600 dark:text-gray-400" /></button>
           <span className="text-sm font-black text-gray-900 dark:text-white">Parent <span className="text-emerald-600">Portal</span></span>
-          <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">{dark ? <Sun size={18} className="text-gray-500" /> : <Moon size={18} className="text-gray-500" />}</button>
+          <button aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={toggleTheme} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">{dark ? <Sun size={18} className="text-gray-500 dark:text-gray-400" /> : <Moon size={18} className="text-gray-500 dark:text-gray-400" />}</button>
         </div>
         <main className="flex-1 overflow-y-auto">
           <motion.div key={pathname} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>

@@ -42,7 +42,7 @@ function FlagHistory({ flagKey }) {
     <div className="mt-2">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800 dark:hover:text-gray-200"
+        className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 dark:text-gray-400"
       >
         <History size={12} /> {open ? 'Hide history' : 'History'}
       </button>
@@ -50,10 +50,10 @@ function FlagHistory({ flagKey }) {
         <div className="mt-2 text-xs">
           {!data && <p className="text-gray-600 dark:text-gray-400">Loading…</p>}
           {data && data.retrieved === false && (
-            <p className="text-gray-500">Could not read the history for this flag.</p>
+            <p className="text-gray-500 dark:text-gray-400">Could not read the history for this flag.</p>
           )}
           {data?.retrieved && data.changes.length === 0 && (
-            <p className="text-gray-500">Never changed.</p>
+            <p className="text-gray-500 dark:text-gray-400">Never changed.</p>
           )}
           {data?.retrieved && data.changes.length > 0 && (
             <ul className="space-y-1">
@@ -116,7 +116,7 @@ function ConsentPanel({ flag, active, onSet, busy }) {
                     <option key={m} value={m}>{m} minutes</option>
                   ))}
                 </select>
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   It turns itself back on when the time is up. There is no indefinite option.
                 </p>
               </div>
@@ -201,7 +201,7 @@ export default function AdminFlags() {
 
       {GROUPS.map(group => (
         <section key={group.title} className="space-y-3">
-          <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">{group.title}</h2>
+          <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">{group.title}</h2>
           {group.note && <p className="text-xs text-gray-500 dark:text-gray-400">{group.note}</p>}
           <div className="space-y-2">
             {group.keys.map(key => {
@@ -240,7 +240,7 @@ export default function AdminFlags() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">Deployment flags</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Deployment flags</h2>
         <p className="text-xs text-gray-500 dark:text-gray-400">
           Read-only. These come from the environment and need a redeploy to change. Several belong
           to the EEG sidecar’s own environment, so a blank value here means “not set for the

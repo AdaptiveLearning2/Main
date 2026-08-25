@@ -39,7 +39,7 @@ export default function AdminLiveFlow() {
       {!data && !failed && <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>}
 
       {data?.retrieved && data.sessions.length === 0 && (
-        <p className="text-sm text-gray-500">No sessions are open right now.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">No sessions are open right now.</p>
       )}
 
       {data?.capped && (
@@ -57,7 +57,7 @@ export default function AdminLiveFlow() {
           >
             <div className="min-w-0">
               <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{s.student_name}</p>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
                 started {s.started_at ? new Date(s.started_at).toLocaleTimeString() : 'unknown'}
               </p>
             </div>

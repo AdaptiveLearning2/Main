@@ -183,7 +183,7 @@ export default function Questions() {
                     )}
                   </div>
                 </div>
-                <span className="text-xs text-gray-600 dark:text-gray-600 flex-shrink-0 pt-0.5">→</span>
+                <span className="text-xs text-gray-600 dark:text-gray-400 flex-shrink-0 pt-0.5">→</span>
               </motion.button>
             ))}
           </div>

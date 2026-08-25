@@ -29,7 +29,7 @@ function HealthStrip() {
       .catch(() => setFailed(true))
   }, [])
 
-  if (failed) return <p className="text-sm text-gray-500">Could not read system health.</p>
+  if (failed) return <p className="text-sm text-gray-500 dark:text-gray-400">Could not read system health.</p>
   if (!checks) return <p className="text-sm text-gray-600 dark:text-gray-400">Checking…</p>
 
   return (
@@ -62,7 +62,7 @@ function ConsentCounts() {
       .catch(() => setFailed(true))
   }, [])
 
-  if (failed) return <p className="text-sm text-gray-500">Could not read consent counts.</p>
+  if (failed) return <p className="text-sm text-gray-500 dark:text-gray-400">Could not read consent counts.</p>
   if (!data) return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
 
   const tiles = [
@@ -162,7 +162,7 @@ function StudentSearch() {
               >
                 <span className="min-w-0">
                   <span className="block text-sm font-bold text-gray-900 dark:text-white truncate">{s.display_name}</span>
-                  <span className="block text-xs text-gray-500 truncate">{s.email}</span>
+                  <span className="block text-xs text-gray-500 truncate dark:text-gray-400">{s.email}</span>
                 </span>
                 <ExternalLink size={14} className="text-gray-600 flex-shrink-0 dark:text-gray-400" />
               </Link>
@@ -185,12 +185,12 @@ export default function AdminOverview() {
       </div>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">System health</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">System health</h2>
         <HealthStrip />
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">Consent</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Consent</h2>
         <ConsentCounts />
         <p className="text-xs text-gray-600 dark:text-gray-400">
           Counts only. Which student agreed to what is not shown here.
@@ -198,7 +198,7 @@ export default function AdminOverview() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500">Find a student</h2>
+        <h2 className="text-sm font-black uppercase tracking-wide text-gray-500 dark:text-gray-400">Find a student</h2>
         <StudentSearch />
       </section>
     </div>

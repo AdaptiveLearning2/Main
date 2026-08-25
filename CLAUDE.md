@@ -2007,10 +2007,24 @@ surfaces this app paints (Tailwind 3.4 stock `gray`):
 straight `gray-400 → gray-600` substitution would have fixed light mode by breaking dark mode, which
 is why the fix is a pair.
 
+**A dark class in one ternary branch says nothing about the grey in another.** Asking whether the
+className *string* contains `dark:text-` is the mistake that shipped a regression: three badges
+reading `${on ? '… dark:text-indigo-300' : 'bg-gray-100 text-gray-400 dark:bg-gray-800'}` looked
+paired, so the grey branch was darkened without a companion and dark mode went from 5.78 to **1.94**
+— worse than before the fix. Resolve each branch separately, and model the fallback: an element with
+no `dark:text-` renders its bare colour in dark mode too.
+
+**Compute the ratio, never match a class name.** The first version of the test grepped for the
+literal `dark:text-gray-500`, so `dark:text-gray-600` — worse, at 2.35 — went straight through a
+green suite, and so did the regression above. Both were found by review, not by the test that
+existed to find them.
+
 `text-gray-500` on white is fine at 4.83 and is left alone; it is only wrong on a `bg-gray-100` card
-(4.39), so those are fixed where the two are named on one element. **Where the background comes from
-a parent, no source check can see it** — the test judges what fails on every surface, plus
-same-element pairs, and says so.
+(4.39). A bare grey with **no** dark companion is a separate failure the same-element check cannot
+see — it renders gray-500 on the gray-900 card at 3.67 — so the last test asks whether *the file*
+ever paints a dark surface. Coarse on purpose: it is what separates a page whose cards flip from
+`MainLayout`, the permanently-white marketing shell, where adding a companion would put gray-400 on
+white at 2.54. **Where the background comes from a parent, no source check can see it.**
 
 **`Adaptive.jsx`'s debug readout is exempt and is the only exemption.** It paints `bg-gray-950` with
 no `dark:` prefix, so it is dark in both modes and every rule above reverses inside it: gray-400

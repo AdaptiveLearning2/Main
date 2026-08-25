@@ -115,7 +115,7 @@ function SessionReviewBody({ sessionId }) {
 
   if (loading) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-gray-500 dark:text-gray-400">
         <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
           className="w-10 h-10 border-4 border-violet-600 border-t-transparent rounded-full mx-auto mb-3" />
         Loading session…
@@ -368,7 +368,7 @@ function SessionReviewBody({ sessionId }) {
                 archive keeps cognitive and heart separate, unlike the live merged trace. */}
             {isUrl(archivedChart('cognitive_timeline')) || isUrl(archivedChart('heart_rate')) ? (
               <>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-gray-500 dark:text-gray-400">
                   The per-sample rows for this session have expired. These are the
                   charts as they were when it closed.
                 </p>
@@ -587,7 +587,7 @@ function SessionReviewBody({ sessionId }) {
                   const t = new Date(a.answered_at).getTime()
                   return (
                     <tr key={i} className="border-t border-gray-50 dark:border-gray-800">
-                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap">{fmtTime(t)}</td>
+                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap dark:text-gray-400">{fmtTime(t)}</td>
                       <td className="text-gray-700 dark:text-gray-300 font-mono text-xs">{(a.question_id || '').slice(0, 12)}…</td>
                       <td className="text-gray-700 dark:text-gray-300">{a.selected_index ?? '—'}</td>
                       <td className="pr-5">

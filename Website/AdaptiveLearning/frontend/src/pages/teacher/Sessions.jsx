@@ -160,7 +160,7 @@ export default function Sessions() {
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-3">📭</div>
           <p className="font-black text-gray-900 dark:text-white">No sessions yet</p>
-          <p className="text-sm text-gray-500 mt-1">When students start practicing, sessions will show here.</p>
+          <p className="text-sm text-gray-500 mt-1 dark:text-gray-400">When students start practicing, sessions will show here.</p>
         </div>
       ) : filteredRows.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">

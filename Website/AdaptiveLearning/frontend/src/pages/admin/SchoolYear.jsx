@@ -164,7 +164,7 @@ export default function AdminSchoolYear() {
               recording for every student until it is corrected.
             </p>
           )}
-          <p id="school-timezone-hint" className="mt-1 text-xs text-gray-500">
+          <p id="school-timezone-hint" className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             The school’s own zone. It sets both the term boundaries and the day buckets on every
             report, so a wrong one moves a lesson onto the wrong day of a parent’s chart.
           </p>

@@ -35,6 +35,32 @@ CREATE INDEX IF NOT EXISTS "cog_session_ts_idx"
 CREATE INDEX IF NOT EXISTS "answers_user_answered_idx"
   ON "public"."session_answers" USING "btree" ("user_id", "answered_at");
 
+-- Each of the two above makes a pre-existing single-column index redundant,
+-- and leaving those in place is not free: a btree on (a, b) serves every
+-- query a btree on (a) serves, so the old ones would be maintained on every
+-- write and chosen by nothing.
+--
+-- That matters most on exactly these two tables. `cognitive_signals` takes a
+-- row per poll tick per active session -- the hottest write path in the
+-- product -- and `expire_signal_rows` bulk-deletes from both at the end of a
+-- school year, where every surviving index is work per row removed.
+--
+-- Checked before dropping: both are plain `CREATE INDEX`, neither is unique
+-- and neither backs a constraint, so nothing depends on them by name.
+--
+-- Dropping is cheap where building is not. `DROP INDEX` takes an ACCESS
+-- EXCLUSIVE lock, but only long enough to unlink the relation rather than for
+-- a full scan, so this needs none of the CONCURRENTLY care the two creations
+-- above do.
+--
+-- Deliberately left alone: `cog_ts_idx` on ("ts" DESC), which serves the
+-- expiry cutoff by timestamp alone, and `answers_session_idx` on
+-- ("session_id"), which nothing here supersedes. The latter would arguably
+-- suit ("session_id", "answered_at") for `latest_signals_for_sessions`, but
+-- that is a separate change with its own measurement to do.
+DROP INDEX IF EXISTS "public"."cog_session_idx";
+DROP INDEX IF EXISTS "public"."answers_user_idx";
+
 
 -- ── 1. answers per school day and hour, for a roster ───────────────────────
 --

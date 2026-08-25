@@ -252,6 +252,44 @@ describe('FocusAccuracy', () => {
       .toBeInTheDocument()
   })
 
+  it('an exact zero is not a negative relationship', () => {
+    // `corr()` returns 0 whenever the two are perfectly unrelated, which is a
+    // realistic answer rather than an edge case. `r > 0 ? … : 'Negative'`
+    // labelled it "Negative: little or no relationship" — a sentence that
+    // contradicts itself and points a teacher at a trend that is not there.
+    render(<FocusAccuracy data={{
+      retrieved: true, eeg_enabled: true, sufficient: true,
+      correlation: 0, pairs: 400, min_pairs: 30, buckets: BUCKETS,
+    }} />)
+    expect(screen.getByText(/no direction: little or no relationship \(r = 0\.00\)/i))
+      .toBeInTheDocument()
+    expect(screen.queryByText(/negative/i)).not.toBeInTheDocument()
+  })
+
+  it('a coefficient that rounds to zero agrees with the figure printed beside it', () => {
+    // 0.004 prints as `r = 0.00`, so a signed label would contradict the
+    // number in the same sentence. The direction is decided on the rounded
+    // value for exactly that reason.
+    render(<FocusAccuracy data={{
+      retrieved: true, eeg_enabled: true, sufficient: true,
+      correlation: 0.004, pairs: 400, min_pairs: 30, buckets: BUCKETS,
+    }} />)
+    expect(screen.getByText(/no direction.*\(r = 0\.00\)/i)).toBeInTheDocument()
+    expect(screen.queryByText(/positive/i)).not.toBeInTheDocument()
+  })
+
+  it('still names a direction when there is one', () => {
+    // The negative tests above pass against a component that never says
+    // "Positive" or "Negative" at all, so this is what makes them mean
+    // something.
+    render(<FocusAccuracy data={{
+      retrieved: true, eeg_enabled: true, sufficient: true,
+      correlation: -0.55, pairs: 400, min_pairs: 30, buckets: BUCKETS,
+    }} />)
+    expect(screen.getByText(/negative: a moderate relationship \(r = -0\.55\)/i))
+      .toBeInTheDocument()
+  })
+
   it('enough data with no computable coefficient is not too little data', () => {
     // `corr()` answers null when an input has no variance. Saying "too few
     // answers" there sends a teacher looking for the wrong problem.

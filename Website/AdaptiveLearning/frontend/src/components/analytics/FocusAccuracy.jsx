@@ -44,7 +44,17 @@ export default function FocusAccuracy({ data, loading, onRetry }) {
     // are conventional and deliberately cautious at the top.
     const strength = Math.abs(r) < 0.2 ? 'little or no'
       : Math.abs(r) < 0.4 ? 'a weak' : 'a moderate'
-    verdict = `${r > 0 ? 'Positive' : 'Negative'}: ${strength} relationship (r = ${r.toFixed(2)}) over ${data.pairs} answers.`
+    // Direction is only claimed where there is one. `corr()` returns an exact
+    // 0 readily — it is the answer whenever the two are perfectly unrelated —
+    // and `r > 0 ? … : 'Negative'` labelled that "Negative: little or no
+    // relationship", which contradicts itself in the same sentence and points
+    // a teacher at a trend that is not there. Rounding makes the reachable set
+    // wider than exact zero, too: anything under 0.005 prints as `r = 0.00`,
+    // so a signed label would disagree with the figure printed beside it.
+    const rounded = Number(r.toFixed(2))
+    const direction = rounded === 0 ? 'No direction'
+      : rounded > 0 ? 'Positive' : 'Negative'
+    verdict = `${direction}: ${strength} relationship (r = ${r.toFixed(2)}) over ${data.pairs} answers.`
   } else if (data?.sufficient) {
     // `corr()` answers null when an input has no variance — every answer
     // correct, say. Enough data, no coefficient, which is not the same as

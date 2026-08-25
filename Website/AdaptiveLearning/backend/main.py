@@ -3368,7 +3368,10 @@ def class_students(class_id: str, request: Request):
 #     through the service-role client, so it is the only thing enforcing that
 #     a teacher reads their own class.
 #   * Every payload carries `retrieved`, on both the populated and the empty
-#     branch. A failed read must never render as a quiet week.
+#     branch. A failed read must never render as a quiet week. Where an
+#     endpoint makes two reads, both fold into the one flag -- the roster and
+#     the aggregate over it fail the same way from the reader's side, as an
+#     empty chart, so a caller cannot act on the difference.
 #   * Anything bucketed by time is bucketed at the school's timezone, through
 #     `_school_timezone`, never against a UTC clock.
 #   * Anything that aggregates over answers does it in Postgres. The raw
@@ -3439,17 +3442,29 @@ def _last_active_many(student_ids) -> dict[str, dict]:
             for sid in ids}
 
 
-def _class_roster(class_id: str) -> list[str]:
-    """The student ids in a class, in join order.
+def _class_roster(class_id: str) -> tuple[list[str], bool]:
+    """The student ids in a class, in join order, and whether the read worked.
 
-    Errors are deliberately not caught. Every caller's next step is an
-    aggregate over this roster, and an empty roster produces a perfectly
-    well-formed payload describing a class with no students -- which is a
-    claim about the class, not about a failed query.
+    An earlier version let the error escape, on the reasoning that a 500 is
+    louder than a wrong number. It is -- but it also contradicts this
+    section's own rule that every payload carries `retrieved`, and the rule is
+    right: a failed roster read produces an empty roster, every aggregate below
+    is then computed over nobody, and the result is a well-formed payload
+    describing a class with no students. That is a claim about the class, and a
+    failed query has not earned it.
+
+    So the flag is returned and each caller folds it into its own `retrieved`,
+    exactly as `_topic_performance_rows` does. `student_count: 0` beside
+    `retrieved: false` is then readable as "we could not find out", where
+    `student_count: 0` beside `retrieved: true` is a genuinely empty class.
     """
-    rows = supabase.table("class_memberships").select("student_id") \
-        .eq("class_id", class_id).execute().data or []
-    return _unique_ids(r.get("student_id") for r in rows)
+    try:
+        rows = supabase.table("class_memberships").select("student_id") \
+            .eq("class_id", class_id).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[class_analytics] could not read the roster for {class_id}: {e}")
+        return [], False
+    return _unique_ids(r.get("student_id") for r in rows), True
 
 
 def _class_topic_heatmap(class_id: str) -> dict:
@@ -3468,9 +3483,13 @@ def _class_topic_heatmap(class_id: str) -> dict:
     An untouched topic is `null`, never 0 -- a topic a student has never been
     served is not a topic they got wrong.
     """
-    roster = _class_roster(class_id)
+    roster, roster_retrieved = _class_roster(class_id)
     profiles = _profiles_many(roster)
-    rows, retrieved = _topic_performance_rows(roster)
+    rows, perf_retrieved = _topic_performance_rows(roster)
+    # Either read failing makes the grid unreliable, and for the same reason:
+    # a missing roster and missing performance rows both render as an empty
+    # board. One flag out, because a caller cannot act on the difference.
+    retrieved = roster_retrieved and perf_retrieved
     by_student = _group_by_user(rows)
 
     # Topic identity comes from the rows themselves rather than from a read of
@@ -3526,18 +3545,29 @@ def _class_topic_heatmap(class_id: str) -> dict:
             "min_attempts": _MIN_TOPIC_ATTEMPTS, "retrieved": retrieved}
 
 
-def _answer_buckets(roster: list[str], days: int, tz: tzinfo) -> tuple[list, bool]:
+def _answer_buckets(roster: list[str], days: int,
+                    tz: tzinfo) -> tuple[list, bool, date]:
     """Answers per school day and hour for a roster, from the RPC.
 
     Shared by the accuracy trend and the time-of-day heatmap -- they are two
     readings of one grouping. Called once per endpoint rather than cached
     between them, so a failure in either cannot blank the other; the two
     panels load independently on the page for the same reason.
+
+    Returns the rows, whether the read worked, and the first school day of the
+    range it asked for -- see below for why the caller must not recompute that.
     """
-    if not roster:
-        return [], True
+    # The clock is read once, here, and the first day is handed back with the
+    # rows. The caller needs the same range to lay out its buckets, and reading
+    # `_utc_now()` again after the round trip is a second clock: a request that
+    # straddles local midnight would query from day N and bucket from day N+1,
+    # so the oldest day's rows land in no bucket and are dropped. Narrow and
+    # self-healing on the next request, which is exactly why it would never be
+    # reported -- one day quietly missing from the left edge of a chart.
     school_today = _utc_now().astimezone(tz).date()
     start = school_today - timedelta(days=days - 1)
+    if not roster:
+        return [], True, start
     # Half-open on the far end, and the end is *tomorrow* at local midnight so
     # today's answers are in range. Converting a local date back to an instant
     # here rather than in SQL keeps the boundary in the same place as
@@ -3557,8 +3587,8 @@ def _answer_buckets(roster: list[str], days: int, tz: tzinfo) -> tuple[list, boo
         }).execute().data or []
     except Exception as e:                                     # noqa: BLE001
         print(f"[class_analytics] answer buckets failed for {len(roster)}: {e}")
-        return [], False
-    return rows, True
+        return [], False, start
+    return rows, True, start
 
 
 def _class_accuracy_trend(class_id: str, days: int) -> dict:
@@ -3573,11 +3603,13 @@ def _class_accuracy_trend(class_id: str, days: int) -> dict:
     bad reading; it is not what "nobody was in" looks like.
     """
     tz = _school_timezone()
-    roster = _class_roster(class_id)
-    rows, retrieved = _answer_buckets(roster, days, tz)
+    roster, roster_retrieved = _class_roster(class_id)
+    rows, buckets_retrieved, start = _answer_buckets(roster, days, tz)
+    retrieved = roster_retrieved and buckets_retrieved
 
-    school_today = _utc_now().astimezone(tz).date()
-    start = school_today - timedelta(days=days - 1)
+    # `start` comes back from the read rather than being recomputed here, so
+    # the buckets cannot describe a different range from the query that filled
+    # them. See `_answer_buckets`.
     buckets = {start + timedelta(days=i): [0, 0] for i in range(days)}
     for r in rows:
         try:
@@ -3619,8 +3651,9 @@ def _class_time_of_day(class_id: str, days: int) -> dict:
     and the empty rows are not a finding.
     """
     tz = _school_timezone()
-    roster = _class_roster(class_id)
-    rows, retrieved = _answer_buckets(roster, days, tz)
+    roster, roster_retrieved = _class_roster(class_id)
+    rows, buckets_retrieved, _start = _answer_buckets(roster, days, tz)
+    retrieved = roster_retrieved and buckets_retrieved
 
     grid: dict[tuple[int, int], list[int]] = {}
     for r in rows:

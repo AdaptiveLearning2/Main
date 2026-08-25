@@ -277,6 +277,60 @@ def test_a_class_with_no_students_is_not_a_failed_read(monkeypatch):
     assert out["retrieved"] is True and out["student_count"] == 0
 
 
+@pytest.mark.parametrize("call, key", [
+    (lambda: main.class_accuracy_trend(CLASS, None, days=7), "days"),
+    (lambda: main.class_time_of_day(CLASS, None, days=7), "cells"),
+    (lambda: main.class_topic_heatmap(CLASS, None), "students"),
+])
+def test_a_failed_roster_read_is_not_a_class_with_no_students(monkeypatch,
+                                                              call, key):
+    """The roster failing produces an aggregate computed over nobody, which is
+    a well-formed payload describing an empty class. That is a claim about the
+    class, and a failed query has not earned it -- so it folds into the same
+    `retrieved` flag as the aggregate's own failure.
+
+    `student_count: 0` beside `retrieved: false` reads as "could not find
+    out"; beside `retrieved: true` it is a genuinely empty class. The test
+    above is the other half of that pair."""
+    monkeypatch.setattr(main, "supabase",
+                        _fake(table_raises=["class_memberships"]))
+    out = call()
+    assert out["retrieved"] is False
+    assert not out[key] or all(
+        s.get("attempted", 0) == 0 for s in out[key] if isinstance(s, dict))
+
+
+def test_the_range_is_fixed_by_one_clock_read(monkeypatch):
+    """A request that straddles local midnight must not query one range and
+    bucket another.
+
+    `_answer_buckets` read the clock to build the query and the caller read it
+    again after the round trip to lay out the buckets. Cross midnight in
+    between and the second read starts a day later, so the oldest day's rows
+    land in no bucket and are silently dropped -- one day quietly missing from
+    the left edge of a chart, self-healing on the next request, which is
+    exactly why nobody would report it.
+
+    The clock advances on every call here, so a second read cannot go
+    unnoticed."""
+    clock = iter([
+        datetime(2026, 6, 11, 23, 59, 59, tzinfo=timezone.utc),   # the query
+        datetime(2026, 6, 12, 0, 0, 1, tzinfo=timezone.utc),      # any re-read
+        datetime(2026, 6, 12, 0, 0, 2, tzinfo=timezone.utc),
+    ])
+    monkeypatch.setattr(main, "_utc_now", lambda: next(clock))
+    # The oldest day of a 3-day window ending 2026-06-11.
+    monkeypatch.setattr(main, "supabase", _fake(
+        rpc_results=_buckets(("2026-06-09", 9, 10, 8))))
+
+    out = main.class_accuracy_trend(CLASS, None, days=3)
+    assert [d["day"] for d in out["days"]] == [
+        "2026-06-09", "2026-06-10", "2026-06-11"]
+    # The row landed in a bucket rather than being dropped on the floor.
+    assert out["days"][0]["attempted"] == 10
+    assert out["attempted"] == 10
+
+
 def test_the_window_is_asked_for_in_the_schools_timezone(monkeypatch):
     """The bucketing happens in SQL, so the timezone has to reach it. Passed
     rather than left to default, since Postgres would otherwise bucket at UTC

@@ -171,6 +171,16 @@ restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` 
 `offLabel` four-state matrix, named for the state each input must produce rather than for its field
 values, since that mapping is the thing under test.
 
+**`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` flakes on Windows, not in CI.**
+It asserts `monotonic() - started >= 0.15` against a `threading.Timer` that releases the semaphore,
+and Windows' default timer resolution is ~15.6 ms — so the wait can return a hair early and the
+exact-boundary comparison fails. Measured 2026-08-25: **2 of 5 runs failed on a clean checkout**, and
+3 of 5 with an unrelated change present, which is the same rate and is what makes it look caused by
+whatever you are working on. CI is Linux and has not failed it. Re-run before believing it, and
+compare against a stashed tree rather than against memory. The second assertion on the next line —
+that the model call was charged less than the full budget — is the one carrying the actual claim and
+does not depend on the clock.
+
 **A daemon thread that prints must be joined before the process exits.** A print landing during
 interpreter shutdown, while the stdout `BufferedWriter` lock is already held, is a fatal
 `_enter_buffered_busy` abort — exit code 134 *after* every test passed, which reads as unrelated

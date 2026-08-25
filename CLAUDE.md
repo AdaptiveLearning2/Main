@@ -1918,6 +1918,74 @@ manufactures a reason: a channel off for consent reasons still reads "not record
 `_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
 They default to True and are not a privacy boundary; don't build one on them.
 
+### Every chart goes through `AccessibleChart`, and a test enforces it
+
+Recharts emits bare `<svg>` with no accessible name and nothing a screen reader
+can walk, so a chart rendered directly announces as nothing at all.
+`components/charts/AccessibleChart.jsx` is the only place that may render one.
+
+**The `sr-only` data table is a *sibling* of the `role="img"` wrapper, never a
+child.** WAI-ARIA's presentational-children rule prunes every descendant role
+from an `img`, so a nested table is invisible to real assistive technology — while
+being **perfectly visible to a jsdom test**, because Testing Library reads DOM
+attributes rather than modelling the accessibility tree. That is the trap, and
+it is the opposite way round from how it first reads: the table is not what the
+test cannot see, it is the *pruning*. `getByRole('table')` finds the element
+whether or not a real reader ever would, so a hand-assembled call site has
+nothing to fail against, in the browser or in CI. That is why this is a
+component rather than a documented recipe, and why
+`AccessibleChart.test.jsx` walks the source and fails on any chart component
+rendered outside it. It cannot see a hand-written `<svg>`; that is the honest
+limit of a source check.
+
+**One `columns` spec drives the sentence and the table.** They were separate
+literals for one PR and disagreed twice in it: a key named `bpm` where the rows
+carry `heart_rate_bpm`, so a visibly-plotted line announced "not recorded"; and
+raw 0..1 ratios described with a `%` unit, announcing a session ranging 42–78%
+as "Focus 0% to 1%". Neither is visible on screen and no test could catch them,
+because both surfaces were wrong in the same way at once.
+
+**Scaling belongs in the spec, per page, because the pages differ.**
+`SessionReview` and `Live` plot raw ratios against `domain={[0, 1]}` and need
+`scale: asPercent` on those columns. `SignalPanel` scales **the fields it names**
+into its chart data — `toPct(d.focus)`, `toPct(d.stress)` — and spreads every
+other field across untouched, so a column for one of those others needs a
+`scale` like anywhere else. "This page scales on the way in" is the wrong unit
+of thought and it has already cost one bug: an `engagement` column was added
+without a `scale` on exactly that reasoning and announced "0% to 1%".
+
+**And a column must name a series the chart actually draws** — including when
+the `<Line>` is conditional, in which case the column is too. A screen-reader
+user given a series no sighted reader can see has a different report, not an
+equivalent one.
+
+This one has now been found **twice**, which is why it is a rule rather than an
+anecdote. `SignalPanel`'s `engagement` column had no `<Line>` at all, so nothing
+on screen could contradict its wrong scaling; `SessionReview` then kept
+`heart_rate_bpm`/`rmssd_ms` columns whose lines are gated on `hasHeart`, so a
+session with no headband emitted "Heart rate: not recorded" on every row. The
+first fix was applied where it was found rather than swept for siblings. Check
+what the chart plots, and under what condition, before copying a spec across.
+
+**A categorical chart is `sliceSpec(label, rows, noun, {nameKey, valueKey,
+rowLabel})`, spread into the component.** It returns the sentence, the rows and
+the columns together so the noun is written once — it names what the values
+count in the sentence and heads the table column. As two literals they drifted:
+`Analytics` built its sentence from a remapped `topicData.map(d => ({name, value}))`
+while its table read `topicData` with key `count`.
+
+The table is **sampled to 60 rows** and says so in its caption. A 4Hz channel
+over an hour is ~14,000 rows, built on every render for a table nobody sighted
+sees — and unusable for those who do. A silently shortened one would claim the
+session was shorter than it was.
+
+`sample()` returns the rows alone; "was it sampled" is
+`tableRows.length < (rows?.length ?? 0)` at the one place that asks. Two return
+values could disagree with each other — but note the `?? 0`: `sample()` guards a
+nullish `rows` internally, so deriving the flag *outside* it moved that check
+away from the guard and crashed on a comparison. Moving a derivation out of a
+function moves it out of that function's guards.
+
 ### A tile never says "no data" for something that was not recorded
 
 `SignalPanel`'s `offLabel` picks between four states, and every tile goes through

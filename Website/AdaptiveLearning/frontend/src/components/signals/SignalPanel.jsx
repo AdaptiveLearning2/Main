@@ -1,10 +1,10 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
-import { describeSeries } from './describeSeries'
-import { ChartDataTable } from './ChartFallback'
+import { sliceSpec } from '../charts/describeSeries'
+import AccessibleChart from '../charts/AccessibleChart'
 
 // One string cannot answer for three channels, so this is a function of
 // *which* channel and *why* it has no value: withdrawn, sensor absent, or
@@ -296,21 +296,31 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value)
 
-  // The sentence that replaces the picture, built only from series with
-  // readings -- an unrecorded channel is absent, not described as flat at zero.
-  const lineSummary = [
-    `Daily signal trend over ${chartData.length} day${chartData.length === 1 ? '' : 's'}.`,
-    ...[
-      describeSeries(chartData, 'focus', 'Focus'),
-      describeSeries(chartData, 'stress', 'Stress'),
-      describeSeries(chartData, 'engagement', 'Engagement'),
-      describeSeries(chartData, 'heart_rate_bpm', 'Heart rate', ' bpm'),
-    ].filter(Boolean),
-  ].join(' ')
-
-  const pieSummary = emotionSlices.length
-    ? `Emotion mix: ${emotionSlices.map(sl => `${sl.name} ${sl.value} samples`).join(', ')}.`
-    : 'Emotion mix: nothing recorded.'
+  // **The columns are what the chart draws, and nothing else.** This is the
+  // text alternative for *this picture*, so a series the picture omits does not
+  // belong in it — a screen-reader user reading a series no sighted reader can
+  // see is not equivalence, it is a different report.
+  //
+  // `engagement` was here, and was both undrawn and wrong. `chartData` scales
+  // `focus` and `stress` through `toPct` and carries every other field across
+  // by spread, so engagement stayed a 0..1 ratio and announced as "Engagement
+  // 0% to 1%". The comment that stood here claimed `chartData` is "already
+  // scaled to percentages" — true of the two fields above it, false of the one
+  // it was being used to justify. Nothing on screen could contradict it,
+  // because engagement is not plotted: the error existed *only* on the surface
+  // this component was built to fix, which is the failure mode to expect here
+  // and to check for deliberately.
+  //
+  // Heart rides on `heartShown` for the same reason: the line is conditional,
+  // so the description of it has to be.
+  //
+  // No `scale` on the two that remain — unlike SessionReview and Live, these
+  // really are scaled on the way in, and each is named in the map above.
+  const TREND_COLUMNS = [
+    { key: 'focus',  label: 'Focus',  unit: '%' },
+    { key: 'stress', label: 'Stress', unit: '%' },
+    ...(heartShown ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
+  ]
 
   return (
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
@@ -348,55 +358,55 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
               : 'No weekly signal data available yet.'}
           </div>
         ) : (
-          // `role="img"` + a summary, since Recharts emits a bare `<svg>` with
-          // no walkable structure. The `sr-only` table carries the days
-          // themselves, as a **sibling** of the `role="img"` wrapper, never a
-          // child -- WAI-ARIA prunes every descendant role from an `img`, so
-          // a table nested inside it is invisible to real assistive tech even
-          // though Testing Library (DOM-based, not AX-tree) would report it
-          // as present.
-          <div className="h-full">
-            <ChartDataTable
-              caption={lineSummary}
-              rows={chartData} rowKey="label" rowLabel="Day"
-              columns={[
-                { key: 'focus',          label: 'Focus',      unit: '%' },
-                { key: 'stress',         label: 'Stress',     unit: '%' },
-                { key: 'engagement',     label: 'Engagement', unit: '%' },
-                { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
-              ]}
-            />
-          <div className="h-full" role="img" aria-label={lineSummary}>
-          <ResponsiveContainer width="100%" height="100%">
+          // `role="img"` + a summary, because Recharts emits bare `<svg>`: with
+          // no name and no walkable structure, the whole trend announced as
+          // nothing. The `sr-only` table below carries the days themselves --
+          // the summary alone is a headline with the data thrown away.
+          <AccessibleChart
+            headline={`Daily signal trend over ${chartData.length} day${chartData.length === 1 ? '' : 's'}.`}
+            rows={chartData} rowKey="label" rowLabel="Day"
+            columns={TREND_COLUMNS}>
             <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-              <XAxis dataKey="label" fontSize={11} tickLine={false} />
-              {/* Two axes for two units: percent for the 0..1 ratios, bpm for
-                  heart rate. Explicit ids on both -- a second axis with no id
-                  on the first silently binds every series to the new one. */}
-              <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
-              {heartShown && (
-                <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
-                       fontSize={11} tickLine={false} unit=" bpm" />
-              )}
-              <Tooltip />
-              {/* Distinct colours per series, matching the MiniMetric tones. */}
-              {/* #6366f1, matching SessionReview.jsx -- same colour meaning
-                  focus here and engagement there would mislead a parent
-                  reading both. */}
-              {/* Dots, not `dot={false}`: a student who practised on a single
-                  day gives every series exactly one point, which draws no
-                  segment and, without a dot, renders as an empty chart. */}
-              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
-              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
-              {/* Omitted entirely when off, rather than drawn as an all-null
-                  series -- an empty legend entry reads as a flatlined reading. */}
-              {/* Same reasoning as the facial series above. */}
-              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
-            </LineChart>
-          </ResponsiveContainer>
-          </div>
-          </div>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                <XAxis dataKey="label" fontSize={11} tickLine={false} />
+                {/* Two axes, because the series are in different units. The left
+                    one is percent for the 0..1 ratios; heart rate is beats per
+                    minute and would either flatten everything else against the
+                    floor or, if scaled to match, be drawn at 7200%. Explicit ids
+                    on both -- adding a second axis without giving the first one
+                    an id silently binds every existing series to the new axis. */}
+                <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
+                {heartShown && (
+                  <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
+                         fontSize={11} tickLine={false} unit=" bpm" />
+                )}
+                <Tooltip />
+                {/* Distinct colours per series -- all three were "currentColor",
+                    which rendered them identically and made the chart unreadable.
+                    Matches the MiniMetric tones above. */}
+                {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
+                    which is the colour that file uses for *engagement* -- so one
+                    green line meant focus on this panel and engagement on session
+                    review, and a parent reading both was shown one colour for two
+                    things. The archived SVGs re-render the session charts, so
+                    those are the reference and this is the side that moved. */}
+                {/* Dots, not `dot={false}`. This chart holds at most seven
+                    points, one per day, and a student who practised on a single
+                    day gives every series exactly one -- which draws no segment
+                    and, without a dot, renders as a completely empty chart. That
+                    is the normal case for a new student in their first week, so
+                    the graph was blank precisely when it was first looked at. */}
+                <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" />
+                <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" />
+                {/* Omitted entirely with facial reporting off, rather than drawn
+                    as an all-null series -- an empty legend entry reads as a
+                    measurement that flatlined. */}
+                {/* Same reasoning as the facial series: omitted rather than drawn
+                    as an all-null line, because an empty legend entry reads as a
+                    measurement that flatlined. */}
+                {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" />}
+              </LineChart>
+          </AccessibleChart>
         )}
       </div>
 
@@ -490,28 +500,19 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
-          {/* Sibling, not child -- see the trend chart above. */}
-          <div className="h-52">
-            <ChartDataTable
-              caption={pieSummary}
-              rows={emotionSlices} rowKey="name" rowLabel="Emotion"
-              columns={[{ key: 'value', label: 'Samples' }]}
-            />
-            <div className="h-full" role="img" aria-label={pieSummary}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={emotionSlices} dataKey="value" nameKey="name"
-                     innerRadius="45%" outerRadius="75%" paddingAngle={2}>
-                  {emotionSlices.map(slice => (
-                    <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-            </div>
-          </div>
+          <AccessibleChart className="h-52"
+            {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
+            <PieChart>
+                  <Pie data={emotionSlices} dataKey="value" nameKey="name"
+                       innerRadius="45%" outerRadius="75%" paddingAngle={2}>
+                    {emotionSlices.map(slice => (
+                      <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                  <Legend />
+                </PieChart>
+          </AccessibleChart>
         </div>
       )}
 

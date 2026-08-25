@@ -13,7 +13,7 @@ makes it true, not afterwards. Keep entries short; it is read in full every time
 
 | Path | What it is |
 | --- | --- |
-| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~2.3k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which run against a local Ollama. |
+| `Website/AdaptiveLearning/backend` | FastAPI app (`main.py`, ~2.3k lines) — the product API on port 8000. Also the `LLM_*_generation.py` question generators and `LLM_topic_decider.py`, which reach a model through `llm_client.py` — a local Ollama by default, the Claude API when `LLM_PROVIDER` says so. |
 | `Website/AdaptiveLearning/frontend` | React 19 + Vite + Tailwind SPA on port 5173. Routed by role: `src/pages/{student,teacher,parent,auth}`, one layout each. `src/lib/api.js` wraps the backend; `src/lib/supabase.js` holds the anon client. |
 | `EEGResearch` | Separate FastAPI sidecar on port 8001 (`src/app`), packaged as `eeg-learning-platform`. Owns headband access and signal derivation; the website backend talks to it over HTTP only, via `backend/eeg_client.py`. |
 | `EEGResearch/native_bridge` | C++ bridge to the libMuse SDK, TCP on 8765. Windows-only (`winsock2`), and the interesting half is behind `ENABLE_LIBMUSE`. |
@@ -299,7 +299,9 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
-`INGEST_RATE_WINDOW`, and the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below. The ingest bounds
+`INGEST_RATE_WINDOW`, the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below, and the
+`LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
+`llm_client`*. The ingest bounds
 matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and
 neither the session check nor the consent check bounds volume. Frontend: `VITE_SUPABASE_URL`,
 `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`, `VITE_EEG_DEBUG`. EEGResearch reads `.env` through
@@ -2038,11 +2040,78 @@ per-operation, not per-call), a 2-worker pool, `STRATEGY_LLM_MAX_WAITERS` on how
 block at once, and `STRATEGY_RATE_LIMIT`/`STRATEGY_RATE_WINDOW` per user id. An abandoned wait
 cancels its future, or a stalled server turns every timeout into work that still runs later. If you
 add another model-backed endpoint, it needs the same four bounds — the per-user rate limit alone
-does not protect the threadpool.
+does not protect the threadpool. Question generation is now the second such caller and has its own
+four; see *Every model call goes through `llm_client`*.
+
+`_llm_strategies` reaches its model through `llm_client` like everything else, so `LLM_PROVIDER`
+switches this pass too and it shares the process-wide concurrency ceiling with the thirteen
+generation calls. It keeps its own `STRATEGY_LLM_*` bounds on top: those are about a *sync endpoint*
+holding an anyio threadpool slot, which is a different problem from a background prefetch thread.
 
 Model output is untrusted text: it's parsed, length-bounded, stripped of markdown emphasis and list
 markers, and run through a clinical-term filter, and anything failing validation falls back to the
 rules. Extend `_validated_strategies` rather than rendering raw output.
+
+## Every model call goes through `llm_client`, and the provider is a setting
+
+`backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used
+to import `ollama` directly — the ten `LLM_*_generation.py` topic files, **three** in
+`LLM_topic_decider.py` (not one: `parallel_topic_and_difficulty_calculation` makes two, on
+`llama3.2:3b` rather than the 8b everything else uses), and `main._llm_strategies`. So a provider
+switch was fourteen edits, and the bounds below had nowhere to live at all.
+
+**`LLM_PROVIDER` defaults to `ollama`.** A fresh checkout running `start.ps1` must not begin billing
+an Anthropic account; a deployment opts in with `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. Both
+packages are pinned in `requirements.txt` and neither is imported until its branch is taken.
+
+**The sampling parameters do not carry across, and getting that wrong fails everything rather than
+degrading it.** Every generation call site passes `temperature=1.1`, which is outside Anthropic's
+0.0–1.0 range — passed through it returns `400 invalid_request_error` on every question, on every
+topic, from the first call. So the Claude branch takes its own `CLAUDE_TEMPERATURE` (default 1.0,
+clamped) and sends **no `top_p`/`top_k`**, since on Claude 4.x and later at most one of
+`temperature`/`top_p` should be set. `claude_temperature=` is the per-caller override; the strategies
+pass uses it to keep its 0.4, because advice a parent reads is not the place for "keep it varied".
+`test_llm_client.py` pins the request that is *built* — nothing else does, and a test that only
+checks a question came back passes against a fixture while saying nothing about what was sent.
+
+**Four bounds, because CLAUDE.md already required them of the one model-backed endpoint that existed
+before this** (see *The strategies model pass is optional and bounded*). Question generation is on
+the hottest path in the product and had none:
+
+| Bound | Setting | Why the existing one was not it |
+| --- | --- | --- |
+| Per-call deadline | `GENERATION_LLM_TIMEOUT` (30s) | The SDK's own default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
+| Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
+| Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
+| Spend | `GENERATION_DAILY_CALL_LIMIT` (5000/24h, Claude only) | Nothing bounded it; free against a local model |
+
+`_ensure_queue` submits to a pool sized to `GENERATION_MAX_CONCURRENCY` instead of spawning a bare
+daemon thread per question. The daily ceiling is **Claude-only** on purpose: Ollama is local and
+free, so a call ceiling there would refuse a child a question to protect nothing.
+
+**On breach the answer is to refuse — `GenerationUnavailable`, surfaced as 503, never a fallback.**
+Serving a question from the bank or from a cheaper model instead would change what a child is asked
+with nothing on any surface saying so, which is the same class of failure as a dashboard that cannot
+tell "no data" from "zero". 503 rather than 500 because a ceiling is a decision this deployment made,
+not something that broke. The prefetch worker is the one place a refusal is *silent*, and that is
+safe because it is invisible by construction: the queue stays short and the next question is
+generated inline.
+
+`CLAUDE_MAX_RETRIES` defaults to **0**, against the SDK's 2. Every call site already sits in its own
+`for attempt in range(3)`, so the defaults multiply to nine billed attempts per failed generation —
+and the loop the call sites own is the one worth keeping, since it also rejects a *well-formed*
+response for being bad JSON or the wrong shape, which no transport retry can.
+
+**Switching provider does not invalidate the checks below it, but it does invalidate every measured
+rate.** `grade_appropriateness` and `question_consistency` are code and are provider-agnostic — that
+is why those rules were moved out of prompts in the first place. Every "measured on llama3.1:8b"
+figure in the sections that follow describes the **Ollama** path and nothing else. Before a
+deployment runs on Claude, redo the sampling: **count how often each fail-open check *engages*, not
+just how often it fires.** A check whose input it can no longer locate — a differently formatted
+dataset, a separator that moved — reports a perfect record while doing nothing, and that has already
+happened once here (fractions in `ordering`). Label the new figures with the model and keep the
+Ollama ones labelled as Ollama's; the reasoning survives the model change even where the rate does
+not.
 
 ## Question generation can be grounded in a lesson plan, but nothing seeds one
 

@@ -3,7 +3,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS #pip install flask-cors
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
-from ollama import generate
+import llm_client
 import json
 import random
 from statistics import fmean
@@ -350,8 +350,14 @@ def calculate_topic_and_difficulty(user_id, grade):
 
 def parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt):
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        topic_future = executor.submit(generate, model="llama3.2:3b", prompt=topic_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
-        difficulty_future = executor.submit(generate, model="llama3.2:3b", prompt=difficulty_prompt, options={"temperature": 0.7, "top_p": 0.95, "top_k": 100})
+        # 3b, not the 8b every other call site uses -- this pass only has to
+        # pick a topic and a tier, and it is on the critical path twice.
+        # `ollama_model` is ignored on the Claude branch, which has one model.
+        submit = lambda text: executor.submit(
+            llm_client.generate_text, text, ollama_model="llama3.2:3b",
+            temperature=0.7, claude_temperature=0.7)
+        topic_future = submit(topic_prompt)
+        difficulty_future = submit(difficulty_prompt)
 
         topic_response = topic_future.result()
         difficulty_response = difficulty_future.result()
@@ -470,13 +476,18 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
     difficulty_data = None
     for attempt in range(2):
         topic_response, difficulty_response = parallel_topic_and_difficulty_calculation(topic_prompt, difficulty_prompt)
+        # The helper answers (None, None) when either call came back empty.
+        # Worth the guard now that these are strings: `extract_json(None)`
+        # raises where the old response object could not be falsy at all.
+        if topic_response is None or difficulty_response is None:
+            continue
 
-        raw_topic = extract_json(topic_response.response)
-        raw_difficulty = extract_json(difficulty_response.response)
+        raw_topic = extract_json(topic_response)
+        raw_difficulty = extract_json(difficulty_response)
         if not raw_topic or not raw_difficulty:
             print(f"[Attempt {attempt+1}] No JSON found")
-            print(topic_response.response)
-            print(difficulty_response.response)
+            print(topic_response)
+            print(difficulty_response)
             continue
 
         try:
@@ -484,8 +495,8 @@ def LLM_topic_and_difficulty_separate_decider(user_id, grade):
             difficulty_data = json.loads(raw_difficulty)
         except Exception as e:
                 print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-                print(topic_response.response)
-                print(difficulty_response.response)
+                print(topic_response)
+                print(difficulty_response)
                 topic_data = None
                 difficulty_data = None
                 continue
@@ -695,20 +706,19 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
 
     topic_data = None
     for attempt in range(3):
-        response = generate(model="llama3.1:8b", prompt=prompt,
-            options={"temperature": 1.1, "top_p": 0.95, "top_k": 100})
+        response_text = llm_client.generate_text(prompt)
 
-        raw = extract_json(response.response)
+        raw = extract_json(response_text)
         if not raw:
             print(f"[Attempt {attempt+1}] No JSON found")
-            print(response.response)
+            print(response_text)
             continue
 
         try:
             topic_data = json.loads(raw)
         except Exception as e:
                 print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-                print(response.response)
+                print(response_text)
                 continue
 
         required_keys = ["topic", "difficulty"]

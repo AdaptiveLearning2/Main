@@ -1663,19 +1663,31 @@ skips nulls, so both stored averages already have the trusted count as their den
 by `sample_count` would divide by rows the average never saw. A mean of daily means is the other
 wrong answer — it weights a 4-sample day like a 4000-sample one.
 
-One approximation, stated because it cannot currently be fixed: `avg_rmssd_ms` has a smaller true
-denominator than its siblings, since roughly one trusted window in five is gated out of RMSSD and the
-rollup stores no separate count for it. The error is between days, never within one, and closing it
-needs a column the schema lacks plus a backfill that deleted rows cannot supply.
+**Three of the five averages carry the same approximation**, because the rollup stores one count per
+channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
+`avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
+trusted rows. `avg_stress` and `avg_engagement` — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives the three from
+`focus_score`, `calm_score` and `confidence` **independently**; only `contact_poor` nulls all three
+together, so an ordinary row can carry focus without calm. `avg_focus` and `avg_heart_rate_bpm` are
+exact. The error is between days, never within one, and closing it needs a per-column count the
+schema lacks plus a backfill that deleted rows cannot supply.
 
 **A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders
 as the weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of
 reason: counting back `weeks * 7` days from today leaves a part-week at each end that looks like a
 full one.
 
-Consent skips the channel in the *aggregation* here, not in the read — one query returns all three
-channels, and asking per channel would be three. That is a real difference from the weekly report,
-where a declined channel skips its own query, and it is why the test says so by name.
+**A declined channel is filtered out of the query, not out of the result.** The first version read
+every channel and dropped the declined ones in Python, on the reasoning that the alternative was
+three queries — a false choice, since one `.in_("channel", …)` narrows the single query it already
+made. CLAUDE.md's rule about the facial opt-out is exactly this: *never fall back to a query that
+reads what the caller opted out of*. Assert on the **filter**, not on the payload — an absent heart
+figure cannot tell "asked and discarded" from "never asked", which is the whole distinction the rule
+is about, and a test that checks only the payload passes either way.
+
+`_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
+assertion is possible at all.
 
 ### Archived charts are the other thing that survives the delete
 

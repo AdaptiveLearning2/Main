@@ -1179,13 +1179,22 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     Postgres `avg()` skips nulls, so both denominators are the trusted count.
     Weighting by `sample_count` would divide by rows the average never saw.
 
-    One approximation, stated rather than hidden: `avg_rmssd_ms` has a smaller
-    true denominator than the other heart averages, because roughly one trusted
-    window in five is gated out of RMSSD (see CLAUDE.md on `rmssd_rejected_by`)
-    and the rollup stores no separate count for it. So a week's RMSSD is
-    weighted by a number slightly larger than its own n. The error is between
-    days, never within one, and correcting it needs a column the schema does
-    not have and a backfill that deleted rows cannot supply.
+    Three of the five averages carry an approximation, and it is the same one:
+    the rollup stores a single count per channel, so any column whose nulls do
+    not follow that count's is weighted slightly wrongly.
+
+      * `avg_rmssd_ms` -- roughly one trusted window in five is gated out of
+        RMSSD (see CLAUDE.md on `rmssd_rejected_by`) while the heart count
+        counts trusted rows.
+      * `avg_stress` and `avg_engagement` -- `trusted_sample_count` for the
+        cognitive channel is `count(*) FILTER (WHERE focus IS NOT NULL)`, and
+        `map_eeg_to_cognitive` derives the three from `focus_score`,
+        `calm_score` and `confidence` independently. Only `contact_poor` nulls
+        all three together; an ordinary row can carry focus without calm.
+
+    `avg_focus` and `avg_heart_rate_bpm` are exact. In every case the error is
+    between days, never within one, and correcting it needs a per-column count
+    the schema does not have and a backfill that deleted rows cannot supply.
     """
     tz = _school_timezone()
     school_today = _utc_now().astimezone(tz).date()
@@ -1195,11 +1204,24 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
     # the others while looking like a full one.
     first_monday = _week_start(school_today) - timedelta(weeks=weeks - 1)
 
+    # A declined channel is not read, rather than read and discarded. One
+    # filtered query, not three -- an earlier version of this took "one query
+    # or one per channel" as the only options and let consent filter the
+    # aggregation instead, which is the exact shape CLAUDE.md's rule about the
+    # facial opt-out warns against: never fall back to a query that reads what
+    # the caller opted out of.
+    channels = ["cognitive"]
+    if include_heart:
+        channels.append("heart")
+    if include_emotion:
+        channels.append("emotion")
+
     rows: list = []
     retrieved = True
     try:
         rows = (supabase.table("signal_daily_rollup").select("*")
                 .eq("user_id", student_id)
+                .in_("channel", channels)
                 .gte("day", first_monday.isoformat())
                 .lte("day", school_today.isoformat())
                 .execute().data or [])
@@ -1237,9 +1259,10 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
 
     for r in rows:
         channel = r.get("channel")
-        if channel == "heart" and not include_heart:
-            continue
-        if channel == "emotion" and not include_emotion:
+        # Belt and braces against a row the filter above should never have
+        # returned. Cheap, and the alternative is trusting a query string to
+        # enforce a consent decision.
+        if channel not in channels:
             continue
         try:
             day = date.fromisoformat(str(r.get("day")))

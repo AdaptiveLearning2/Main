@@ -201,15 +201,17 @@ def test_it_reads_the_rollup_and_never_the_per_sample_tables(monkeypatch):
         assert table not in fake.table_calls, f"{table} must not be read here"
 
 
-def test_a_declined_channel_is_not_reported_even_though_one_query_returns_it(monkeypatch):
-    """One query returns every channel, so the skip is in the aggregation
-    rather than in the read -- unlike the weekly report, where a declined
-    channel skips its own query.
+def test_a_declined_channel_is_never_read(monkeypatch):
+    """Consent skips the query, it does not filter the result.
 
-    That difference is worth stating: what consent buys here is that the value
-    never reaches the payload, not that the row was never selected. The row is
-    the student's own either way, and asking per channel would be three
-    queries where the rollup needs one.
+    CLAUDE.md: *never fall back to a query that reads what the caller opted out
+    of*. The first version of this read every channel and dropped the declined
+    ones in Python, on the reasoning that the alternative was three queries --
+    a false choice, since one `.in_()` filters the single query it already made.
+
+    Asserting on the filter rather than the payload is the point: an absent
+    heart figure cannot tell "asked and discarded" from "never asked", which is
+    the whole distinction the rule is about.
     """
     rollup = [
         _rollup("2026-06-08", "cognitive", avg_focus=0.5, trusted_sample_count=10),
@@ -217,19 +219,35 @@ def test_a_declined_channel_is_not_reported_even_though_one_query_returns_it(mon
         _rollup("2026-06-08", "emotion", trusted_sample_count=4,
                 emotion_counts={"neutral": 4}),
     ]
-    monkeypatch.setattr(main, "supabase", _fake(rollup=rollup))
+    fake = _fake(rollup=rollup)
+    monkeypatch.setattr(main, "supabase", fake)
 
     out = main._signal_trend(STUDENT, weeks=1, include_heart=False,
                              include_emotion=False)
-    week = _week(out, "2026-06-08")
 
+    asked = [f for q in fake.queries for f in q.filters if f[0] == "channel"]
+    assert asked == [("channel", ("in", ["cognitive"]))], (
+        "the declined channels must not be in the query at all")
+
+    week = _week(out, "2026-06-08")
     assert week["focus"] == pytest.approx(0.5)
     assert week["heart_rate_bpm"] is None
-    assert week["heart_samples"] == 0
     assert week["emotion_distribution"] == {}
     # And the payload says the absence is a decision, not an empty week.
     assert out["heart_included"] is False
     assert out["emotion_included"] is False
+
+
+def test_a_consented_channel_is_asked_for(monkeypatch):
+    """The other half: a filter that asked for nothing would pass the test
+    above while reporting a blank term for everyone."""
+    fake = _fake()
+    monkeypatch.setattr(main, "supabase", fake)
+
+    main._signal_trend(STUDENT, weeks=1)
+
+    asked = [f for q in fake.queries for f in q.filters if f[0] == "channel"]
+    assert asked == [("channel", ("in", ["cognitive", "heart", "emotion"]))]
 
 
 def test_the_endpoint_checks_the_relationship_before_reading(monkeypatch):

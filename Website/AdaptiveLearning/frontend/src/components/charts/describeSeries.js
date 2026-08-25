@@ -88,8 +88,12 @@ export function describeSlices(label, slices, noun, nameKey = 'name', valueKey =
  * Not memoised: no page that draws a categorical chart polls. `Live` is the one
  * that re-renders on a timer and it draws a line, not a pie.
  */
+// `rowLabel` has no default on purpose: all five call sites name it, and the
+// one a default would have supplied ("Name") is worse than every one of them.
+// An unexercised fallback on a screen-reader-only surface is a string nobody
+// would ever see fail.
 export function sliceSpec(label, rows, noun,
-                          { nameKey = 'name', valueKey = 'value', rowLabel = 'Name' } = {}) {
+                          { nameKey = 'name', valueKey = 'value', rowLabel } = {}) {
   return {
     summary: describeSlices(label, rows, noun, nameKey, valueKey),
     rows,

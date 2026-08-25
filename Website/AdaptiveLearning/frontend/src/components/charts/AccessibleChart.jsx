@@ -83,7 +83,13 @@ export default function AccessibleChart({
     <div className={className}>
       {tableRows && (
         <ChartDataTable
-          caption={tableRows.length < rows.length
+          // `rows?.length ?? 0`, because `sample()` guards `!rows` internally
+          // and returns `[]` — so moving this derivation out of it moved it away
+          // from that guard, and a nullish `rows` crashed here on a comparison
+          // rather than rendering an empty table. Every live call site guards
+          // `rows` before rendering, so it was unreachable; the previous shape
+          // could not reach it at all, which is the difference worth closing.
+          caption={tableRows.length < (rows?.length ?? 0)
             ? `${text} Table shows ${tableRows.length} rows sampled evenly across ${rows.length}.`
             : text}
           rows={tableRows} rowKey={rowKey} rowLabel={rowLabel} columns={columns}

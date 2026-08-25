@@ -155,3 +155,22 @@ it('is the only place that renders a Recharts chart', () => {
 
   expect(offenders).toEqual([])
 })
+
+it('renders with no rows at all rather than throwing', () => {
+  // `sample()` guards `!rows` and returns `[]`, so moving the "was it sampled"
+  // derivation out of it moved that check away from the guard: the caption
+  // compared `tableRows.length < rows.length` and threw on a nullish `rows`.
+  //
+  // Every live call site guards `rows` before rendering, so it was unreachable
+  // — but the shape this replaced could not reach it at all, and a component
+  // that crashes on absent data is the wrong default for one whose whole job is
+  // describing data that may not be there.
+  expect(() => render(
+    <div style={{ width: 400, height: 200 }}>
+      <AccessibleChart headline="Nothing yet." rows={undefined} rowKey="day"
+                       rowLabel="Day" columns={COLUMNS}>
+        <LineChart data={[]}><Line dataKey="focus" /></LineChart>
+      </AccessibleChart>
+    </div>,
+  )).not.toThrow()
+})

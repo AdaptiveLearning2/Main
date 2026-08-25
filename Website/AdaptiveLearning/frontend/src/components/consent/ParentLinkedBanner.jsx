@@ -14,21 +14,13 @@
  */
 
 import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
 import { UserPlus } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
-
-function fmtDate(s) {
-  if (!s) return null
-  const d = new Date(s)
-  return Number.isNaN(d.getTime())
-    ? null
-    : d.toLocaleDateString([], { month: 'long', day: 'numeric' })
-}
+import { fmtDate } from '../../lib/dates'
+import NoticeBanner from './NoticeBanner'
 
 export default function ParentLinkedBanner({ studentId }) {
   const [links, setLinks] = useState([])
-  const [busy, setBusy]   = useState(false)
 
   useEffect(() => {
     if (!studentId) return undefined
@@ -44,44 +36,30 @@ export default function ParentLinkedBanner({ studentId }) {
   if (links.length === 0) return null
 
   const acknowledge = async () => {
-    setBusy(true)
-    try {
-      await apiFetch('/api/student/parent-links/ack', { method: 'POST' })
-      setLinks([])
-    } catch {
-      // Left up: the student has not actually been told yet.
-      setBusy(false)
-    }
+    await apiFetch('/api/student/parent-links/ack', { method: 'POST' })
+    setLinks([])
   }
 
   const names = links.map(l => l.parent_name).join(', ')
   const when  = fmtDate(links[0]?.linked_at)
 
   return (
-    <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-4 rounded-2xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40">
-      <div className="flex items-start gap-3">
-        <UserPlus className="text-emerald-600 dark:text-emerald-300 flex-shrink-0" size={18} />
-        <div className="min-w-0">
-          <p className="text-sm font-bold text-emerald-900 dark:text-emerald-100">
-            {links.length > 1
-              ? `${links.length} parents linked to your account`
-              : `${names} linked to your account`}
-            {when && <span className="font-normal"> on {when}</span>}
-          </p>
-          {/* Both powers are real the moment the link exists, so naming only
-              "a parent is now linked" would understate it. */}
-          <p className="text-xs text-emerald-800 dark:text-emerald-200 mt-1">
-            They can see your progress reports, and can turn a sensor back on
-            if you have turned one off. You will always be told when that
-            happens.
-          </p>
-          <button onClick={acknowledge} disabled={busy}
-                  className="mt-3 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50">
-            {busy ? 'Saving…' : 'Got it'}
-          </button>
-        </div>
-      </div>
-    </motion.div>
+    <NoticeBanner
+      tone="emerald" icon={UserPlus} onAcknowledge={acknowledge}
+      title={<>
+        {links.length > 1
+          ? `${links.length} parents linked to your account`
+          : `${names} linked to your account`}
+        {when && <span className="font-normal"> on {when}</span>}
+      </>}
+    >
+      {/* Both powers are real the moment the link exists, so naming only
+          "a parent is now linked" would understate it. */}
+      <p className="text-xs mt-1">
+        They can see your progress reports, and can turn a sensor back on
+        if you have turned one off. You will always be told when that
+        happens.
+      </p>
+    </NoticeBanner>
   )
 }

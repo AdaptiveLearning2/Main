@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { ArrowLeft, Copy, Check, GraduationCap, Users } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
+import AlertFeed from '../../components/analytics/AlertFeed'
 import ClassTopicHeatmap from '../../components/analytics/ClassTopicHeatmap'
 import ClassAccuracyTrend from '../../components/analytics/ClassAccuracyTrend'
 import ClassTimeOfDay from '../../components/analytics/ClassTimeOfDay'
@@ -86,6 +87,7 @@ export default function ClassDetail() {
     // panel has one thing to check rather than two, and a network failure and
     // a database failure reach it identically. Neither is an empty chart.
     const paths = {
+      alerts: `/api/classes/${id}/alerts?days=7`,
       heatmap: `/api/classes/${id}/topic-heatmap`,
       trend: `/api/classes/${id}/accuracy-trend?days=30`,
       timeOfDay: `/api/classes/${id}/time-of-day?days=30`,
@@ -221,6 +223,9 @@ export default function ClassDetail() {
       )}
 
       <div className="mt-8 grid lg:grid-cols-2 gap-6">
+        {/* First, because it is the only panel that asks for an action. */}
+        <AlertFeed data={analytics.alerts} loading={analyticsLoading}
+          onRetry={loadAnalytics} />
         <ClassAccuracyTrend data={analytics.trend} loading={analyticsLoading}
           onRetry={loadAnalytics} />
         <ClassTopicHeatmap data={analytics.heatmap} loading={analyticsLoading}

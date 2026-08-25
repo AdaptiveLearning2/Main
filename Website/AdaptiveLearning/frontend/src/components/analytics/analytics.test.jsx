@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, it, expect } from 'vitest'
 import Heatmap from '../charts/Heatmap'
 import Panel from './Panel'
+import AlertFeed from './AlertFeed'
 import ClassTopicHeatmap from './ClassTopicHeatmap'
 import ClassAccuracyTrend from './ClassAccuracyTrend'
 import ClassTimeOfDay from './ClassTimeOfDay'
@@ -346,5 +347,101 @@ describe('FocusAccuracy', () => {
       correlation: 0.6, pairs: 400, min_pairs: 30, buckets: BUCKETS,
     }} />)
     expect(screen.getByText(/a relationship here is not a cause/i)).toBeInTheDocument()
+  })
+})
+
+// ─── the alert feed ────────────────────────────────────────────────────────
+
+describe('AlertFeed', () => {
+  const alert = (kind, over = {}) => ({
+    id: `a-${kind}`, kind, student_name: 'Ada', detail: {},
+    created_at: '2026-06-11T09:30:00Z', school_day: '2026-06-11', ...over,
+  })
+
+  it('describes a timed-out session and says the work was kept', () => {
+    // The reassurance is load-bearing: "session timed out" alone reads as
+    // "their work was lost", which is the first thing a teacher would ask.
+    render(<AlertFeed data={{
+      retrieved: true, days: 7,
+      alerts: [alert('session_auto_closed', { detail: { questions_answered: 12 } })],
+    }} />)
+    expect(screen.getByText(/Ada — Session timed out/)).toBeInTheDocument()
+    expect(screen.getByText(/after 12 questions. The work was saved./))
+      .toBeInTheDocument()
+  })
+
+  it('does not say "1 questions"', () => {
+    render(<AlertFeed data={{
+      retrieved: true, days: 7,
+      alerts: [alert('session_auto_closed', { detail: { questions_answered: 1 } })],
+    }} />)
+    expect(screen.getByText(/after 1 question\./)).toBeInTheDocument()
+  })
+
+  it('survives a detail with no count rather than saying "undefined"', () => {
+    render(<AlertFeed data={{
+      retrieved: true, days: 7, alerts: [alert('session_auto_closed')],
+    }} />)
+    expect(screen.getByText(/Ended without being finished\. The work was saved\./))
+      .toBeInTheDocument()
+  })
+
+  it('tells a teacher what to check when no readings arrived', () => {
+    render(<AlertFeed data={{
+      retrieved: true, days: 7, alerts: [alert('signals_missing')],
+    }} />)
+    expect(screen.getByText(/Ada — No headband data/)).toBeInTheDocument()
+    expect(screen.getByText(/Check the headband is paired/)).toBeInTheDocument()
+  })
+
+  it('shows an unrecognised kind rather than dropping it', () => {
+    // The CHECK constraint means this should be impossible. If it happens, a
+    // visible unstyled row is what gets it reported; skipping it silently
+    // would make a real alert invisible.
+    render(<AlertFeed data={{
+      retrieved: true, days: 7, alerts: [alert('something_new')],
+    }} />)
+    expect(screen.getByText(/Unrecognised alert \(something_new\)/)).toBeInTheDocument()
+  })
+
+  it('uses the school day from the payload, not the browser', () => {
+    // Re-deriving it here would show a teacher marking from another timezone
+    // the wrong day for the lesson.
+    render(<AlertFeed data={{
+      retrieved: true, days: 7,
+      alerts: [alert('signals_missing', { school_day: '2026-06-10' })],
+    }} />)
+    expect(screen.getByText(/2026-06-10/)).toBeInTheDocument()
+  })
+
+  it('a quiet week is not a failed read', () => {
+    const { rerender } = render(<AlertFeed data={{ retrieved: true, days: 7, alerts: [] }} />)
+    expect(screen.getByText(/nothing to flag/i)).toBeInTheDocument()
+
+    rerender(<AlertFeed data={{ retrieved: false, alerts: [] }} />)
+    expect(screen.getByText(/couldn't load the alert feed/i)).toBeInTheDocument()
+    expect(screen.queryByText(/nothing to flag/i)).not.toBeInTheDocument()
+  })
+
+  it('discloses truncation instead of implying that is all of them', () => {
+    render(<AlertFeed data={{
+      retrieved: true, days: 7, truncated: true,
+      alerts: [alert('signals_missing')],
+    }} />)
+    expect(screen.getByText(/there are more in this window/i)).toBeInTheDocument()
+  })
+
+  it('never renders a judgement about the student', () => {
+    // The scope is the feature. If a future kind smuggles an inference in,
+    // this is what should stop it.
+    render(<AlertFeed data={{
+      retrieved: true, days: 7,
+      alerts: [alert('session_auto_closed'), alert('signals_missing')],
+    }} />)
+    const text = document.body.textContent
+    for (const word of ['stressed', 'struggling', 'inattentive', 'attention',
+      'distracted', 'at risk']) {
+      expect(text.toLowerCase()).not.toContain(word)
+    }
   })
 })

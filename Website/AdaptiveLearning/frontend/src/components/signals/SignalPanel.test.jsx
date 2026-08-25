@@ -1,5 +1,5 @@
 import { render, screen, cleanup, within } from '@testing-library/react'
-import { LiveSignalSummary, WeeklySignalReport, StrategyPanel, pct } from './SignalPanel'
+import { LiveSignalSummary, WeeklySignalReport, SignalTrend, StrategyPanel, pct } from './SignalPanel'
 
 // Signals cross the wire as 0..1 ratios. Guards against rendering them
 // unscaled, which would print focus 0.72 as "1%".
@@ -681,5 +681,74 @@ describe('the trend description matches the trend', () => {
     // The `<Line>` is conditional on consent, so the description has to be.
     render(<WeeklySignalReport report={{ ...RATIOS, heart_included: false }} />)
     expect(trendName()).not.toMatch(/heart rate/i)
+  })
+})
+
+// ─── SignalTrend ─────────────────────────────────────────────────────────
+
+const trend = {
+  weeks: [
+    { week_start: '2026-05-25', focus: 0.62, stress: 0.30, heart_rate_bpm: 74, days_with_data: 4 },
+    { week_start: '2026-06-01', focus: null,  stress: null, heart_rate_bpm: null, days_with_data: 0 },
+    { week_start: '2026-06-08', focus: 0.71, stress: 0.26, heart_rate_bpm: 71, days_with_data: 5 },
+  ],
+  retrieved: true,
+  heart_included: true,
+  emotion_included: true,
+}
+
+describe('SignalTrend', () => {
+  afterEach(cleanup)
+
+  it('scales the ratio series and leaves heart rate in bpm', () => {
+    // The failure this pins is invisible on screen and invisible to the
+    // chart: the sr-only table is the only place the units are stated, so a
+    // series scaled wrongly announces "0% to 1%" with nothing to contradict it.
+    render(<SignalTrend trend={trend} />)
+
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('62%')).toBeInTheDocument()
+    expect(within(table).getByText('74 bpm')).toBeInTheDocument()
+  })
+
+  it('counts the weeks that recorded something, not the weeks in range', () => {
+    // A week of three samples is plotted beside a week of four thousand and
+    // looks equally solid. Coverage goes in the sentence rather than a column,
+    // because a column naming something the chart does not draw would give a
+    // screen-reader user a different report, not an equivalent one.
+    render(<SignalTrend trend={trend} />)
+
+    expect(screen.getByRole('img', { name: /across 3 weeks, with data recorded on 2 of them/i }))
+      .toBeInTheDocument()
+  })
+
+  it('leaves a week with nothing recorded as a gap', () => {
+    render(<SignalTrend trend={trend} />)
+
+    const row = screen.getByRole('row', { name: /06-01/ })
+    expect(within(row).getAllByText(/not recorded/i).length).toBeGreaterThan(0)
+  })
+
+  it('says a failed read failed, rather than that nothing was recorded', () => {
+    // Both produce an empty series, and only the flag tells them apart.
+    render(<SignalTrend trend={{ weeks: [], retrieved: false }} />)
+
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument()
+    expect(screen.queryByText(/no signal history yet/i)).not.toBeInTheDocument()
+  })
+
+  it('says a genuinely empty history is empty', () => {
+    render(<SignalTrend trend={{ weeks: [], retrieved: true }} />)
+
+    expect(screen.getByText(/no signal history yet/i)).toBeInTheDocument()
+  })
+
+  it('omits the heart series entirely when the channel is off', () => {
+    // Not drawn as an all-null line: an empty legend entry reads as a
+    // measurement that flatlined.
+    render(<SignalTrend trend={{ ...trend, heart_included: false }} />)
+
+    expect(screen.queryByText('Heart rate')).not.toBeInTheDocument()
+    expect(screen.getByText('Focus')).toBeInTheDocument()
   })
 })

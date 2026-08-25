@@ -1647,6 +1647,48 @@ Its access rules differ from `retention_window`'s above: the rollup carries a **
 There is no insert/update/delete policy for anyone, so with RLS on, PostgREST cannot write it
 whatever JWT it carries — the only correct writer is `rollup_signal_day`.
 
+### The term trend reads the rollup and nothing else
+
+`/api/students/{id}/signal-trend` answers week-over-week averages, and is deliberately **not** built
+on `_weekly_signal_report`. That one reads the per-sample tables under `_REPORT_ROW_CAP`, which trims
+**oldest-first** — right for seven days and wrong for six months, because the early weeks would come
+back empty and read as a quiet term rather than as rows nobody fetched. `signal_daily_rollup` is one
+row per student per day per channel, so half a year is a few hundred rows and needs no cap. It is
+also the only copy that outlives `expire_signal_rows`, and a trend is the surface most likely to be
+read *after* a year ends.
+
+**Weeks are weighted by `trusted_sample_count`, and that is derived, not chosen.** `rollup_signal_day`
+writes `avg(focus)` for cognitive and `avg(…) FILTER (WHERE trusted)` for heart; Postgres `avg()`
+skips nulls, so both stored averages already have the trusted count as their denominator. Weighting
+by `sample_count` would divide by rows the average never saw. A mean of daily means is the other
+wrong answer — it weights a 4-sample day like a 4000-sample one.
+
+**Three of the five averages carry the same approximation**, because the rollup stores one count per
+channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
+`avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
+trusted rows. `avg_stress` and `avg_engagement` — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives the three from
+`focus_score`, `calm_score` and `confidence` **independently**; only `contact_poor` nulls all three
+together, so an ordinary row can carry focus without calm. `avg_focus` and `avg_heart_rate_bpm` are
+exact. The error is between days, never within one, and closing it needs a per-column count the
+schema lacks plus a backfill that deleted rows cannot supply.
+
+**A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders
+as the weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of
+reason: counting back `weeks * 7` days from today leaves a part-week at each end that looks like a
+full one.
+
+**A declined channel is filtered out of the query, not out of the result.** The first version read
+every channel and dropped the declined ones in Python, on the reasoning that the alternative was
+three queries — a false choice, since one `.in_("channel", …)` narrows the single query it already
+made. CLAUDE.md's rule about the facial opt-out is exactly this: *never fall back to a query that
+reads what the caller opted out of*. Assert on the **filter**, not on the payload — an absent heart
+figure cannot tell "asked and discarded" from "never asked", which is the whole distinction the rule
+is about, and a test that checks only the payload passes either way.
+
+`_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
+assertion is possible at all.
+
 ### Archived charts are the other thing that survives the delete
 
 At every session close, `chart_archive.schedule()` renders the session's four charts to standalone

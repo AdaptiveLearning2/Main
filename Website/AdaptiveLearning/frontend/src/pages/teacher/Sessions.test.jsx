@@ -76,7 +76,12 @@ it('reports a partly-loaded class as partly loaded, and shows what it has', asyn
   draw()
 
   expect(await screen.findByText(BANNER)).toBeInTheDocument()
-  expect(screen.getByText('Ada')).toBeInTheDocument()
+  // `findByText`, not `getByText`. The class list resolving and the roster
+  // arriving are two fetches, and the error clears on the first -- so this
+  // assertion sits in a window the next test in this file exists to describe.
+  // Synchronously it passed only because the microtasks happened to land in
+  // one tick locally; on a loaded CI runner they did not.
+  expect(await screen.findByText('Ada')).toBeInTheDocument()
   expect(screen.queryByText(ERROR)).not.toBeInTheDocument()
   expect(screen.queryByText(EMPTY)).not.toBeInTheDocument()
 })
@@ -91,7 +96,12 @@ it('offers a retry that does not need a page reload', async () => {
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
 
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
-  expect(screen.getByText('Ada')).toBeInTheDocument()
+  // `findByText`, not `getByText`. The class list resolving and the roster
+  // arriving are two fetches, and the error clears on the first -- so this
+  // assertion sits in a window the next test in this file exists to describe.
+  // Synchronously it passed only because the microtasks happened to land in
+  // one tick locally; on a loaded CI runner they did not.
+  expect(await screen.findByText('Ada')).toBeInTheDocument()
 })
 
 it('retries the class list when that is the read that failed', async () => {
@@ -105,7 +115,12 @@ it('retries the class list when that is the read that failed', async () => {
   await userEvent.click(screen.getByRole('button', { name: /try again/i }))
 
   await waitFor(() => expect(screen.queryByText(ERROR)).not.toBeInTheDocument())
-  expect(screen.getByText('Ada')).toBeInTheDocument()
+  // `findByText`, not `getByText`. The class list resolving and the roster
+  // arriving are two fetches, and the error clears on the first -- so this
+  // assertion sits in a window the next test in this file exists to describe.
+  // Synchronously it passed only because the microtasks happened to land in
+  // one tick locally; on a loaded CI runner they did not.
+  expect(await screen.findByText('Ada')).toBeInTheDocument()
 })
 
 it('does not flash "no sessions yet" between a successful retry and the roster', async () => {

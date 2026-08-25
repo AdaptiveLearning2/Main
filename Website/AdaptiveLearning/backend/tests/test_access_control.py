@@ -40,7 +40,7 @@ class _Query:
         # like an empty list downstream, which is why the report's `retrieved`
         # flags exist -- to tell the two apart.
         self._raises = raises
-        self._filters = []
+        self._filters = self.filters = []
         self._limit = None
         self._order = None
         self._desc = False
@@ -157,12 +157,17 @@ class _FakeSupabase:
         # from "never asked", which is the distinction the facial opt-out
         # depends on.
         self.table_calls = []
+        # Every query built, so a test can assert on the filters a read
+        # carried rather than only on what came back.
+        self.queries = []
 
     def table(self, name):
         self.table_calls.append(name)
         cap = self._max_rows.get(name) if isinstance(self._max_rows, dict) else self._max_rows
         exc = RuntimeError(f"{name} read failed") if name in self._table_raises else None
-        return _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
+        query = _Query(self._tables.get(name, []), max_rows=cap, raises=exc)
+        self.queries.append(query)
+        return query
 
     def rpc(self, name, params=None):
         params = params or {}

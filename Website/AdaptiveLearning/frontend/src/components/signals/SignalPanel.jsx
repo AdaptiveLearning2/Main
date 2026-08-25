@@ -248,6 +248,104 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
   )
 }
 
+/**
+ * Week-over-week averages, over months rather than days.
+ *
+ * A different question from the panel below it, and a different source. The
+ * weekly report reads the per-sample tables under a row cap; this reads
+ * `signal_daily_rollup`, which is the only copy that outlives
+ * `expire_signal_rows` — and a trend is the surface most likely to be read
+ * *after* a school year ends, which is exactly when the raw rows are gone.
+ *
+ * Same three-state rule as everything else here: a failed read is not a quiet
+ * term, and a week with nothing recorded is a gap rather than a missing bar.
+ */
+export function SignalTrend({ trend, title = 'Term Trend' }) {
+  const heartShown = heartOn(trend)
+  const weeks = trend?.weeks || []
+  const failed = trend?.retrieved === false
+
+  const chartData = weeks.map(w => ({
+    ...w,
+    focus: toPct(w.focus),
+    stress: toPct(w.stress),
+    // bpm, not a ratio. Through `toPct` a 72 bpm week draws at 7200%.
+    heart_rate_bpm: ratio(w.heart_rate_bpm),
+    // The Monday, as `MM-DD`. The year is the same across any range this
+    // component offers, so it would be repetition on every tick.
+    label: w.week_start ? w.week_start.slice(5) : '',
+  }))
+
+  // Mirrors the drawn series and nothing else — the sr-only table is the text
+  // alternative for *this picture*, so a column naming something no sighted
+  // reader can see is a different report, not an equivalent one. `focus` and
+  // `stress` are scaled on the way in above, hence no `scale` here; heart rate
+  // is left in bpm and says so in its unit.
+  const COLUMNS = [
+    { key: 'focus',  label: 'Focus',  unit: '%' },
+    { key: 'stress', label: 'Stress', unit: '%' },
+    ...(heartShown ? [{ key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
+  ]
+
+  // Coverage belongs in the sentence, not in a column, for the reason above.
+  // It has to be said somewhere: the rollup keeps per-day counts precisely so a
+  // thin week stays visibly thin, and a week of three samples plotted beside a
+  // week of four thousand looks equally solid.
+  const recorded = weeks.filter(w => w.days_with_data > 0).length
+  const headline = `Weekly signal averages across ${weeks.length} week`
+    + `${weeks.length === 1 ? '' : 's'}, with data recorded on ${recorded} of them.`
+
+  return (
+    <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
+      <div className="mb-4">
+        <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Weekly averages, weighted by how much was recorded each day. Weeks
+          with nothing recorded are left as gaps.
+        </p>
+      </div>
+
+      <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
+        {failed || chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
+            {/* A failed read empties the series exactly as an untouched term
+                does, so the "yet" claim is gated on having looked. */}
+            {failed
+              ? 'The term trend could not be loaded.'
+              : 'No signal history yet.'}
+          </div>
+        ) : (
+          <AccessibleChart headline={headline} rows={chartData}
+                           rowKey="label" rowLabel="Week of" columns={COLUMNS}>
+            <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+              <XAxis dataKey="label" fontSize={11} tickLine={false} />
+              {/* Two axes and explicit ids, same as the daily chart: adding a
+                  second axis without giving the first one an id silently binds
+                  every existing series to the new one. */}
+              <YAxis yAxisId="pct" domain={[0, 100]} fontSize={11} tickLine={false} />
+              {heartShown && (
+                <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
+                       fontSize={11} tickLine={false} unit=" bpm" />
+              )}
+              <Tooltip />
+              {/* Dots for the same reason as the daily chart: a student with
+                  one recorded week gives every series a single point, which
+                  draws no segment and renders as an empty chart without one. */}
+              <Line yAxisId="pct" type="monotone" dataKey="focus" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Focus" connectNulls={false} />
+              <Line yAxisId="pct" type="monotone" dataKey="stress" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Stress" connectNulls={false} />
+              {/* Omitted rather than drawn as an all-null line: an empty legend
+                  entry reads as a measurement that flatlined. */}
+              {heartShown && <Line yAxisId="bpm" type="monotone" dataKey="heart_rate_bpm" stroke="#a855f7" strokeWidth={2} dot={{ r: 3 }} name="Heart Rate (bpm)" connectNulls={false} />}
+            </LineChart>
+          </AccessibleChart>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' }) {
   const avg = report?.averages || {}
   const highlights = report?.highlights || {}

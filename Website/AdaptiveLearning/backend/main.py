@@ -742,7 +742,150 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
     return counted_q, rows[0].get("correct") or 0, True
 
 
-def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
+# ─── session alerts ───────────────────────────────────────────────────────
+#
+# Operational facts about a session, for the teacher who owns the class. Never
+# a claim about the student: `signal_fusion` produces a "stressed" label and
+# it is deliberately not routed here, for the reason the `attention` tiles
+# were removed -- a timestamped event reads as objective, and that inference
+# is not validated on children. See `20260901000000_session_alerts.sql`.
+
+# Which close site is running. `_close_session` cannot tell, and the
+# difference is the entire content of `session_auto_closed`.
+CLOSED_BY_STUDENT = "student"
+CLOSED_BY_SWEEP = "stale_sweep"
+
+ALERT_SESSION_AUTO_CLOSED = "session_auto_closed"
+ALERT_SIGNALS_MISSING = "signals_missing"
+
+
+def _session_had_signals(session_id: str) -> bool | None:
+    """Whether any cognitive row reached this session. None if unreadable.
+
+    Three states, as everywhere else: rows arrived, none did, or the question
+    could not be answered. The last must not raise a `signals_missing` alert
+    -- accusing a deployment of a silent recording failure on the strength of
+    a failed count is the same class of error as reporting a failed read as a
+    quiet week.
+
+    Only `cognitive_signals` is consulted. It is the channel the alert is
+    about: the headband is the primary sensor, the camera is opt-in and
+    emotion-only, and a session with a working headband and no camera is not
+    a fault.
+    """
+    try:
+        res = supabase.table("cognitive_signals").select("id") \
+            .eq("session_id", session_id).limit(1).execute()
+        return bool(res.data)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not check signals for {session_id}: {e}")
+        return None
+
+
+def _recording_was_expected(user_id: str) -> bool | None:
+    """Whether EEG *should* have been recording. None when that cannot be told.
+
+    Three states, deliberately the same shape as `_session_had_signals` beside
+    it, because `signals_missing` is the conjunction of the two and either one
+    being unknown makes the alert a guess.
+
+    **A try/except is not enough here, which is the whole reason this is a
+    function.** `_consent()` catches its own read failure and returns a
+    fail-closed dict rather than raising, and `_may_record` spreads that dict
+    straight through -- so an unreadable `signal_consent` arrives as
+    `record_eeg: False` with nothing thrown. Read as a bool that is
+    indistinguishable from a student who declined the headband, and it is the
+    likelier failure of the two.
+
+    `_retention_window()` has exactly the same shape: `WINDOW_UNREADABLE`
+    denies, so a failed read of the school year also lands as `record_eeg:
+    False` without raising.
+
+    Both already carry the flag that tells them apart -- `retrieved` and
+    `window_state` -- so this reads them rather than inferring from the
+    composed answer. A genuinely declined channel, a closed year and a
+    disabled recording flag all still return False: nothing was supposed to
+    arrive in any of those, and alerting would train a teacher to ignore the
+    feed.
+    """
+    try:
+        gate = _may_record(user_id)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not read recording state for {user_id[:8]}: {e}")
+        return None
+    # `is False`, not falsiness: a payload predating the flag has no opinion
+    # and must not be read as a failed read.
+    if gate.get("retrieved") is False:
+        return None
+    if gate.get("window_state") == WINDOW_UNREADABLE:
+        return None
+    return bool(gate.get("record_eeg"))
+
+
+def _raise_session_alerts(user_id: str, session: dict,
+                          closed_by: str, answered: int) -> None:
+    """Emit whatever operational alerts this close earned.
+
+    **Never raises.** It runs after the writes that matter -- the credit, the
+    rollup -- and a failure to record an alert must not turn a completed
+    session into a failed close. Same rule as `_rollup_session_days` and
+    `_record_topic_attempt`.
+
+    Both kinds are deduped by a unique index on `(session_id, kind)`, so a
+    replayed close cannot double-report. That is a backstop rather than the
+    primary guard, which is `_claim_session_close`.
+    """
+    sid = session.get("id")
+    if not sid:
+        return
+    alerts = []
+
+    if closed_by == CLOSED_BY_SWEEP:
+        # The student did not end this. It timed out and was closed for them,
+        # which means they closed the tab, lost the network, or walked away
+        # mid-lesson -- and their work was credited, so it is worth knowing.
+        # `detail` deliberately carries no timestamps. They are columns on the
+        # session this alert already points at, so copying them here would be a
+        # second source of truth for the same fact -- and writing the end-stamp
+        # key as a literal would make `conftest.close_sites()` read this
+        # function as a fourth close site. That guard finds closers by scanning
+        # for exactly that hand-written key, so it is worth not blunting; note
+        # it also means this comment cannot spell the key out.
+        alerts.append({
+            "kind": ALERT_SESSION_AUTO_CLOSED,
+            "detail": {"questions_answered": answered},
+        })
+
+    expected = _recording_was_expected(user_id)
+    if expected is None:
+        # Unknown, not "no". Logged because this is the one branch with nothing
+        # to show for it -- no alert, and a real recording outage during a
+        # database blip would otherwise pass in silence.
+        print(f"[alerts] cannot tell whether recording was expected for "
+              f"{user_id[:8]}; withholding {ALERT_SIGNALS_MISSING}")
+    elif expected:
+        had = _session_had_signals(sid)
+        # `is False`, never falsiness: None means the count failed, and that
+        # is not evidence of a silent recording failure.
+        if had is False:
+            alerts.append({
+                "kind": ALERT_SIGNALS_MISSING,
+                "detail": {"questions_answered": answered, "channel": "eeg"},
+            })
+
+    if not alerts:
+        return
+    try:
+        supabase.table("session_alerts").upsert(
+            [{"user_id": user_id, "session_id": sid, **a} for a in alerts],
+            on_conflict="session_id,kind", ignore_duplicates=True,
+        ).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[alerts] could not record {len(alerts)} alert(s) for {sid}: {e}")
+
+
+def _close_session(user_id: str, session: dict, ended_at: str,
+                   closed_by: str = CLOSED_BY_STUDENT) -> dict:
     """Everything a session close does, including stamping `ended_at`.
 
     Three endpoints close sessions (`/end`, the stale sweep, `class_live`), and
@@ -756,6 +899,14 @@ def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
     Stopping the poller stays at each call site, since the ids differ, but it
     must happen *before* this call -- `test_every_close_site_stops_the_poller_first`
     pins that ordering.
+
+    `closed_by` says which of the three sites this is, because the function
+    cannot tell and the difference is the whole content of one alert: a
+    session the student ended is ordinary, one the stale sweep ended is a
+    lesson that stopped without them. It defaults to the student so a new call
+    site has to opt *in* to raising an alert rather than out of it -- a
+    wrongly-raised alert is worse than a missing one on a surface whose value
+    is that every row means something happened.
     """
     sid = session["id"]
     if not _claim_session_close(sid, ended_at):
@@ -772,6 +923,11 @@ def _close_session(user_id: str, session: dict, ended_at: str) -> dict:
 
     _credit_session_to_user_stats(user_id, total_q, correct)
     _rollup_session_days(user_id, session.get("started_at"), ended_at)
+    # After the discard, and deliberately: an alert about a session that is
+    # about to stop existing would be deleted by the cascade a moment later,
+    # and an empty session is not an operational fault worth a teacher's
+    # attention. Never raises -- see `_raise_session_alerts`.
+    _raise_session_alerts(user_id, session, closed_by, total_q)
     # Off the request path and last: reads three tables and hits object
     # storage four times, not worth holding a request open for.
     chart_archive.schedule(supabase, sid, user_id)
@@ -2121,7 +2277,9 @@ def start_session(payload: StartSessionRequest, request: Request):
         stale_ended = _utc_now().isoformat()
         # This is often the only close a session gets, so it must still run
         # the rollup, lifetime credit, and chart archive like a normal close.
-        _close_session(user["id"], s, stale_ended)
+        # Marked as the sweep: the student did not end this one, and that is
+        # exactly what `session_auto_closed` reports.
+        _close_session(user["id"], s, stale_ended, closed_by=CLOSED_BY_SWEEP)
 
 
     obj  = {
@@ -3406,6 +3564,12 @@ _FOCUS_MATCH_SECONDS = 30
 
 _LAST_ACTIVE_UNKNOWN = {"last_active": None, "last_active_retrieved": False}
 
+# How far back the alert feed looks by default, and how many rows it will
+# return. A week is the span a teacher acts on; the cap is a backstop against
+# a runaway emitter filling a page, and the payload says when it bites.
+_ALERT_FEED_DAYS = 7
+_ALERT_FEED_CAP = 200
+
 
 def _last_active_many(student_ids) -> dict[str, dict]:
     """When each student was last doing anything, for a whole roster.
@@ -3774,6 +3938,75 @@ def class_time_of_day(class_id: str, request: Request,
     user = get_user(request)
     _verify_class_owner(class_id, user["id"])
     return _class_time_of_day(class_id, _clamp_days(days))
+
+
+def _class_alerts(class_id: str, days: int) -> dict:
+    """Recent operational alerts for a class's roster.
+
+    Read-only and append-only: there is no acknowledge or dismiss, and that is
+    a decision rather than an omission. Both kinds are facts about a session
+    that has already ended -- a lesson that timed out yesterday stays timed
+    out -- so there is nothing to resolve. Dismissal would imply a workflow
+    (assign, triage, close) this product does not have, and the window below
+    already bounds what a teacher is shown.
+
+    Alerts are stored per student, not per class, because a student can change
+    class and a stored `class_id` would go stale. The roster resolves it at
+    read time instead.
+    """
+    tz = _school_timezone()
+    roster, roster_retrieved = _class_roster(class_id)
+    profiles = _profiles_many(roster)
+    since = (_utc_now() - timedelta(days=days)).isoformat()
+
+    rows, retrieved = [], roster_retrieved
+    if roster:
+        try:
+            rows = (supabase.table("session_alerts")
+                    .select("id, user_id, session_id, kind, detail, created_at")
+                    .in_("user_id", roster)
+                    .gte("created_at", since)
+                    .order("created_at", desc=True)
+                    .limit(_ALERT_FEED_CAP).execute().data or [])
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[alerts] could not read the feed for {class_id}: {e}")
+            retrieved = False
+
+    alerts = [{
+        **r,
+        "student_name": (profiles.get(r.get("user_id")) or {}).get("display_name")
+        or "Student",
+        # The school's day, not the viewer's, so an alert groups under the
+        # lesson it belongs to rather than under whatever day it is where the
+        # teacher happens to be marking.
+        "school_day": _school_day(r.get("created_at"), tz),
+    } for r in rows]
+
+    return {
+        "alerts": alerts,
+        "days": days,
+        "student_count": len(roster),
+        "timezone": str(tz),
+        # The cap is disclosed rather than left to be inferred from a round
+        # number of rows. Silent truncation reads as "that is all of them".
+        "truncated": len(rows) >= _ALERT_FEED_CAP,
+        "retrieved": retrieved,
+    }
+
+
+@app.get("/api/classes/{class_id}/alerts")
+def class_alerts(class_id: str, request: Request, days: int = _ALERT_FEED_DAYS):
+    """Operational alerts for a class, newest first.
+
+    Teacher-of-this-class only, deliberately narrower than
+    `_verify_can_view_student`. These are classroom-operations facts -- a
+    lesson that timed out, a headband that recorded nothing -- and they are
+    for the person who can walk over and fix it. A parent reading "signals
+    missing" has no action available and the weekly report is their surface.
+    """
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    return _class_alerts(class_id, _clamp_days(days))
 
 
 @app.get("/api/students/{student_id}/focus-accuracy")
@@ -4890,7 +5123,8 @@ def class_live(class_id: str, request: Request):
                 # Goes through the shared `_close_session` helper so the
                 # empty-session discard, credit, rollup and archive all run --
                 # see the close-site ordering rule in CLAUDE.md.
-                _close_session(sid, sess, now.isoformat())
+                _close_session(sid, sess, now.isoformat(),
+                               closed_by=CLOSED_BY_SWEEP)
                 active = None; latest_cog = None; latest_face = None; latest_heart = None
             elif last_activity and last_activity >= live_cutoff:
                 active = sess

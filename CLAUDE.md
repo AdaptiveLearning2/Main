@@ -1771,6 +1771,76 @@ independently ordered lists is the drift `AccessibleChart`'s single `columns` sp
 don't re-sort either end. The time-of-day grid aligns in the *browser* instead, because that payload
 is sparse — an hour a given day never used is a real absence, not a missing row.
 
+### Session alerts are operations, never a judgement about a student
+
+`session_alerts` (`20260901000000`) is a teacher-facing feed of things that went wrong with a
+*session*: `session_auto_closed` (the stale sweep ended it, the student did not) and
+`signals_missing` (EEG recording was permitted and no cognitive row arrived). Read at
+`GET /api/classes/{id}/alerts`, rendered by `AlertFeed` on `ClassDetail`.
+
+**The scope is the feature.** `signal_fusion` produces a `stressed` label that no teacher surface
+consumes, and routing it here was considered and rejected: it is an inference from signals this
+codebase already treats as weak, and a timestamped event reads as more objective than a tile does.
+That is what retired `identity_confidence` and the `attention` surfaces (#86). FER+ is not validated
+on this product's users and `signal_fusion`'s own rule is that emotion may withhold and never
+trigger. Every kind in the CHECK whitelist is checkable against the database without interpreting a
+person; keep it that way, and if that ever changes it needs a labelled reference first, not a column.
+
+**`_close_session` takes `closed_by`, defaulting to `CLOSED_BY_STUDENT`.** The function cannot tell
+which of the three close sites is running and the difference is the entire content of
+`session_auto_closed`. It defaults to the student so a new site has to opt *in* to raising an alert —
+a wrongly-raised alert is worse than a missing one on a surface whose value is that every row means
+something happened. `test_every_close_site_says_who_ended_the_session` partitions the sites: each is
+either in `STUDENT_DRIVEN_CLOSERS` or must pass `CLOSED_BY_SWEEP`, so a new closer fails until
+someone classifies it. No property of the source separates them — `/end` and both sweeps stop the
+poller and call the same helper — which is why the list is by name.
+
+**`_raise_session_alerts` runs after the discard and never raises.** After, because an alert about a
+session about to be deleted goes with it on the cascade, and an empty session is not a fault worth
+anyone's attention. Never raises, because it runs after the credit and the rollup and a session's
+record must not be lost because a notification could not be filed.
+
+**`signals_missing` gates on `_may_record`, not `_consent`, and on `is False`, not falsiness.** A
+student who declined the headband is working exactly as configured; so is one whose school year has
+ended or whose recording flag is off. Alerting on any of those trains a teacher to ignore the feed,
+and the first would leak a consent decision as an incident. And `_session_had_signals` answers
+`True`/`False`/`None` — `None` is a failed count, which must not become an accusation that recording
+is broken, the same error as reporting a failed read as a quiet week.
+
+**A `try/except` around `_may_record` catches almost nothing, and that is the trap.** Both helpers
+behind it fail closed by *returning*, not raising: `_consent()` catches its own read error and
+answers `retrieved: False`, and `_retention_window()` answers `WINDOW_UNREADABLE` — and `_may_record`
+spreads both straight through as `record_*: False`. Read as a plain bool, an outage is
+indistinguishable from a student who declined, and the outage is the likelier of the two. The
+three-state signal is already in the dict; `_recording_was_expected` reads `retrieved` and
+`window_state` rather than inferring from the composed answer, and returns `None` for either.
+
+This generalises: **anywhere a `record_*` flag decides whether to report a fault, the `False` is
+three different facts.** Withholding is the right outcome for the unknown one — nobody can act on a
+database blip — but it has to be *logged*, because that branch has no other trace. And the test has
+to assert on the log: the outcome is identical either way, so a test checking only that no alert was
+raised passes against the bug.
+
+**Don't put a literal end-stamp key in a payload here.** `conftest.close_sites()` finds closers by
+scanning for that hand-written key, so a `detail` dict carrying one reads as a fourth close site —
+which happened, and then happened again in the comment explaining it. The timestamps are columns on
+the session the alert already points at, so `detail` carries none.
+
+**Expiry is `expire_session_alerts()`, on the same `expired_signal_cutoff()` — and deliberately with
+no rollup guard.** `expire_signal_rows` refuses a day with no `signal_daily_rollup` row because the
+rows it deletes are the only copy. Nothing summarises alerts and nothing should, so copying that
+guard — the obvious move when modelling this on its neighbour — would mean alerts never expire at
+all. It is also not batched, because this table takes a couple of rows per session rather than
+thousands per hour. Its own `pg_cron` job at 03:35, five minutes after the signal sweep, rather than
+a step inside `expire_signal_rows` — adding one there would change that function's return shape and
+the callers reading it.
+
+**No acknowledge or dismiss, by decision.** Both kinds are about a session that has already ended, so
+there is nothing to resolve; dismissal implies a triage workflow this product does not have, and the
+seven-day window already bounds what is on screen. **An unrecognised `kind` renders as a visible
+unstyled row**, never dropped — the CHECK makes it near-impossible, and if it happens a visible row
+is what gets it reported.
+
 ### Archived charts are the other thing that survives the delete
 
 At every session close, `chart_archive.schedule()` renders the session's four charts to standalone

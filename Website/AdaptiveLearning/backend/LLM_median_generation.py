@@ -176,12 +176,18 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
         response_text = llm_client.generate_text(prompt)
 
         raw = extract_json(response_text)
-        raw = raw.replace("\n", " ")
 
         if not raw:
             print(f"[Attempt {attempt+1}] No JSON found")
             print(response_text)
             continue
+
+        # After the guard, not before it. `extract_json` returns None when the
+        # response holds no JSON at all -- which is the case this retry loop
+        # exists for -- and `.replace` on that raises AttributeError straight
+        # out of the loop instead of retrying. The nine sibling generators all
+        # check first; this one had the two lines the other way round.
+        raw = raw.replace("\n", " ")
 
         try:
             question_data = json.loads(raw)

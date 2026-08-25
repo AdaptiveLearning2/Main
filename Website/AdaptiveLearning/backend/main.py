@@ -1721,7 +1721,24 @@ def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = 
             return
         _prefetch_active[user_id] = inflight + needed
     for _ in range(needed):
-        _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)
+        try:
+            _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)
+        except Exception as e:                                 # noqa: BLE001
+            # The lock is released by here, so `_lifespan` can shut the pool
+            # between the fetch and the submit and `submit` raises RuntimeError.
+            #
+            # Rolling the counter back is the load-bearing half, and it is not
+            # only about shutdown. `_prefetch_worker` owns the decrement in its
+            # `finally`, so a worker that never starts never runs one: the
+            # student's in-flight count stays permanently inflated, `needed`
+            # is <= 0 from then on, and their queue never refills again.
+            #
+            # Swallowed rather than raised because prefetch is best-effort and
+            # this runs *after* the caller already has its question -- letting
+            # it out turns a served response into a 500 over a refill.
+            with _prefetch_lock:
+                _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+            print(f"[prefetch] could not queue for {user_id[:8]}: {e}")
 
 # ─── models ──────────────────────────────────────────────────────────────
 

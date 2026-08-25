@@ -2093,7 +2093,12 @@ belongs here rather than at a call site, because this is where the queueing happ
 must therefore assert `<=` the budget, never `==` it.
 
 `_ensure_queue` submits to a pool sized to `GENERATION_MAX_CONCURRENCY` instead of spawning a bare
-daemon thread per question. The daily ceiling is **Claude-only** on purpose: Ollama is local and
+daemon thread per question. **A submit that fails must roll the in-flight count back**, because
+`_prefetch_worker` owns that decrement in its `finally` and a worker that never starts never runs
+one — the student's count would stay raised for the life of the process, `needed` would be ≤ 0 from
+then on, and their queue would never refill again. It is swallowed rather than raised for a separate
+reason: `_ensure_queue` runs *after* the response is assembled, so letting a failed refill out turns
+a served question into a 500. The daily ceiling is **Claude-only** on purpose: Ollama is local and
 free, so a call ceiling there would refuse a child a question to protect nothing.
 
 **On breach the answer is to refuse — `GenerationUnavailable`, surfaced as 503, never a fallback.**
@@ -2359,6 +2364,14 @@ follow instructions — the same reasoning `grade_appropriateness` is built on. 
 contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geometry` and
 `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
 so there is no comparable multiset.
+
+**In every generator's retry loop, the `if not raw:` guard comes before anything that touches
+`raw`.** `extract_json` answers `None` for a response with no JSON in it — prose, a refusal, an
+empty completion — which is the exact case the three attempts exist to absorb, so a `.replace` or a
+`.strip()` above the guard raises `AttributeError` straight out of the loop and the retry never
+happens. `LLM_median_generation` had those two lines the other way round;
+`tests/test_generation_retry_loop.py` is parametrised over all ten topics so the next copy cannot be
+a one-off.
 
 **Measure how often a fail-open check *engages*, never just how often it fires.** A check that never
 finds anything to compare reports a perfect false-positive rate while doing nothing, and reads as

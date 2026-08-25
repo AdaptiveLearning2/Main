@@ -142,6 +142,38 @@ def test_prefetch_runs_in_a_bounded_pool_not_an_unbounded_thread(monkeypatch):
     assert threading.active_count() == before
 
 
+class _DeadPool:
+    """A pool that has been shut down. `submit` raises exactly like the real one."""
+
+    def submit(self, *_a, **_k):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+
+def test_a_pool_that_refuses_the_work_does_not_leak_the_in_flight_count(monkeypatch):
+    """This is the durable half, and it is not only about shutdown.
+
+    `_prefetch_worker` owns the decrement, in its `finally`. A worker that never
+    starts never runs one -- so without the rollback this student's in-flight
+    count stays raised for the life of the process, `needed` is <= 0 from then
+    on, and their queue never refills again.
+    """
+    monkeypatch.setattr(main, "_prefetch_pool", _DeadPool)
+    main._ensure_queue("kid", "5th Grade", 0, None)
+    assert main._prefetch_active.get("kid", 0) == 0
+
+
+def test_a_failed_refill_does_not_discard_the_question_already_built(monkeypatch):
+    """`_ensure_queue` runs *after* the response is assembled, so letting a
+    refill failure out turns a served question into a 500.
+
+    The window is real rather than theoretical: `_ensure_queue` releases the
+    lock before submitting, so `_lifespan` can shut the pool in between.
+    """
+    monkeypatch.setattr(main, "_prefetch_pool", _DeadPool)
+    out = _generate(monkeypatch, decider=lambda *_a, **_k: {"question_text": "2+2"})
+    assert out["question_text"] == "2+2"
+
+
 def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatch):
     """There is no request to fail here, and a short queue is invisible -- the
     next question is simply generated inline."""

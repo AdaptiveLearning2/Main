@@ -3429,7 +3429,7 @@ def _last_active_many(student_ids) -> dict[str, dict]:
         # quietly rather than a request that fails.
         if "PGRST202" in str(e):
             print(f"[last_active] last_active_for_users is missing from the "
-                  f"database -- apply 20260828000000; the roster will show "
+                  f"database -- apply 20260831000000; the roster will show "
                   f"'unknown' until then: {e}")
         else:
             print(f"[last_active] could not read for {len(ids)}: {e}")

@@ -1691,7 +1691,7 @@ assertion is possible at all.
 
 ### The teacher analytics aggregate in Postgres, and one of them is a table not a chart
 
-Five surfaces (`20260828000000`): a class topic heatmap, class accuracy per school day, a
+Five surfaces (`20260831000000`): a class topic heatmap, class accuracy per school day, a
 weekday×hour heatmap, a real last-active column on the roster, and focus-vs-accuracy per student.
 Three Postgres functions behind them, all `SECURITY INVOKER` and `service_role`-only — the backend
 resolves who owns the class before calling, so they are only ever as safe as the check above them.

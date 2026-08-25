@@ -3,8 +3,7 @@ import re
 import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
-from ollama import chat, generate
-from ollama import ChatResponse
+import llm_client
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -209,27 +208,19 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         if grade_band == "early":
             prompt += EARLY_BAND_EXAMPLE
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
-        response = generate(
-            model="llama3.1:8b",
-            prompt=prompt,
-            options={
-                "temperature": 1.1,
-                "top_p": 0.95,
-                "top_k": 100
-            }
-        )
-        raw = extract_json(response.response)
+        response_text = llm_client.generate_text(prompt)
+        raw = extract_json(response_text)
 
         if not raw:
             print(f"[Attempt {attempt+1}] No JSON found")
-            print(response.response)
+            print(response_text)
             continue
 
         try:
             question_data = json.loads(raw)
         except Exception as e:
             print(f"[Attempt {attempt+1}] JSON parse failed:", e)
-            print(response.response)
+            print(response_text)
             continue
 
         required_keys = ["scenario", "variables", "question_text"]

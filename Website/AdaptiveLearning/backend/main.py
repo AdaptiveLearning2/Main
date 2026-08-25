@@ -15,6 +15,7 @@ import chart_archive
 import eeg_client
 import signal_mapping
 import eeg_poller
+import llm_client
 
 load_dotenv()
 
@@ -77,7 +78,10 @@ async def _lifespan(app: FastAPI):
             try:
                 _shutdown_admin_live_pool()
             finally:
-                chart_archive.shutdown_pool()
+                try:
+                    _shutdown_prefetch_pool()
+                finally:
+                    chart_archive.shutdown_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -1600,8 +1604,94 @@ _prefetch_cache: dict[str, list] = {}   # user_id → list of questions
 _prefetch_lock = threading.Lock()
 _prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
 
+# Generation used to spawn a bare daemon thread per queued question, which was
+# survivable only while the model was a local Ollama nobody paid per call: the
+# process-wide peak was QUEUE_SIZE times however many children pressed start at
+# once. The pool makes that a number someone chose, and it is sized to
+# `GENERATION_MAX_CONCURRENCY` so threads and in-flight model calls line up --
+# a larger pool would only buy workers that block on `llm_client`'s semaphore.
+#
+# Built on first use and reset on shutdown, same shape as `_strategy_pool`.
+_PREFETCH_POOL: ThreadPoolExecutor | None = None
+_prefetch_pool_lock = threading.Lock()
+
+
+def _prefetch_pool() -> ThreadPoolExecutor:
+    global _PREFETCH_POOL
+    with _prefetch_pool_lock:
+        if _PREFETCH_POOL is None:
+            _PREFETCH_POOL = ThreadPoolExecutor(
+                max_workers=llm_client.GENERATION_MAX_CONCURRENCY,
+                thread_name_prefix="prefetch")
+        return _PREFETCH_POOL
+
+
+def _shutdown_prefetch_pool():
+    """Drop queued prefetch on the way out. Called from _lifespan.
+
+    Nothing is waiting on a prefetched question once the process is stopping,
+    and a worker may be blocked in a socket read against a stalled model -- so
+    cancel rather than join, exactly as `_shutdown_strategy_pool` does.
+    """
+    global _PREFETCH_POOL
+    with _prefetch_pool_lock:
+        pool, _PREFETCH_POOL = _PREFETCH_POOL, None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+# Per-student ceiling on generations over time.
+#
+# `_prefetch_active` bounds *concurrency* per user, which is not the same
+# quantity: a student answering quickly for an hour never exceeds two in
+# flight and still generates hundreds of questions. That was free against a
+# local model and is not against a metered one.
+#
+# Generous on purpose -- 60/min is far above what answering questions can
+# actually consume (each answer triggers at most one refill), so it blunts a
+# client looping on Generate without ever meeting a child working quickly.
+_GENERATION_RATE_LIMIT  = _env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
+_GENERATION_RATE_WINDOW = _env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
+_generation_hits: dict[str, list[float]] = {}
+_generation_hits_lock = threading.Lock()
+_generation_sweep_at = time.monotonic()
+
+
+def _claim_generation_slot(user_id: str) -> bool:
+    """Count one generation against this student's window, or refuse.
+
+    Returns a bool rather than raising: the prefetch worker has no request to
+    fail, and skipping a refill there is invisible -- the queue simply stays
+    short and the next question is generated inline. The endpoint turns a False
+    into a 429 itself.
+    """
+    global _generation_sweep_at
+    now = time.monotonic()
+    with _generation_hits_lock:
+        # Sweep only when the dict is large and at most once an interval, so
+        # the common path stays one lookup. Same shape as the strategy limiter.
+        if (len(_generation_hits) > _STRATEGY_SWEEP_ABOVE
+                and now - _generation_sweep_at >= _STRATEGY_SWEEP_EVERY):
+            _generation_sweep_at = now
+            for uid in [u for u, ts in _generation_hits.items()
+                        if all(now - t >= _GENERATION_RATE_WINDOW for t in ts)]:
+                del _generation_hits[uid]
+
+        hits = [t for t in _generation_hits.get(user_id, ())
+                if now - t < _GENERATION_RATE_WINDOW]
+        if len(hits) >= _GENERATION_RATE_LIMIT:
+            _generation_hits[user_id] = hits
+            return False
+        hits.append(now)
+        _generation_hits[user_id] = hits
+        return True
+
+
 def _prefetch_worker(user_id: str, grade: str, bias: int, session_id: str | None):
     try:
+        if not _claim_generation_slot(user_id):
+            print(f"[prefetch] rate limit reached for {user_id[:8]}; not refilling")
+            return
         # Topic, difficulty, EEG state, and the manual bias are all resolved in
         # this one call -- one decision + one generation call per question.
         question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
@@ -1631,9 +1721,24 @@ def _ensure_queue(user_id: str, grade: str, bias: int, session_id: str | None = 
             return
         _prefetch_active[user_id] = inflight + needed
     for _ in range(needed):
-        threading.Thread(
-            target=_prefetch_worker, args=(user_id, grade, bias, session_id), daemon=True
-        ).start()
+        try:
+            _prefetch_pool().submit(_prefetch_worker, user_id, grade, bias, session_id)
+        except Exception as e:                                 # noqa: BLE001
+            # The lock is released by here, so `_lifespan` can shut the pool
+            # between the fetch and the submit and `submit` raises RuntimeError.
+            #
+            # Rolling the counter back is the load-bearing half, and it is not
+            # only about shutdown. `_prefetch_worker` owns the decrement in its
+            # `finally`, so a worker that never starts never runs one: the
+            # student's in-flight count stays permanently inflated, `needed`
+            # is <= 0 from then on, and their queue never refills again.
+            #
+            # Swallowed rather than raised because prefetch is best-effort and
+            # this runs *after* the caller already has its question -- letting
+            # it out turns a served response into a 500 over a refill.
+            with _prefetch_lock:
+                _prefetch_active[user_id] = max(0, _prefetch_active.get(user_id, 0) - 1)
+            print(f"[prefetch] could not queue for {user_id[:8]}: {e}")
 
 # ─── models ──────────────────────────────────────────────────────────────
 
@@ -1773,9 +1878,22 @@ def generate_question(
 
     if not question:
         print(f"[generate] cache miss for {user_id[:8]} -- generating inline")
-        question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
-            user_id, effective_grade, session_id, manual_bias
-        )
+        if not _claim_generation_slot(user_id):
+            raise HTTPException(
+                429, "Too many questions requested. Try again shortly.",
+                headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
+            )
+        try:
+            question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+                user_id, effective_grade, session_id, manual_bias
+            )
+        except llm_client.GenerationUnavailable as e:
+            # 503, not 500: a ceiling was reached, which is a decision this
+            # deployment made rather than something that broke. Refusing is
+            # deliberate -- quietly serving a question from somewhere else
+            # would change what the student is asked with nothing saying so.
+            print(f"[generate] refused for {user_id[:8]}: {e}")
+            raise HTTPException(503, "Question generation is temporarily unavailable.")
         if not question:
             raise HTTPException(500, "Failed to generate question")
     else:
@@ -2589,28 +2707,36 @@ def _validated_strategies(raw: str) -> list[str] | None:
 
 
 def _llm_strategies(prompt: str, timeout: float | None = None) -> list[str] | None:
-    """One local-model attempt, or None on any failure.
+    """One model attempt, or None on any failure.
 
-    `ollama` is imported here, not at module scope, so this module (and the
-    rule-based fallback) still works if the package is missing.
+    Goes through `llm_client`, which is also what question generation calls, so
+    the provider switch is one setting rather than two -- and so this call is
+    inside the same process-wide concurrency ceiling as the thirteen generation
+    calls it now competes with for it.
 
-    Uses an explicit Client so the call actually carries a timeout -- the
-    module-level ollama.generate() has no deadline, and a server that accepts
-    the connection then stalls would otherwise never raise.
+    0.4, not the generation default: this writes advice a parent reads, where
+    "keep it varied" is the wrong instinct. `llm_client` sends it as
+    `temperature` on Ollama and `claude_temperature` on Claude, since the two
+    providers do not accept the same range.
 
     `timeout` is what remains of the caller's budget after any time spent
     queued, not the full budget again -- charging it the full timeout once a
     worker frees up let a queued call hold that worker for nearly twice
     STRATEGY_LLM_TIMEOUT. Defaults to the full budget for a direct call.
+
+    Catches everything, including `GenerationUnavailable`: the rule-based list
+    is always available, so a ceiling here costs generic advice rather than an
+    error, which is not the trade on the generation path.
     """
     try:
-        from ollama import Client
-        resp = Client(timeout=STRATEGY_LLM_TIMEOUT if timeout is None else timeout).generate(
-            model=STRATEGY_LLM_MODEL,
-            prompt=prompt,
-            options={"temperature": 0.4},
+        raw = llm_client.generate_text(
+            prompt,
+            ollama_model=STRATEGY_LLM_MODEL,
+            temperature=0.4, top_p=None, top_k=None,
+            claude_temperature=0.4,
+            max_tokens=1024,
+            timeout=STRATEGY_LLM_TIMEOUT if timeout is None else timeout,
         )
-        raw = resp.get("response") if isinstance(resp, dict) else getattr(resp, "response", "")
     except Exception as e:
         print(f"[learning_strategies:llm] {e}")
         return None

@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { ArrowLeft, BookOpen, Target, Flame, TrendingUp } from 'lucide-react'
 import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel } from '../signals/SignalPanel'
 import { apiFetch } from '../../lib/api'
+import FocusAccuracy from '../analytics/FocusAccuracy'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 // Persisted so the choice survives navigation between students. Shared with
 // the teacher student list, which reads the same facial signals.
@@ -59,6 +60,7 @@ export default function StudentProgressReport({
   // Its own state, and no error twin: the trend carries `retrieved`, so a
   // failed read is a state of the payload rather than the absence of one.
   const [trend, setTrend]               = useState(null)
+  const [focusAccuracy, setFocusAccuracy] = useState(null)
   const [loadError, setLoadError]       = useState(null)
   const [strategies, setStrategies]     = useState(null)
   const [strategySource, setStrategySource]   = useState(null)
@@ -139,6 +141,17 @@ export default function StudentProgressReport({
     apiFetch(`/api/students/${studentId}/signal-trend`)
       .then(r => { if (!cancelled) setTrend(r) })
       .catch(() => { if (!cancelled) setTrend({ weeks: [], retrieved: false }) })
+    return () => { cancelled = true }
+  }, [studentId])
+
+  // Same shape and the same reasoning as the trend above: its own endpoint,
+  // its own failure, and a thrown request is given a `retrieved: false`
+  // payload rather than left null, which the panel reads as still loading.
+  useEffect(() => {
+    let cancelled = false
+    apiFetch(`/api/students/${studentId}/focus-accuracy`)
+      .then(r => { if (!cancelled) setFocusAccuracy(r) })
+      .catch(() => { if (!cancelled) setFocusAccuracy({ buckets: [], retrieved: false }) })
     return () => { cancelled = true }
   }, [studentId])
 
@@ -241,6 +254,14 @@ export default function StudentProgressReport({
               different table through a different endpoint, so a weekly report
               that failed says nothing about whether the term history loaded. */}
           {showSignals && trend && <SignalTrend trend={trend} />}
+
+          {/* Behind `showSignals` for the same reason as the panels above:
+              this is EEG data, so the teacher's "Hide sensor data" switch has
+              to cover it. Its own gate, not the trend's — one endpoint
+              failing says nothing about the other. */}
+          {showSignals && focusAccuracy && (
+            <FocusAccuracy data={focusAccuracy} />
+          )}
 
           {showStrategies && (
             <StrategyPanel

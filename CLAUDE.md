@@ -171,6 +171,24 @@ restates a whole payload to move one field tends to move two. `CHANNEL_REASONS` 
 `offLabel` four-state matrix, named for the state each input must produce rather than for its field
 values, since that mapping is the thing under test.
 
+**Assert an ordering, not a duration, when a test synchronises on a thread.**
+`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` checked that a queued call had
+waited with `monotonic() - started >= 0.15`, against a `threading.Timer(0.15)` releasing the
+semaphore. Windows' default timer resolution is ~15.6 ms, so the timer fires a hair early and the
+exact-boundary comparison fails **against a correct implementation** — measured 2026-08-25 at **2
+failures in 5 runs on a clean checkout**, and 3 in 5 with an unrelated change present. Identical
+rates, but the second reads as a regression you just caused, which is where the time goes.
+
+The fix was to notice the assertion and the claim were different things. The claim is that the call
+could not proceed until the slot was free, which is an ordering: the releasing thread records
+`monotonic()` as it lets go, and the test asserts the call returned *after* that. Two readings of one
+clock with a real happens-before between them compare exactly, at any timer resolution. The teeth are
+unchanged and were re-checked both ways — a `generate_text` that never acquires returns before the
+timer fires, so the recorded release is missing and the assertion still fires.
+
+CI is Linux and never failed the old form, so the whole cost of this landed on local runs. Prefer a
+recorded event over an elapsed-time threshold whenever a test waits on another thread.
+
 **A daemon thread that prints must be joined before the process exits.** A print landing during
 interpreter shutdown, while the stdout `BufferedWriter` lock is already held, is a fatal
 `_enter_buffered_busy` abort — exit code 134 *after* every test passed, which reads as unrelated
@@ -1688,6 +1706,70 @@ is about, and a test that checks only the payload passes either way.
 
 `_FakeSupabase` records every query it builds (`fake.queries`, each with `.filters`) so that
 assertion is possible at all.
+
+### The teacher analytics aggregate in Postgres, and one of them is a table not a chart
+
+Five surfaces (`20260831000000`): a class topic heatmap, class accuracy per school day, a
+weekday×hour heatmap, a real last-active column on the roster, and focus-vs-accuracy per student.
+Three Postgres functions behind them, all `SECURITY INVOKER` and `service_role`-only — the backend
+resolves who owns the class before calling, so they are only ever as safe as the check above them.
+
+**They aggregate in SQL for the reason `rollup_signal_day` does, and the trap is `_REPORT_ROW_CAP`.**
+A class of thirty answering fifty a day is 45,000 rows a month, far past the 5000 cap, and the cap
+trims **oldest-first** — so a Python-side average would describe the recent tail while the early
+weeks read as a quiet term. That is the same trap `/api/students/{id}/signal-trend` was built to
+avoid, one surface over. `class_answer_buckets` returns at most 720 rows for 30 days however busy
+the class, because it is bounded by the *range* rather than by the answers.
+
+**One function serves both the day trend and the time-of-day heatmap**, since they are two readings
+of one grouping — sum the hours for a day, or the days for an hour-of-week. It is still called once
+per endpoint rather than cached between them, so a failure in either cannot blank the other.
+
+**`last_active_for_users` exists because "newest row per student" has no PostgREST form.** One `in_`
+query ordered by time returns the newest rows *overall*, which is one busy student's — the same
+limitation `my_children` documents. That is why the column was absent rather than wrong. It is the
+greatest of two clocks (`coalesce(ended_at, started_at)` and `max(answered_at)`): a student mid-lesson
+answered more recently than their session began, and an open session must not drop out on a null
+`ended_at`. **Three states on the roster** — a timestamp, `null` for never active, and
+`last_active_retrieved: false`. Collapsing the last two tells a teacher the class has stopped
+working, which is both wrong and something they would act on.
+
+**`focus_accuracy_for_user` pairs each answer with the nearest focus reading in the same session**,
+within `_FOCUS_MATCH_SECONDS`. Same *session*, not same student: a reading from another session is a
+different lesson on a different day. An answer with no reading in range is **dropped, not counted as
+focus 0** — sessions run with the headband off, and a zero would drag exactly the unmeasured answers
+to the bottom of the correlation.
+
+**The correlation is withheld below `_FOCUS_MIN_PAIRS` (30) even when the database computed one.**
+`corr()` needs two pairs and will happily answer from them; r over a dozen answers is noise, and it
+reaches a teacher as a single objective-looking number with no visible denominator. The *buckets* are
+still returned below the threshold, deliberately — a bar chart of five bins shows its own sample
+sizes in a way a scalar cannot. Keep three outcomes apart: too few pairs, enough pairs with a null
+`corr()` (no variance in the input — every answer correct), and a real coefficient.
+
+**EEG consent skips the query, and the test asserts on the RPC call rather than the payload.** An
+absent correlation cannot tell "asked and found nothing" from "never asked" — the facial-opt-out rule
+again — so a test that checked only the payload would pass either way.
+
+**`Heatmap.jsx` is a real `<table>` and deliberately not an `AccessibleChart`.** That wrapper exists
+because Recharts emits a bare `<svg>`, so it pairs the picture with an `sr-only` table. A matrix has
+no series to plot: it *is* the table, and `<th scope>` headers let a reader ask for one cell by its
+two headings, which the sr-only copy could not. The shading is an enhancement on top of real markup.
+Consequence worth knowing: `AccessibleChart.test.jsx` **cannot see this file** — its guard matches
+Recharts imports and there are none — so this is on review, the same stated blind spot it has for a
+hand-written `<svg>`. Its colour scale is a **map of complete class strings**, never interpolated,
+for the reason the notice-banner tones are: Tailwind ships only classes it finds as whole strings, so
+`bg-${x}-500` renders as no background in production only.
+
+**A cell has three states and two of them look alike in colour**: a number, `null` for a topic never
+attempted (not shaded, and *not* the zero colour — a topic nobody was served is not one they failed),
+and a real 0%. Below `min_attempts` the figure is still shown and marked thin; what is withheld is
+the confidence, since one answer colours as strongly as four hundred.
+
+**The topic grid's `cells` are a list aligned to `topics`, built server-side in one pass.** Two
+independently ordered lists is the drift `AccessibleChart`'s single `columns` spec exists to prevent;
+don't re-sort either end. The time-of-day grid aligns in the *browser* instead, because that payload
+is sparse — an hour a given day never used is a real absence, not a missing row.
 
 ### Archived charts are the other thing that survives the delete
 

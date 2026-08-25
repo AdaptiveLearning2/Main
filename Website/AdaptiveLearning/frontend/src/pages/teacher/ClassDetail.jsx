@@ -1,9 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Copy, Check, GraduationCap, Users } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import { toast } from 'sonner'
+import ClassTopicHeatmap from '../../components/analytics/ClassTopicHeatmap'
+import ClassAccuracyTrend from '../../components/analytics/ClassAccuracyTrend'
+import ClassTimeOfDay from '../../components/analytics/ClassTimeOfDay'
+
+/** "2 hours ago", or null when there is no timestamp to describe.
+ *
+ * Null rather than a placeholder, so the caller can say "never" or "unknown"
+ * itself — those are different facts and only it knows which applies.
+ */
+function agoLabel(iso) {
+  if (!iso) return null
+  const then = new Date(iso)
+  if (Number.isNaN(then.getTime())) return null
+  const mins = Math.round((Date.now() - then.getTime()) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`
+  return `${Math.round(mins / 1440)}d ago`
+}
 
 export default function ClassDetail() {
   const { id } = useParams()
@@ -15,7 +34,17 @@ export default function ClassDetail() {
   const [error, setError]       = useState(null)
   const [copied, setCopied]     = useState(false)
 
+  // The three analytics panels load independently of the roster and of each
+  // other. Bundling them into `loadData`'s allSettled would mean one slow
+  // aggregate holding up the student list, and one failed aggregate taking
+  // the whole page to its error state — where the roster is the thing the
+  // page is actually for.
+  const [analytics, setAnalytics] = useState({})
+  const [analyticsLoading, setAnalyticsLoading] = useState(true)
+  const analyticsRun = useRef(0)
+
   useEffect(() => { loadData() }, [id])
+  useEffect(() => { loadAnalytics() }, [id])
 
   async function loadData() {
     setLoading(true)
@@ -47,6 +76,36 @@ export default function ClassDetail() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function loadAnalytics() {
+    const run = ++analyticsRun.current
+    setAnalyticsLoading(true)
+    // Three independent reads. A rejected one becomes `retrieved: false`, the
+    // same flag the backend sets when an aggregate fails behind a 200 — so the
+    // panel has one thing to check rather than two, and a network failure and
+    // a database failure reach it identically. Neither is an empty chart.
+    const paths = {
+      heatmap: `/api/classes/${id}/topic-heatmap`,
+      trend: `/api/classes/${id}/accuracy-trend?days=30`,
+      timeOfDay: `/api/classes/${id}/time-of-day?days=30`,
+    }
+    const settled = await Promise.allSettled(
+      Object.values(paths).map(p => apiFetch(p)))
+
+    // A class switched away from mid-flight must not repaint under the new
+    // class's heading. A generation counter rather than a cleanup flag,
+    // because the effect is not the only caller — the retry button is, and a
+    // retry is exactly when someone changes class rather than waiting.
+    if (run !== analyticsRun.current) return
+
+    const next = {}
+    Object.keys(paths).forEach((key, i) => {
+      const res = settled[i]
+      next[key] = res.status === 'fulfilled' ? res.value : { retrieved: false }
+    })
+    setAnalytics(next)
+    setAnalyticsLoading(false)
   }
 
   function copyCode() {
@@ -135,12 +194,22 @@ export default function ClassDetail() {
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {students.map((s, i) => {
+            // Three states, never two. A timestamp, a student who has genuinely
+            // never worked, and a read that failed. Collapsing the last two
+            // tells a teacher nobody is working, which is both wrong and
+            // something they would act on.
+            const ago = agoLabel(s.last_active)
+            const lastActive = s.last_active_retrieved === false
+              ? 'Last active unknown'
+              : ago ? `Active ${ago}` : 'Never active'
             return (
               <motion.div key={s.user_id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}
-                className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-center gap-3 shadow-sm">
-               
-                <p className="min-w-0 text-lg font-bold text-gray-900 dark:text-white truncate">{s.name}</p>
+                className="bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4 flex items-center justify-between gap-3 shadow-sm">
+                <div className="min-w-0">
+                  <p className="text-lg font-bold text-gray-900 dark:text-white truncate">{s.name}</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">{lastActive}</p>
+                </div>
                 <button onClick={() => navigate(`/teacher/students/${s.user_id}/report`, { state: { name: s.name, classId: id, className: cls?.name } })}
                   className="shrink-0 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-bold transition">
                   Get Report
@@ -150,6 +219,15 @@ export default function ClassDetail() {
           })}
         </div>
       )}
+
+      <div className="mt-8 grid lg:grid-cols-2 gap-6">
+        <ClassAccuracyTrend data={analytics.trend} loading={analyticsLoading}
+          onRetry={loadAnalytics} />
+        <ClassTopicHeatmap data={analytics.heatmap} loading={analyticsLoading}
+          onRetry={loadAnalytics} />
+        <ClassTimeOfDay data={analytics.timeOfDay} loading={analyticsLoading}
+          onRetry={loadAnalytics} />
+      </div>
     </div>
   )
 }

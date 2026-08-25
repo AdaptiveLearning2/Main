@@ -76,7 +76,7 @@ export default function ClassDetail() {
     return (
       <div className="p-6 lg:p-8 text-center">
         <p className="text-gray-500 dark:text-gray-400 mb-1">Couldn&apos;t load this class.</p>
-        <p className="text-xs text-gray-400 mb-4">{error}</p>
+        <p className="text-xs text-gray-600 mb-4 dark:text-gray-400">{error}</p>
         <div className="flex items-center justify-center gap-2">
           <button onClick={loadData} className="px-5 py-2.5 bg-violet-600 text-white rounded-xl font-bold text-sm">Try again</button>
           <button onClick={() => navigate('/teacher/classes')} className="px-5 py-2.5 bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm">Back to Classes</button>
@@ -113,7 +113,7 @@ export default function ClassDetail() {
               <span className="text-xs text-gray-500 dark:text-gray-400">Code:</span>
               <span className="font-mono font-black text-violet-600 dark:text-violet-400 text-sm tracking-widest">{cls.join_code}</span>
               <button onClick={copyCode} className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
-                {copied ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
+                {copied ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-600 dark:text-gray-400" />}
               </button>
               <span className="flex items-center gap-1 ml-2 text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">
                 <GraduationCap size={11} /> {cls.grade_level || 'Grade not set'}
@@ -130,7 +130,7 @@ export default function ClassDetail() {
 
       {students.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
-          <p className="text-gray-400 text-sm">No students have joined yet. Share the code <span className="font-mono font-black text-violet-600">{cls.join_code}</span></p>
+          <p className="text-gray-600 text-sm dark:text-gray-400">No students have joined yet. Share the code <span className="font-mono font-black text-violet-600">{cls.join_code}</span></p>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">

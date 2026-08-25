@@ -150,7 +150,7 @@ export default function Classes() {
                       <span className="font-mono font-black text-violet-600 dark:text-violet-400 text-sm tracking-widest">{cls.join_code}</span>
                       <button onClick={(e) => copyCode(cls.join_code, cls.id, e)}
                         className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
-                        {copiedId === cls.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
+                        {copiedId === cls.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-600 dark:text-gray-400" />}
                       </button>
 
                       {editingId === cls.id ? (
@@ -162,7 +162,7 @@ export default function Classes() {
                           <button onClick={() => saveGrade(cls.id)} className="p-1 rounded-md text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30">
                             <Save size={13} />
                           </button>
-                          <button onClick={() => setEditingId(null)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
+                          <button onClick={() => setEditingId(null)} className="p-1 rounded-md text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 dark:text-gray-400">
                             <X size={13} />
                           </button>
                         </span>

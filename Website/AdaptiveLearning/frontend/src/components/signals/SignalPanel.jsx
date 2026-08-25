@@ -178,7 +178,7 @@ export function MiniMetric({ label, value, icon: Icon = Activity, tone = 'indigo
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">{label}</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">{label}</p>
           <p className="mt-1 text-2xl font-black text-gray-900 dark:text-white">{value}</p>
         </div>
         <div className={`p-2.5 rounded-xl ${tones[tone] || tones.indigo}`}>
@@ -204,7 +204,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-600 dark:text-gray-400">
             Most recent EEG{heartShown ? ', heart' : ''} and facial-recognition readings.
           </p>
         </div>
@@ -235,7 +235,7 @@ export function LiveSignalSummary({ report, title = 'Live Signal Snapshot' }) {
           different purpose from what camera consent asks about. */}
       <div className="mt-4 grid gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Facial Emotion</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Facial Emotion</p>
           {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
               read also leaves faceOn false, and offLabel tells that apart
               from a genuine withdrawal. */}
@@ -326,7 +326,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
     <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm">
       <div className="mb-4">
         <h3 className="font-black text-gray-900 dark:text-white">{title}</h3>
-        <p className="text-xs text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
+        <p className="text-xs text-gray-600 dark:text-gray-400">Averages are based on the last {report?.days || 7} days of available samples.</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
@@ -350,7 +350,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
 
       <div className="h-56 rounded-2xl bg-slate-50 dark:bg-gray-800 p-3">
         {chartData.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-sm text-gray-400 text-center px-4">
+          <div className="h-full flex items-center justify-center text-sm text-gray-600 text-center px-4 dark:text-gray-400">
             {/* A failed read empties the series exactly like a quiet week
                 does, so the "yet" claim has to be gated on having looked. */}
             {anyFailed
@@ -412,15 +412,15 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
 
       <div className="mt-4 grid md:grid-cols-3 gap-3 text-sm">
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Highest Stress</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Highest Stress</p>
           <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.highest_stress)}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Lowest Focus</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Lowest Focus</p>
           <p className="font-bold text-gray-900 dark:text-white">{pct(highlights.lowest_focus)}</p>
         </div>
         <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Dominant Emotion</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Dominant Emotion</p>
           {/* Not a binary faceOn ? value : "Reporting off" -- a failed consent
               read also leaves faceOn false, and offLabel tells that apart
               from an actual withdrawal. */}
@@ -439,7 +439,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             so the row is omitted. */}
       {report?.heart_included === false && (
         <div className="mt-3 rounded-xl bg-slate-50 dark:bg-gray-800 p-3 text-sm">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Heart</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Heart</p>
           <p className="font-bold text-gray-900 dark:text-white">
             {offLabel({
               on: false,
@@ -453,7 +453,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
       {heartShown && (
         <div className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg Heart Rate</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg Heart Rate</p>
             {/* Not a raw "N/A": the channel was read (heartShown, above), so
                 an empty average means unusable samples, not never asked. */}
             <p className="font-bold text-gray-900 dark:text-white">
@@ -465,7 +465,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Avg RMSSD</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Avg RMSSD</p>
             <p className="font-bold text-gray-900 dark:text-white">
               {valueOrReason(unit(highlights.rmssd_ms, ' ms'), {
                 on: true,
@@ -475,7 +475,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
             </p>
           </div>
           <div className="rounded-xl bg-slate-50 dark:bg-gray-800 p-3">
-            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Sensor</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Sensor</p>
             {/* Named because accuracy differs materially by source, and the
                 camera one is unvalidated -- a reader comparing weeks should
                 be able to see the sensor changed. */}
@@ -499,7 +499,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           there's something to render. */}
       {faceOn && emotionSlices.length > 0 && (
         <div className="mt-4">
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-1">Emotion Mix</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-1 dark:text-gray-400">Emotion Mix</p>
           <AccessibleChart className="h-52"
             {...sliceSpec('Emotion mix', emotionSlices, 'samples', { rowLabel: 'Emotion' })}>
             <PieChart>
@@ -518,7 +518,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
 
       <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">{report?.summary || 'No summary available yet.'}</p>
       {report && !faceOn && (
-        <p className="mt-1 text-xs text-gray-400">
+        <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
           Facial recognition data was not included in this report.
         </p>
       )}
@@ -526,7 +526,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
           nonzero sample count means every reading failed the quality gate,
           not that the headband never ran. */}
       {heartShown && heartSamples > 0 && ratio(highlights.heart_rate_bpm) === null && (
-        <p className="mt-1 text-xs text-gray-400">
+        <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
           Heart-rate samples were recorded but none met the quality threshold, so no average is shown.
         </p>
       )}
@@ -586,7 +586,7 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
           </h3>
           {/* Swapped rather than annotated, so the claim and its correction
               don't sit next to each other contradicting one another. */}
-          <p className="text-xs text-gray-400 mt-1">
+          <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">
             {signalsMissing
               ? <>General practice suggestions — this week&apos;s signal data could not be read. Learning indicators only — not medical or behavioural advice.</>
               : <>Practice suggestions built from this week&apos;s report. Learning indicators only — not medical or behavioural advice.</>}
@@ -607,7 +607,7 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
       ) : loading ? (
         <div className="space-y-2">{[1, 2, 3].map(i => <div key={i} className="h-12 rounded-xl bg-slate-50 dark:bg-gray-800 animate-pulse" />)}</div>
       ) : !strategies?.length ? (
-        <p className="text-sm text-gray-400">No strategies generated yet.</p>
+        <p className="text-sm text-gray-600 dark:text-gray-400">No strategies generated yet.</p>
       ) : (
         <div className="space-y-3">
           {/* Above the list, not beside `source` below -- it changes how the
@@ -625,7 +625,7 @@ export function StrategyPanel({ strategies, source, signalsRetrieved, loading, e
               <p className="text-sm text-gray-700 dark:text-gray-200">{s}</p>
             </div>
           ))}
-          {source && <p className="text-[11px] text-gray-400">Source: {source}</p>}
+          {source && <p className="text-[11px] text-gray-600 dark:text-gray-400">Source: {source}</p>}
         </div>
       )}
     </div>

@@ -36,9 +36,9 @@ export default function StatCard({
       <div className={`absolute inset-0 bg-gradient-to-br ${hoverTint} rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300`} />
       <div className="relative flex items-start justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-1">{title}</p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-gray-600 dark:text-gray-400 mb-1">{title}</p>
           <p className="text-3xl font-black text-gray-900 dark:text-white">{value ?? '—'}</p>
-          {sub && <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{sub}</p>}
+          {sub && <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{sub}</p>}
         </div>
         <div className={`p-2.5 ${color} rounded-xl shadow-md`}>
           <Icon size={20} className="text-white" />

@@ -48,7 +48,7 @@ function FlagHistory({ flagKey }) {
       </button>
       {open && (
         <div className="mt-2 text-xs">
-          {!data && <p className="text-gray-400">Loading…</p>}
+          {!data && <p className="text-gray-600 dark:text-gray-400">Loading…</p>}
           {data && data.retrieved === false && (
             <p className="text-gray-500">Could not read the history for this flag.</p>
           )}
@@ -184,7 +184,7 @@ export default function AdminFlags() {
     }))
 
   if (error && !flags) return <div className="p-6 text-sm text-rose-600">{error}</div>
-  if (!flags) return <div className="p-6 text-sm text-gray-400">Loading…</div>
+  if (!flags) return <div className="p-6 text-sm text-gray-600 dark:text-gray-400">Loading…</div>
 
   const byKey = Object.fromEntries(flags.map(f => [f.key, f]))
 
@@ -216,7 +216,7 @@ export default function AdminFlags() {
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{flag.description}</p>
                       )}
                       {flag.is_default && (
-                        <p className="text-xs text-gray-400 mt-0.5">Never set — using the built-in default.</p>
+                        <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">Never set — using the built-in default.</p>
                       )}
                     </div>
                     <Toggle

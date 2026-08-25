@@ -223,7 +223,7 @@ export default function ConsentChannels({ studentId, role, studentName = null })
     return <p className="text-sm text-rose-500">{error}</p>
   }
   if (!channels) {
-    return <p className="text-sm text-gray-400">Loading…</p>
+    return <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>
   }
 
   return (

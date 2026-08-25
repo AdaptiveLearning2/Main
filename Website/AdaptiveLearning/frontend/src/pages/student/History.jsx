@@ -96,7 +96,7 @@ export default function History() {
                   </div>
                   <div>
                     <p className="font-bold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">
                       {new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                   </div>
@@ -104,15 +104,15 @@ export default function History() {
                 <div className="flex items-center gap-6 text-right">
                   <div className="hidden sm:block">
                     <p className="text-sm font-black text-gray-900 dark:text-white">{s.questions_answered}</p>
-                    <p className="text-xs text-gray-400">questions</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">questions</p>
                   </div>
                   <div className="hidden sm:block">
                     <p className="text-sm font-black text-gray-900 dark:text-white">{s.correct_answers}</p>
-                    <p className="text-xs text-gray-400">correct</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">correct</p>
                   </div>
                   <div>
                     <p className={`text-lg font-black ${acc >= 70 ? 'text-green-500' : acc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{acc}%</p>
-                    <p className="text-xs text-gray-400">accuracy</p>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">accuracy</p>
                   </div>
                 </div>
               </motion.div>

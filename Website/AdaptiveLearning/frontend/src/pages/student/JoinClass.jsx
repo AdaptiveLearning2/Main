@@ -53,7 +53,7 @@ export default function JoinClass() {
         className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm mb-8">
         <form onSubmit={handleJoin} className="flex gap-3">
           <div className="relative flex-1">
-            <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
             <input value={code} onChange={e => setCode(e.target.value.toUpperCase().slice(0, 6))}
               className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:text-white outline-none transition tracking-widest font-mono uppercase"
               placeholder="ABC123" maxLength={6} />
@@ -88,7 +88,7 @@ export default function JoinClass() {
                 </div>
                 <div>
                   <p className="font-bold text-gray-900 dark:text-white">{c.name}</p>
-                  <p className="text-xs text-gray-400 flex items-center gap-2">
+                  <p className="text-xs text-gray-600 flex items-center gap-2 dark:text-gray-400">
                     Code: <span className="font-mono font-bold">{c.join_code}</span>
                     {c.grade_level && (
                       <span className="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-bold">

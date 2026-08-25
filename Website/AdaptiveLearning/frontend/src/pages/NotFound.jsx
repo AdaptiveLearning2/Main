@@ -19,7 +19,7 @@ export default function NotFound() {
         </motion.div>
         <h1 className="text-6xl font-black text-gray-900 dark:text-white mb-3">404</h1>
         <p className="text-xl font-semibold text-gray-600 dark:text-gray-400 mb-2">Page not found</p>
-        <p className="text-gray-400 mb-8 text-sm">Let's get you back on track.</p>
+        <p className="text-gray-600 mb-8 text-sm dark:text-gray-400">Let's get you back on track.</p>
         <Link to="/dashboard">
           <motion.span
             whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}

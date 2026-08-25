@@ -125,7 +125,7 @@ export default function TeacherDashboard() {
           </h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Here's what's going on with your class.</p>
           {lastUpdated && (
-            <p className="text-[11px] text-gray-400 mt-1">
+            <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">
               Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
               {' · refreshes every minute'}
             </p>
@@ -181,19 +181,19 @@ export default function TeacherDashboard() {
             {classes.map(c => (
               <div key={c.id} className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
                 <p className="font-black text-gray-900 dark:text-white mb-1 truncate">{c.name}</p>
-                {c.grade_level && <p className="text-xs text-gray-400 mb-3">{c.grade_level}</p>}
+                {c.grade_level && <p className="text-xs text-gray-600 mb-3 dark:text-gray-400">{c.grade_level}</p>}
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Join code</p>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-wide mb-0.5 dark:text-gray-400">Join code</p>
                     <p className="font-mono font-black text-violet-600 dark:text-violet-400 text-lg tracking-widest">{c.join_code}
                     <button onClick={(e) => copyCode(c.join_code, c.id, e)}
                         className="p-1 rounded-md hover:bg-violet-50 dark:hover:bg-violet-900/30 transition">
-                        {copiedId === c.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-400" />}
+                        {copiedId === c.id ? <Check size={13} className="text-green-500" /> : <Copy size={13} className="text-gray-600 dark:text-gray-400" />}
                       </button></p>
                   </div>
                   <div className="text-right">
                     <p className="text-xl font-black text-gray-900 dark:text-white">{headcount(c)}</p>
-                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">students</p>
+                    <p className="text-[10px] text-gray-600 uppercase tracking-wide dark:text-gray-400">students</p>
                   </div>
                 </div>
               </div>
@@ -218,11 +218,11 @@ export default function TeacherDashboard() {
                           <p className="text-xl font-black text-violet-600">
                             {avg.avgAccuracy === null ? '—' : `${avg.avgAccuracy}%`}
                           </p>
-                          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Avg accuracy</p>
+                          <p className="text-[10px] text-gray-600 uppercase tracking-wide dark:text-gray-400">Avg accuracy</p>
                         </div>
                         <div>
                           <p className="text-xl font-black text-amber-600">{avg.avgStreak}</p>
-                          <p className="text-[10px] text-gray-400 uppercase tracking-wide">Avg streak</p>
+                          <p className="text-[10px] text-gray-600 uppercase tracking-wide dark:text-gray-400">Avg streak</p>
                         </div>
                       </div>
                     )}

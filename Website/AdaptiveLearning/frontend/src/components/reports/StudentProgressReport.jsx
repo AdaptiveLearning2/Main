@@ -177,7 +177,7 @@ export default function StudentProgressReport({
         // back link stays so a teacher who mistyped an id can still get out.
         <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-8 shadow-sm text-center">
           <p className="text-sm font-semibold text-gray-600 dark:text-gray-300">Couldn&apos;t load this student&apos;s report.</p>
-          <p className="text-xs text-gray-400 mt-1">{loadError}</p>
+          <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">{loadError}</p>
         </div>
       ) : (
         <div className="space-y-6">
@@ -193,7 +193,7 @@ export default function StudentProgressReport({
                 whileHover={{ y: -3 }}
                 className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm flex items-start justify-between">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-1">{c.label}</p>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-gray-600 mb-1 dark:text-gray-400">{c.label}</p>
                   <p className="text-3xl font-black text-gray-900 dark:text-white">{c.value}</p>
                 </div>
                 <div className={`p-2.5 ${c.color} rounded-xl shadow-md`}>
@@ -210,7 +210,7 @@ export default function StudentProgressReport({
           {showSignals && signalError && (
             <div className="rounded-2xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">Couldn&apos;t load the EEG &amp; face report.</p>
-              <p className="text-xs text-gray-400 mt-1">{signalError}</p>
+              <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">{signalError}</p>
             </div>
           )}
           {showSignals && signalReport && (
@@ -237,7 +237,7 @@ export default function StudentProgressReport({
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Topic Performance</h3>
               {perf.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-6">{emptyTopicText}</p>
+                <p className="text-gray-600 text-sm text-center py-6 dark:text-gray-400">{emptyTopicText}</p>
               ) : (
                 <div className="space-y-3">
                   {perf.map(p => {
@@ -255,7 +255,7 @@ export default function StudentProgressReport({
                           <motion.div className={`h-full rounded-full ${topicAcc >= 70 ? 'bg-green-500' : topicAcc >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
                             initial={{ width: 0 }} animate={{ width: `${topicAcc}%` }} transition={{ duration: 0.6 }} />
                         </div>
-                        <p className="text-xs text-gray-400 mt-0.5">{p.correct_questions}/{p.attempted_questions} correct</p>
+                        <p className="text-xs text-gray-600 mt-0.5 dark:text-gray-400">{p.correct_questions}/{p.attempted_questions} correct</p>
                       </div>
                     )
                   })}
@@ -268,7 +268,7 @@ export default function StudentProgressReport({
               className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 shadow-sm">
               <h3 className="font-black text-gray-900 dark:text-white mb-5">Recent Sessions</h3>
               {sessions.length === 0 ? (
-                <p className="text-gray-400 text-sm text-center py-6">No sessions yet.</p>
+                <p className="text-gray-600 text-sm text-center py-6 dark:text-gray-400">No sessions yet.</p>
               ) : (
                 <div className="space-y-2">
                   {sessions.map((s, i) => {
@@ -278,11 +278,11 @@ export default function StudentProgressReport({
                         className="flex items-center justify-between p-3 bg-slate-50 dark:bg-gray-800 rounded-xl">
                         <div>
                           <p className="text-sm font-semibold text-gray-900 dark:text-white">{s.title || 'Practice Session'}</p>
-                          <p className="text-xs text-gray-400">{new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
+                          <p className="text-xs text-gray-600 dark:text-gray-400">{new Date(s.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</p>
                         </div>
                         <div className="text-right">
                           <p className={`text-sm font-black ${sAcc >= 70 ? 'text-green-500' : sAcc >= 40 ? 'text-amber-500' : 'text-rose-500'}`}>{sAcc}%</p>
-                          <p className="text-xs text-gray-400">{s.questions_answered}q</p>
+                          <p className="text-xs text-gray-600 dark:text-gray-400">{s.questions_answered}q</p>
                         </div>
                       </motion.div>
                     )

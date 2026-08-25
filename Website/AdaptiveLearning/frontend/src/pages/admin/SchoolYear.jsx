@@ -67,7 +67,7 @@ export default function AdminSchoolYear() {
   }
 
   if (error && !data) return <div className="p-6 text-sm text-rose-600">{error}</div>
-  if (!data || !form) return <div className="p-6 text-sm text-gray-400">Loading…</div>
+  if (!data || !form) return <div className="p-6 text-sm text-gray-600 dark:text-gray-400">Loading…</div>
 
   const tzValid = isValidTimezone(form.timezone)
 

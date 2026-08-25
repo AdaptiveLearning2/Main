@@ -235,7 +235,7 @@ export default function Students() {
       </motion.div>
 
       <div className="relative mb-6 max-w-sm">
-        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
         <input value={search} onChange={e => setSearch(e.target.value)}
           className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 transition"
           placeholder="Search students..." />
@@ -262,9 +262,9 @@ export default function Students() {
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
           <div className="grid grid-cols-4 px-5 py-3 border-b border-gray-50 dark:border-gray-800">
-            <span className="text-xs font-bold uppercase tracking-widest text-gray-400 col-span-2">Student</span>
-            <span className="text-xs font-bold uppercase tracking-widest text-gray-400">Joined</span>
-            <span className="text-xs font-bold uppercase tracking-widest text-gray-400 text-right">Role</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-gray-600 col-span-2 dark:text-gray-400">Student</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-gray-600 dark:text-gray-400">Joined</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-gray-600 text-right dark:text-gray-400">Role</span>
           </div>
           {filtered.map((s, i) => {
             const initial = (s.email || s.username || s.id || '?')[0].toUpperCase()
@@ -288,14 +288,14 @@ export default function Students() {
                     </div>
                     <div>
                       <p className="text-sm font-bold text-gray-900 dark:text-white">{name}</p>
-                      {s.email && <p className="text-xs text-gray-400">{s.email}</p>}
+                      {s.email && <p className="text-xs text-gray-600 dark:text-gray-400">{s.email}</p>}
                     </div>
                   </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">{joined}</p>
                   <div className="flex justify-end items-center gap-3">
                     <span className="text-xs font-bold px-2.5 py-1 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">Student</span>
                     <motion.span animate={{ rotate: isOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
-                      <ChevronDown size={16} className="text-gray-400" />
+                      <ChevronDown size={16} className="text-gray-600 dark:text-gray-400" />
                     </motion.span>
                   </div>
                 </motion.button>
@@ -315,7 +315,7 @@ export default function Students() {
                             {[1,2,3,4].map(k => <div key={k} className="h-20 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 animate-pulse" />)}
                           </div>
                         ) : !stats ? (
-                          <p className="text-sm text-gray-400">Couldn't load stats for this student.</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">Couldn't load stats for this student.</p>
                         ) : (
                           <>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
@@ -406,7 +406,7 @@ export default function Students() {
 
                             {stats.topics.length > 0 && (
                               <div className="mt-4 bg-white dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800 p-4">
-                                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Per-topic accuracy</p>
+                                <p className="text-xs font-bold uppercase tracking-widest text-gray-600 mb-3 dark:text-gray-400">Per-topic accuracy</p>
                                 <div className="grid sm:grid-cols-2 gap-3">
                                   {stats.topics.map(t => (
                                     <div key={t.topicId ?? t.topicName}>
@@ -421,7 +421,7 @@ export default function Students() {
                                       <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
                                         <div className="h-full rounded-full bg-violet-500" style={{ width: `${t.accuracy ?? 0}%` }} />
                                       </div>
-                                      <p className="text-[10px] text-gray-400 mt-0.5">{t.correct}/{t.attempted} correct</p>
+                                      <p className="text-[10px] text-gray-600 mt-0.5 dark:text-gray-400">{t.correct}/{t.attempted} correct</p>
                                     </div>
                                   ))}
                                 </div>
@@ -431,12 +431,12 @@ export default function Students() {
                             {/* Both branches only assert "no activity" once the relevant data was actually read
                                 -- not when the switch skipped facial data or the summary request failed. */}
                             {stats.signalsFailed ? (
-                              <p className="text-xs text-gray-400 mt-3">
+                              <p className="text-xs text-gray-600 mt-3 dark:text-gray-400">
                                 Signal data couldn&apos;t be loaded — the figures above cover questions only.
                               </p>
                             ) : stats.totalQuestions === 0 && stats.signalCount === 0 &&
                                 (!stats.faceIncluded || stats.faceSignalCount === 0) ? (
-                              <p className="text-xs text-gray-400 mt-3">
+                              <p className="text-xs text-gray-600 mt-3 dark:text-gray-400">
                                 {stats.faceIncluded
                                   ? "This student hasn't completed any sessions yet."
                                   : 'No question or EEG activity yet — facial signals were not read.'}
@@ -472,8 +472,8 @@ function MiniStat({ icon, label, value, sub, color }) {
         {icon}
       </div>
       <p className="text-lg font-black text-gray-900 dark:text-white leading-none">{value}</p>
-      <p className="text-[11px] text-gray-400 mt-1">{label}</p>
-      {sub && <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>}
+      <p className="text-[11px] text-gray-600 mt-1 dark:text-gray-400">{label}</p>
+      {sub && <p className="text-[10px] text-gray-600 mt-0.5 dark:text-gray-400">{sub}</p>}
     </div>
   )
 }

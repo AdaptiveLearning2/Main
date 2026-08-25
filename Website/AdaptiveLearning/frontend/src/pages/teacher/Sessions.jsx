@@ -169,7 +169,7 @@ export default function Sessions() {
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden">
-          <div className="grid grid-cols-12 px-5 py-3 border-b border-gray-50 dark:border-gray-800 text-[11px] uppercase tracking-wider text-gray-400 font-bold">
+          <div className="grid grid-cols-12 px-5 py-3 border-b border-gray-50 dark:border-gray-800 text-[11px] uppercase tracking-wider text-gray-600 font-bold dark:text-gray-400">
             <div className="col-span-3">Student</div>
             <div className="col-span-3">Started</div>
             <div className="col-span-2">Duration</div>
@@ -196,13 +196,13 @@ export default function Sessions() {
                 <div className="col-span-2 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
                   <Activity size={13} className="text-emerald-500" />
                   {s.questions_answered || 0} q
-                  {acc !== null && <span className="text-xs text-gray-400">· {acc}%</span>}
+                  {acc !== null && <span className="text-xs text-gray-600 dark:text-gray-400">· {acc}%</span>}
                 </div>
                 <div className="col-span-2 flex items-center justify-end gap-2">
                   {live
                     ? <span className="text-[10px] font-bold px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full animate-pulse">● LIVE</span>
-                    : <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-500 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
-                  <ChevronRight size={14} className="text-gray-300 group-hover:text-violet-500 transition" />
+                    : <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
+                  <ChevronRight size={14} className="text-gray-600 group-hover:text-violet-500 transition dark:text-gray-400" />
                 </div>
               </Link>
             )

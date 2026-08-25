@@ -71,13 +71,13 @@ export default function Achievements() {
             <motion.div className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
               initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.9, delay: 0.2 }} />
           </div>
-          <p className="text-xs text-gray-400 mt-1.5">{pct}% complete</p>
+          <p className="text-xs text-gray-600 mt-1.5 dark:text-gray-400">{pct}% complete</p>
         </motion.div>
       )}
 
       {unlocked.length > 0 && (
         <div className="mb-8">
-          <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔓 Unlocked <span className="text-sm font-semibold text-gray-400">({unlocked.length})</span></h2>
+          <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔓 Unlocked <span className="text-sm font-semibold text-gray-600 dark:text-gray-400">({unlocked.length})</span></h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {unlocked.map((a, i) => (
               <motion.div key={a.id}
@@ -99,7 +99,7 @@ export default function Achievements() {
       {/* Hidden on failure too: with no stats every threshold reads as 0/locked, showing every achievement as lost. */}
       {!failed && locked.length > 0 && (
         <div>
-          <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔒 Locked <span className="text-sm font-semibold text-gray-400">({locked.length})</span></h2>
+          <h2 className="text-lg font-black text-gray-900 dark:text-white mb-4">🔒 Locked <span className="text-sm font-semibold text-gray-600 dark:text-gray-400">({locked.length})</span></h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {locked.map((a, i) => {
               const progress = stats?.[a.stat] ?? 0
@@ -109,9 +109,9 @@ export default function Achievements() {
                   className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-5 opacity-65 hover:opacity-90 transition-opacity">
                   <div className="text-4xl mb-3 grayscale">{a.emoji}</div>
                   <h3 className="font-black text-gray-700 dark:text-gray-300 text-sm mb-1">{a.title}</h3>
-                  <p className="text-xs text-gray-400">{a.desc}</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">{a.desc}</p>
                   <div className="mt-3">
-                    <div className="flex justify-between text-xs text-gray-400 mb-1"><span>{progress} / {a.threshold}</span><span>{fill}%</span></div>
+                    <div className="flex justify-between text-xs text-gray-600 mb-1 dark:text-gray-400"><span>{progress} / {a.threshold}</span><span>{fill}%</span></div>
                     <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-gray-300 dark:bg-gray-600 rounded-full" style={{ width: `${fill}%` }} />
                     </div>

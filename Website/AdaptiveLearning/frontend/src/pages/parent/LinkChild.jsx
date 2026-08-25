@@ -55,7 +55,7 @@ export default function ParentLinkChild() {
           <div>
             <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-1.5">Child's User ID</label>
             <div className="relative">
-              <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400" />
               <input
                 value={childId}
                 onChange={e => setChildId(e.target.value)}
@@ -64,7 +64,7 @@ export default function ParentLinkChild() {
                 required
               />
             </div>
-            <p className="text-xs text-gray-400 mt-1">This is a UUID — looks like: <span className="font-mono">a1b2c3d4-e5f6-...</span></p>
+            <p className="text-xs text-gray-600 mt-1 dark:text-gray-400">This is a UUID — looks like: <span className="font-mono">a1b2c3d4-e5f6-...</span></p>
           </div>
 
           <motion.button type="submit" disabled={loading || !childId.trim()}

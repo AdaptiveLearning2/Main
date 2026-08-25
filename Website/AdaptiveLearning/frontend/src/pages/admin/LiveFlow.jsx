@@ -36,7 +36,7 @@ export default function AdminLiveFlow() {
       </div>
 
       {failed && <p className="text-sm text-rose-600">Could not read the open sessions.</p>}
-      {!data && !failed && <p className="text-sm text-gray-400">Loading…</p>}
+      {!data && !failed && <p className="text-sm text-gray-600 dark:text-gray-400">Loading…</p>}
 
       {data?.retrieved && data.sessions.length === 0 && (
         <p className="text-sm text-gray-500">No sessions are open right now.</p>

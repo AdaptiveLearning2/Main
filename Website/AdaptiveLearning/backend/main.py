@@ -2408,6 +2408,91 @@ def count_questions(subject: str | None = None, difficulty: str | None = None):
         return {"total": None, "retrieved": False}
 
 
+_STUDENT_QUESTIONS_MAX = 200
+
+
+@app.get("/api/students/{student_id}/questions")
+def student_questions(student_id: str, request: Request, limit: int = 100):
+    """The questions one student has actually been asked, newest answer first.
+
+    Deliberately a separate endpoint from GET /api/questions rather than a
+    `student_id` filter on it, for two reasons that both matter.
+
+    **Access.** /api/questions takes no `request` and runs no check at all --
+    correct for the bank, which is public-read at the grant layer too
+    (`anon`/`authenticated` both hold SELECT on `questions`) because a
+    question's text identifies nobody. Which questions *a named child* was
+    asked is student data, so it needs the same relationship check as every
+    other student-scoped read here. Bolting the filter onto the open endpoint
+    would have made an unauthenticated caller able to ask that question.
+
+    **Shape.** There is no student column on `questions` to filter by; the
+    association exists only through `session_answers`. So this reads answers
+    and embeds the question, the same direction SessionReview does -- not
+    `questions` narrowed by something.
+
+    One question can appear under several students, and more than once for
+    one student: `add_question_to_supabase` dedupes on exact text across the
+    whole product, and a student can be served the same question twice. Rows
+    are collapsed per question with `attempts`/`correct` counts rather than
+    repeated, and `session_id` is the most recent session it was asked in, so
+    a caller can deep-link to that session's review.
+    """
+    _verify_can_view_student(get_user(request), student_id)
+    limit = max(1, min(limit, _STUDENT_QUESTIONS_MAX))
+
+    # Embedded rather than a second query keyed by id: one round trip however
+    # many answers, and PostgREST left-joins it, so an answer whose question
+    # was expired by `expire_old_questions` still arrives with `questions:
+    # null` instead of vanishing. The answer happened either way.
+    rows = (supabase.table("session_answers")
+            .select("question_id, session_id, correct, answered_at, "
+                    "questions(question_text, subject, difficulty)")
+            .eq("user_id", student_id)
+            .order("answered_at", desc=True)
+            .limit(limit).execute().data or [])
+
+    collapsed: dict = {}
+    for r in rows:
+        q = r.get("questions")
+        qid = r.get("question_id")
+        # An answer whose question is gone carries nothing to show, and
+        # grouping every one of them under a single `None` key would merge
+        # unrelated questions into one row. Skipped rather than rendered as an
+        # empty entry -- the count of them is reported separately below.
+        if not q or not qid:
+            continue
+        entry = collapsed.get(qid)
+        if entry is None:
+            entry = collapsed[qid] = {
+                "question_id":   qid,
+                "question_text": q.get("question_text"),
+                "subject":       q.get("subject"),
+                "difficulty":    q.get("difficulty"),
+                # Rows arrive newest-first, so the first one seen is the most
+                # recent -- these two are set once and not overwritten.
+                "last_answered_at": r.get("answered_at"),
+                "session_id":       r.get("session_id"),
+                "attempts": 0,
+                "correct":  0,
+            }
+        entry["attempts"] += 1
+        if r.get("correct"):
+            entry["correct"] += 1
+
+    return {
+        "student_id": student_id,
+        "questions": list(collapsed.values()),
+        # Distinguishes "this student answered nothing" from "their questions
+        # have aged out of the bank" -- the same three-state rule the
+        # reporting surfaces follow, since both otherwise render as an empty
+        # list.
+        "answers_read": len(rows),
+        "expired_questions": sum(1 for r in rows if not r.get("questions")),
+        "truncated": len(rows) == limit,
+    }
+
+
 # ─── llm generation ──────────────────────────────────────────────────────
 
 @app.get("/api/generate-question")

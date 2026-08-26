@@ -2848,3 +2848,78 @@ def test_leaderboard_marks_the_callers_own_row(monkeypatch):
     mine = [r for r in rows if r["is_me"]]
     assert len(mine) == 1
     assert mine[0]["rank"] == 2   # student-1 is second by total_correct
+
+
+# ── the student-scoped question list ─────────────────────────────────────
+#
+# GET /api/questions is deliberately unauthenticated -- the bank identifies
+# nobody and is public-read at the grant layer. Which questions a *named
+# child* was asked is student data, so this endpoint is the gated one.
+
+def _student_question_rows():
+    return {**TABLES, "session_answers": [
+        {"question_id": "q-1", "session_id": "session-1", "user_id": "student-1",
+         "correct": True,  "answered_at": "2026-09-03T10:00:00Z",
+         "questions": {"question_text": "2+2?", "subject": "algebra", "difficulty": "easy"}},
+        {"question_id": "q-1", "session_id": "session-0", "user_id": "student-1",
+         "correct": False, "answered_at": "2026-09-01T10:00:00Z",
+         "questions": {"question_text": "2+2?", "subject": "algebra", "difficulty": "easy"}},
+        {"question_id": "q-2", "session_id": "session-1", "user_id": "student-1",
+         "correct": False, "answered_at": "2026-09-02T10:00:00Z",
+         "questions": {"question_text": "3+3?", "subject": "algebra", "difficulty": "easy"}},
+    ]}
+
+
+def test_student_questions_rejects_a_viewer_with_no_relationship(monkeypatch):
+    """The whole reason this is not a filter on the open /api/questions."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
+    monkeypatch.setattr(main, "get_user", lambda _r: STRANGER)
+    with pytest.raises(main.HTTPException) as exc:
+        main.student_questions("student-1", None)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("viewer", [PARENT, TEACHER, STUDENT],
+                         ids=["linked parent", "teacher of their class", "the student"])
+def test_student_questions_allows_everyone_with_a_relationship(viewer, monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
+    monkeypatch.setattr(main, "get_user", lambda _r: viewer)
+    assert main.student_questions("student-1", None)["student_id"] == "student-1"
+
+
+def test_student_questions_collapses_repeat_attempts(monkeypatch):
+    """One question answered twice is one row carrying both attempts, not two
+    rows -- and the session it links to is the most recent one."""
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    out = main.student_questions("student-1", None)
+    by_id = {q["question_id"]: q for q in out["questions"]}
+    assert len(out["questions"]) == 2
+    assert by_id["q-1"]["attempts"] == 2
+    assert by_id["q-1"]["correct"] == 1
+    assert by_id["q-1"]["session_id"] == "session-1", "should link to the newest attempt"
+    assert by_id["q-2"]["attempts"] == 1
+
+
+def test_student_questions_reports_expired_questions_separately(monkeypatch):
+    """An answer whose question expire_old_questions removed arrives with
+    questions: null. Counting it keeps "answered nothing" apart from "their
+    questions aged out of the bank", which otherwise render identically."""
+    rows = {**TABLES, "session_answers": [
+        {"question_id": "q-9", "session_id": "session-1", "user_id": "student-1",
+         "correct": True, "answered_at": "2026-09-03T10:00:00Z", "questions": None},
+    ]}
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(rows))
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    out = main.student_questions("student-1", None)
+    assert out["questions"] == []
+    assert out["answers_read"] == 1
+    assert out["expired_questions"] == 1
+
+
+def test_student_questions_bounds_the_limit(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(_student_question_rows()))
+    monkeypatch.setattr(main, "get_user", lambda _r: TEACHER)
+    assert main.student_questions("student-1", None, limit=9999)["truncated"] is False
+    # The cap is applied before the query, so a caller cannot ask for more.
+    assert main._STUDENT_QUESTIONS_MAX == 200

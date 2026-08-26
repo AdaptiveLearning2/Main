@@ -82,72 +82,93 @@ def solve_complementary(expr1, expr2):
     result= sp.solve(equation, x)
     return result[0] if result else None
 
-angle_prompt = f"""
-You are to provide a Math question suitable for students. The response must be in JSON format. 
+# Only the selected scenario's block is sent -- see the same note in
+# LLM_geometry_generation.py. _pick_scenario has already applied difficulty
+# and the grade-band restriction by the time this is built, so the other
+# scenarios were worked examples for questions the model was not being asked
+# to write. Plain strings, not f-strings: the original was an f-string with
+# no interpolation, so its `{{`/`}}` were escapes for single braces.
+ANGLE_HEADER = """
+You are to provide a Math question suitable for students. The response must be in JSON format.
 The Question Text, Question Topic, Scenario, and Variables will be displayed. The Question Topic will always be "angle_relationships".
-There will be four possible scenarios to select from. You must select only ONE scenario to generate a question and corresponding JSON response for.
+Generate a question for the one scenario given below.
+"""
 
-Scenario 1: complementary
+SCENARIO_BLOCKS = {
+    1: """Scenario 1: complementary
 "Two angles are complementary. One angle is 35Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Two angles are complementary. One angle is 35Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "complementary",
   "variables": ["35"]
-}}
+}
+""",
 
-Scenario 2: supplementary
+    2: """Scenario 2: supplementary
 "Two angles are supplementary. One angle is 135Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Two angles are supplementary. One angle is 135Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "supplementary",
   "variables": ["135"]
-}}
+}
+""",
 
-Scenario 3: linear_pair
+    3: """Scenario 3: linear_pair
 "Two angles form a straight line. One angle is 140Â°. What is the other angle?"
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Two angles form a straight line. One angle is 140Â°. What is the other angle?",
   "question_topic": "angle_relationships",
   "scenario": "linear_pair",
   "variables": ["140"]
-}}
+}
+""",
 
-Scenario 4: triangle_sum
+    4: """Scenario 4: triangle_sum
 "A triangle has angles 50Â° and 60Â°. What is the third angle?"
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "A triangle has angles 50Â° and 60Â°. What is the third angle?",
   "question_topic": "angle_relationships",
   "scenario": "triangle_sum",
   "variables": ["50", "60"]
-}}
+}
+""",
 
-Scenario 5: algebra_complementary
+    5: """Scenario 5: algebra_complementary
 "Two angles are complementary: (x + 10)Â° and (2x âˆ’ 20)Â°. Find x."
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Two angles are complementary: (x + 10)Â° and (2x âˆ’ 20)Â°. Find x.",
   "question_topic": "angle_relationships",
   "scenario": "algebra_complementary",
   "variables": ["x + 10", "2x - 20"]
-}}
+}
+""",
 
+}
+
+ANGLE_FOOTER = """
 Return ONLY valid JSON with no text before or after the JSON object.
 
-The JSON must follow this exact structure:
-
 Rules:
-- Select ONLY ONE scenario, Generate ONLY ONE question, return ONLY ONE JSON object. 
+- Generate ONLY ONE question, return ONLY ONE JSON object.
 - Use ONLY double quotes for all strings.
 - The JSON object must contain the keys "question_text", "question_topic", "scenario", and "variables".
 - "variables" must be a list of strings.
 - Do NOT include any text or characters outside the JSON object.
 """
+
+
+def _angle_prompt(scenario):
+    """Header + the one selected scenario's block + footer. KeyError on an
+    unknown scenario, for the reason _geometry_prompt documents."""
+    return ANGLE_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + ANGLE_FOOTER
+
 
 solution = -1
 
@@ -287,17 +308,14 @@ def _solve_scenario(scenario, variables):
 
 def generate_angle_relationship_question(global_questions,prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
-        if attempt > 0:
-            prompt = angle_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-        else:
-            prompt = angle_prompt
-
-        # select a scenario from the tier matching this question's difficulty and grade
+        # select a scenario from the tier matching this question's difficulty
+        # and grade; the prompt is built around it rather than listing all five
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(difficulty, grade_band)
 
-        prompt += f"\nYOU must generate a question for scenario {scenario}."
-        print(scenario)
+        prompt = _angle_prompt(scenario)
+        if attempt > 0:
+            prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
 
 
         prompt += (

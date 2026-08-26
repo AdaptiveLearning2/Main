@@ -183,3 +183,61 @@ it('does not let a slow class roster repaint the list under a newer class', asyn
   await waitFor(() => expect(screen.getByText('Zola')).toBeInTheDocument())
   expect(screen.queryByText('Ada')).not.toBeInTheDocument()
 })
+
+// ─── abandoned sessions ────────────────────────────────────────────────────
+//
+// `!ended_at` alone was rendering "● LIVE", with a pulsing dot, for sessions
+// opened two months earlier and never closed — and a duration counted to
+// `Date.now()`, which read "83132m 45s". Both were claims the data does not
+// support. The backend decides which are abandoned so the threshold has one
+// definition.
+
+const OPEN_RECENT = {
+  id: 's-live', started_at: '2026-08-15T10:00:00Z', ended_at: null,
+  questions_answered: 3, correct_answers: 2, abandoned: false,
+}
+const OPEN_ABANDONED = {
+  id: 's-old', started_at: '2026-06-29T01:24:00Z', ended_at: null,
+  questions_answered: 0, correct_answers: 0, abandoned: true,
+}
+
+it('does not call a two-month-old open session live', async () => {
+  wire({ students: { a: [OPEN_ABANDONED], b: [] } })
+  draw()
+  expect(await screen.findByText(/never ended/i)).toBeInTheDocument()
+  expect(screen.queryByText(/LIVE/)).not.toBeInTheDocument()
+})
+
+it('still calls a genuinely open session live', async () => {
+  // The negative above passes against a page that never says LIVE at all.
+  wire({ students: { a: [OPEN_RECENT], b: [] } })
+  draw()
+  expect(await screen.findByText(/LIVE/)).toBeInTheDocument()
+  expect(screen.queryByText(/never ended/i)).not.toBeInTheDocument()
+})
+
+it('shows no duration for an abandoned session', async () => {
+  // Counting to now for a session nobody touched since June measures nothing.
+  wire({ students: { a: [OPEN_ABANDONED], b: [] } })
+  draw()
+  await screen.findByText(/never ended/i)
+  expect(screen.queryByText(/\d+m \d+s/)).not.toBeInTheDocument()
+})
+
+it('an abandoned session is not reported as done either', async () => {
+  // It was never ended, so its questions were never credited. "done" would
+  // claim they were.
+  wire({ students: { a: [OPEN_ABANDONED], b: [] } })
+  draw()
+  await screen.findByText(/never ended/i)
+  expect(screen.queryByText(/done/i)).not.toBeInTheDocument()
+})
+
+it('treats a payload with no abandoned flag as live, not abandoned', async () => {
+  // An older backend does not send the field. Absent must not silently
+  // relabel every open session.
+  const { abandoned, ...noFlag } = OPEN_RECENT   // eslint-disable-line no-unused-vars
+  wire({ students: { a: [noFlag], b: [] } })
+  draw()
+  expect(await screen.findByText(/LIVE/)).toBeInTheDocument()
+})

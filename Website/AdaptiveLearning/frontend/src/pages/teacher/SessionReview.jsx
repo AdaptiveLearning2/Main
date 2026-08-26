@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity } from 'lucide-react'
+import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity, ChevronDown } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
@@ -30,6 +30,64 @@ function fmtTime(ms) {
   if (!Number.isFinite(ms)) return ''
   const d = new Date(ms)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+/* ── the answers table ────────────────────────────────────────────────────
+ *
+ * These four turn a `session_answers` row into something a teacher can read.
+ * The row itself carries a question *id* and a `selected_index`, which is why
+ * the table used to show a truncated uuid and the bare number 2 — true, and
+ * useless. The question is embedded on the answer by the endpoint.
+ *
+ * Every one of them tolerates a missing question: PostgREST left-joins the
+ * embed, so an answer whose question has since been deleted from the bank
+ * arrives with `questions: null`. The answer still happened, so it is still
+ * shown.
+ */
+
+/** The question's topic, for the column a teacher scans. */
+function topicLabel(q) {
+  return q?.subject || 'Unknown topic'
+}
+
+/** `options` as an array of strings, whatever shape it was stored in.
+ *
+ * The column is `jsonb` with no schema behind it, so it has held a plain
+ * array and could hold an object. Anything else yields `[]`, which the table
+ * renders as "options were not recorded" rather than crashing on `.map`.
+ */
+function optionList(q) {
+  const raw = q?.options
+  if (Array.isArray(raw)) return raw.map(String)
+  if (raw && typeof raw === 'object') return Object.values(raw).map(String)
+  return []
+}
+
+/** What the student picked, by text. Falls back to the index when it cannot
+ *  be resolved — better a bare number than silently showing nothing. */
+function answerLabel(opts, index) {
+  if (index === null || index === undefined) return '—'
+  const opt = opts[index]
+  return opt === undefined ? `Option ${index}` : opt
+}
+
+/** Whether an option is the correct one.
+ *
+ * `questions.correct_answer` is **text, not an index**, so this compares
+ * values rather than positions. Trimmed and case-insensitive because the
+ * generators write the answer as its own string and it need not match the
+ * option byte for byte.
+ *
+ * The numeric fallback covers a row whose `correct_answer` holds an index
+ * instead — the column's type does not stop that, and a wrong "correct
+ * answer" marker on a review screen is worse than none.
+ */
+function isCorrectOption(q, opt, index) {
+  const want = q?.correct_answer
+  if (want === null || want === undefined) return false
+  const a = String(want).trim().toLowerCase()
+  if (a === String(opt).trim().toLowerCase()) return true
+  return /^\d+$/.test(a) && Number(a) === index
 }
 
 // Per-section label for the archived SVG, so a fallback never appears under
@@ -80,6 +138,11 @@ function SessionReviewBody({ sessionId }) {
   const backTo = location.state?.from || '/teacher/live'
   const [data, setData] = useState(null)
   const [err, setErr]   = useState(null)
+  // Which answer's question is expanded. One at a time: the point is to read
+  // one question, and a table of twenty open panels is the list again.
+  // Session-scoped state, and the whole body is keyed on `sessionId`, so
+  // navigating to another session resets it with everything else.
+  const [openAnswer, setOpenAnswer] = useState(null)
   // Deriving loading from comparing loadedFor to the URL's session id means
   // switching sessions raises the skeleton immediately, not one render later.
   const [loadedFor, setLoadedFor] = useState(null)
@@ -577,25 +640,103 @@ function SessionReviewBody({ sessionId }) {
               <thead className="text-left text-[11px] uppercase tracking-wider text-gray-600 dark:text-gray-400">
                 <tr>
                   <th className="px-5 py-2 font-bold">Time</th>
-                  <th className="font-bold">Question ID</th>
-                  <th className="font-bold">Pick</th>
+                  <th className="font-bold">Topic</th>
+                  <th className="font-bold">Answered</th>
                   <th className="font-bold pr-5">Result</th>
                 </tr>
               </thead>
               <tbody>
                 {answers.map((a, i) => {
                   const t = new Date(a.answered_at).getTime()
+                  const q = a.questions || null
+                  const opts = optionList(q)
+                  const open = openAnswer === i
                   return (
-                    <tr key={i} className="border-t border-gray-50 dark:border-gray-800">
-                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap dark:text-gray-400">{fmtTime(t)}</td>
-                      <td className="text-gray-700 dark:text-gray-300 font-mono text-xs">{(a.question_id || '').slice(0, 12)}…</td>
-                      <td className="text-gray-700 dark:text-gray-300">{a.selected_index ?? '—'}</td>
-                      <td className="pr-5">
-                        {a.correct
-                          ? <span className="text-emerald-500 flex items-center gap-1"><CheckCircle2 size={14} /> correct</span>
-                          : <span className="text-rose-500 flex items-center gap-1"><XCircle size={14} /> wrong</span>}
-                      </td>
-                    </tr>
+                    <Fragment key={i}>
+                      <tr className="border-t border-gray-50 dark:border-gray-800">
+                        <td className="px-5 py-2 text-gray-500 whitespace-nowrap dark:text-gray-400">{fmtTime(t)}</td>
+                        <td className="text-gray-700 dark:text-gray-300">
+                          {/* The topic, not the uuid. A truncated id told a
+                              teacher nothing; the topic is the thing they are
+                              scanning the column for. */}
+                          <button
+                            type="button"
+                            onClick={() => setOpenAnswer(open ? null : i)}
+                            aria-expanded={open}
+                            title={q?.question_text || 'The question is no longer in the bank'}
+                            className="flex items-center gap-1 font-bold text-violet-700 dark:text-violet-300 hover:underline">
+                            {topicLabel(q)}
+                            <ChevronDown size={12} aria-hidden="true"
+                              className={`transition ${open ? 'rotate-180' : ''}`} />
+                          </button>
+                        </td>
+                        <td className="text-gray-700 dark:text-gray-300">
+                          {/* The text they picked, not its index. "2" is not
+                              a fact anyone can act on. */}
+                          {answerLabel(opts, a.selected_index)}
+                        </td>
+                        <td className="pr-5">
+                          {a.correct
+                            ? <span className="text-emerald-500 flex items-center gap-1"><CheckCircle2 size={14} /> correct</span>
+                            : <span className="text-rose-500 flex items-center gap-1"><XCircle size={14} /> wrong</span>}
+                        </td>
+                      </tr>
+                      {open && (
+                        <tr className="border-t border-gray-50 dark:border-gray-800 bg-slate-50 dark:bg-gray-800/50">
+                          <td colSpan={4} className="px-5 py-3">
+                            {q ? (
+                              <>
+                                <p className="text-sm font-bold text-gray-900 dark:text-white">
+                                  {q.question_text}
+                                </p>
+                                {q.difficulty && (
+                                  <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                                    Difficulty: {q.difficulty}
+                                  </p>
+                                )}
+                                {opts.length > 0 ? (
+                                  <ul className="mt-2 space-y-1">
+                                    {opts.map((opt, oi) => {
+                                      const picked = oi === a.selected_index
+                                      const right = isCorrectOption(q, opt, oi)
+                                      return (
+                                        <li key={oi}
+                                          className={`text-sm flex items-start gap-2 ${
+                                            right ? 'text-emerald-700 dark:text-emerald-300 font-bold'
+                                              : picked ? 'text-rose-700 dark:text-rose-300 font-bold'
+                                                : 'text-gray-700 dark:text-gray-300'}`}>
+                                          <span aria-hidden="true">{right ? '✓' : picked ? '✗' : '·'}</span>
+                                          <span>
+                                            {opt}
+                                            {/* Spelled out rather than left to
+                                                colour and a glyph: a reader
+                                                who cannot see either still
+                                                needs to know which was which. */}
+                                            {picked && <span className="ml-1 text-xs font-normal">(chosen)</span>}
+                                            {right && <span className="ml-1 text-xs font-normal">(correct answer)</span>}
+                                          </span>
+                                        </li>
+                                      )
+                                    })}
+                                  </ul>
+                                ) : (
+                                  <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+                                    The options for this question were not recorded.
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              // The answer happened; only the question is gone.
+                              // Saying so is different from showing a blank.
+                              <p className="text-sm text-gray-600 dark:text-gray-400">
+                                This question is no longer in the question bank, so
+                                its text and options cannot be shown.
+                              </p>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   )
                 })}
               </tbody>

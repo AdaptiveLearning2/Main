@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { History, Activity, CheckCircle2, ChevronRight } from 'lucide-react'
+import { History, Activity, CheckCircle2, ChevronRight, AlertTriangle } from 'lucide-react'
 import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
@@ -10,8 +10,16 @@ function fmtTime(s) {
   if (!s) return '—'
   const d = new Date(s); return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-function duration(start, end) {
+/** How long a session ran, or how long it has been open.
+ *
+ * An abandoned session gets no duration at all. Counting to `Date.now()` for
+ * one nobody has touched since June produced "83132m 45s", which is not a
+ * measurement of anything — the student left within the hour and the clock
+ * kept running. A dash says the honest thing: we do not know when it ended.
+ */
+function duration(start, end, abandoned) {
   if (!start) return '—'
+  if (!end && abandoned) return '—'
   const a = new Date(start).getTime()
   const b = end ? new Date(end).getTime() : Date.now()
   const sec = Math.max(0, Math.round((b - a) / 1000))
@@ -177,7 +185,12 @@ export default function Sessions() {
             <div className="col-span-2 text-right">Status</div>
           </div>
           {filteredRows.map((s) => {
-            const live = !s.ended_at
+            // Three states, not two. `!ended_at` alone was claiming LIVE for
+            // sessions open since June, complete with a pulsing dot. The
+            // backend decides which are abandoned so the threshold has one
+            // definition -- see `student_sessions`.
+            const abandoned = !s.ended_at && s.abandoned === true
+            const live = !s.ended_at && !abandoned
             const acc  = (s.questions_answered || 0) > 0
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null
             return (
@@ -192,16 +205,25 @@ export default function Sessions() {
                   <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{s._student?.name || 'Student'}</span>
                 </div>
                 <div className="col-span-3 text-sm text-gray-500 dark:text-gray-400">{fmtTime(s.started_at)}</div>
-                <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">{duration(s.started_at, s.ended_at)}</div>
+                <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">{duration(s.started_at, s.ended_at, abandoned)}</div>
                 <div className="col-span-2 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
                   <Activity size={13} className="text-emerald-500" />
                   {s.questions_answered || 0} q
                   {acc !== null && <span className="text-xs text-gray-600 dark:text-gray-400">· {acc}%</span>}
                 </div>
                 <div className="col-span-2 flex items-center justify-end gap-2">
-                  {live
-                    ? <span className="text-[10px] font-bold px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full animate-pulse">● LIVE</span>
-                    : <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
+                  {live && <span className="text-[10px] font-bold px-2 py-1 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full animate-pulse">● LIVE</span>}
+                  {abandoned && (
+                    // Not an error, and not "done" either: it was never ended,
+                    // so its questions were never credited. The nightly sweep
+                    // closes these; until it has, saying so is more use than
+                    // either of the other two badges.
+                    <span title="Never ended — the student left without finishing. The nightly sweep will close it."
+                      className="text-[10px] font-bold px-2 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 rounded-full flex items-center gap-1">
+                      <AlertTriangle size={10} /> never ended
+                    </span>
+                  )}
+                  {!live && !abandoned && <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
                   <ChevronRight size={14} className="text-gray-600 group-hover:text-violet-500 transition dark:text-gray-400" />
                 </div>
               </Link>

@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { vi } from 'vitest'
 import SessionReview from './SessionReview'
@@ -230,5 +231,115 @@ describe('a fault is never reported as an absence', () => {
 
     await waitFor(() => expect(screen.getByText('Heart-rate stress')).toBeInTheDocument())
     expect(screen.getAllByText(/could not be loaded/i).length).toBeGreaterThan(0)
+  })
+})
+
+// ─── the answers table ─────────────────────────────────────────────────────
+//
+// It showed a truncated uuid and a bare `selected_index` — both true and
+// neither usable. A teacher scanning the column wants the topic, and "2" is
+// not a fact anyone can act on without the options beside it.
+
+describe('the answers table', () => {
+  const QUESTION = {
+    question_text: 'What is 7 x 6?',
+    options: ['40', '42', '44'],
+    correct_answer: '42',
+    subject: 'algebra',
+    difficulty: 'easy',
+  }
+
+  const answerRow = (over = {}) => ({
+    answered_at: '2026-06-11T09:30:00Z', question_id: 'q-1',
+    selected_index: 0, correct: false, questions: QUESTION, ...over,
+  })
+
+  function renderWith(answers) {
+    // Resolved by URL, not call order: the page fetches signals and charts in
+    // parallel and a `mockResolvedValueOnce` chain would depend on whichever
+    // Promise.all happened to start first.
+    apiFetch.mockImplementation(url =>
+      Promise.resolve(String(url).endsWith('/charts')
+        ? { archived: false, charts: {} }
+        : { cognitive: [], face: [], heart: [], answers }))
+    return renderAt()
+  }
+
+  it('shows the topic rather than the question id', async () => {
+    renderWith([answerRow()])
+    expect(await screen.findByRole('button', { name: /algebra/ })).toBeInTheDocument()
+    expect(screen.queryByText(/q-1/)).not.toBeInTheDocument()
+  })
+
+  it('shows the answer text rather than its index', async () => {
+    renderWith([answerRow({ selected_index: 0 })])
+    expect(await screen.findByText('40')).toBeInTheDocument()
+  })
+
+  it('marks which option was chosen and which was correct', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow({ selected_index: 0 })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+
+    expect(screen.getByText('What is 7 x 6?')).toBeInTheDocument()
+    // Spelled out, not left to colour alone.
+    expect(screen.getByText('(chosen)')).toBeInTheDocument()
+    expect(screen.getByText('(correct answer)')).toBeInTheDocument()
+  })
+
+  it('marks one option both chosen and correct when the answer was right', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow({ selected_index: 1, correct: true })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.getByText('(chosen)')).toBeInTheDocument()
+    expect(screen.getByText('(correct answer)')).toBeInTheDocument()
+  })
+
+  it('collapses again on a second click', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow()])
+    const toggle = await screen.findByRole('button', { name: /algebra/ })
+    await user.click(toggle)
+    expect(screen.getByText('What is 7 x 6?')).toBeInTheDocument()
+    await user.click(toggle)
+    expect(screen.queryByText('What is 7 x 6?')).not.toBeInTheDocument()
+  })
+
+  it('still shows an answer whose question has left the bank', async () => {
+    // PostgREST left-joins the embed, so this is a real shape. The answer
+    // happened; dropping the row would change the session's history.
+    const user = userEvent.setup()
+    renderWith([answerRow({ questions: null })])
+    const toggle = await screen.findByRole('button', { name: /unknown topic/i })
+    await user.click(toggle)
+    expect(screen.getByText(/no longer in the question bank/i)).toBeInTheDocument()
+  })
+
+  it('falls back to the index when the option text cannot be resolved', async () => {
+    // Better a bare number than a blank cell that reads as "no answer".
+    renderWith([answerRow({ selected_index: 9 })])
+    expect(await screen.findByText('Option 9')).toBeInTheDocument()
+  })
+
+  it('says so when the options were never recorded', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow({ questions: { ...QUESTION, options: null } })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.getByText(/options for this question were not recorded/i))
+      .toBeInTheDocument()
+  })
+
+  it('resolves the correct option by value, not by position', async () => {
+    // `questions.correct_answer` is text, not an index. Comparing positions
+    // would mark the wrong option on every question whose answer is not
+    // stored in order.
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      selected_index: 0,
+      questions: { ...QUESTION, correct_answer: '44' },
+    })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    const correct = screen.getByText('(correct answer)').closest('li')
+    expect(correct).toHaveTextContent('44')
   })
 })

@@ -87,6 +87,17 @@ class _Query:
         self._filters.append((col, ("in", list(vals))))
         return self
 
+    def lt(self, col, val):
+        self._filters.append((col, ("lt", val)))
+        return self
+
+    def is_(self, col, val):
+        # PostgREST spells the null check `is_(col, "null")`; the string is
+        # what the real client sends, so the fake matches on it rather than
+        # on Python's None.
+        self._filters.append((col, ("is", val)))
+        return self
+
     def _matches(self, row):
         for col, want in self._filters:
             have = row.get(col)
@@ -99,6 +110,21 @@ class _Query:
             elif isinstance(want, tuple) and want[0] == "lte":
                 if have is None or str(have) > str(want[1]):
                     return False
+            elif isinstance(want, tuple) and want[0] == "lt":
+                if have is None or str(have) >= str(want[1]):
+                    return False
+            elif isinstance(want, tuple) and want[0] == "is":
+                # Only "null"/"not.null" are used here. Anything else would be
+                # a silently-ignored filter, which is how a test comes to pass
+                # for a reason unrelated to what it claims.
+                if want[1] == "null":
+                    if have is not None:
+                        return False
+                elif want[1] == "not.null":
+                    if have is None:
+                        return False
+                else:
+                    raise AssertionError(f"unsupported is_() value {want[1]!r}")
             elif have != want:
                 return False
         return True

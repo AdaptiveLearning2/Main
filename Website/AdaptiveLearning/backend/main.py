@@ -1230,7 +1230,18 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     revoked channel's rows are never read even if stale ones exist. Fails
     closed like `_consent`: an unreadable consent row reports nothing.
     """
-    consent = _consent(student_id)
+    return _channels_from_consent(_consent(student_id), want_emotion, want_heart)
+
+
+def _channels_from_consent(consent: dict, want_emotion: bool = True,
+                           want_heart: bool = True) -> ReportChannels:
+    """The consent row -> channels mapping, with no read of its own.
+
+    Split out so the single-student and roster forms cannot drift: one reads
+    consent per student, the other in a batch, and both have to derive the
+    flags the same way or a class page would disagree with the child page about
+    the same student.
+    """
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart can come from either sensor, so it's off only when both are, and the
@@ -4147,6 +4158,286 @@ def _clamp_days(days: int) -> int:
     return max(1, min(days, _CLASS_TREND_MAX_DAYS))
 
 
+# Below this many students, the per-student table is not built at all. A
+# breakdown of four is close to naming individuals even with the class average
+# beside it -- a teacher already knows who is in the room, so "the low row" is
+# a person, not a data point. The class-wide trend still renders: it is the
+# aggregate the floor exists to protect.
+#
+# Enforced in the backend rather than by hiding a rendered table, so an
+# under-floor roster's rows never leave the server. A client-side hide would
+# put them in the response for anyone reading it.
+_COHORT_MIN_STUDENTS = 5
+
+
+def _class_signal_totals(student_ids: list[str], days: int,
+                         include_heart: bool, include_emotion: bool) -> dict | None:
+    """Per-student averages over the window, keyed by student, or None on failure.
+
+    Reads the rollup rather than `_signal_summaries`, which reads the
+    per-sample tables. That is the right source for the weekly report and the
+    parent dashboard, and the wrong one here: this roster renders beside a
+    trend built on the rollup, and `expire_signal_rows` deletes the per-sample
+    rows at the end of a school year while leaving the rollup standing. The
+    pair would have shown a full term of class averages above a table reading
+    "No sensor" for every student in it, on a fixed date rather than because
+    anything broke.
+    """
+    if not student_ids:
+        return {}
+    try:
+        res = supabase.rpc("class_signal_student_totals", {
+            "p_student_ids": student_ids,
+            "p_days": days,
+            "p_include_heart": include_heart,
+            "p_include_emotion": include_emotion,
+            "p_timezone": _retention_window().get("timezone") or "UTC",
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[cohort_signals] per-student read failed: {e}")
+        return None
+    rows = res.data or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    return {str(r["user_id"]): r for r in rows if r.get("user_id")}
+
+
+def _cohort_student_row(sid: str, totals: dict | None, channels: ReportChannels,
+                        retrieved: bool) -> dict:
+    """One roster row: the student's averages, and why any of them is missing.
+
+    Built on both branches, like `_shape_summary`, so a consumer never has to
+    check whether a key exists before reading it -- an absent key becomes a
+    fourth state nobody handles.
+
+    The consent fields are stamped per student rather than per bucket: the RPC
+    groups students by flag pair and so cannot return a revocation date, and
+    "off since 3 August" is a different sentence from "no sensor".
+    """
+    t = totals or {}
+    return {
+        "focus": t.get("avg_focus"),
+        "stress": t.get("avg_stress"),
+        "engagement": t.get("avg_engagement"),
+        "heart_rate_bpm": t.get("avg_heart_rate_bpm"),
+        "rmssd_ms": t.get("avg_rmssd_ms"),
+        # A null average beside a zero count is "nothing recorded"; beside a
+        # nonzero one it is "recorded but unusable" -- which the tile reads as
+        # calibrating rather than as an absent sensor.
+        "cognitive_samples": t.get("cognitive_samples") or 0,
+        "heart_samples": t.get("heart_samples") or 0,
+        "emotion_samples": t.get("emotion_samples") or 0,
+        # Days, not sessions: a session count would come from `sessions`, a
+        # second table with a different lifetime, which is the split this whole
+        # change removes.
+        "days_recorded": t.get("days_recorded") or 0,
+        "heart_included": channels.heart,
+        "emotion_included": channels.emotion,
+        "eeg_enabled": channels.eeg,
+        "eeg_revoked_at": channels.eeg_revoked_at,
+        "heart_revoked_at": channels.heart_revoked_at,
+        "emotion_revoked_at": channels.emotion_revoked_at,
+        "consent_retrieved": channels.consent_retrieved,
+        "retrieved": retrieved,
+    }
+
+
+def _class_signal_trend(student_ids: list[str], days: int,
+                        include_heart: bool, include_emotion: bool) -> list | None:
+    """Per-day class averages for one consent bucket, or None if the read failed.
+
+    None rather than [] on failure, for the reason `_signal_summaries` draws
+    the same distinction: an empty series is also what a class that recorded
+    nothing looks like, and the caller has to tell them apart before it says
+    so on a chart.
+    """
+    if not student_ids:
+        return []
+    try:
+        res = supabase.rpc("class_signal_daily_trend", {
+            "p_student_ids": student_ids,
+            "p_days": days,
+            "p_include_heart": include_heart,
+            "p_include_emotion": include_emotion,
+            # The school's timezone, so these day boundaries agree with the
+            # weekly report's and the term trend's. A cohort panel sitting
+            # beside the accuracy trend must not bucket Tuesday differently.
+            "p_timezone": _retention_window().get("timezone") or "UTC",
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[cohort_signals] trend read failed: {e}")
+        return None
+    rows = res.data or []
+    return [rows] if isinstance(rows, dict) else rows
+
+
+# The five averages the trend carries, and the count each was computed over.
+# Named once because the merge below has to re-weight every one of them the
+# same way, and a list that drifted from the RPC's columns would silently drop
+# a series from the chart.
+_COHORT_TREND_METRICS = ("avg_focus", "avg_stress", "avg_engagement",
+                         "avg_heart_rate_bpm", "avg_rmssd_ms")
+
+
+def _merge_cohort_trend(parts: list[list]) -> list:
+    """One class series from several consent buckets' series.
+
+    Re-weighted on `trusted_sample_count`, never averaged again. Each bucket's
+    rows are already weighted means over the students in it, so averaging those
+    means across buckets would weight a bucket of one student like a bucket of
+    twenty -- the same mistake the RPC avoids one level down, and the one
+    `_weekly_signal_report` and `_signal_trend` both document.
+
+    A metric is absent from a bucket's row when nothing in that bucket measured
+    it -- a bucket that declined the headband contributes no heart rate -- so it
+    contributes no weight rather than a zero.
+    """
+    merged: dict[tuple, dict] = {}
+    for rows in parts:
+        for r in rows:
+            key = (r.get("day"), r.get("channel"))
+            b = merged.setdefault(key, {
+                "day": r.get("day"),
+                "channel": r.get("channel"),
+                "sums": {k: [0.0, 0] for k in _COHORT_TREND_METRICS},
+                "sample_count": 0,
+                "trusted_sample_count": 0,
+                "student_count": 0,
+            })
+            n = r.get("trusted_sample_count") or 0
+            b["sample_count"] += r.get("sample_count") or 0
+            b["trusted_sample_count"] += n
+            # Summed rather than maxed: the buckets partition the roster, so no
+            # student is counted twice and the total is the class's real
+            # coverage for that day.
+            b["student_count"] += r.get("student_count") or 0
+            for metric in _COHORT_TREND_METRICS:
+                value = r.get(metric)
+                if isinstance(value, (int, float)) and n > 0:
+                    b["sums"][metric][0] += float(value) * n
+                    b["sums"][metric][1] += n
+
+    def _mean(pair):
+        total, count = pair
+        return round(total / count, 4) if count else None
+
+    return [{
+        "day": b["day"],
+        "channel": b["channel"],
+        **{k: _mean(v) for k, v in b["sums"].items()},
+        "sample_count": b["sample_count"],
+        "trusted_sample_count": b["trusted_sample_count"],
+        "student_count": b["student_count"],
+    } for _, b in sorted(merged.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
+
+
+def _cohort_signals(class_id: str, days: int) -> dict:
+    """Class-wide signal averages per day, and the per-student rows behind them.
+
+    Two surfaces from one read, because they answer one question together: the
+    trend says how the class is doing and the table says whether that average
+    describes everyone. Split across two endpoints they could disagree -- one
+    fetched before a session closed and one after.
+
+    Consent is resolved per student and the roster is bucketed by flag pair, so
+    a student who declined the headband is never read under a classmate's
+    permission. At most four buckets exist (heart x emotion), and in practice
+    one.
+    """
+    roster, roster_retrieved = _class_roster(class_id)
+    # One consent read for the roster, not one per student: a class of thirty
+    # made thirty sequential round-trips on a page load.
+    channels_by_student = _reportable_channels_many(roster)
+
+    # Keyed on the flags alone, not the whole ReportChannels: `consent_retrieved`
+    # doesn't change what is asked for, so including it would split two students
+    # with identical consent into separate round-trips.
+    by_channels: dict[tuple[bool, bool], list[str]] = {}
+    for sid, ch in channels_by_student.items():
+        by_channels.setdefault((ch.heart, ch.emotion), []).append(sid)
+
+    parts: list[list] = []
+    summaries: dict | None = {}
+    trend_retrieved = roster_retrieved
+    for (heart_flag, emotion_flag), group in by_channels.items():
+        part = _class_signal_trend(group, days, heart_flag, emotion_flag)
+        if part is None:
+            # One failed bucket fails the whole series, discarding buckets that
+            # succeeded. Deliberate, and the same call `my_children` makes: the
+            # payload carries one `retrieved` flag for the trend, so a partial
+            # merge would report the missing students as a quiet fortnight --
+            # the one thing a failed read has not earned the right to say.
+            trend_retrieved = False
+            # And the roster goes with it, because breaking here skips this
+            # bucket's totals call and every later bucket's. Those students were
+            # never asked about, so leaving `summaries` as {} would render them
+            # with zero counts and `retrieved: True` -- "recorded nothing", which
+            # is the one thing we have not found out. Buckets that already
+            # succeeded are discarded with them, for the reason above: one flag
+            # cannot describe a half-read roster.
+            summaries = None
+            break
+        parts.append(part)
+
+        # Same buckets, same rollup, second grouping. Failing independently of
+        # the trend so a broken read here leaves the chart standing.
+        if summaries is not None:
+            got = _class_signal_totals(group, days, heart_flag, emotion_flag)
+            if got is None:
+                summaries = None
+            else:
+                summaries.update(got)
+
+    series = _merge_cohort_trend(parts) if trend_retrieved else []
+    summaries_retrieved = summaries is not None
+    summaries = summaries or {}
+
+    # The floor is applied to the roster, not to the students who happen to
+    # have recorded something: a class of six where two wore a headband is
+    # still a class of six, and gating on the smaller number would expose the
+    # pair exactly when they are most identifiable.
+    per_student = None
+    if len(roster) >= _COHORT_MIN_STUDENTS:
+        profiles = _profiles_many(roster)
+        # Every student on the roster gets a row, including those the RPC
+        # returned nothing for. A shorter list would read as a smaller class,
+        # and a student who recorded nothing is a fact worth showing rather
+        # than an absence to hide.
+        per_student = [{
+            "student_id": sid,
+            "display_name": (profiles.get(sid) or {}).get("display_name") or "Student",
+            "summary": _cohort_student_row(sid, summaries.get(sid),
+                                           channels_by_student[sid],
+                                           summaries_retrieved),
+        } for sid in roster]
+
+    return {
+        "class_id": class_id,
+        "class_size": len(roster),
+        "days": days,
+        "series": series,
+        "retrieved": trend_retrieved,
+        "summaries_retrieved": summaries_retrieved,
+        "per_student": per_student,
+        "min_students": _COHORT_MIN_STUDENTS,
+        "timezone": _retention_window().get("timezone") or "UTC",
+    }
+
+
+@app.get("/api/classes/{class_id}/cohort-signals")
+def class_cohort_signals(class_id: str, request: Request,
+                         days: int = _CLASS_TREND_DEFAULT_DAYS):
+    """Class-wide signal trend, and the per-student rows behind it.
+
+    Teacher-of-this-class only, like the analytics endpoints beside it. This is
+    signal data for a roster, which is a stronger claim than the academic
+    aggregates -- so it stays on the narrowest relationship that can serve it.
+    """
+    user = get_user(request)
+    _verify_class_owner(class_id, user["id"])
+    return _cohort_signals(class_id, _clamp_days(days))
+
+
 @app.get("/api/classes/{class_id}/topic-heatmap")
 def class_topic_heatmap(class_id: str, request: Request):
     """Per-student, per-topic accuracy across a class."""
@@ -4351,6 +4642,42 @@ def _consent(student_id: str) -> dict:
         # read deny, but only a missing row means a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+
+
+def _consent_many(student_ids) -> dict[str, dict]:
+    """`_consent` for a roster, in one query rather than one per student.
+
+    A class of thirty was thirty sequential reads on a page load. `my_children`
+    keeps the per-student loop and can: a family has a handful of children, and
+    a roster is an order of magnitude larger.
+
+    Fails closed exactly as `_consent` does, and per student: a failed read
+    denies *every* requested id with `retrieved: False`, since none of them was
+    found out. A student with no row denies with `retrieved: True`, because that
+    read succeeded and the answer is that nobody has consented yet.
+    """
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("signal_consent").select("*") \
+            .in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[consent:read_many] {len(ids)} students: {e}")
+        return {sid: {**_CONSENT_DENIED, "retrieved": False, "exists": False}
+                for sid in ids}
+    by_id = {str(r["user_id"]): r for r in rows if r.get("user_id")}
+    return {sid: ({**_CONSENT_DENIED, **by_id[sid], "retrieved": True, "exists": True}
+                  if sid in by_id
+                  else {**_CONSENT_DENIED, "retrieved": True, "exists": False})
+            for sid in ids}
+
+
+def _reportable_channels_many(student_ids, want_emotion: bool = True,
+                              want_heart: bool = True) -> dict[str, ReportChannels]:
+    """`_reportable_channels` for a roster, over one consent read."""
+    return {sid: _channels_from_consent(consent, want_emotion, want_heart)
+            for sid, consent in _consent_many(student_ids).items()}
 
 
 # The poller writes `cognitive_signals` directly with the service-role client,

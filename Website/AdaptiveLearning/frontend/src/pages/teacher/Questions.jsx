@@ -7,6 +7,7 @@ import { apiFetch } from '../../lib/api'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
+import { useLatestRequest } from '../../hooks/useLatestRequest'
 
 const TOPICS = ['all','ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const DIFFS  = ['all','easy','medium','hard']
@@ -93,20 +94,44 @@ export default function Questions() {
   const [studentMeta, setStudentMeta] = useState(null)
   const PER_PAGE = 15
 
+  // One counter across BOTH loaders, because they supersede each other in
+  // both directions. Guarding only the per-student read would leave the
+  // likeliest case open: switching back to the bank resolves from the 30s
+  // cache almost immediately, so it can land *under* a student request that
+  // is still in flight and then be overwritten by it -- one child's history
+  // rendered under another child's name.
+  //
+  // A generation ref rather than a cleanup flag scoped to the effect, because
+  // `retry()` is a second caller and a flag the effect owns leaves it
+  // unguarded -- the same reasoning useLatestRequest documents and Sessions.jsx
+  // already relies on.
+  const beginQuestionRead = useLatestRequest()
+
   // loading already starts true, so no setState is needed here on mount.
   const load = () => {
+    const isCurrent = beginQuestionRead()
     // Fetches the whole bank since this page paginates client-side.
     fetchQuestionsCached(1000)
-      .then(q => { setQuestions(q || []); setStudentMeta(null); setFailed(false); setLoading(false) })
-      .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
+      .then(q => {
+        if (!isCurrent()) return
+        setQuestions(q || []); setStudentMeta(null); setFailed(false); setLoading(false)
+      })
+      // Guarded too: a superseded *failure* would otherwise raise the error
+      // state over a read that has since succeeded.
+      .catch(e => {
+        if (!isCurrent()) return
+        console.error('Failed to load questions:', e); setFailed(true); setLoading(false)
+      })
   }
 
   // Deliberately not cached like the bank is: this is per student, changes as
   // they answer, and `fetchQuestionsCached`'s 30s window is tuned for content
   // that is the same for every teacher.
   const loadStudent = (id) => {
+    const isCurrent = beginQuestionRead()
     apiFetch(`/api/students/${id}/questions?limit=200`)
       .then(res => {
+        if (!isCurrent()) return
         setQuestions(res.questions || [])
         setStudentMeta({
           answersRead: res.answers_read,
@@ -115,7 +140,10 @@ export default function Questions() {
         })
         setFailed(false); setLoading(false)
       })
-      .catch(e => { console.error('Failed to load student questions:', e); setFailed(true); setLoading(false) })
+      .catch(e => {
+        if (!isCurrent()) return
+        console.error('Failed to load student questions:', e); setFailed(true); setLoading(false)
+      })
   }
 
   const retry = () => { setLoading(true); studentId ? loadStudent(studentId) : load() }

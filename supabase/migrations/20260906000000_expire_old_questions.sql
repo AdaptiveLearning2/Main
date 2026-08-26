@@ -49,6 +49,24 @@ CREATE INDEX IF NOT EXISTS "questions_created_idx"
 -- unbounded DELETE over a year of rows holds a long lock. Idempotent and
 -- self-healing the same way -- the cutoff is derived from the clock, so a
 -- missed run completes on the next one and a repeat deletes nothing new.
+--
+-- KNOWN GAP, deliberately not closed here: `practice_session_answers` also
+-- carries a question_id, but it has no foreign key to `questions` (unlike
+-- session_answers, whose ON DELETE SET NULL is what makes the deletion above
+-- degrade cleanly), and the protect clause below does not consult it. So a
+-- question answered *only* in practice mode can be deleted while a practice
+-- answer still names its id, leaving a dangling reference rather than a null.
+--
+-- Harmless today because nothing reads it: the sole read of that table is
+-- `.select("topic, correct")`, and the topic is resolved at write time. It is
+-- recorded here rather than fixed because the fix depends on a decision
+-- nobody has made yet -- whether practice history should pin a question the
+-- way session history does.
+--
+-- If a practice-review screen is ever built, this is the trap: it would face
+-- a dangling id where the session path yields a clean null, and PostgREST
+-- cannot embed `questions(...)` through a missing FK at all. Add the FK (and
+-- this table to the protect clause) before building that reader, not after.
 CREATE OR REPLACE FUNCTION "public"."expire_old_questions"(
     p_retention_days integer DEFAULT 365,
     p_batch_size integer DEFAULT 5000,

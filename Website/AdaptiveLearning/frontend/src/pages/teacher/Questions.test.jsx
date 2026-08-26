@@ -178,3 +178,75 @@ describe('the student filter', () => {
     await waitFor(() => expect(screen.queryByText('What is 7 x 8?')).not.toBeInTheDocument())
   })
 })
+
+describe('a superseded read cannot paint under the wrong name', () => {
+  const CLASSES = [{ id: 'c-1', name: 'Period 1' }]
+  const ROSTER  = [
+    { id: 's-1', display_name: 'Ada' },
+    { id: 's-2', display_name: 'Grace' },
+  ]
+  const asked = (text) => ({
+    student_id: 'x',
+    questions: [{ question_id: `q-${text}`, question_text: text, subject: 'algebra',
+                  difficulty: 'easy', session_id: 'sess-1', attempts: 1, correct: 1 }],
+    answers_read: 1, expired_questions: 0, truncated: false,
+  })
+
+  async function pick(label, value) {
+    await userEvent.selectOptions(await screen.findByLabelText(label), value)
+  }
+
+  it("shows the student the dropdown says, not whichever request lands last", async () => {
+    // Hold Ada's request open, switch to Grace, then release Ada's. Without a
+    // supersede guard Ada's questions arrive last and paint under Grace.
+    let releaseAda
+    mockApi({
+      '/api/questions?limit=1000': () => [QUESTION],
+      '/api/classes': () => CLASSES,
+      '/api/classes/c-1/students': () => ROSTER,
+      '/api/students/s-1/questions?limit=200': () =>
+        new Promise(res => { releaseAda = () => res(asked('ADA ONLY')) }),
+      '/api/students/s-2/questions?limit=200': () => asked('GRACE ONLY'),
+    })
+
+    render(<Questions />, { wrapper: MemoryRouter })
+    await pick('Filter by class', 'c-1')
+    await pick('Filter by student', 's-1')
+    await waitFor(() => expect(releaseAda).toBeDefined())
+
+    await pick('Filter by student', 's-2')
+    expect(await screen.findByText('GRACE ONLY')).toBeInTheDocument()
+
+    releaseAda()
+    // Ada's response resolves now. It must be discarded.
+    await waitFor(() => expect(screen.getByText('GRACE ONLY')).toBeInTheDocument())
+    expect(screen.queryByText('ADA ONLY')).not.toBeInTheDocument()
+  })
+
+  it("the bank landing late cannot overwrite a student's list", async () => {
+    // The likelier direction: the bank resolves from the 30s cache, so going
+    // back to "Whole bank" and straight into a student can land bank-last.
+    let releaseStudent
+    mockApi({
+      '/api/questions?limit=1000': () => [QUESTION],
+      '/api/classes': () => CLASSES,
+      '/api/classes/c-1/students': () => ROSTER,
+      '/api/students/s-1/questions?limit=200': () =>
+        new Promise(res => { releaseStudent = () => res(asked('ADA ONLY')) }),
+    })
+
+    render(<Questions />, { wrapper: MemoryRouter })
+    await screen.findByText('What is 7 x 8?')
+    await pick('Filter by class', 'c-1')
+    await pick('Filter by student', 's-1')
+    await waitFor(() => expect(releaseStudent).toBeDefined())
+
+    // Back to the bank while the student read is still open, then release it.
+    await pick('Filter by student', '')
+    expect(await screen.findByText('What is 7 x 8?')).toBeInTheDocument()
+
+    releaseStudent()
+    await waitFor(() => expect(screen.getByText('What is 7 x 8?')).toBeInTheDocument())
+    expect(screen.queryByText('ADA ONLY')).not.toBeInTheDocument()
+  })
+})

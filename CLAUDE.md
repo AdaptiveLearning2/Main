@@ -1273,6 +1273,21 @@ and adaptive would both mean no shift.
 before the first answer and served first, so a hardcoded default there makes the setting do nothing
 for the opening of every session.
 
+**`QUEUE_SIZE` is `QUESTION_QUEUE_SIZE` and defaults to 0 — prefetching is off.** A queued question
+is billed when it is *generated* and only earns its cost when a student *answers* it, so any depth
+above 0 pays for the unanswered questions of everyone who closes the tab — and those are precisely
+the rows `expire_old_questions` collects, since they never gain a `session_answers` reference. Free
+against a local Ollama, which is why the queue was 2 and unconditional before. The cost of 0 is
+latency: `generate_question` always takes the inline path, so a student waits for a full model call
+on every question instead of only on a queue miss. It is an env var so a deployment can raise it
+once the per-question cost and the real abandonment rate are known, without a deploy.
+
+**A test that reads `QUEUE_SIZE` instead of pinning it goes vacuous at 0**, which is how this was
+nearly missed: `assert len(submitted) == main.QUEUE_SIZE` becomes `0 == 0` after submitting nothing,
+passing while exercising none of the pooling it exists to check. Any test whose point is prefetch
+*behaviour* must `monkeypatch.setattr(main, "QUEUE_SIZE", n)` explicitly — the same rule, and the
+same failure shape, as the `strategy_llm_enabled` default above.
+
 Bounds are stated twice on purpose — Pydantic on `UpdateProfileRequest` and a CHECK in the
 migration — and they must agree, or a value that passes one and fails the other surfaces as a 500
 from the client library instead of a 422 naming the field. The CHECK is a **range**, not the four

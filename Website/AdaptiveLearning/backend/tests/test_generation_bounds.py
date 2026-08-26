@@ -129,7 +129,13 @@ def test_the_rate_limited_student_gets_a_429_with_a_retry_after(monkeypatch):
 
 def test_prefetch_runs_in_a_bounded_pool_not_an_unbounded_thread(monkeypatch):
     """It used to be a bare daemon thread per queued question, so the peak was
-    a function of how many children pressed start at once."""
+    a function of how many children pressed start at once.
+
+    QUEUE_SIZE is pinned rather than inherited: it now defaults to 0, and at 0
+    this test would assert `0 == 0` after submitting nothing -- passing while
+    exercising none of the pooling it exists to check.
+    """
+    monkeypatch.setattr(main, "QUEUE_SIZE", 2)
     pool = main._prefetch_pool()
     assert pool._max_workers == llm_client.GENERATION_MAX_CONCURRENCY
 
@@ -189,3 +195,35 @@ def test_a_rate_limited_prefetch_skips_generating_rather_than_raising(monkeypatc
     # The in-flight counter is still released, or the queue would never refill
     # again for this student.
     assert main._prefetch_active["kid"] == 0
+
+
+def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_for(monkeypatch):
+    """QUEUE_SIZE defaults to 0, and that is a spend decision, not a tuning one.
+
+    A queued question is billed when it is generated and only earns its cost
+    when a student answers it, so any prefetch depth > 0 pays for the questions
+    of every student who closes the tab. Asserted on the default value *and* on
+    the behaviour, because a default nothing reads is not a default.
+    """
+    assert main.QUEUE_SIZE == 0, "the default changed; this is a billing decision"
+
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    main._ensure_queue("kid", "5th Grade", 0, None)
+    assert submitted == []
+    # And nothing was recorded as in flight -- a count left raised here would
+    # keep `needed` <= 0 for the life of the process if the queue were later
+    # turned back on for this user.
+    assert main._prefetch_active.get("kid", 0) == 0
+
+
+def test_raising_the_queue_turns_prefetching_back_on(monkeypatch):
+    """The setting is the only thing standing between the two behaviours, so a
+    deployment can restore prefetching without a code change."""
+    monkeypatch.setattr(main, "QUEUE_SIZE", 3)
+    submitted = []
+    monkeypatch.setattr(main, "_prefetch_pool",
+                        lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
+    main._ensure_queue("kid2", "5th Grade", 0, None)
+    assert len(submitted) == 3

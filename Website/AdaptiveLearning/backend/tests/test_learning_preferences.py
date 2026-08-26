@@ -84,7 +84,12 @@ def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch
     served first, so ignoring the setting here means it does nothing for the
     opening of every session -- the part of a lesson most likely to be the
     only part.
+
+    Pinned to a prefetching value because QUEUE_SIZE now defaults to 0: this
+    test is about *which bias* the prewarm uses, not about whether prewarming
+    is switched on.
     """
+    monkeypatch.setattr(main, "QUEUE_SIZE", 1)
     _with_profile(monkeypatch, difficulty_bias=saved)
 
     main.start_session(main.StartSessionRequest(title=None), request=None)

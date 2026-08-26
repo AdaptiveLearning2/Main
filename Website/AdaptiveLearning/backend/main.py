@@ -2104,7 +2104,24 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 
 # ─── question prefetch cache ──────────────────────────────────────────────
 # Maintains a queue of up to QUEUE_SIZE pre-generated questions per user.
-QUEUE_SIZE = 2
+#
+# **0 by default, which disables prefetching entirely.** The queue trades money
+# for latency, and that trade changed sign when generation moved to a billed
+# API: a question is generated as soon as it is queued but only paid off when a
+# student actually answers it, so every abandoned session left up to QUEUE_SIZE
+# questions bought and never served. (Those are exactly the rows
+# `expire_old_questions` now collects -- generated, never referenced by an
+# answer.) At 0 nothing is generated until a question is actually asked for.
+#
+# The cost is latency: with no queue, `generate_question` always takes the
+# inline path, so the student waits for a full model call on every question
+# rather than only on a queue miss. Raise this once the per-question cost and
+# the real abandonment rate are known -- it is an env var, not a constant, so
+# that does not need a deploy.
+#
+# Read through `_env_number` with a floor of 0 like every other numeric setting
+# here: this is read at import, so a typo must not take the module down.
+QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", 0, int, minimum=0)
 _prefetch_cache: dict[str, list] = {}   # user_id → list of questions
 _prefetch_lock = threading.Lock()
 _prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers

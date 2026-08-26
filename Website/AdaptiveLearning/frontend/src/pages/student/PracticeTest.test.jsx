@@ -164,3 +164,48 @@ it('waits for an in-flight answer to settle before advancing, so results cannot 
     expect(apiFetch).toHaveBeenCalledWith('/api/practice-sessions/sess-1/question')
   })
 })
+
+/**
+ * The bug this pins: `handleNext` had no re-entrancy guard, and its button is
+ * never disabled -- `setRevealed(true)` renders it before the answer POST is
+ * awaited, so it stays clickable through the whole in-flight window. A second
+ * click landing there re-entered `handleNext` and ran `setIndex`/
+ * `loadQuestion` twice: index jumped 0 -> 2, the student never saw question
+ * 2, and the discarded generation still cost an LLM call and a rate-limit
+ * slot.
+ *
+ * Needs a *held* answer to reproduce: with an already-resolved answer,
+ * `handleNext` has no `await` left to suspend at (the `if (pendingAnswerRef
+ * .current)` guard is false), so it runs start-to-finish inside one
+ * synchronous `fireEvent.click`, and React's synchronous re-render unmounts
+ * the "Next" button (`revealed` flips false) before a second dispatched click
+ * could land on it -- the DOM itself would mask the race. Holding `/answer`
+ * unresolved keeps `handleNext` suspended at that `await` and the button
+ * mounted, which is the actual window a fast real double-click lands in.
+ */
+it('ignores a second click on Next while the first is still advancing', async () => {
+  let resolveAnswer
+  const heldAnswer = new Promise(resolve => { resolveAnswer = resolve })
+  mockApi({
+    'GET /api/practice-sessions/sess-1/question': () => QUESTION_ONE,
+    'POST /api/practice-sessions/sess-1/answer': () => heldAnswer.then(() => ({ ok: true, topic: 'ordering' })),
+  })
+  draw()
+  await screen.findByText('What is 2 + 2?')
+  await userEvent.click(screen.getByRole('button', { name: /4/ }))
+  const next = await screen.findByRole('button', { name: /next/i })
+
+  apiFetch.mockClear()
+  // Both land while `handleNext` is suspended awaiting the held answer, and
+  // the button is still mounted (`revealed` hasn't been touched yet).
+  fireEvent.click(next)
+  fireEvent.click(next)
+  expect(next).toBeDisabled()
+
+  resolveAnswer()
+  await vi.waitFor(() => {
+    const questionCalls = apiFetch.mock.calls.filter(([path]) => path === '/api/practice-sessions/sess-1/question')
+    expect(questionCalls).toHaveLength(1)
+  })
+  expect(await screen.findByText(/question 2 of 10/i)).toBeInTheDocument()
+})

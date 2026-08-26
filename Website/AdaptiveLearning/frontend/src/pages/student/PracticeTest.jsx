@@ -49,6 +49,18 @@ export default function PracticeTest({ session, onFinish }) {
   // results appear, and the results screen shows one more question answered
   // than the server recorded. `handleNext` awaits this before finishing.
   const pendingAnswerRef = useRef(null)
+  // `handleNext` has no re-entrancy guard by default: `setRevealed(true)`
+  // renders its button before `postAnswer` is awaited, so the button is
+  // clickable for the whole in-flight window, and `handleNext` itself awaits
+  // `pendingAnswerRef` before doing anything -- a second click landing in
+  // that window re-enters and runs `setIndex`/`loadQuestion` twice, skipping
+  // a question the student never saw and still paying for its generation
+  // call. A ref for the synchronous guard (state alone can't stop a second
+  // click arriving before the first's `setState` commits); `advancing` state
+  // alongside it just disables the button so a second click never reaches
+  // the handler visually either.
+  const advancingRef = useRef(false)
+  const [advancing, setAdvancing] = useState(false)
 
   const loadQuestion = useCallback(async () => {
     setLoading(true)
@@ -56,6 +68,8 @@ export default function PracticeTest({ session, onFinish }) {
     setSelected(null)
     setRevealed(false)
     answeredRef.current = false
+    advancingRef.current = false
+    setAdvancing(false)
     try {
       const raw = await apiFetch(`/api/practice-sessions/${session.id}/question`)
       const q = normalizeQuestion(raw)
@@ -129,6 +143,9 @@ export default function PracticeTest({ session, onFinish }) {
   }
 
   async function handleNext() {
+    if (advancingRef.current) return
+    advancingRef.current = true
+    setAdvancing(true)
     // The current question's answer may still be in flight (the timeout path
     // never awaits `postAnswer`) -- wait for it so `onFinish`/`/end` can't
     // race an `/answer` that would otherwise land after the session closed.
@@ -179,8 +196,8 @@ export default function PracticeTest({ session, onFinish }) {
 
       {revealed && (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mt-6 flex justify-end">
-          <button onClick={handleNext}
-            className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow">
+          <button onClick={handleNext} disabled={advancing}
+            className="px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-xl font-bold hover:from-indigo-700 hover:to-violet-700 transition shadow disabled:opacity-60 disabled:cursor-not-allowed">
             {index + 1 >= QUESTION_COUNT ? 'See Results →' : 'Next →'}
           </button>
         </motion.div>

@@ -318,7 +318,10 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
 `INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` / `STALE_SWEEP_INTERVAL_SECONDS` (the
-abandoned-session sweep — the second is `0` to disable it), the `STRATEGY_LLM_*` /
+abandoned-session sweep — the second is `0` to disable it), `QUESTIONS_CACHE_TTL` (30s default —
+the in-process cache in front of `GET /api/questions`, bounded at 256 entries so a sweep of
+distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint can't grow
+it unboundedly), the `STRATEGY_LLM_*` /
 `STRATEGY_RATE_*` group below, and the
 `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
 `llm_client`*. The ingest bounds

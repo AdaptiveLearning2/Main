@@ -4,29 +4,36 @@ import { apiFetch } from './api'
 // every mount -- two redundant reads of the same data during ordinary
 // teacher navigation. Module-level state (not component state) is what lets
 // this be shared across those two separate component instances.
+//
+// Keyed by `limit` rather than a single slot: a single slot would only help
+// callers sharing the exact same limit, and a second caller with a different
+// limit (e.g. Dashboard.jsx's `?limit=5`) would thrash the first one's entry
+// on every call instead of getting its own.
 const TTL_MS = 30_000 // matches backend QUESTIONS_CACHE_TTL default
 
-let cached = null    // { limit, data, expiresAt }
-let inFlight = null  // { limit, promise } -- shared while a fetch is in flight
+const cache = new Map()     // limit -> { data, expiresAt }
+const inFlight = new Map()  // limit -> promise, while a fetch is in flight
 
 export function fetchQuestionsCached(limit = 1000) {
   const now = Date.now()
-  if (cached && cached.limit === limit && cached.expiresAt > now) {
-    return Promise.resolve(cached.data)
+  const hit = cache.get(limit)
+  if (hit && hit.expiresAt > now) {
+    return Promise.resolve(hit.data)
   }
-  if (inFlight && inFlight.limit === limit) {
-    return inFlight.promise
+  const pending = inFlight.get(limit)
+  if (pending) {
+    return pending
   }
   const promise = apiFetch(`/api/questions?limit=${limit}`)
     .then(data => {
-      cached = { limit, data, expiresAt: Date.now() + TTL_MS }
-      inFlight = null
+      cache.set(limit, { data, expiresAt: Date.now() + TTL_MS })
+      inFlight.delete(limit)
       return data
     })
-    // Not populating `cached` on failure means each page's existing retry()
+    // Not populating `cache` on failure means each page's existing retry()
     // still forces a genuine refetch rather than replaying a rejection.
-    .catch(err => { inFlight = null; throw err })
-  inFlight = { limit, promise }
+    .catch(err => { inFlight.delete(limit); throw err })
+  inFlight.set(limit, promise)
   return promise
 }
 
@@ -36,6 +43,6 @@ export function fetchQuestionsCached(limit = 1000) {
 // `beforeEach`, or a later test can be served a still-fresh entry left
 // behind by an earlier one instead of hitting its own mocked response.
 export function _resetForTests() {
-  cached = null
-  inFlight = null
+  cache.clear()
+  inFlight.clear()
 }

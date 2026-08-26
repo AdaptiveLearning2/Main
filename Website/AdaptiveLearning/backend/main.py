@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
-import os, math, re, requests, random, string, threading, time
+import os, math, re, requests, random, string, threading, time, collections
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -2312,11 +2312,21 @@ class _TTLCache:
     caches (see the three-state freshness rules elsewhere in this file), so
     reach for this only for a read where staleness of a few seconds is an
     accepted tradeoff, not for anything signal/consent/session-live.
+
+    Bounded at `max_size` entries, evicting the least-recently-used one to
+    make room. The caller here is an unauthenticated endpoint whose key
+    (limit, subject, difficulty) is taken straight from query params, so
+    without a bound a sweep of distinct combinations plants one permanent
+    entry per combination -- a memory-growth vector the cache itself would
+    be introducing, where an uncached endpoint only ever cost per-call
+    CPU/DB time and left nothing behind.
     """
-    def __init__(self, ttl: float):
+    def __init__(self, ttl: float, max_size: int = 256):
         self._ttl = ttl
+        self._max_size = max_size
         self._lock = threading.Lock()
-        self._store: dict = {}   # key -> (expires_at, value)
+        # key -> (expires_at, value), ordered least- to most-recently-used.
+        self._store: "collections.OrderedDict" = collections.OrderedDict()
 
     def get(self, key):
         with self._lock:
@@ -2327,10 +2337,14 @@ class _TTLCache:
             if expires_at < time.monotonic():
                 del self._store[key]
                 return None, False
+            self._store.move_to_end(key)
             return value, True
 
     def set(self, key, value):
         with self._lock:
+            self._store.pop(key, None)
+            if len(self._store) >= self._max_size:
+                self._store.popitem(last=False)
             self._store[key] = (time.monotonic() + self._ttl, value)
 
 

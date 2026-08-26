@@ -252,3 +252,51 @@ def test_the_count_endpoint_is_never_cached(_questions):
 
     assert len(c.selects) == 2, (
         "count_questions is being served from the list cache")
+
+
+# ── cache bound ──────────────────────────────────────────────────────────
+#
+# `/api/questions` is unauthenticated and its cache key is taken straight
+# from query params, so without a bound a sweep of distinct
+# (limit, subject, difficulty) combinations plants one permanent entry per
+# combination. These test `_TTLCache` directly rather than through
+# `get_questions`, since exercising the real 256-entry cap through the
+# endpoint would mean 257 fake Supabase round trips for no extra coverage.
+
+def test_the_cache_evicts_the_least_recently_used_entry_once_full():
+    cache = main._TTLCache(ttl=60.0, max_size=2)
+
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.set("c", 3)  # over capacity -- "a" is the least recently used
+
+    assert cache.get("a") == (None, False), "the cache grew past its bound"
+    assert cache.get("b") == (2, True)
+    assert cache.get("c") == (3, True)
+
+
+def test_reading_an_entry_protects_it_from_eviction():
+    """Otherwise this would be a bare FIFO, evicting a key that is still in
+    active use just because it was set first."""
+    cache = main._TTLCache(ttl=60.0, max_size=2)
+
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.get("a")       # "a" is now the most-recently-used
+    cache.set("c", 3)    # "b" is evicted instead
+
+    assert cache.get("a") == (1, True)
+    assert cache.get("b") == (None, False)
+
+
+def test_a_sweep_of_distinct_keys_cannot_grow_the_cache_past_its_bound(_questions):
+    """The end-to-end version: hitting `/api/questions` with many distinct
+    limits (as an unauthenticated caller freely can) must not leave behind
+    one permanent entry per limit."""
+    _questions(rows=[{"id": "q1"}])
+    max_size = main._questions_cache._max_size
+
+    for limit in range(max_size + 50):
+        main.get_questions(limit=limit)
+
+    assert len(main._questions_cache._store) <= max_size

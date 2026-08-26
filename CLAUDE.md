@@ -317,7 +317,9 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
-`INGEST_RATE_WINDOW`, the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below, and the
+`INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` / `STALE_SWEEP_INTERVAL_SECONDS` (the
+abandoned-session sweep — the second is `0` to disable it), the `STRATEGY_LLM_*` /
+`STRATEGY_RATE_*` group below, and the
 `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
 `llm_client`*. The ingest bounds
 matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and

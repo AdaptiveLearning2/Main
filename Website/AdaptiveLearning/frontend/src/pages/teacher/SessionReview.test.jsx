@@ -343,3 +343,85 @@ describe('the answers table', () => {
     expect(correct).toHaveTextContent('44')
   })
 })
+
+describe('the correct-answer marker', () => {
+  const answerRow = (over = {}) => ({
+    answered_at: '2026-06-11T09:30:00Z', question_id: 'q-1',
+    selected_index: 0, correct: false, ...over,
+  })
+
+  function renderWith(answers) {
+    apiFetch.mockImplementation(url =>
+      Promise.resolve(String(url).endsWith('/charts')
+        ? { archived: false, charts: {} }
+        : { cognitive: [], face: [], heart: [], answers }))
+    return renderAt()
+  }
+
+  it('marks only one option when a distractor repeats the answer', async () => {
+    // Not every generator dedupes its distractors, and two options both
+    // ticked "correct answer" reads as a broken panel rather than a result.
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      questions: {
+        question_text: 'Order these', options: ['42', '40', '42'],
+        correct_answer: '42', subject: 'ordering', difficulty: 'easy',
+      },
+    })])
+    await user.click(await screen.findByRole('button', { name: /ordering/ }))
+    expect(screen.getAllByText('(correct answer)')).toHaveLength(1)
+  })
+
+  it('marks nothing when the answer is not among the options', async () => {
+    // Better to mark none than to mark an arbitrary one. A wrong marker on a
+    // review screen is worse than an absent one.
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      questions: {
+        question_text: 'What is 7 x 6?', options: ['40', '44'],
+        correct_answer: '42', subject: 'algebra', difficulty: 'easy',
+      },
+    })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.queryByText('(correct answer)')).not.toBeInTheDocument()
+    // The panel still shows the question and the pick.
+    expect(screen.getByText('(chosen)')).toBeInTheDocument()
+  })
+
+  it('accepts a correct_answer that holds an index instead of a value', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      questions: {
+        question_text: 'Pick one', options: ['a', 'b', 'c'],
+        correct_answer: '2', subject: 'algebra', difficulty: 'easy',
+      },
+    })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.getByText('(correct answer)').closest('li')).toHaveTextContent('c')
+  })
+
+  it('ignores an out-of-range numeric correct_answer', async () => {
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      questions: {
+        question_text: 'Pick one', options: ['a', 'b'],
+        correct_answer: '7', subject: 'algebra', difficulty: 'easy',
+      },
+    })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.queryByText('(correct answer)')).not.toBeInTheDocument()
+  })
+
+  it('prefers a value match over a numeric one', async () => {
+    // An option literally named "1" must win over reading "1" as an index.
+    const user = userEvent.setup()
+    renderWith([answerRow({
+      questions: {
+        question_text: 'Pick one', options: ['0', '1', '2'],
+        correct_answer: '1', subject: 'algebra', difficulty: 'easy',
+      },
+    })])
+    await user.click(await screen.findByRole('button', { name: /algebra/ }))
+    expect(screen.getByText('(correct answer)').closest('li')).toHaveTextContent('1')
+  })
+})

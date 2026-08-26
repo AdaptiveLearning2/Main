@@ -71,23 +71,37 @@ function answerLabel(opts, index) {
   return opt === undefined ? `Option ${index}` : opt
 }
 
-/** Whether an option is the correct one.
+/** The index of the correct option, or -1 if it cannot be resolved.
  *
- * `questions.correct_answer` is **text, not an index**, so this compares
- * values rather than positions. Trimmed and case-insensitive because the
- * generators write the answer as its own string and it need not match the
- * option byte for byte.
+ * `questions.correct_answer` is **text, not an index**, so this matches by
+ * value rather than position — comparing positions would mark the wrong
+ * option on every question whose answer is not stored in order. Trimmed and
+ * case-insensitive, because the generators write the answer as its own string
+ * and it need not match the option byte for byte.
+ *
+ * **Resolved once for the question, not asked per option**, so a duplicate
+ * distractor equal to `correct_answer` marks the first and not both. Most
+ * generators guard distractor uniqueness but `LLM_ordering_generation` does
+ * not check its underlying values, and there is no central dedup pass. Two
+ * options both ticked "correct answer" is worse than either alone: it reads
+ * as a broken panel and tells a teacher nothing.
  *
  * The numeric fallback covers a row whose `correct_answer` holds an index
- * instead — the column's type does not stop that, and a wrong "correct
- * answer" marker on a review screen is worse than none.
+ * anyway — the column's type does not prevent it — and is bounds-checked, so
+ * a stray "7" against three options resolves to nothing rather than silently
+ * marking none while claiming to have looked.
  */
-function isCorrectOption(q, opt, index) {
+function correctIndex(q, opts) {
   const want = q?.correct_answer
-  if (want === null || want === undefined) return false
+  if (want === null || want === undefined) return -1
   const a = String(want).trim().toLowerCase()
-  if (a === String(opt).trim().toLowerCase()) return true
-  return /^\d+$/.test(a) && Number(a) === index
+  const byValue = opts.findIndex(o => String(o).trim().toLowerCase() === a)
+  if (byValue !== -1) return byValue
+  if (/^\d+$/.test(a)) {
+    const n = Number(a)
+    if (n >= 0 && n < opts.length) return n
+  }
+  return -1
 }
 
 // Per-section label for the archived SVG, so a fallback never appears under
@@ -650,6 +664,9 @@ function SessionReviewBody({ sessionId }) {
                   const t = new Date(a.answered_at).getTime()
                   const q = a.questions || null
                   const opts = optionList(q)
+                  // Once per question, so a repeated option value cannot mark
+                  // two rows correct -- see `correctIndex`.
+                  const correctIdx = correctIndex(q, opts)
                   const open = openAnswer === i
                   return (
                     <Fragment key={i}>
@@ -698,7 +715,7 @@ function SessionReviewBody({ sessionId }) {
                                   <ul className="mt-2 space-y-1">
                                     {opts.map((opt, oi) => {
                                       const picked = oi === a.selected_index
-                                      const right = isCorrectOption(q, opt, oi)
+                                      const right = oi === correctIdx
                                       return (
                                         <li key={oi}
                                           className={`text-sm flex items-start gap-2 ${

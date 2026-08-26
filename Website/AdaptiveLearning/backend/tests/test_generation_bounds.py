@@ -205,8 +205,19 @@ def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_
     of every student who closes the tab. Asserted on the default value *and* on
     the behaviour, because a default nothing reads is not a default.
     """
-    assert main.QUEUE_SIZE == 0, "the default changed; this is a billing decision"
+    # Asserted on the *default resolution* with no env var set, not on
+    # main.QUEUE_SIZE, which resolves QUESTION_QUEUE_SIZE at import: reading
+    # the module value makes setting the very env var this exists to expose
+    # turn the suite red with a message blaming a source change that did not
+    # happen. Same trap CLAUDE.md documents for a locally-edited
+    # EEGResearch/.env, and the same shape test_llm_client.py avoids for
+    # LLM_PROVIDER.
+    monkeypatch.delenv("QUESTION_QUEUE_SIZE", raising=False)
+    assert main._env_number("QUESTION_QUEUE_SIZE", 0, int, minimum=0) == 0,         "the source default changed; this is a billing decision"
 
+    # The behaviour is pinned explicitly rather than inherited, so this half
+    # holds whatever the deployment has configured.
+    monkeypatch.setattr(main, "QUEUE_SIZE", 0)
     submitted = []
     monkeypatch.setattr(main, "_prefetch_pool",
                         lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
@@ -227,3 +238,44 @@ def test_raising_the_queue_turns_prefetching_back_on(monkeypatch):
                         lambda: type("P", (), {"submit": lambda _s, *a: submitted.append(a)})())
     main._ensure_queue("kid2", "5th Grade", 0, None)
     assert len(submitted) == 3
+
+
+def test_a_waiting_caller_is_refused_rather_than_holding_a_threadpool_slot(monkeypatch):
+    """The fourth bound CLAUDE.md requires, and the one generation lacked.
+
+    GENERATION_MAX_CONCURRENCY bounds calls *in flight*; this bounds callers
+    blocked waiting to become one. Only the second protects the threadpool:
+    llm_client's semaphore is acquired in the caller's own thread, and FastAPI
+    runs these sync endpoints on anyio's shared ~40-slot pool -- so a class
+    starting together would sit in those slots for up to GENERATION_LLM_TIMEOUT
+    and queue the signal-ingest endpoints behind them. The per-student rate
+    limit does not help: that is one student over time, this is many students
+    at one instant.
+    """
+    monkeypatch.setattr(main, "_generation_waiters", threading.BoundedSemaphore(1))
+
+    with main._generation_waiter() as first:
+        assert first is True
+        with main._generation_waiter() as second:
+            assert second is False, "the cap admitted a second waiter"
+
+    # Released on the way out, both times -- including the refused one, which
+    # never held a permit to give back.
+    with main._generation_waiter() as again:
+        assert again is True
+
+
+def test_the_waiter_permit_survives_the_caller_raising(monkeypatch):
+    """A leaked permit is permanent: the cap is a BoundedSemaphore acquired
+    without a timeout, so once they all leak generation is off for the life of
+    the process. The refusal path raises HTTPException *inside* the block, so
+    this is the ordinary case rather than an edge one."""
+    monkeypatch.setattr(main, "_generation_waiters", threading.BoundedSemaphore(1))
+
+    with pytest.raises(RuntimeError):
+        with main._generation_waiter() as admitted:
+            assert admitted is True
+            raise RuntimeError("the model blew up")
+
+    with main._generation_waiter() as after:
+        assert after is True, "the permit leaked when the body raised"

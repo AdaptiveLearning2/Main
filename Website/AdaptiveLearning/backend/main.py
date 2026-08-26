@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
-import os, math, re, requests, random, string, threading, time, collections
+import os, math, re, requests, random, string, threading, time, collections, contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -2175,6 +2175,57 @@ def _shutdown_prefetch_pool():
 _GENERATION_RATE_LIMIT  = _env_number("GENERATION_RATE_LIMIT", 60, int, minimum=1)
 _GENERATION_RATE_WINDOW = _env_number("GENERATION_RATE_WINDOW", 60.0, float, minimum=1.0)
 _generation_hits: dict[str, list[float]] = {}
+
+# How many requests may be *waiting* on a generation at once, process-wide.
+#
+# The fourth bound CLAUDE.md requires of a model-backed endpoint, and the one
+# generation was missing: `GENERATION_MAX_CONCURRENCY` bounds the calls in
+# flight, this bounds the callers *blocked waiting to become* one. They are
+# different quantities, and only the second protects the threadpool --
+# `llm_client._generation_slots.acquire(timeout=budget)` blocks in the
+# caller's thread, and FastAPI runs these sync endpoints on anyio's shared
+# ~40-slot pool. So the 9th through 30th student of a class starting together
+# sit in a threadpool slot for up to GENERATION_LLM_TIMEOUT, and
+# `/api/signals/cognitive` queues behind them.
+#
+# Latent while the prefetch queue absorbed this: workers blocked in the
+# prefetch pool, not in a request thread. Turning the queue off
+# (QUESTION_QUEUE_SIZE=0) made the inline path the only path, which is what
+# promoted this from theoretical to the ordinary case.
+#
+# The per-student rate limit does not help here -- it counts one student's
+# requests over time, and this is thirty different students at one instant.
+#
+# Past the cap the request is refused rather than queued: a student who waited
+# 30s for a slot and then waited again for the model has been failed either
+# way, and refusing keeps the threadpool available for the ingest endpoints
+# that are recording the rest of the class's session.
+#
+# Floored at 1, or the semaphore admits nobody and generation is off entirely.
+_GENERATION_MAX_WAITERS = _env_number("GENERATION_MAX_WAITERS", 12, int, minimum=1)
+_generation_waiters = threading.BoundedSemaphore(_GENERATION_MAX_WAITERS)
+
+
+@contextlib.contextmanager
+def _generation_waiter():
+    """Admit this caller to wait on the model, or yield False.
+
+    A context manager rather than an acquire/release pair at each call site,
+    because the release has to survive every exit path -- the model raising,
+    `GenerationUnavailable`, or the HTTPException the caller itself raises on
+    a refusal. A leaked permit is permanent: the cap is a `BoundedSemaphore`
+    with no timeout, so once all of them leak, generation is off for the life
+    of the process.
+
+    `blocking=False`: the point is to *not* hold a threadpool slot, so waiting
+    for permission to wait defeats it.
+    """
+    admitted = _generation_waiters.acquire(blocking=False)
+    try:
+        yield admitted
+    finally:
+        if admitted:
+            _generation_waiters.release()
 _generation_hits_lock = threading.Lock()
 _generation_sweep_at = time.monotonic()
 
@@ -2543,23 +2594,32 @@ def generate_question(
         question = queue.pop(0) if queue else None
 
     if not question:
-        print(f"[generate] cache miss for {user_id[:8]} -- generating inline")
+        # Not an anomaly line any more: with QUESTION_QUEUE_SIZE at its default
+        # of 0 there is no queue to hit, so this is the ordinary path and would
+        # otherwise print "cache miss" once per question forever.
+        print(f"[generate] generating inline for {user_id[:8]}")
         if not _claim_generation_slot(user_id):
             raise HTTPException(
                 429, "Too many questions requested. Try again shortly.",
                 headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
             )
-        try:
-            question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
-                user_id, effective_grade, session_id, manual_bias
-            )
-        except llm_client.GenerationUnavailable as e:
-            # 503, not 500: a ceiling was reached, which is a decision this
-            # deployment made rather than something that broke. Refusing is
-            # deliberate -- quietly serving a question from somewhere else
-            # would change what the student is asked with nothing saying so.
-            print(f"[generate] refused for {user_id[:8]}: {e}")
-            raise HTTPException(503, "Question generation is temporarily unavailable.")
+        with _generation_waiter() as admitted:
+            if not admitted:
+                raise HTTPException(
+                    503, "Too many questions are being generated right now. Try again shortly.",
+                    headers={"Retry-After": "5"},
+                )
+            try:
+                question = LLM_topic_decider.LLM_single_prompt_topic_and_difficulty_decider(
+                    user_id, effective_grade, session_id, manual_bias
+                )
+            except llm_client.GenerationUnavailable as e:
+                # 503, not 500: a ceiling was reached, which is a decision this
+                # deployment made rather than something that broke. Refusing is
+                # deliberate -- quietly serving a question from somewhere else
+                # would change what the student is asked with nothing saying so.
+                print(f"[generate] refused for {user_id[:8]}: {e}")
+                raise HTTPException(503, "Question generation is temporarily unavailable.")
         if not question:
             raise HTTPException(500, "Failed to generate question")
     else:
@@ -2870,18 +2930,26 @@ def practice_question(practice_session_id: str = Path(...), request: Request = N
 
     # Same rate-limit / refusal contract as /api/generate-question: both now
     # go through the same bounded llm_client dispatch point, so practice
-    # generation shares that endpoint's global concurrency/daily ceiling too.
+    # generation shares that endpoint's global concurrency/daily ceiling too --
+    # including the waiter cap, since this endpoint is sync and blocks on the
+    # same semaphore, so it can starve the threadpool exactly as that one can.
     if not _claim_generation_slot(user["id"]):
         raise HTTPException(
             429, "Too many questions requested. Try again shortly.",
             headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
         )
-    try:
-        question = LLM_topic_decider.question_generation(
-            topic, session["difficulty"], user["id"], session.get("grade_level"))
-    except llm_client.GenerationUnavailable as e:
-        print(f"[practice] generation refused for {user['id'][:8]}: {e}")
-        raise HTTPException(503, "Question generation is temporarily unavailable.")
+    with _generation_waiter() as admitted:
+        if not admitted:
+            raise HTTPException(
+                503, "Too many questions are being generated right now. Try again shortly.",
+                headers={"Retry-After": "5"},
+            )
+        try:
+            question = LLM_topic_decider.question_generation(
+                topic, session["difficulty"], user["id"], session.get("grade_level"))
+        except llm_client.GenerationUnavailable as e:
+            print(f"[practice] generation refused for {user['id'][:8]}: {e}")
+            raise HTTPException(503, "Question generation is temporarily unavailable.")
     if not question:
         raise HTTPException(500, "Failed to generate question")
 

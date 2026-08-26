@@ -321,7 +321,9 @@ Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`,
 abandoned-session sweep — the second is `0` to disable it), `QUESTIONS_CACHE_TTL` (30s default —
 the in-process cache in front of `GET /api/questions`, bounded at 256 entries so a sweep of
 distinct `limit`/`subject`/`difficulty` combinations from that unauthenticated endpoint can't grow
-it unboundedly), the `STRATEGY_LLM_*` /
+it unboundedly), `QUESTION_QUEUE_SIZE` (0 — how many questions to pre-generate per student; named
+separately because it is not part of the `GENERATION_*` group and is a spend decision, see *Learning
+preferences* below), the `STRATEGY_LLM_*` /
 `STRATEGY_RATE_*` group below, and the
 `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
 `llm_client`*. The ingest bounds
@@ -2516,7 +2518,7 @@ does not protect the threadpool. Question generation is now the second such call
 four; see *Every model call goes through `llm_client`*.
 
 `_llm_strategies` reaches its model through `llm_client` like everything else, so `LLM_PROVIDER`
-switches this pass too and it shares the process-wide concurrency ceiling with the thirteen
+switches this pass too and it shares the process-wide concurrency ceiling with the eleven
 generation calls. It keeps its own `STRATEGY_LLM_*` bounds on top: those are about a *sync endpoint*
 holding an anyio threadpool slot, which is a different problem from a background prefetch thread.
 
@@ -2527,10 +2529,22 @@ rules. Extend `_validated_strategies` rather than rendering raw output.
 ## Every model call goes through `llm_client`, and the provider is a setting
 
 `backend/llm_client.py` is the only place either model provider is reached. Fourteen call sites used
-to import `ollama` directly — the ten `LLM_*_generation.py` topic files, **three** in
-`LLM_topic_decider.py` (not one: `parallel_topic_and_difficulty_calculation` makes two, on
-`llama3.2:3b` rather than the 8b everything else uses), and `main._llm_strategies`. So a provider
-switch was fourteen edits, and the bounds below had nowhere to live at all.
+to import `ollama` directly — the ten `LLM_*_generation.py` topic files, three in
+`LLM_topic_decider.py`, and `main._llm_strategies`. So a provider switch was fourteen edits, and the
+bounds below had nowhere to live at all.
+
+**Twelve of those remain.** Two of the three in `LLM_topic_decider.py` belonged to
+`parallel_topic_and_difficulty_calculation`, which spent *two* model calls on what the live path
+does in one and was reachable from nothing — `main.py` has only ever called
+`LLM_single_prompt_topic_and_difficulty_decider`. Deleted along with its sole caller
+`LLM_topic_and_difficulty_separate_decider`, since dead code that bills twice per question is a trap
+for whoever wires it up next.
+
+**A question served costs exactly two model calls**: one for the topic-and-difficulty decision, one
+for the generation. Each has its own three-attempt retry loop, so six is the worst case — but the
+decider's loop is *around its own call only*, and `question_generation` runs after it, so a retried
+decision never re-runs a generation. `CLAUDE_MAX_RETRIES` is 0 against the SDK's 2 so nothing
+multiplies underneath that.
 
 **`LLM_PROVIDER` defaults to `ollama`.** A fresh checkout running `start.ps1` must not begin billing
 an Anthropic account; a deployment opts in with `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. Both
@@ -2556,6 +2570,27 @@ the hottest path in the product and had none:
 | Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
 | Spend | `GENERATION_DAILY_CALL_LIMIT` (5000/24h, Claude only) | Nothing bounded it; free against a local model |
+| Waiting callers | `GENERATION_MAX_WAITERS` (12) | See below — this was the fourth bound, and it was missing |
+
+**`GENERATION_MAX_WAITERS` is the threadpool bound, and it is not the concurrency one.**
+`GENERATION_MAX_CONCURRENCY` bounds calls *in flight*; this bounds callers *blocked waiting to
+become one*. Only the second protects the app: `llm_client._generation_slots.acquire(timeout=…)`
+blocks in the caller's own thread, and FastAPI runs these sync endpoints on anyio's shared ~40-slot
+threadpool — so with a concurrency of 8, a class of thirty starting together puts twenty-two
+requests to sleep in threadpool slots for up to `GENERATION_LLM_TIMEOUT`, and `/api/signals/*` ingest
+queues behind them. The per-student rate limit does not help: that counts one student over time,
+this is thirty students at one instant. Exactly the hazard `_STRATEGY_LLM_MAX_WAITERS` was added for
+one endpoint over, which is why CLAUDE.md said *four* bounds.
+
+It was latent while the prefetch queue absorbed it — those waits happened in the prefetch pool, not
+in a request thread. Setting `QUESTION_QUEUE_SIZE=0` made the inline path the only path and promoted
+it to the ordinary case. **Both** generation endpoints take it (`/api/generate-question` and the
+practice one); a third would need it too.
+
+**Take it through `_generation_waiter()`, never a bare acquire/release pair.** The refusal raises
+`HTTPException` *inside* the guarded block, so a hand-written release is skipped on the path most
+likely to run. The permit never comes back, and since the cap is a `BoundedSemaphore` acquired with
+`blocking=False`, once all of them leak generation is off for the life of the process.
 
 **The budget covers the whole call, so time spent queueing for a slot comes out of it** — the model
 call is charged the *remainder*, and a caller that queues its budget away is refused rather than

@@ -1,33 +1,40 @@
--- cognitive_signals and session_answers are the two write-heavy tables in
--- the "Database efficiency" review still missing the composite index their
--- own access pattern needs -- every other signal/session table already has
--- one:
+-- session_answers is the one write-heavy table in the "Database efficiency"
+-- review still missing the composite index its own access pattern needs.
+--
+-- cognitive_signals already has it: `cog_user_ts_idx` (user_id, ts DESC) was
+-- added by `20260721000000_student_signal_summary.sql`, alongside the same
+-- fix for face_signals and sessions --
 --
 --   face_signals   (user_id, ts DESC)   -- 20260721000000_student_signal_summary.sql
+--   cognitive_signals (user_id, ts DESC) -- 20260721000000_student_signal_summary.sql
 --   heart_signals  (user_id, ts DESC)   -- 20260805000000_heart_signals.sql
 --   sessions       (user_id, started_at DESC) -- 20260721000000_student_signal_summary.sql
 --
--- cognitive_signals(user_id, ts DESC) mirrors that pattern for
--- rollup_signal_day's per-user/day aggregation and the weekly report's
--- per-user time-range reads, which today plan against two separate
--- single-column indexes (session_id, ts DESC, user_id) rather than one
--- index-only scan.
+-- An earlier version of this migration re-created `cog_user_ts_idx` under
+-- the same name, believing it missing -- a false read of the schema, caught
+-- in review. It would have been a harmless no-op (IF NOT EXISTS), but it
+-- also meant `cog_user_idx`, the single-column index that index has made
+-- redundant since 20260721000000, went unnoticed rather than dropped -- see
+-- `20260905020000_drop_redundant_indexes.sql`.
 --
 -- session_answers(session_id, answered_at DESC) supports
 -- latest_signals_for_sessions' `DISTINCT ON (session_id) ORDER BY
 -- session_id, answered_at DESC` (20260827000000), today served by the
--- single-column session_id index plus a sort.
+-- single-column session_id index plus a sort. `20260831000000_class_analytics.sql`
+-- added `session_answers(user_id, answered_at)` for a different access
+-- pattern and explicitly left `answers_session_idx` alone, noting this
+-- exact index "would arguably suit (session_id, answered_at)... but that is
+-- a separate change with its own measurement to do." This is that change --
+-- see `20260905020000_drop_redundant_indexes.sql` for completing it by
+-- dropping the now-superseded `answers_session_idx`.
 --
 -- Plain CREATE INDEX, not CONCURRENTLY: Supabase wraps each migration in a
--- transaction and CONCURRENTLY cannot run inside one. Both tables are small
--- at this point in the product's life (see the "Database efficiency" plan
--- section for the volume estimate) -- if either has grown large by the time
--- this runs, build the index manually with CONCURRENTLY outside a
+-- transaction and CONCURRENTLY cannot run inside one. session_answers is
+-- small at this point in the product's life (see the "Database efficiency"
+-- plan section for the volume estimate) -- if it has grown large by the
+-- time this runs, build the index manually with CONCURRENTLY outside a
 -- transaction first, per this repo's own documented convention, and this
 -- migration's IF NOT EXISTS will no-op.
-
-CREATE INDEX IF NOT EXISTS "cog_user_ts_idx"
-    ON "public"."cognitive_signals" USING "btree" ("user_id", "ts" DESC);
 
 CREATE INDEX IF NOT EXISTS "answers_session_answered_idx"
     ON "public"."session_answers" USING "btree" ("session_id", "answered_at" DESC);

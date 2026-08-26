@@ -416,7 +416,7 @@ def _resolve_window(row: dict) -> dict:
 # a write to an unknown key is refused rather than silently creating a dead
 # switch.
 _FEATURE_FLAG_DEFAULTS = {
-    "strategy_llm_enabled": False,
+    "strategy_llm_enabled": True,
     "recording_eeg_enabled": True,
     "recording_heart_enabled": True,
     "recording_camera_enabled": True,

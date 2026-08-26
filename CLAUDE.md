@@ -765,12 +765,11 @@ GRANT ALL ON TABLE "public"."my_table" TO "service_role";
 Sequences need the same treatment. `20260805110000` swept every remaining table, and
 `scripts/check_table_grants.py` enforces it as part of the `Database grants` CI job.
 
-**What to grant back is per-table judgement, and the lint deliberately does not check it.** Most
-tables carry a `FOR ALL` "own" policy that RLS evaluates against `auth.uid()`, and the frontend
-relies on one: `Adaptive.jsx:290` upserts `user_math_performance` directly through PostgREST, so
-that table keeps `INSERT`/`UPDATE`. `math_topics` and `questions` have `USING (true)` public-read
-policies, so `anon` keeps `SELECT` on those two and nothing else anywhere. Tables written only by
-the backend get `SELECT` for `authenticated` and nothing more.
+**What to grant back is per-table judgement, and the lint deliberately does not check it — which
+means a judgement call can go stale as the write path it was based on moves, and nothing catches
+that.** `math_topics` and `questions` have `USING (true)` public-read policies, so `anon` keeps
+`SELECT` on those two and nothing else anywhere. Every other table written only by the backend gets
+`SELECT` for `authenticated` and nothing more.
 
 `sessions` was the one that had been missed, until `20260817000000`. It kept `authenticated=arwd`
 next to a `FOR ALL` own policy, so a student could rewrite any column of their own sessions through
@@ -779,6 +778,20 @@ PostgREST. Found via `chart_paths` — a path pointed at another child's chart o
 there cascades all three signal tables. **RLS narrows which rows a command touches, never which
 commands exist**, so an own-row policy is not a substitute for withholding the grant. Nothing in
 `frontend/src` reads or writes `sessions` directly; they reach the browser through the backend.
+
+**`class_memberships`, `classes`, `profiles`, `parent_child_links`, `user_math_performance`,
+`user_stats`, and `session_answers` were the next seven, until `20260905000000`.** This file used to
+say `Adaptive.jsx:290` upserts `user_math_performance` directly through PostgREST, which is what
+justified that table's grant — that was true once, but the write moved server-side in
+`20260825000000_record_topic_attempt.sql`, and this file was never updated to say so. A repo-wide
+grep of `frontend/src` for `.insert(`/`.update(`/`.upsert(`/`.delete(` against the Supabase client
+returns zero matches today: every write in this app, `profiles` included (`PUT /api/profile/me` uses
+the backend's service-role client), goes through the backend. All seven grants were live capability
+nothing used, reachable by a student's own JWT through PostgREST, constrained only by each table's
+`FOR ALL "own"` policy — which, per the reasoning two paragraphs up, does not withhold `TRUNCATE`
+either. **A stale "the frontend needs this" comment is exactly as dangerous as the missing revoke it
+excuses — re-verify the claim against the current write path before trusting an old grant rationale,
+this file's own included.**
 
 ### When adding a function
 
@@ -2449,9 +2462,30 @@ payload does not know about, so the row is omitted.
 ## The strategies model pass is optional and bounded
 
 `/api/students/{id}/learning-strategies` always has a deterministic rule-based answer; the
-`strategy_llm_enabled` **feature flag** (default off) only decides whether a model gets a chance to
-replace it. Off, the endpoint never opens a socket — which is what CI and any deployment without a
-local Ollama should do. Every failure path degrades to the rules rather than erroring.
+`strategy_llm_enabled` **feature flag** (default **on**, since `20260905030000`) only decides whether
+a model gets a chance to replace it. Off, the endpoint never opens a socket — which is what CI and
+any deployment without a local Ollama should do. Every failure path degrades to the rules rather than
+erroring.
+
+**The default was `false` from `20260824000000` through `20260905000000`, and nothing ever flipped
+it** — it's admin-only, via `POST /api/admin/flags/{key}`, so every deployment that never had an
+admin manually enable it had this pass silently doing nothing: every response was `source:
+"rule-based"`, indistinguishable from the model being tried and always failing. `20260905030000`
+flips both the Python default and, guarded on there being no recorded `feature_flag_changes` row for
+the key, the already-seeded live row — so a deployment where an admin deliberately turned it off
+after trying it is not silently overwritten. Turning it on for good still needs a working provider
+underneath it (`ANTHROPIC_API_KEY` + `LLM_PROVIDER=claude`, or a running local Ollama) — `_llm_strategies`
+catches every exception and falls back to the rules, so a misconfigured provider produces the exact
+same symptom as the flag being off.
+
+**Tests must pin this flag explicitly, not rely on the suite's default.** The autouse
+`_feature_flags_are_default` fixture in `conftest.py` reads live from `_FEATURE_FLAG_DEFAULTS`, so
+flipping the production default flipped it for the whole test suite in one step — several tests that
+called `student_learning_strategies` without an explicit `set_flag("strategy_llm_enabled", False)`
+started actually attempting the model call, one of them via a genuine ~20s `STRATEGY_LLM_TIMEOUT`
+wait per test, not a fast failure. Every test whose point is the rule-based path, access control, or
+rate limiting now pins the flag off explicitly for that reason, even though the assertion happened to
+still pass either way.
 
 It was the `STRATEGY_LLM_ENABLED` env var until the admin dashboard landed, and is now read per
 request rather than at import: the reason to reach for this switch is a model behaving badly in

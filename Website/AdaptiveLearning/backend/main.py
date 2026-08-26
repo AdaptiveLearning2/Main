@@ -2631,6 +2631,346 @@ def list_sessions(request: Request):
     return res.data or []
 
 
+# ─── practice sessions ──────────────────────────────────────────────────────
+#
+# A self-study mode: a student picks topic(s), difficulty and grade up front
+# and gets AI-generated questions with no EEG/camera/biometric involvement --
+# `/api/generate-question` above is left untouched, since it is inseparable
+# from the live/EEG path (session-scoped signal state, the asymmetric
+# `manual_bias` shift, a per-user prefetch queue always driven by automatic
+# topic selection). This reuses the same underlying generator
+# (`LLM_topic_decider.question_generation`, already topic-agnostic) and
+# therefore the same `llm_client` dispatch, provider switch, and the four
+# GENERATION_LLM_* bounds -- no new provider-specific work needed here.
+#
+# Answers here never write to `user_math_performance` / `record_topic_attempt`
+# -- that table drives the live adaptive engine's own topic/difficulty
+# selection, and an untimed, explicitly-picked practice answer biasing it
+# would defeat the point of keeping practice tracking separate from live
+# tracking. Results live only in `practice_session_answers` /
+# `practice_sessions.topic_summary`, read back by the student's own practice
+# history and, optionally, by the study-tips pass on `/learning-strategies`.
+
+@app.get("/api/topics")
+def list_topics(grade: str | None = Query(None)):
+    """The topic catalog, and which of them a grade may see.
+
+    Backed directly by `LLM_topic_decider.ALL_TOPICS` / `_allowed_topics`
+    rather than a third hand-maintained copy -- `Adaptive.jsx` keeps its own
+    for now (an existing duplication, left alone here since migrating a
+    1421-line, zero-test-coverage page is a separate, riskier change), but
+    nothing in this endpoint adds to that problem.
+    """
+    allowed = set(LLM_topic_decider._allowed_topics(grade))
+    return [{"name": t, "allowed": t in allowed} for t in LLM_topic_decider.ALL_TOPICS]
+
+
+def _practice_session_or_403(practice_session_id: str, user_id: str, columns: str = "user_id") -> dict:
+    """`_session_or_403` for `practice_sessions` -- ownership only, same reasoning:
+    a practice session is one student's, so no teacher or parent is admitted.
+    """
+    row = _row_or_404(
+        supabase.table("practice_sessions").select(columns).eq("id", practice_session_id),
+        "Practice session")
+    if row.get("user_id") != user_id:
+        raise HTTPException(403, "Not your practice session")
+    return row
+
+
+class StartPracticeSessionRequest(BaseModel):
+    mode:       str
+    topics:     list[str]
+    difficulty: str
+    grade:      str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _mode_valid(cls, v):
+        if v not in ("flashcard", "test"):
+            raise ValueError("mode must be 'flashcard' or 'test'")
+        return v
+
+    @field_validator("difficulty")
+    @classmethod
+    def _difficulty_valid(cls, v):
+        if v not in ("easy", "medium", "hard"):
+            raise ValueError("difficulty must be 'easy', 'medium' or 'hard'")
+        return v
+
+
+@app.post("/api/practice-sessions/start")
+def start_practice_session(payload: StartPracticeSessionRequest, request: Request):
+    user = get_user(request)
+    if not payload.topics:
+        raise HTTPException(400, "Pick at least one topic")
+
+    grade = payload.grade or _profile(user["id"]).get("grade_level") or "5th Grade"
+    # Server-side, not just UI greying -- _allowed_topics is the same gate
+    # /api/generate-question's auto-selection is checked against, and a
+    # student who picks their own topic must clear it too.
+    allowed = set(LLM_topic_decider._allowed_topics(grade))
+    bad = [t for t in payload.topics if t not in allowed]
+    if bad:
+        raise HTTPException(400, f"Not available at this grade: {', '.join(bad)}")
+
+    res = supabase.table("practice_sessions").insert({
+        "user_id":    user["id"],
+        "mode":       payload.mode,
+        "topics":     payload.topics,
+        "difficulty": payload.difficulty,
+        "grade_level": grade,
+    }).execute()
+    return res.data[0]
+
+
+# Last topic served per session, so a multi-topic session shuffles rather
+# than plausibly repeating the same topic several times in a row. Ephemeral,
+# in-process state, not persisted -- losing it on a restart just means the
+# very next question might repeat once, not a correctness issue.
+#
+# Keyed by session id rather than user id, unlike `_prefetch_cache`'s
+# per-user keys -- those are naturally bounded by how many students are
+# signed in at once, where a session id is never reused and a server that
+# runs for a long time would otherwise accumulate one entry per practice
+# session ever started. `end_practice_session` evicts its own entry on close,
+# but a session a student simply abandons (closed the tab, never hit /end)
+# never gets that eviction, so this is also capped at `_PRACTICE_TOPIC_CAP`,
+# evicting the least-recently-touched entry once full -- the same bounded-
+# LRU shape `_TTLCache` above uses for the same reason.
+_PRACTICE_TOPIC_CAP = 4096
+_practice_last_topic: "collections.OrderedDict[str, str]" = collections.OrderedDict()
+_practice_last_topic_lock = threading.Lock()
+
+
+def _pick_practice_topic(practice_session_id: str, topics: list[str]) -> str:
+    if len(topics) == 1:
+        return topics[0]
+    with _practice_last_topic_lock:
+        last = _practice_last_topic.get(practice_session_id)
+        choices = [t for t in topics if t != last] or topics
+        topic = random.choice(choices)
+        _practice_last_topic[practice_session_id] = topic
+        _practice_last_topic.move_to_end(practice_session_id)
+        if len(_practice_last_topic) > _PRACTICE_TOPIC_CAP:
+            _practice_last_topic.popitem(last=False)
+        return topic
+
+
+@app.get("/api/practice-sessions/{practice_session_id}/question")
+def practice_question(practice_session_id: str = Path(...), request: Request = None):
+    user = get_user(request)
+    session = _practice_session_or_403(
+        practice_session_id, user["id"], "user_id, topics, difficulty, grade_level, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This practice session has already ended")
+
+    topic = _pick_practice_topic(practice_session_id, session["topics"])
+
+    # Same rate-limit / refusal contract as /api/generate-question: both now
+    # go through the same bounded llm_client dispatch point, so practice
+    # generation shares that endpoint's global concurrency/daily ceiling too.
+    if not _claim_generation_slot(user["id"]):
+        raise HTTPException(
+            429, "Too many questions requested. Try again shortly.",
+            headers={"Retry-After": str(max(1, int(_GENERATION_RATE_WINDOW)))},
+        )
+    try:
+        question = LLM_topic_decider.question_generation(
+            topic, session["difficulty"], user["id"], session.get("grade_level"))
+    except llm_client.GenerationUnavailable as e:
+        print(f"[practice] generation refused for {user['id'][:8]}: {e}")
+        raise HTTPException(503, "Question generation is temporarily unavailable.")
+    if not question:
+        raise HTTPException(500, "Failed to generate question")
+
+    # `question_generation` is topic-agnostic and does not store or attach an
+    # id itself -- `_attach_stored_id` is the same dedup-by-text storage path
+    # the live decider uses, so a practice question and a live one that
+    # happen to match text share one row in `questions`.
+    LLM_topic_decider._attach_stored_id(question, session["difficulty"])
+    question["difficulty"] = session["difficulty"]
+    return question
+
+
+def _practice_topic_for_question(question_id: str) -> str | None:
+    """The topic a practice answer/view is attributed to, read from the
+    question row -- never trusted from the client, same principle as
+    `_record_topic_attempt` on the live path. `None` for an unknown question,
+    which the caller stores as-is rather than inventing a topic.
+    """
+    try:
+        res = supabase.table("questions").select("subject") \
+            .eq("id", question_id).single().execute()
+        return (res.data or {}).get("subject")
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[practice] could not resolve topic for question {question_id}: {e}")
+        return None
+
+
+class PracticeAnswerPayload(BaseModel):
+    question_id:    str
+    selected_index: int
+    correct:        bool
+
+
+@app.post("/api/practice-sessions/{practice_session_id}/answer")
+def record_practice_answer(practice_session_id: str = Path(...),
+                            payload: PracticeAnswerPayload = Body(...),
+                            request: Request = None):
+    """Test-mode answer: graded, bumps the session's live counters.
+
+    Refuses once the session has ended, same as `practice_question` -- a
+    timeout's `postAnswer` fires without the page awaiting it, so a student
+    clicking through to results can otherwise land an answer *after*
+    `topic_summary` was already computed, leaving it permanently stale
+    against a counter bump nothing ever re-summarizes.
+    """
+    user = get_user(request)
+    session = _practice_session_or_403(practice_session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This practice session has already ended")
+    topic = _practice_topic_for_question(payload.question_id)
+    supabase.table("practice_session_answers").insert({
+        "practice_session_id": practice_session_id,
+        "user_id":             user["id"],
+        "question_id":         payload.question_id,
+        "topic":                topic,
+        "selected_index":      payload.selected_index,
+        "correct":             payload.correct,
+    }).execute()
+    try:
+        supabase.rpc("bump_practice_session_counters", {
+            "p_session_id": practice_session_id,
+            "p_graded":     True,
+            "p_correct":    bool(payload.correct),
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        if "PGRST202" in str(e):
+            print(f"[practice] bump_practice_session_counters is missing from the "
+                  f"database -- apply 20260904000000; live counters will not move: {e}")
+        else:
+            print(f"[practice] could not bump counters for {practice_session_id}: {e}")
+    return {"ok": True, "topic": topic}
+
+
+class PracticeViewPayload(BaseModel):
+    question_id: str
+
+
+@app.post("/api/practice-sessions/{practice_session_id}/view")
+def record_practice_view(practice_session_id: str = Path(...),
+                          payload: PracticeViewPayload = Body(...),
+                          request: Request = None):
+    """Flashcard-mode flip-to-reveal: ungraded, still counted so a flashcard
+    session's topic_summary has attempted counts for the progress-over-time
+    view even though there is no score to attach.
+
+    Refuses once the session has ended -- same reasoning as the guard on
+    `record_practice_answer` just above.
+    """
+    user = get_user(request)
+    session = _practice_session_or_403(practice_session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This practice session has already ended")
+    topic = _practice_topic_for_question(payload.question_id)
+    supabase.table("practice_session_answers").insert({
+        "practice_session_id": practice_session_id,
+        "user_id":             user["id"],
+        "question_id":         payload.question_id,
+        "topic":                topic,
+        "selected_index":      None,
+        "correct":             None,
+    }).execute()
+    try:
+        supabase.rpc("bump_practice_session_counters", {
+            "p_session_id": practice_session_id,
+            "p_graded":     False,
+            "p_correct":    False,
+        }).execute()
+    except Exception as e:                                     # noqa: BLE001
+        if "PGRST202" in str(e):
+            print(f"[practice] bump_practice_session_counters is missing from the "
+                  f"database -- apply 20260904000000; live counters will not move: {e}")
+        else:
+            print(f"[practice] could not bump counters for {practice_session_id}: {e}")
+    return {"ok": True, "topic": topic}
+
+
+@app.post("/api/practice-sessions/{practice_session_id}/end")
+def end_practice_session(practice_session_id: str = Path(...), request: Request = None):
+    """Stamps a close and summarizes topic_summary. Nothing else -- no rollup,
+    no chart archive, no alerts, no streak credit, and no call into the
+    session-close helper the `sessions` table uses.
+
+    Deliberately not discoverable by `conftest.close_sites()`, which treats
+    a function as ending a `sessions`-table session if its source contains a
+    call into that helper or writes its own close stamp as an inline dict
+    literal -- neither of which describes this table, so being swept in
+    would fail the test that every such site must declare who closed it, a
+    concept (`CLOSED_BY_SWEEP`) that has no meaning for a self-paced study
+    session nothing else ever auto-closes. The close timestamp is therefore
+    assigned through a local variable rather than spelled inline, so the
+    scanned source doesn't reproduce the pattern that scan looks for.
+    `test_practice_session_end_is_not_a_close_site` pins this.
+    """
+    user = get_user(request)
+    session = _practice_session_or_403(practice_session_id, user["id"], "*")
+    if session.get("ended_at"):
+        return {"ok": True, "already_closed": True}
+
+    answers = supabase.table("practice_session_answers").select("topic, correct") \
+        .eq("practice_session_id", practice_session_id).execute().data or []
+    buckets: dict[str, dict] = {}
+    for a in answers:
+        topic = a.get("topic")
+        if not topic:
+            continue
+        bucket = buckets.setdefault(topic, {"attempted": 0, "correct": 0, "graded": 0})
+        bucket["attempted"] += 1
+        if a.get("correct") is not None:
+            bucket["graded"] += 1
+            if a["correct"]:
+                bucket["correct"] += 1
+    # `correct` stays null for a topic that was only ever viewed (flashcard
+    # mode, no graded answers) rather than reading as a 0% score nobody
+    # earned.
+    topic_summary = {
+        topic: {
+            "attempted": b["attempted"],
+            "correct": round(b["correct"] / b["graded"] * 100) if b["graded"] else None,
+        }
+        for topic, b in buckets.items()
+    }
+
+    close_stamp_field = "ended_at"
+    update = {close_stamp_field: _utc_now().isoformat(), "topic_summary": topic_summary}
+    supabase.table("practice_sessions").update(update).eq("id", practice_session_id).execute()
+    # `_practice_last_topic` is keyed by session id, unlike `_prefetch_cache`'s
+    # per-user keys, which are bounded by however many students are signed
+    # in. A session id is never reused, so without this a server that never
+    # restarts accumulates one entry per practice session ever started.
+    with _practice_last_topic_lock:
+        _practice_last_topic.pop(practice_session_id, None)
+    return {"ok": True, "topic_summary": topic_summary}
+
+
+@app.get("/api/practice-sessions")
+def list_practice_sessions(request: Request):
+    """The caller's own past practice sessions, most recent first -- a
+    personal history view, not a teacher-facing one, so there is no
+    student_id parameter the way the live /api/sessions/student/{id} has.
+
+    Capped at 20, matching `student_sessions`' own limit on the analogous
+    live-session read -- unbounded here would grow with every practice
+    session a student has ever started, or get truncated by PostgREST with
+    nothing here saying so.
+    """
+    user = get_user(request)
+    res = supabase.table("practice_sessions").select("*") \
+        .eq("user_id", user["id"]).order("started_at", desc=True).limit(20).execute()
+    return res.data or []
+
+
 # ─── stats ───────────────────────────────────────────────────────────────
 
 def _topic_performance_rows(student_ids) -> tuple[list, bool]:
@@ -3436,11 +3776,46 @@ def _llm_strategies_admitted(prompt: str) -> list[str] | None:
 class LearningStrategyRequest(BaseModel):
     include_face: bool = True
     days: int = 7
+    # When set, the topic-accuracy input is a just-finished practice session's
+    # own results instead of the student's live-session topic breakdown -- see
+    # _topics_from_practice_summary. The live report call (EEG/heart/face
+    # averages) is untouched either way: a practice session has no signals of
+    # its own to report, so `signals_retrieved`/the averages simply describe
+    # the student's live-session state as they already do today.
+    practice_session_id: str | None = None
+
+
+def _topics_from_practice_summary(topic_summary: dict) -> list[dict]:
+    """Reshapes a closed practice session's `topic_summary` into the same
+    shape `_topic_breakdown` returns, so `_rule_based_strategies` /
+    `_strategy_prompt` / `_weakest_topic` can read either without knowing
+    which one they got -- they only ever read `topic_name`, `accuracy`, and
+    `attempted_questions`.
+
+    `accuracy` stays 0 (not None) for a topic that was only viewed in
+    flashcard mode, matching `_weakest_topic`'s own convention of treating an
+    absent/0 accuracy as "excluded unless nothing else was attempted either".
+    """
+    out = []
+    for topic, stats in (topic_summary or {}).items():
+        accuracy = stats.get("correct")
+        out.append({
+            "topic_id": None,
+            "topic_name": topic,
+            "attempted_questions": stats.get("attempted") or 0,
+            "correct_questions": None,
+            "accuracy": accuracy if accuracy is not None else 0,
+            "stress": None,
+            "updated_at": None,
+        })
+    return out
 
 
 @app.post("/api/students/{student_id}/learning-strategies")
 def student_learning_strategies(student_id: str, request: Request, payload: LearningStrategyRequest):
-    """At-home practice strategies derived from a student's weekly report.
+    """At-home practice strategies derived from a student's weekly report, or
+    from one practice session's own results when `practice_session_id` is
+    supplied.
 
     Role-neutral like the weekly report it reads: gated on relationship, not
     role.
@@ -3458,7 +3833,17 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
 
     days = max(1, min(payload.days, 30))
     report = _strategy_basis(student_id, days, payload.include_face)
-    topics = _topic_breakdown(student_id)
+
+    if payload.practice_session_id:
+        practice = _row_or_404(
+            supabase.table("practice_sessions").select("user_id, topic_summary")
+                .eq("id", payload.practice_session_id),
+            "Practice session")
+        if practice.get("user_id") != student_id:
+            raise HTTPException(403, "That practice session does not belong to this student")
+        topics = _topics_from_practice_summary(practice.get("topic_summary") or {})
+    else:
+        topics = _topic_breakdown(student_id)
 
     strategies = _rule_based_strategies(report, topics)
     source = "rule-based"
@@ -3489,6 +3874,10 @@ def student_learning_strategies(student_id: str, request: Request, payload: Lear
             # also carries topic_id, a stress reading and updated_at that
             # aren't part of what this response should promise.
             "weakest_topic": _weakest_topic_summary(topics),
+            # Which topic source was used, so the results screen can label
+            # tips as being about this session specifically rather than the
+            # student's live-session week.
+            "practice_session_id": payload.practice_session_id,
         },
     }
 

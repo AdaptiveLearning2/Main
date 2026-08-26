@@ -28,16 +28,26 @@ export default function PracticeTest({ session, onFinish }) {
   const [revealed, setRevealed] = useState(false)
   const [timeLeft, setTimeLeft] = useState(TIMER)
   const timerRef = useRef(null)
-  // Score/answered live in a ref as well as state so `handleTimeout` (fired
+  // Score/answered live in a ref as well as state so `postAnswer` (fired
   // from a `setInterval` closure) always reads the latest count rather than
   // one captured when the timer was set up.
   const tallyRef = useRef({ score: 0, answered: 0 })
+  // Whether *this* question has already been answered, by either path
+  // (a click or the countdown reaching zero). A ref rather than the
+  // `revealed` state: the timeout path used to guard on `revealed` from
+  // inside a `setTimeLeft` updater, but React can invoke an updater more
+  // than once for the same transition (StrictMode's double-invoke in dev is
+  // one case, not the only one) -- every extra invocation read the same
+  // stale `revealed=false` closure and posted a second "timed out" answer,
+  // so one timeout could land two-to-four rows for a single question.
+  const answeredRef = useRef(false)
 
   const loadQuestion = useCallback(async () => {
     setLoading(true)
     setFailed(false)
     setSelected(null)
     setRevealed(false)
+    answeredRef.current = false
     try {
       const raw = await apiFetch(`/api/practice-sessions/${session.id}/question`)
       const q = normalizeQuestion(raw)
@@ -58,15 +68,25 @@ export default function PracticeTest({ session, onFinish }) {
     if (loading || failed || !question) return
     setTimeLeft(TIMER)
     clearInterval(timerRef.current)
+    // The interval only ever decrements state here -- no side effect lives
+    // inside the updater function passed to `setTimeLeft`. The effect below,
+    // reacting to the resulting `timeLeft` value, is what fires the timeout
+    // exactly once, guarded by `answeredRef` rather than by re-entering the
+    // updater.
     timerRef.current = setInterval(() => {
-      setTimeLeft(t => {
-        if (t <= 1) { clearInterval(timerRef.current); handleTimeout(); return 0 }
-        return t - 1
-      })
+      setTimeLeft(t => (t <= 1 ? 0 : t - 1))
     }, 1000)
     return () => clearInterval(timerRef.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, loading, failed, question])
+
+  useEffect(() => {
+    if (timeLeft > 0 || answeredRef.current) return
+    answeredRef.current = true
+    clearInterval(timerRef.current)
+    setRevealed(true)
+    postAnswer(-1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeLeft])
 
   async function postAnswer(idx) {
     const selectedVal = idx >= 0 ? question.options[idx] : null
@@ -83,14 +103,9 @@ export default function PracticeTest({ session, onFinish }) {
     })
   }
 
-  function handleTimeout() {
-    if (revealed) return
-    setRevealed(true)
-    postAnswer(-1)
-  }
-
   async function handleSelect(idx) {
-    if (revealed) return
+    if (answeredRef.current) return
+    answeredRef.current = true
     clearInterval(timerRef.current)
     setSelected(idx)
     setRevealed(true)

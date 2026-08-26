@@ -2725,10 +2725,20 @@ def start_practice_session(payload: StartPracticeSessionRequest, request: Reques
 
 # Last topic served per session, so a multi-topic session shuffles rather
 # than plausibly repeating the same topic several times in a row. Ephemeral,
-# in-process state -- same precedent as `_prefetch_cache` above -- not
-# persisted, since losing it on a restart just means the very next question
-# might repeat once, not a correctness issue.
-_practice_last_topic: dict[str, str] = {}
+# in-process state, not persisted -- losing it on a restart just means the
+# very next question might repeat once, not a correctness issue.
+#
+# Keyed by session id rather than user id, unlike `_prefetch_cache`'s
+# per-user keys -- those are naturally bounded by how many students are
+# signed in at once, where a session id is never reused and a server that
+# runs for a long time would otherwise accumulate one entry per practice
+# session ever started. `end_practice_session` evicts its own entry on close,
+# but a session a student simply abandons (closed the tab, never hit /end)
+# never gets that eviction, so this is also capped at `_PRACTICE_TOPIC_CAP`,
+# evicting the least-recently-touched entry once full -- the same bounded-
+# LRU shape `_TTLCache` above uses for the same reason.
+_PRACTICE_TOPIC_CAP = 4096
+_practice_last_topic: "collections.OrderedDict[str, str]" = collections.OrderedDict()
 _practice_last_topic_lock = threading.Lock()
 
 
@@ -2740,6 +2750,9 @@ def _pick_practice_topic(practice_session_id: str, topics: list[str]) -> str:
         choices = [t for t in topics if t != last] or topics
         topic = random.choice(choices)
         _practice_last_topic[practice_session_id] = topic
+        _practice_last_topic.move_to_end(practice_session_id)
+        if len(_practice_last_topic) > _PRACTICE_TOPIC_CAP:
+            _practice_last_topic.popitem(last=False)
         return topic
 
 
@@ -2804,9 +2817,18 @@ class PracticeAnswerPayload(BaseModel):
 def record_practice_answer(practice_session_id: str = Path(...),
                             payload: PracticeAnswerPayload = Body(...),
                             request: Request = None):
-    """Test-mode answer: graded, bumps the session's live counters."""
+    """Test-mode answer: graded, bumps the session's live counters.
+
+    Refuses once the session has ended, same as `practice_question` -- a
+    timeout's `postAnswer` fires without the page awaiting it, so a student
+    clicking through to results can otherwise land an answer *after*
+    `topic_summary` was already computed, leaving it permanently stale
+    against a counter bump nothing ever re-summarizes.
+    """
     user = get_user(request)
-    _practice_session_or_403(practice_session_id, user["id"])
+    session = _practice_session_or_403(practice_session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This practice session has already ended")
     topic = _practice_topic_for_question(payload.question_id)
     supabase.table("practice_session_answers").insert({
         "practice_session_id": practice_session_id,
@@ -2842,9 +2864,14 @@ def record_practice_view(practice_session_id: str = Path(...),
     """Flashcard-mode flip-to-reveal: ungraded, still counted so a flashcard
     session's topic_summary has attempted counts for the progress-over-time
     view even though there is no score to attach.
+
+    Refuses once the session has ended -- same reasoning as the guard on
+    `record_practice_answer` just above.
     """
     user = get_user(request)
-    _practice_session_or_403(practice_session_id, user["id"])
+    session = _practice_session_or_403(practice_session_id, user["id"], "user_id, ended_at")
+    if session.get("ended_at"):
+        raise HTTPException(409, "This practice session has already ended")
     topic = _practice_topic_for_question(payload.question_id)
     supabase.table("practice_session_answers").insert({
         "practice_session_id": practice_session_id,
@@ -2918,6 +2945,12 @@ def end_practice_session(practice_session_id: str = Path(...), request: Request 
     close_stamp_field = "ended_at"
     update = {close_stamp_field: _utc_now().isoformat(), "topic_summary": topic_summary}
     supabase.table("practice_sessions").update(update).eq("id", practice_session_id).execute()
+    # `_practice_last_topic` is keyed by session id, unlike `_prefetch_cache`'s
+    # per-user keys, which are bounded by however many students are signed
+    # in. A session id is never reused, so without this a server that never
+    # restarts accumulates one entry per practice session ever started.
+    with _practice_last_topic_lock:
+        _practice_last_topic.pop(practice_session_id, None)
     return {"ok": True, "topic_summary": topic_summary}
 
 
@@ -2926,10 +2959,15 @@ def list_practice_sessions(request: Request):
     """The caller's own past practice sessions, most recent first -- a
     personal history view, not a teacher-facing one, so there is no
     student_id parameter the way the live /api/sessions/student/{id} has.
+
+    Capped at 20, matching `student_sessions`' own limit on the analogous
+    live-session read -- unbounded here would grow with every practice
+    session a student has ever started, or get truncated by PostgREST with
+    nothing here saying so.
     """
     user = get_user(request)
     res = supabase.table("practice_sessions").select("*") \
-        .eq("user_id", user["id"]).order("started_at", desc=True).execute()
+        .eq("user_id", user["id"]).order("started_at", desc=True).limit(20).execute()
     return res.data or []
 
 

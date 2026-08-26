@@ -20,6 +20,7 @@ checks every endpoint here needs:
    table with none of that machinery, so tripping that scan would fail a test
    this file has no way to satisfy on purpose.
 """
+import collections
 import os
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -78,6 +79,7 @@ class _Client:
                 self._insert = None
                 self._update = None
                 self._order = None
+                self._limit = None
 
             def select(self, *_a, **_k):
                 return self
@@ -88,6 +90,10 @@ class _Client:
 
             def order(self, col, desc=False, **_k):
                 self._order = (col, desc)
+                return self
+
+            def limit(self, n, *_a, **_k):
+                self._limit = n
                 return self
 
             def single(self):
@@ -131,6 +137,8 @@ class _Client:
                     if self._order:
                         col, desc = self._order
                         rows = sorted(rows, key=lambda r: r.get(col) or "", reverse=desc)
+                    if self._limit is not None:
+                        rows = rows[:self._limit]
                     if self._single:
                         return type("R", (), {"data": rows[0] if rows else None})()
                     return type("R", (), {"data": rows})()
@@ -387,6 +395,39 @@ def test_view_records_an_ungraded_attempt(_client, monkeypatch):
                        {"p_session_id": SESSION, "p_graded": False, "p_correct": False})]
 
 
+def test_answer_refuses_once_the_session_has_ended(_client, monkeypatch):
+    """A timeout's `postAnswer` fires without the page awaiting it, so a
+    student clicking through to results can otherwise land an answer after
+    `topic_summary` was already computed at close -- permanently stale
+    against a counter bump nothing ever re-summarizes. Same contract as
+    `practice_question`'s 409.
+    """
+    _as(monkeypatch, USER)
+    ended = dict(_OWNED_SESSION, ended_at="2026-08-25T00:00:00Z")
+    c = _client(sessions=[ended], questions=[{"id": "q-1", "subject": "ordering"}])
+    payload = main.PracticeAnswerPayload(question_id="q-1", selected_index=0, correct=True)
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.record_practice_answer(SESSION, payload, None)
+
+    assert exc.value.status_code == 409
+    assert c.inserted_answers == []
+    assert c.rpcs == []
+
+
+def test_view_refuses_once_the_session_has_ended(_client, monkeypatch):
+    _as(monkeypatch, USER)
+    ended = dict(_OWNED_SESSION, ended_at="2026-08-25T00:00:00Z")
+    c = _client(sessions=[ended], questions=[{"id": "q-1", "subject": "ordering"}])
+    payload = main.PracticeViewPayload(question_id="q-1")
+
+    with pytest.raises(main.HTTPException) as exc:
+        main.record_practice_view(SESSION, payload, None)
+
+    assert exc.value.status_code == 409
+    assert c.inserted_answers == []
+
+
 # ─── POST /api/practice-sessions/{id}/end ───────────────────────────────
 
 def test_end_summarizes_correct_and_ungraded_topics_separately(_client, monkeypatch):
@@ -460,6 +501,53 @@ def test_list_practice_sessions_is_scoped_to_the_caller(_client, monkeypatch):
     ])
     rows = main.list_practice_sessions(None)
     assert [r["id"] for r in rows] == [SESSION]
+
+
+def test_list_practice_sessions_is_capped(_client, monkeypatch):
+    """Matches `student_sessions`' own cap on the analogous live-session
+    read -- unbounded here would grow with every practice session a student
+    has ever started."""
+    _as(monkeypatch, USER)
+    many = [dict(_OWNED_SESSION, id=f"s-{i}", started_at=f"2026-01-{i + 1:02d}T00:00:00Z")
+            for i in range(25)]
+    _client(sessions=many)
+    rows = main.list_practice_sessions(None)
+    assert len(rows) == 20
+
+
+# ─── the per-session topic-rotation state is bounded ────────────────────
+
+def test_topic_rotation_state_is_evicted_when_a_session_ends(_client, monkeypatch):
+    _as(monkeypatch, USER)
+    monkeypatch.setattr(main, "_practice_last_topic", collections.OrderedDict())
+    _client(sessions=[dict(_OWNED_SESSION, topics=["ordering", "geometry"])])
+
+    main._pick_practice_topic(SESSION, ["ordering", "geometry"])
+    assert SESSION in main._practice_last_topic
+
+    main.end_practice_session(SESSION, None)
+
+    assert SESSION not in main._practice_last_topic
+
+
+def test_topic_rotation_state_is_capped_regardless_of_close(monkeypatch):
+    """Unlike `_prefetch_cache` (bounded by however many students are signed
+    in, keyed per user), this dict is keyed per practice session, which is
+    never reused -- a session a student abandons without ever calling `/end`
+    would otherwise sit here forever. `end_practice_session` evicts its own
+    key, but a hard cap is what protects the sessions that never reach it.
+    """
+    monkeypatch.setattr(main, "_PRACTICE_TOPIC_CAP", 3)
+    monkeypatch.setattr(main, "_practice_last_topic", collections.OrderedDict())
+
+    for i in range(5):
+        main._pick_practice_topic(f"s-{i}", ["ordering", "geometry"])
+
+    assert len(main._practice_last_topic) == 3
+    # The earliest sessions are the ones evicted, not the most recent.
+    assert "s-0" not in main._practice_last_topic
+    assert "s-1" not in main._practice_last_topic
+    assert "s-4" in main._practice_last_topic
 
 
 # ─── learning-strategies extension ──────────────────────────────────────

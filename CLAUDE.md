@@ -1822,6 +1822,15 @@ which renders as `No sensor` and is indistinguishable from a class that left the
 cupboard. Both flags go false together. The two reads still fail *independently* in the ordinary
 case: a broken totals RPC leaves the chart standing.
 
+**And the row's `retrieved` has to be read by the tile, or that fix stops at the API boundary.**
+`ClassSignalRoster`'s `reasons()` folds it into `offLabel`'s `consentRetrieved`, which already means
+"could we find out?" and owns the one `Unavailable` string — a second literal here would be free to
+drift from `CHANNEL_STATE`. Without it the row arrives correct and renders `No sensor` anyway, from
+the zero counts, so the backend flag reads as fixed while the screen still makes the claim. The day
+count needs the same guard: `0` asserts the student recorded on no day at all. Both directions need
+a test, since replacing `No sensor` with a permanent `Unavailable` is the same bug facing the other
+way.
+
 **Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
 `student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly
 report and the parent dashboard, and the wrong one *here*, because this is the first place a

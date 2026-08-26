@@ -19,19 +19,32 @@ import Panel from './Panel'
  *
  * Kept per channel rather than one per row: a student can have EEG on and the
  * camera off, and a single reason would explain the wrong null.
+ *
+ * **`retrieved` outranks the rest.** When the per-student read fails while the
+ * trend's succeeds, the row arrives with `retrieved: false`, null averages and
+ * zero counts — and zero counts are what `offLabel` reads as "No sensor", i.e.
+ * an assertion that nothing was recorded. Nobody asked. That is the same defect
+ * the backend fixed one layer in, and the flag it added for it has to actually
+ * be read here or the fix stops at the API boundary.
+ *
+ * Folded into `consentRetrieved` rather than compared against a second literal,
+ * because that input already means "could we find out?" and answers with the
+ * one `Unavailable` string. A copy of that string here would be a second
+ * definition free to drift from `CHANNEL_STATE`.
  */
 function reasons(summary) {
+  const known = summary?.retrieved !== false && summary?.consent_retrieved !== false
   return {
     eeg: {
       on: summary?.eeg_enabled !== false,
       revokedAt: summary?.eeg_revoked_at ?? null,
-      consentRetrieved: summary?.consent_retrieved,
+      consentRetrieved: known,
       samples: summary?.cognitive_samples,
     },
     heart: {
       on: summary?.heart_included !== false,
       revokedAt: summary?.heart_revoked_at ?? null,
-      consentRetrieved: summary?.consent_retrieved,
+      consentRetrieved: known,
       samples: summary?.heart_samples,
     },
   }
@@ -141,7 +154,12 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
                       ? `${Math.round(s.heart_rate_bpm)} bpm`
                       : offLabel(why.heart)}
                   </td>
-                  <td className="py-2 text-gray-900 dark:text-white">{s.days_recorded ?? 0}</td>
+                  {/* A dash, not 0, when the row was never read — a zero here
+                      asserts the student recorded on no day at all, which is
+                      the same claim the cells beside it stopped making. */}
+                  <td className="py-2 text-gray-900 dark:text-white">
+                    {s.retrieved === false ? '—' : (s.days_recorded ?? 0)}
+                  </td>
                 </tr>
               )
             })}

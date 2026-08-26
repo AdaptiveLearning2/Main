@@ -609,6 +609,44 @@ describe('ClassSignalRoster', () => {
     expect(screen.getByText(/unlike the class/i)).toBeInTheDocument()
   })
 
+  it('says a failed per-student read is unknown, never that nothing was recorded', () => {
+    // The exact payload the backend produces when the totals RPC fails and the
+    // trend's succeeds: rows present, `retrieved: false`, null averages, zero
+    // counts. Zero counts are what `offLabel` reads as "No sensor" -- an
+    // assertion that the student recorded nothing, when nobody asked.
+    //
+    // The backend grew this flag to stop exactly that claim one layer in; it is
+    // only a fix if a consumer reads it.
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
+      per_student: [student('a', {
+        focus: null, stress: null, heart_rate_bpm: null,
+        cognitive_samples: 0, heart_samples: 0, days_recorded: 0,
+        retrieved: false,
+      })],
+    }} />)
+    expect(screen.queryByText(/no sensor/i)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/unavailable/i).length).toBeGreaterThanOrEqual(3)
+    // And the day count does not assert zero either.
+    expect(screen.queryByRole('cell', { name: '0' })).not.toBeInTheDocument()
+  })
+
+  it('still separates a real empty channel from an unread one', () => {
+    // Teeth for the test above: with `retrieved: true` the same zero counts are
+    // a genuine finding and must keep saying so, or the fix would have replaced
+    // one wrong label with another.
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [student('a', {
+        focus: null, stress: null, heart_rate_bpm: null,
+        cognitive_samples: 0, heart_samples: 0, days_recorded: 0,
+        retrieved: true,
+      })],
+    }} />)
+    expect(screen.getAllByText(/no sensor/i).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument()
+  })
+
   it('hides the table when the teacher has hidden sensor data', () => {
     render(<ClassSignalRoster hideSensors data={{
       retrieved: true, days: 30, class_size: 5, per_student: [student('a')],

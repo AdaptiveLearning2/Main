@@ -8,6 +8,9 @@ import AlertFeed from '../../components/analytics/AlertFeed'
 import ClassTopicHeatmap from '../../components/analytics/ClassTopicHeatmap'
 import ClassAccuracyTrend from '../../components/analytics/ClassAccuracyTrend'
 import ClassTimeOfDay from '../../components/analytics/ClassTimeOfDay'
+import ClassSignalTrend from '../../components/analytics/ClassSignalTrend'
+import ClassSignalRoster from '../../components/analytics/ClassSignalRoster'
+import { readHideSensorData } from '../../lib/viewPrefs'
 
 /** "2 hours ago", or null when there is no timestamp to describe.
  *
@@ -42,6 +45,9 @@ export default function ClassDetail() {
   // page is actually for.
   const [analytics, setAnalytics] = useState({})
   const [analyticsLoading, setAnalyticsLoading] = useState(true)
+  // The teacher's own decluttering switch, not a privacy boundary — the data
+  // is fetched either way. See `lib/viewPrefs.js`.
+  const hideSensors = readHideSensorData()
   const analyticsRun = useRef(0)
 
   useEffect(() => { loadData() }, [id])
@@ -91,6 +97,7 @@ export default function ClassDetail() {
       heatmap: `/api/classes/${id}/topic-heatmap`,
       trend: `/api/classes/${id}/accuracy-trend?days=30`,
       timeOfDay: `/api/classes/${id}/time-of-day?days=30`,
+      cohortSignals: `/api/classes/${id}/cohort-signals?days=30`,
     }
     const settled = await Promise.allSettled(
       Object.values(paths).map(p => apiFetch(p)))
@@ -232,6 +239,15 @@ export default function ClassDetail() {
           onRetry={loadAnalytics} />
         <ClassTimeOfDay data={analytics.timeOfDay} loading={analyticsLoading}
           onRetry={loadAnalytics} />
+        {/* Sensor surfaces, so they honour the teacher's "Hide sensor data"
+            switch — a reporting view like the weekly report, not a live
+            supervision one. Read once per render rather than held in state:
+            it is a localStorage flag with no event to subscribe to, and the
+            page re-renders whenever the analytics land anyway. */}
+        <ClassSignalTrend data={analytics.cohortSignals} loading={analyticsLoading}
+          onRetry={loadAnalytics} hideSensors={hideSensors} />
+        <ClassSignalRoster data={analytics.cohortSignals} loading={analyticsLoading}
+          onRetry={loadAnalytics} hideSensors={hideSensors} />
       </div>
     </div>
   )

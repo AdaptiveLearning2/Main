@@ -1776,6 +1776,76 @@ independently ordered lists is the drift `AccessibleChart`'s single `columns` sp
 don't re-sort either end. The time-of-day grid aligns in the *browser* instead, because that payload
 is sparse — an hour a given day never used is a real absence, not a missing row.
 
+### The cohort panels weight across students, and the roster floor is a server-side gate
+
+`GET /api/classes/{id}/cohort-signals` (`20260902000000`) answers a class-wide signal trend and the
+per-student rows behind it, rendered by `ClassSignalTrend` and `ClassSignalRoster` on `ClassDetail`.
+One endpoint for both, because they answer one question together and two fetches could disagree
+about when they were taken.
+
+**Consent buckets the roster before anything is read.** `_reportable_channels` per student, then
+grouped by `(heart, emotion)` flag pair — at most four calls — exactly as `my_children` does. One
+call for the whole class would either read a declining student's heart rows under a classmate's
+permission or hide the channel from everyone who allowed it; the bucket is what avoids choosing.
+The RPC does **not** filter consent itself, deliberately, so passing it a mixed roster with one flag
+pair is the way to get that wrong. Heart is `headband_optical OR camera` — the camera carries the
+rPPG fallback — so a test that declines the headband and leaves the camera on has not declined heart.
+
+**Weighted on `trusted_sample_count` at both levels, and the second is the one to watch.** The RPC
+weights across students within a bucket; `_merge_cohort_trend` then weights across *buckets* in
+Python, because the buckets exist for consent reasons and re-averaging their means would weight a
+bucket of one like a bucket of twenty. Verified against the applied migration: two students on one
+day answer **0.7714**, where `avg(avg_focus)` answers 0.5000. A null daily average contributes no
+weight rather than a zero — its count is still real, so it stays in `trusted_sample_count` while
+staying out of the numerator's denominator, or a day of poor electrode contact drags the class below
+every student in it.
+
+**`_COHORT_MIN_STUDENTS` (5) is enforced in the backend, and gates on the roster.** Below it
+`per_student` is `null` and the rows are never built — a client-side hide would leave them in the
+payload for anyone reading it. It counts the roster, not the students who recorded something: a class
+of six where two wore a headband is still a class of six, and gating on the smaller number would
+expose that pair exactly when they are most identifiable. The class trend still renders; it is the
+aggregate the floor exists to protect.
+
+**One failed bucket fails the whole trend**, like `my_children`'s `summaries_retrieved`. A partial
+merge would report the missing students as a quiet fortnight. The per-student summaries fail
+*independently* of the trend, so a broken summary RPC leaves the chart standing.
+
+**Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
+`student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly
+report and the parent dashboard, and the wrong one *here*, because this is the first place a
+rollup-backed panel sits directly beside a raw-backed one. `expire_signal_rows` deletes the
+per-sample rows at the end of a school year and leaves the rollup standing, so the pair would have
+shown a full term of class averages above a table reading "No sensor" for every student in it — on a
+fixed date, rather than because anything broke. Caught by running it: a student with rollup rows and
+no raw rows rendered exactly that way.
+
+`class_signal_student_totals` (`20260903000000`) is the same aggregation as its sibling, grouped by
+student rather than by day. One source under both panels, so they cannot answer differently.
+`test_the_roster_reads_the_rollup_and_never_the_per_sample_tables` asserts on the tables that must
+**not** be read — the two sources look identical while both hold the same data, which is every day
+of a school year except the ones after expiry, so nothing about the numbers can see this.
+
+**The roster counts days recorded, not sessions**, for the same reason: a session count comes from
+`sessions`, a table with a different lifetime, which would put one column of the row back on the
+wrong side of the expiry.
+
+**The roster table is a real `<table>`, not an `AccessibleChart`** — same reasoning as `Heatmap.jsx`
+above, and the same blind spot in `AccessibleChart.test.jsx`. Its outlier flag compares against an
+**unweighted** class mean, deliberately a different number from the trend's weighted one: this asks
+"is this student unusual among their classmates", where each classmate is one comparison whatever
+their session length. Using the weighted figure would flag a student for sitting next to someone who
+recorded all afternoon.
+
+**A conditional `<Line>` needs a conditional column, and the sentence cannot test it.**
+`describeSeries` omits a series with no readings on its own, so an aria-label assertion passes
+whether or not the column is gated — inert against the exact bug it names. The defect shows in the
+`sr-only` **table**, where an unconditional column renders "not recorded" on every row. Assert on
+`columnheader`, not the summary.
+
+Both panels honour `viewPrefs.js`'s "Hide sensor data" switch; the academic panels beside them do
+not, because that switch hides sensor data and those measure answers.
+
 ### Abandoned sessions: a third sweep, and two surfaces that were lying about them
 
 Both original sweeps are **on demand** — `start_session` collects a student's strays when they next

@@ -7,6 +7,8 @@ import ClassTopicHeatmap from './ClassTopicHeatmap'
 import ClassAccuracyTrend from './ClassAccuracyTrend'
 import ClassTimeOfDay from './ClassTimeOfDay'
 import FocusAccuracy from './FocusAccuracy'
+import ClassSignalTrend from './ClassSignalTrend'
+import ClassSignalRoster from './ClassSignalRoster'
 
 /**
  * The teacher analytics panels.
@@ -443,5 +445,164 @@ describe('AlertFeed', () => {
       'distracted', 'at risk']) {
       expect(text.toLowerCase()).not.toContain(word)
     }
+  })
+})
+
+// ─── the cohort panels ─────────────────────────────────────────────────────
+//
+// Two surfaces over one payload. What matters here is the same set of
+// distinctions the rest of this file is about, plus one that is only this
+// section's: the per-student rows are withheld by the *backend* below its
+// floor, so these tests pin that the panel explains the absence rather than
+// rendering a blank where a table should be.
+
+describe('ClassSignalTrend', () => {
+  const day = (d, over) => ({
+    day: d, channel: 'cognitive', avg_focus: 0.6, avg_stress: 0.3,
+    avg_engagement: 0.5, sample_count: 100, trusted_sample_count: 100,
+    student_count: 3, ...over,
+  })
+  const heart = (d, bpm) => ({
+    day: d, channel: 'heart', avg_heart_rate_bpm: bpm, avg_rmssd_ms: 40,
+    sample_count: 50, trusted_sample_count: 50, student_count: 2,
+  })
+
+  it('distinguishes a failed read from a class that recorded nothing', () => {
+    const { rerender } = render(
+      <ClassSignalTrend data={{ retrieved: false, series: [] }} />)
+    expect(screen.getByText(/couldn't load the class signal trend/i)).toBeInTheDocument()
+
+    rerender(<ClassSignalTrend data={{ retrieved: true, series: [], days: 30 }} />)
+    expect(screen.getByText(/no signals recorded/i)).toBeInTheDocument()
+  })
+
+  it('describes the ratio series as percentages, not as 0 to 1', () => {
+    // The scale lives in the column spec, and getting it wrong is invisible on
+    // screen -- the chart looks right while the text alternative announces a
+    // session ranging 42-78% as "Focus 0% to 1%".
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30, timezone: 'UTC',
+      series: [day('2026-06-10'), day('2026-06-11', { avg_focus: 0.78 })],
+    }} />)
+    const summary = screen.getByRole('img').getAttribute('aria-label')
+    expect(summary).toMatch(/Focus 60% to 78%/)
+    expect(summary).not.toMatch(/Focus 0% to 1%/)
+  })
+
+  it('gives the table no heart column when no line is drawn for one', () => {
+    // Asserted on the *table*, not the summary sentence, because the sentence
+    // omits an empty series on its own -- `describeSeries` returns null when
+    // nothing was recorded. So a test reading the aria-label passes whether or
+    // not the column is conditional, which makes it inert against exactly the
+    // bug it names.
+    //
+    // The table is where it shows: an unconditional column renders a
+    // "not recorded" cell on every row, so a class with no headband announces
+    // a heart rate it never had. That is the defect CLAUDE.md records shipping
+    // twice, and this is the assertion that can see it.
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30, series: [day('2026-06-10')],
+    }} />)
+    expect(screen.queryByRole('columnheader', { name: /heart rate/i }))
+      .not.toBeInTheDocument()
+    expect(screen.queryByText(/not recorded/i)).not.toBeInTheDocument()
+  })
+
+  it('describes the heart series when there is one, in bpm rather than percent', () => {
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30,
+      series: [day('2026-06-10'), heart('2026-06-10', 72)],
+    }} />)
+    const summary = screen.getByRole('img').getAttribute('aria-label')
+    expect(summary).toMatch(/Heart rate 72 bpm/)
+  })
+
+  it('folds the channels of one day into one row rather than one row each', () => {
+    render(<ClassSignalTrend data={{
+      retrieved: true, days: 30,
+      series: [day('2026-06-10'), heart('2026-06-10', 72)],
+    }} />)
+    // One day, so both series report a single value rather than a range.
+    const summary = screen.getByRole('img').getAttribute('aria-label')
+    expect(summary).toMatch(/1 day with recordings/)
+  })
+
+  it('withholds the heart line when the teacher has hidden sensor data', () => {
+    render(<ClassSignalTrend hideSensors data={{
+      retrieved: true, days: 30,
+      series: [day('2026-06-10'), heart('2026-06-10', 72)],
+    }} />)
+    expect(screen.getByText(/sensor data is hidden/i)).toBeInTheDocument()
+  })
+})
+
+describe('ClassSignalRoster', () => {
+  const student = (id, over) => ({
+    student_id: id, display_name: id.toUpperCase(),
+    summary: {
+      focus: 0.6, stress: 0.3, heart_rate_bpm: 70, days_recorded: 4,
+      cognitive_samples: 100, heart_samples: 50,
+      eeg_enabled: true, heart_included: true, consent_retrieved: true, ...over,
+    },
+  })
+
+  it('explains a withheld breakdown rather than rendering a blank', () => {
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 3, per_student: null, min_students: 5,
+    }} />)
+    expect(screen.getByText(/withheld for classes smaller than 5/i)).toBeInTheDocument()
+  })
+
+  it('renders a row per student once the rows arrive', () => {
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [student('a'), student('b')],
+    }} />)
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: /^A/ })).toBeInTheDocument()
+  })
+
+  it('says why a figure is missing rather than showing a bare dash', () => {
+    // The four-state rule: a declined channel reads as a decision, an
+    // unreadable consent read as unknown, and neither as "no data".
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [
+        student('a', { focus: null, eeg_enabled: false, eeg_revoked_at: '2026-06-01' }),
+        student('b', { heart_rate_bpm: null, heart_included: false }),
+        student('c', { focus: null, consent_retrieved: false }),
+      ],
+    }} />)
+    expect(screen.getByText(/off since/i)).toBeInTheDocument()
+    expect(screen.getByText(/unavailable/i)).toBeInTheDocument()
+  })
+
+  it('separates a channel that recorded nothing from one that is switched off', () => {
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [student('a', {
+        focus: null, cognitive_samples: 0, eeg_enabled: true,
+      })],
+    }} />)
+    expect(screen.getByText(/no sensor/i)).toBeInTheDocument()
+  })
+
+  it('flags an outlier in words, not by colour alone', () => {
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5,
+      per_student: [
+        student('a', { focus: 0.8 }), student('b', { focus: 0.8 }),
+        student('c', { focus: 0.8 }), student('d', { focus: 0.2 }),
+      ],
+    }} />)
+    expect(screen.getByText(/unlike the class/i)).toBeInTheDocument()
+  })
+
+  it('hides the table when the teacher has hidden sensor data', () => {
+    render(<ClassSignalRoster hideSensors data={{
+      retrieved: true, days: 30, class_size: 5, per_student: [student('a')],
+    }} />)
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(screen.getByText(/turn off "hide sensor data"/i)).toBeInTheDocument()
   })
 })

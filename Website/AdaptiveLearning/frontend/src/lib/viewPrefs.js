@@ -10,10 +10,14 @@
 // Uses its own key (not the old `signal_include_face`) so a browser that
 // still has the old value doesn't silently misapply it here.
 //
-// Scope: only `/teacher/students` and `/teacher/students/:id/report`. Live
-// monitoring and session review deliberately don't honor this switch —
-// those are real-time views built around whether a sensor is working, where
-// hiding data would be the wrong default.
+// Scope: `/teacher/students`, `/teacher/students/:id/report`, and the two
+// cohort panels on `/teacher/classes/:id` (`ClassSignalTrend` and
+// `ClassSignalRoster`). Live monitoring and session review deliberately don't
+// honor this switch — those are real-time views built around whether a sensor
+// is working, where hiding data would be the wrong default.
+//
+// The class page's *academic* panels (accuracy, topics, time of day) are
+// outside it too: this hides sensor data, and those measure answers.
 //
 // It never invents a reason: a channel off because of consent still shows
 // "not recorded — turned off on <date>" regardless of this filter.

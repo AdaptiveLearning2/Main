@@ -49,50 +49,68 @@ def extract_json(text):
 
     return None
 
-expr_prompt = f"""
-You are to provide a Math question suitable for students. The response must be in JSON format. 
+# Only the selected scenario's block is sent -- see the note in
+# LLM_geometry_generation.py. _pick_scenario has already applied the
+# grade-band restriction (scenarios 2 and 3 are withheld from "early"), so
+# the others were worked examples for questions the model must not write.
+#
+# This narrows the early-band contradiction CLAUDE.md documents but does NOT
+# resolve it: scenario 1's own example is `36/3+(8*2)-(15-7)+4`, which is
+# exactly the parenthesis-heavy older-student shape that beat the textual
+# rule. EARLY_BAND_EXAMPLE below is still what actually fixes that and must
+# stay -- three contradicting examples became one, not none.
+EXPR_HEADER = """
+You are to provide a Math question suitable for students. The response must be in JSON format.
 The Question Text, Question Topic, Scenario, and Variables will be displayed. The Question Topic will always be "expressions".
 
-There are three possible scenarios:
+Generate a question for the one scenario given below.
+"""
 
-Scenario 1: evaluate
+SCENARIO_BLOCKS = {
+    1: """Scenario 1: evaluate
 "Solve 36/3+(8*2)-(15-7)+4"
 The question should include a numerical expression to evaluate using the symbols "+", "-", "*", "/", "(", ")".
 
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Solve 36/3+(8*2)-(15-7)+4.",
   "question_topic": "expressions",
   "scenario": "evaluate",
   "variables": ["36", "/", "3", "+", "(", "8", "*", "2", ")", "-", "(", "15", "-", "7", ")", "+", "4"]
-}}
+}
+""",
 
-Scenario 2: order_of_operations
+    2: """Scenario 2: order_of_operations
 "Evaluate (4+6)*3-5"
 The question should emphasize correct use of order of operations (parentheses, multiplication, division, addition, subtraction).
 
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Evaluate (4+6)*3-5.",
   "question_topic": "expressions",
   "scenario": "order_of_operations",
   "variables": ["(", "4", "+", "6", ")", "*", "3", "-", "5"]
-}}
+}
+""",
 
-Scenario 3: simplify
+    3: """Scenario 3: simplify
 "Simplify 2x+3x"
 The question should include a simple algebraic expression combining like terms. Use variable "x" only.
 
 JSON for this scenario must follow this exact structure:
-{{
+{
   "question_text": "Simplify 2x+3x.",
   "question_topic": "expressions",
   "scenario": "simplify",
   "variables": ["2x", "+", "3x"]
-}}
+}
+""",
 
+}
+
+EXPR_FOOTER = """
 Rules:
-- Select ONLY ONE scenario, Generate ONLY ONE question, return ONLY ONE JSON object.
+- Generate ONLY ONE question, return ONLY ONE JSON object.
 - Use ONLY the symbols "+", "-", "*", "/", "(", ")" in expressions.
 - Use ONLY integers (no decimals or fractions).
 - The number of operations and parentheses allowed is given below under COMPLEXITY FOR THIS DIFFICULTY -- follow that, not a fixed count.
@@ -105,6 +123,13 @@ Rules:
 
 Return ONLY valid JSON with no text before or after the JSON object.
 """
+
+
+def _expr_prompt(scenario):
+    """Header + the one selected scenario's block + footer. KeyError on an
+    unknown scenario, for the reason _geometry_prompt documents."""
+    return EXPR_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + EXPR_FOOTER
+
 
 def _grade_band(grade):
     # Shared with the other generation files so they can't drift apart.
@@ -129,7 +154,7 @@ def _pick_scenario(grade_band):
     return random.randint(1, 3)
 
 
-# The scenario examples in expr_prompt above are all written for older
+# The scenario examples in SCENARIO_BLOCKS above are all written for older
 # students (e.g. "36/3+(8*2)-(15-7)+4"), and a few-shot example beats a text
 # rule. Measured on llama3.1:8b with the lesson plans seeded (2026-08-18,
 # grade 1 / easy): 2 of 8 questions came back with parentheses despite
@@ -179,17 +204,14 @@ solution = -1
 
 def generate_expression_question(global_questions, prev_questions, difficulty, grade, max_retries=3):
     for attempt in range(max_retries):
-        if attempt > 0:
-            prompt = expr_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-        else:
-            prompt = expr_prompt
-
-        # randomize scenario selection (within what this grade band may see) to ensure variety
+        # randomize scenario selection (within what this grade band may see)
+        # to ensure variety; the prompt is built around the result
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(grade_band)
 
-        prompt += f"\nYOU must generate a question for scenario {scenario}."
-        print(scenario)
+        prompt = _expr_prompt(scenario)
+        if attempt > 0:
+            prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
 
         prompt += (
             "\nPreviously generated questions:\n"

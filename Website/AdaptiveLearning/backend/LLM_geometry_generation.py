@@ -137,280 +137,325 @@ def circle_circumference_missing_side(circ):
     solution = solve(Eq(2*simple_pi*x, circ), x)
     return solution
 
-geometry_prompt = f"""
-You are to provide a Math question suitable for students. The response must be in JSON format. 
+# The scenario is chosen in code by _pick_scenario before the prompt is
+# built, so only that one block is sent. Sending all eighteen -- as this
+# prompt did until the switch to a billed API made the waste visible -- put
+# seventeen irrelevant worked examples in front of the model on every call,
+# every one of them a phrasing template it could copy from ("...units. What
+# is its...") for a question it was not being asked to write.
+#
+# Split into header/blocks/footer rather than one f-string for that reason.
+# The blocks are plain strings, not f-strings: the original was an f-string
+# with no interpolation, so its `{{`/`}}` were escapes rendering as single
+# braces -- doubling them here would emit literal `{{` into the prompt.
+GEOMETRY_HEADER = """
+You are to provide a Math question suitable for students. The response must be in JSON format.
 The Question Text, Question Topic, Scenario, Variables, and Target will be displayed. The Question Topic will always be "geometry".
 
-There are multiple possible scenarios to select from. You must select only ONE scenario to generate a question and corresponding JSON response for.
+Generate a question for the one scenario given below.
 
 IMPORTANT:
 - ALWAYS approximate pi as 3.14
 - All numeric values must be simple (integers or one decimal max)
 - Ensure the problem is solvable using the provided variables
+"""
 
-EASY TOPICS: rectangle_area, rectangle_perimeter, triangle_area, triangle_perimeter, circle_area, circle_circumference
-MEDIUM TOPICS: rectangle_missing_side_area, rectangle_missing_side_perimeter, circle_missing_radius, pythagorean_theorem
-HARD TOPICS: rectangular_prism_volume, cylinder_volume, sphere_volume, cube_volume, pyramid_volume
+# The EASY/MEDIUM/HARD TOPICS listing that sat here is gone with the other
+# seventeen blocks: it named scenarios the model can no longer see, and
+# difficulty is not its decision -- _pick_scenario has already applied both
+# the difficulty tier and the grade-band restriction by this point.
 
-SCENARIO 1: rectangle_area
+SCENARIO_BLOCKS = {
+    1: """SCENARIO 1: rectangle_area
 Example:
 "A rectangle has a length of 5 units and a width of 3 units. What is its area?"
 
 JSON structure:
-{{
+{
   "question_text": "A rectangle has a length of 5 units and a width of 3 units. What is its area?",
   "type": "geometry",
   "scenario": "rectangle_area",
-  "variables": {{
+  "variables": {
     "length": "5",
     "width": "3"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 2: rectangle_perimeter
+    2: """SCENARIO 2: rectangle_perimeter
 Example:
 "A rectangle has a length of 8 units and a width of 2 units. What is its perimeter?"
 
-{{
+{
   "question_text": "A rectangle has a length of 8 units and a width of 2 units. What is its perimeter?",
   "type": "geometry",
   "scenario": "rectangle_perimeter",
-  "variables": {{
+  "variables": {
     "length": "8",
     "width": "2"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 3: triangle_area
+    3: """SCENARIO 3: triangle_area
 Example:
 "A triangle has a base of 6 units and a height of 4 units. What is its area?"
 
-{{
+{
   "question_text": "A triangle has a base of 6 units and a height of 4 units. What is its area?",
   "type": "geometry",
   "scenario": "triangle_area",
-  "variables": {{
+  "variables": {
     "base": "6",
     "height": "4"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 4: triangle_perimeter
+    4: """SCENARIO 4: triangle_perimeter
 Example:
 "A triangle has side lengths 3, 4, and 5 units. What is its perimeter?"
 
-{{
+{
   "question_text": "A triangle has side lengths 3, 4, and 5 units. What is its perimeter?",
   "type": "geometry",
   "scenario": "triangle_perimeter",
-  "variables": {{
+  "variables": {
     "s1": "3",
     "s2": "4",
     "s3": "5"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 5: circle_area
+    5: """SCENARIO 5: circle_area
 Example:
 "A circle has a radius of 7 units. What is its area?"
 
-{{
+{
   "question_text": "A circle has a radius of 7 units. What is its area?",
   "type": "geometry",
   "scenario": "circle_area",
-  "variables": {{
+  "variables": {
     "radius": "7"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 6: circle_circumference
+    6: """SCENARIO 6: circle_circumference
 Example:
 "A circle has a radius of 5 units. What is its circumference?"
 
-{{
+{
   "question_text": "A circle has a radius of 5 units. What is its circumference?",
   "type": "geometry",
   "scenario": "circle_circumference",
-  "variables": {{
+  "variables": {
     "radius": "5"
-  }}
-}}
+  }
+}
+""",
 
-
-
-SCENARIO 7: rectangular_prism_volume
+    7: """SCENARIO 7: rectangular_prism_volume
 Example:
 "A rectangular prism has a length of 4, width of 3, and height of 2. What is its volume?"
 
-{{
+{
   "question_text": "A rectangular prism has a length of 4, width of 3, and height of 2. What is its volume?",
   "type": "geometry",
   "scenario": "rect_volume",
-  "variables": {{
+  "variables": {
     "length": "4",
     "width": "3",
     "height": "2"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 8: cylinder_volume
+    8: """SCENARIO 8: cylinder_volume
 Example:
 "A cylinder has a radius of 3 and height of 5. What is its volume?"
 
-{{
+{
   "question_text": "A cylinder has a radius of 3 and height of 5. What is its volume?",
   "type": "geometry",
   "scenario": "cylinder_volume",
-  "variables": {{
+  "variables": {
     "radius": "3",
     "height": "5"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 9: sphere_volume
+    9: """SCENARIO 9: sphere_volume
 Example:
 "A sphere has a radius of 3. What is its volume?"
 
-{{
+{
   "question_text": "A sphere has a radius of 3. What is its volume?",
   "type": "geometry",
   "scenario": "sphere_volume",
-  "variables": {{
+  "variables": {
     "radius": "3"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 10: pythagorean
+    10: """SCENARIO 10: pythagorean
 Example:
 "A right triangle has legs of 3 and 4 units. What is the hypotenuse?"
 
-{{
+{
   "question_text": "A right triangle has legs of 3 and 4 units. What is the hypotenuse?",
   "type": "geometry",
   "scenario": "pythagorean",
-  "variables": {{
+  "variables": {
     "a": "3",
     "b": "4"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 11: rectangle_missing_side_area
+    11: """SCENARIO 11: rectangle_missing_side_area
 Example:
 "A rectangle has an area of 20 square units and a width of 4 units. What is the length?"
 
-{{
+{
   "question_text": "A rectangle has an area of 20 square units and a width of 4 units. What is the length?",
   "type": "geometry",
   "scenario": "rect_area_missing_side",
-  "variables": {{
+  "variables": {
     "area": "20",
     "known_side": "4"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 12: rectangle_missing_side_perimeter
+    12: """SCENARIO 12: rectangle_missing_side_perimeter
 Example:
 "A rectangle has a perimeter of 24 units and one side length of 5 units. What is the other side?"
 
-{{
+{
   "question_text": "A rectangle has a perimeter of 24 units and one side length of 5 units. What is the other side?",
   "type": "geometry",
   "scenario": "rect_perimeter_missing_side",
-  "variables": {{
+  "variables": {
     "perimeter": "24",
     "known_side": "5"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 13: circle_missing_radius_area
+    13: """SCENARIO 13: circle_missing_radius_area
 Example:
 "A circle has an area of 50.24 square units. What is the radius?"
 
-{{
+{
   "question_text": "A circle has an area of 50.24 square units. What is the radius?",
   "type": "geometry",
   "scenario": "circle_area_missing_side",
-  "variables": {{
+  "variables": {
     "area": "50.24"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 14: triangle_missing_side_area
+    14: """SCENARIO 14: triangle_missing_side_area
 Example:
 "A triangle has an area of 12 square units and a base of 6 units. What is the height?"
 
-{{
+{
   "question_text": "A triangle has an area of 12 square units and a base of 6 units. What is the height?",
   "type": "geometry",
   "scenario": "triangle_area_missing_side",
-  "variables": {{
+  "variables": {
     "area": "12",
     "known_side": "6"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 15: triangle_missing_side_perimeter
+    15: """SCENARIO 15: triangle_missing_side_perimeter
 Example:
 "A triangle has a perimeter of 18 units. Two of its sides are 5 units and 7 units. What is the length of the third side?"
 
-{{
+{
   "question_text": "A triangle has a perimeter of 18 units. Two of its sides are 5 units and 7 units. What is the length of the third side?",
   "type": "geometry",
   "scenario": "triangle_perimeter_missing_side",
-  "variables": {{
+  "variables": {
     "perimeter": "18",
     "s1": "5",
     "s2": "7"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 16: circle_missing_radius_circumference
+    16: """SCENARIO 16: circle_missing_radius_circumference
 Example:
 "A circle has a circumference of 31.4 units. What is the radius?"
 
-{{
+{
   "question_text": "A circle has a circumference of 31.4 units. What is the radius?",
   "type": "geometry",
   "scenario": "circle_circumference_missing_side",
-  "variables": {{
+  "variables": {
     "circumference": "31.4"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 17: cube_volume
+    17: """SCENARIO 17: cube_volume
 Example:
 "A cube has a side length of 4 units. What is its volume?"
 
-{{
+{
   "question_text": "A cube has a side length of 4 units. What is its volume?",
   "type": "geometry",
   "scenario": "cube_volume",
-  "variables": {{
+  "variables": {
     "side": "4"
-  }}
-}}
+  }
+}
+""",
 
-SCENARIO 18: pyramid_volume
+    18: """SCENARIO 18: pyramid_volume
 Example:
 "A pyramid has a base area of 30 square units and a height of 9 units. What is its volume?"
 
-{{
+{
   "question_text": "A pyramid has a base area of 30 square units and a height of 9 units. What is its volume?",
   "type": "geometry",
   "scenario": "pyramid_volume",
-  "variables": {{
+  "variables": {
     "base_area": "30",
     "height": "9"
-  }}
-}}
+  }
+}
+""",
+}
 
+GEOMETRY_FOOTER = """
 FINAL RULES:
-- Select ONLY ONE scenario, Generate ONLY ONE question, return ONLY ONE JSON object. 
+- Generate ONLY ONE question, return ONLY ONE JSON object.
 - Return ONLY valid JSON, with NO additional text or characters
 - Do NOT include: explanations, markdown, backticks, extra text before or after JSON
 - Use ONLY double quotes
 - All keys must match EXACTLY as shown
 """
+
+
+def _geometry_prompt(scenario):
+    """Header + the one selected scenario's block + footer.
+
+    KeyError rather than a default block on an unknown scenario: every caller
+    gets its number from _pick_scenario, which draws from DIFFICULTY_SCENARIOS,
+    so an unknown one means those two tables have drifted apart -- which should
+    fail loudly here rather than silently generate a rectangle-area question
+    the solver will then score against whatever scenario it was asked for.
+    """
+    return GEOMETRY_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GEOMETRY_FOOTER
+
 
 solution = -1
 
@@ -459,17 +504,15 @@ GRADE_COMPLEXITY = {
 
 def generate_geometry_question(global_questions, prev_questions, difficulty, grade,max_retries=3):
     for attempt in range(max_retries):
-        if attempt > 0:
-            prompt = geometry_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
-        else:
-            prompt = geometry_prompt
-
+        # Scenario first: the prompt is now built around it rather than
+        # listing every scenario and naming one at the end.
         grade_band = _grade_band(grade)
         scenario = _pick_scenario(difficulty, grade_band)
 
-        prompt += f"\nYOU must generate a question for scenario {scenario}."
-        print(scenario)
-        
+        prompt = _geometry_prompt(scenario)
+        if attempt > 0:
+            prompt += "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
+
         prompt += (
             "\nPreviously generated questions:\n"
             + "\n".join(q["text"] for q in prev_questions)

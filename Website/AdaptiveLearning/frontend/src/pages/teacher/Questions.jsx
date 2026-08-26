@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, Search, Filter, X, ChevronDown } from 'lucide-react'
-import { apiFetch } from '../../lib/api'
+import { fetchQuestionsCached } from '../../lib/questionsCache'
 import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
@@ -82,7 +82,7 @@ export default function Questions() {
   // loading already starts true, so no setState is needed here on mount.
   const load = () => {
     // Fetches the whole bank since this page paginates client-side.
-    apiFetch('/api/questions?limit=1000')
+    fetchQuestionsCached(1000)
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
       .catch(e => { console.error('Failed to load questions:', e); setFailed(true); setLoading(false) })
   }

@@ -4,8 +4,10 @@ import userEvent from '@testing-library/user-event'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { _resetForTests } from '../../lib/questionsCache'
 import Questions from './Questions'
+import Analytics from './Analytics'
 
 const QUESTION = {
   id: 'q-1',
@@ -18,6 +20,10 @@ const QUESTION = {
 
 beforeEach(() => {
   resetApi()
+  // The question-bank cache is module-level state shared with Analytics.jsx,
+  // so it has to be cleared between tests too, or a later test can be served
+  // a still-fresh entry left behind by an earlier one.
+  _resetForTests()
   mockApi({ '/api/questions?limit=1000': () => [QUESTION] })
 })
 
@@ -68,5 +74,18 @@ describe('the question modal', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(document.body).not.toBe(document.activeElement)
     expect(opener).toBeTruthy()
+  })
+})
+
+describe('the question-bank cache shared with Analytics', () => {
+  it('serves both pages from a single fetch of the bank', async () => {
+    // Both pages independently fetch `?limit=1000` on mount -- this is the
+    // direct regression test for the redundant-fetch problem the shared
+    // cache exists to fix.
+    render(<Questions />)
+    render(<Analytics />)
+
+    await screen.findByText('What is 7 x 8?')
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1))
   })
 })

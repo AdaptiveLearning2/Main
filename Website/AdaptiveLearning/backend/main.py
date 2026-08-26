@@ -2305,15 +2305,60 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
 
 # ─── questions ───────────────────────────────────────────────────────────
 
+class _TTLCache:
+    """A tiny in-process cache for genuinely static, display-only reads.
+
+    Not a general-purpose cache -- most of this codebase deliberately never
+    caches (see the three-state freshness rules elsewhere in this file), so
+    reach for this only for a read where staleness of a few seconds is an
+    accepted tradeoff, not for anything signal/consent/session-live.
+    """
+    def __init__(self, ttl: float):
+        self._ttl = ttl
+        self._lock = threading.Lock()
+        self._store: dict = {}   # key -> (expires_at, value)
+
+    def get(self, key):
+        with self._lock:
+            hit = self._store.get(key)
+            if hit is None:
+                return None, False
+            expires_at, value = hit
+            if expires_at < time.monotonic():
+                del self._store[key]
+                return None, False
+            return value, True
+
+    def set(self, key, value):
+        with self._lock:
+            self._store[key] = (time.monotonic() + self._ttl, value)
+
+
+# The teacher question bank is fetched independently (and identically) by
+# Analytics.jsx and Questions.jsx on every mount -- two full-table reads of
+# the same data during ordinary teacher navigation. Reference data, not
+# session-live state, so a short TTL is an acceptable staleness tradeoff: a
+# newly generated question can take up to this long to appear in a teacher's
+# question-bank view, which only matters for browsing/analytics, never for
+# the student's live adaptive session (that path's own duplicate-check in
+# LLM_topic_decider.py stays live/uncached).
+QUESTIONS_CACHE_TTL = _env_number("QUESTIONS_CACHE_TTL", 30.0, float, minimum=1.0)
+_questions_cache = _TTLCache(QUESTIONS_CACHE_TTL)
+
 @app.get("/api/questions")
 def get_questions(limit: int = 100, subject: str | None = None, difficulty: str | None = None):
+    key = (limit, subject, difficulty)
+    cached, hit = _questions_cache.get(key)
+    if hit:
+        return cached
     # Newest first, so "Recent Questions" on the teacher dashboard is actually
     # chronological rather than whatever order Postgres happens to return.
     q = supabase.table("questions").select("*").order("created_at", desc=True).limit(limit)
     if subject:    q = q.eq("subject", subject)
     if difficulty: q = q.eq("difficulty", difficulty)
-    res = q.execute()
-    return res.data or []
+    data = q.execute().data or []
+    _questions_cache.set(key, data)
+    return data
 
 
 @app.get("/api/questions/count")

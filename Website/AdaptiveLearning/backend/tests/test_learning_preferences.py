@@ -84,6 +84,10 @@ def test_a_session_prewarms_at_the_students_own_difficulty(_stubbed, monkeypatch
     served first, so ignoring the setting here means it does nothing for the
     opening of every session -- the part of a lesson most likely to be the
     only part.
+
+    QUEUE_SIZE is deliberately *not* pinned here, despite now defaulting to 0:
+    this test stubs `_ensure_queue` wholesale, so the value is never read and a
+    pin would claim a protection that is not operating.
     """
     _with_profile(monkeypatch, difficulty_bias=saved)
 

@@ -65,23 +65,30 @@ supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Process-lifetime hooks. Everything before the yield is startup."""
+    start_stale_sweeper()
     yield
     # Pollers first: they're daemon threads that print on the way out, and
     # leaving them to interpreter teardown risks a fatal stdout-lock crash.
     try:
         eeg_poller.stop_all()
     finally:
-        # Nested finally so each shutdown step runs even if an earlier one raises.
+        # The sweeper is the same kind of thread and needs the same join, for
+        # the same reason -- see `stop_stale_sweeper`.
         try:
-            _shutdown_strategy_pool()
+            stop_stale_sweeper()
         finally:
+            # Nested finally so each shutdown step runs even if an earlier one
+            # raises.
             try:
-                _shutdown_admin_live_pool()
+                _shutdown_strategy_pool()
             finally:
                 try:
-                    _shutdown_prefetch_pool()
+                    _shutdown_admin_live_pool()
                 finally:
-                    chart_archive.shutdown_pool()
+                    try:
+                        _shutdown_prefetch_pool()
+                    finally:
+                        chart_archive.shutdown_pool()
 
 
 app = FastAPI(title="AdaptiveLearning API", lifespan=_lifespan)
@@ -755,6 +762,33 @@ def _answer_counts(session_id: str, session: dict) -> tuple[int, int, bool]:
 CLOSED_BY_STUDENT = "student"
 CLOSED_BY_SWEEP = "stale_sweep"
 
+# How long a session may stay open before it is treated as abandoned rather
+# than in progress.
+#
+# Deliberately far longer than any real lesson: `session_duration_minutes` caps
+# out at an hour, and this is the threshold past which a session is closed *for*
+# a student who is not there. Closing one that is genuinely in progress would
+# discard the question they are part way through answering, so the cost is
+# asymmetric and this errs long.
+#
+# **This is an age, not an idleness.** A session open for two hours with a
+# student answering throughout is not stale by this measure, and that is
+# accepted: `class_live` is the surface that computes real last-activity from
+# signal rows and answers, and it keeps its own much tighter `_STALE_AFTER_SEC`.
+# What this one exists for is the session nobody has touched since June.
+_SESSION_ABANDONED_AFTER_SEC = _env_number(
+    "SESSION_ABANDONED_AFTER_HOURS", 6.0, float, minimum=1.0) * 3600
+
+# How often the background sweeper looks. Zero disables it entirely, which is
+# what tests and any deployment preferring the on-demand sweeps should use.
+_STALE_SWEEP_INTERVAL_SEC = _env_number(
+    "STALE_SWEEP_INTERVAL_SECONDS", 900.0, float, minimum=0.0)
+
+# Rows per pass. A backlog is worked through over several passes rather than in
+# one long transaction -- each close runs the full sequence, including a chart
+# render and four storage writes.
+_STALE_SWEEP_BATCH = 50
+
 ALERT_SESSION_AUTO_CLOSED = "session_auto_closed"
 ALERT_SIGNALS_MISSING = "signals_missing"
 
@@ -932,6 +966,122 @@ def _close_session(user_id: str, session: dict, ended_at: str,
     # storage four times, not worth holding a request open for.
     chart_archive.schedule(supabase, sid, user_id)
     return {"discarded": False}
+
+
+# ─── the background sweep for abandoned sessions ──────────────────────────
+#
+# Both existing sweeps are *on demand*: `start_session` collects a student's
+# strays when they next start one, and `class_live` collects a class's when a
+# teacher opens the live monitor. A student who simply never comes back is
+# collected by neither, so their sessions sit open indefinitely -- seen in
+# production as rows still marked live two months after they were started.
+#
+# It runs in the backend rather than as a `pg_cron` job on purpose. Closing a
+# session is not a matter of stamping `ended_at`: it credits the lifetime
+# totals, writes the daily rollup, archives four charts to storage and raises
+# the alerts, none of which SQL can do. A cron job that stamped the column
+# would be a fourth close site that silently skipped all of it -- exactly what
+# `conftest.close_sites()` exists to catch.
+
+_stale_sweep_stop = threading.Event()
+_stale_sweep_thread: threading.Thread | None = None
+
+
+def _sweep_abandoned_sessions(limit: int = _STALE_SWEEP_BATCH) -> dict:
+    """Close sessions left open past `_SESSION_ABANDONED_AFTER_SEC`.
+
+    Returns counts rather than raising, so the caller (a loop) can log and
+    carry on. One student's broken session must not stop the sweep reaching
+    everyone else's, so each close is guarded individually.
+    """
+    cutoff = (_utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)).isoformat()
+    try:
+        rows = (supabase.table("sessions")
+                .select("id, user_id, started_at, questions_answered, correct_answers")
+                .is_("ended_at", "null").lt("started_at", cutoff)
+                .order("started_at").limit(limit).execute().data or [])
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[stale_sweep] could not list abandoned sessions: {e}")
+        return {"found": 0, "closed": 0, "discarded": 0, "failed": 0,
+                "retrieved": False}
+
+    closed = discarded = failed = 0
+    for s in rows:
+        uid = s.get("user_id")
+        if not uid:
+            continue
+        try:
+            # The poller first, and for the same reason every other close site
+            # does it first: a tick landing after the discard check has looked
+            # leaves a row pointing at a session that was just deleted.
+            eeg_poller.stop(s["id"], uid)
+            # Marked as a sweep, so an abandoned session with real work in it
+            # raises `session_auto_closed` like the other two sweeps do.
+            out = _close_session(uid, s, _utc_now().isoformat(),
+                                 closed_by=CLOSED_BY_SWEEP)
+            if out.get("discarded"):
+                discarded += 1
+            else:
+                closed += 1
+        except Exception as e:                                 # noqa: BLE001
+            failed += 1
+            print(f"[stale_sweep] could not close {s.get('id')}: {e}")
+    if rows:
+        print(f"[stale_sweep] {len(rows)} abandoned: {closed} closed, "
+              f"{discarded} discarded, {failed} failed")
+    return {"found": len(rows), "closed": closed, "discarded": discarded,
+            "failed": failed, "retrieved": True}
+
+
+def _stale_sweep_loop() -> None:
+    """Sweep on an interval until asked to stop.
+
+    Waits on the stop event rather than sleeping, so shutdown is immediate
+    rather than up to an interval away -- the same rule the poller threads
+    follow, and the reason this thread can be joined rather than abandoned to
+    interpreter teardown.
+    """
+    while not _stale_sweep_stop.wait(_STALE_SWEEP_INTERVAL_SEC):
+        try:
+            _sweep_abandoned_sessions()
+        except Exception as e:                                 # noqa: BLE001
+            # The loop outliving one bad pass is the whole point of a sweeper.
+            print(f"[stale_sweep] pass failed: {e}")
+
+
+def start_stale_sweeper() -> bool:
+    """Start the background sweep, unless it is switched off or already running.
+
+    Safe to run in several processes at once: `_claim_session_close` is an
+    atomic conditional update, so two workers racing on one session means one
+    of them does the work and the other sees it was already closed.
+    """
+    global _stale_sweep_thread
+    if _STALE_SWEEP_INTERVAL_SEC <= 0:
+        print("[stale_sweep] disabled (STALE_SWEEP_INTERVAL_SECONDS=0)")
+        return False
+    if _stale_sweep_thread and _stale_sweep_thread.is_alive():
+        return False
+    _stale_sweep_stop.clear()
+    _stale_sweep_thread = threading.Thread(
+        target=_stale_sweep_loop, name="stale-sweep", daemon=True)
+    _stale_sweep_thread.start()
+    return True
+
+
+def stop_stale_sweeper(timeout: float = 5.0) -> None:
+    """Ask the sweep to finish and wait for it.
+
+    Joined, not just signalled: this thread prints, and a print landing during
+    interpreter shutdown while the stdout lock is held is a fatal
+    `_enter_buffered_busy` abort -- exit code 134 after every test passed,
+    which reads as unrelated flake. Same rule as `eeg_poller.stop_all`.
+    """
+    global _stale_sweep_thread
+    _stale_sweep_stop.set()
+    thread, _stale_sweep_thread = _stale_sweep_thread, None
+    if thread and thread.is_alive():
+        thread.join(timeout=timeout)
 
 
 def _may_record(student_id: str) -> dict:
@@ -2548,9 +2698,33 @@ def student_stats(student_id: str, request: Request):
 
 @app.get("/api/sessions/student/{student_id}")
 def student_sessions(student_id: str, request: Request):
+    """A student's recent sessions, with abandoned ones marked as such.
+
+    `abandoned` is derived here rather than in the browser so the threshold
+    has one definition. The Sessions list decided "live" from `ended_at`
+    alone, which is true of a session started two months ago and never closed
+    -- it rendered a pulsing LIVE badge for a student who had not been seen
+    since June.
+
+    It is an **age, not an idleness**, and the flag is named for what it can
+    actually support. A session open for two hours with a student answering
+    throughout is not abandoned by this measure and is correctly not marked.
+    `class_live` is the surface that computes real last-activity from signal
+    rows and answers, on a much tighter window; this one only has to stop the
+    list asserting that a long-dead session is in progress.
+    """
     _verify_can_view_student(get_user(request), student_id)
     res = supabase.table("sessions").select("*").eq("user_id", student_id).order("started_at", desc=True).limit(20).execute()
-    return res.data or []
+    rows = res.data or []
+    cutoff = _utc_now() - timedelta(seconds=_SESSION_ABANDONED_AFTER_SEC)
+    for r in rows:
+        started = _parse_ts(r.get("started_at"))
+        # Only open sessions can be abandoned, and an unparseable start is not
+        # evidence of anything -- False, so a bad timestamp does not relabel a
+        # session nobody has looked at.
+        r["abandoned"] = bool(
+            not r.get("ended_at") and started is not None and started < cutoff)
+    return rows
 
 @app.get("/api/performance/student/{student_id}")
 def student_performance(student_id: str, request: Request):
@@ -4950,7 +5124,23 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # one trace needs to see the sensor changed, not infer a physiological
     # event.
     hrt_data = hrt.order("ts").limit(20000).execute().data or []
-    answers  = supabase.table("session_answers").select("*").eq("session_id", session_id).order("answered_at").execute().data or []
+    # The question rides along on the answer, embedded rather than fetched per
+    # row. A bare `session_answers` row carries a question *id* and a
+    # `selected_index`, which is unreadable on a review screen: a teacher was
+    # shown a truncated uuid and the number 2, with no way to know what was
+    # asked or what 2 meant. Named columns, not `questions(*)` -- `id` and
+    # `created_at` add nothing here, and a column added to the bank later
+    # should not start reaching the browser on its own.
+    #
+    # Embedded, so this stays one query however many answers a session has.
+    # It is left-joined by PostgREST, so an answer whose question row was
+    # deleted still appears, with `questions: null` -- the answer happened and
+    # dropping it would change the session's history.
+    answers = (supabase.table("session_answers")
+               .select("*, questions(question_text, options, correct_answer, "
+                       "subject, difficulty)")
+               .eq("session_id", session_id).order("answered_at")
+               .execute().data or [])
     return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}
 
 

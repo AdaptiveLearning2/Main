@@ -59,6 +59,13 @@ def _join_poller_threads():
     """
     yield
     eeg_poller.stop_all()
+    # The stale sweeper is the same kind of thread with the same crash-on-exit
+    # risk. Nothing here starts it -- it starts from `_lifespan`, which tests
+    # do not run -- but a test that exercises it directly must not leave it
+    # running into the next one, where it would close sessions out from under
+    # a fake client.
+    import main
+    main.stop_stale_sweeper()
     still_running = [p.session_id for p in eeg_poller.live_pollers()]
     assert not still_running, f"poller threads did not stop: {still_running}"
 

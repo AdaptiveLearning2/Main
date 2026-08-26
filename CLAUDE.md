@@ -317,7 +317,9 @@ at a local stack, not production, so nothing in the working tree reaches the pro
 
 Backend: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (required), `BACKEND_PORT`, `EEG_API_URL`,
 `EEG_API_TOKEN`, `EEG_ADMIN_TOKEN`, `EEG_POLL_HZ`, `INGEST_MAX_BATCH` / `INGEST_RATE_LIMIT` /
-`INGEST_RATE_WINDOW`, the `STRATEGY_LLM_*` / `STRATEGY_RATE_*` group below, and the
+`INGEST_RATE_WINDOW`, `SESSION_ABANDONED_AFTER_HOURS` / `STALE_SWEEP_INTERVAL_SECONDS` (the
+abandoned-session sweep — the second is `0` to disable it), the `STRATEGY_LLM_*` /
+`STRATEGY_RATE_*` group below, and the
 `LLM_PROVIDER` / `CLAUDE_*` / `GENERATION_*` group under *Every model call goes through
 `llm_client`*. The ingest bounds
 matter because the sidecar posts with the *student's* token: that endpoint is a trust boundary, and
@@ -1770,6 +1772,61 @@ the confidence, since one answer colours as strongly as four hundred.
 independently ordered lists is the drift `AccessibleChart`'s single `columns` spec exists to prevent;
 don't re-sort either end. The time-of-day grid aligns in the *browser* instead, because that payload
 is sparse — an hour a given day never used is a real absence, not a missing row.
+
+### Abandoned sessions: a third sweep, and two surfaces that were lying about them
+
+Both original sweeps are **on demand** — `start_session` collects a student's strays when they next
+start one, `class_live` collects a class's when a teacher opens the monitor — so a student who never
+comes back is collected by neither. Found in production as sessions still open **two months** after
+they were started.
+
+`_sweep_abandoned_sessions` is the third, run from a background thread started in `_lifespan`.
+**It is a backend thread, not a `pg_cron` job, and that is not a preference.** Closing a session
+credits lifetime totals, writes the daily rollup, archives four charts to storage and raises the
+alerts; SQL can do none of it. A cron job stamping `ended_at` would be a fourth close site that
+skipped all of it — the exact thing `conftest.close_sites()` exists to catch. That helper picks the
+sweeper up automatically, so it is already covered by every close-site guard.
+
+`_SESSION_ABANDONED_AFTER_SEC` (6h, `SESSION_ABANDONED_AFTER_HOURS`) is **an age, not an idleness**,
+and the flag is named for what it can support. A two-hour session with a student answering
+throughout is not abandoned by this measure and is correctly untouched; `class_live` keeps its own
+much tighter `_STALE_AFTER_SEC` computed from real last activity. This one only has to catch the
+session nobody has touched since June, so it errs long — closing a live one would discard the
+question a child is part way through answering. `STALE_SWEEP_INTERVAL_SECONDS=0` disables it.
+
+Safe in several workers at once: `_claim_session_close` is an atomic conditional update, so a race
+means one does the work and the other sees it already closed. **The thread must be joined**, like
+the pollers — it prints, and a print during interpreter shutdown is a fatal stdout-lock abort.
+`conftest` joins it after every test.
+
+**Two surfaces were asserting things the data does not support**, both fixed with the same flag:
+
+- `Sessions.jsx` decided `live = !ended_at`, so an abandoned session rendered a *pulsing* `● LIVE`
+  badge indefinitely. Three states now — live, `never ended`, done — with `abandoned` derived in
+  `student_sessions` so the threshold has one definition rather than a second copy in the browser.
+- Its duration counted to `Date.now()` for open sessions, printing `83132m 45s` for a student who
+  left within the hour. An abandoned session shows a dash: we do not know when it ended.
+
+### The answers table shows the topic and the option text, never the ids
+
+A `session_answers` row carries a question *id* and a `selected_index`, and `SessionReview` rendered
+exactly that — a truncated uuid and the bare number `2`. Both true, neither usable: nothing on the
+screen said what was asked or what `2` meant.
+
+`/api/signals/session/{id}` now embeds the question on the answer
+(`select("*, questions(question_text, options, correct_answer, subject, difficulty)")`) — one query
+however many answers, named columns so a later addition to the bank does not start reaching the
+browser. **PostgREST left-joins the embed**, so an answer whose question has since been deleted
+arrives with `questions: null`; the answer still happened, so the row is still shown and says why it
+cannot expand.
+
+**`questions.correct_answer` is text, not an index.** Comparing it against a position marks the wrong
+option on every question whose answer is not stored in order, so `isCorrectOption` compares *values*
+(trimmed, case-insensitive) with a numeric fallback for a row that holds an index anyway. And
+`options` is unschema'd `jsonb` — `optionList` accepts an array or an object and yields `[]` for
+anything else, which renders as "options were not recorded" rather than crashing on `.map`.
+
+Chosen and correct are spelled out as words next to the glyph, not left to colour and a `✓`.
 
 ### Session alerts are operations, never a judgement about a student
 

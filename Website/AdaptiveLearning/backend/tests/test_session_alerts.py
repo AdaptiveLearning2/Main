@@ -500,3 +500,133 @@ def test_the_feed_is_scoped_to_the_roster_and_the_window(monkeypatch):
                 if any(c == "user_id" for c, _ in q.filters))
     cols = [c for c, _ in feed.filters]
     assert "user_id" in cols and "created_at" in cols
+
+
+# ─── abandoned sessions ───────────────────────────────────────────────────
+#
+# Two on-demand sweeps existed -- `start_session` collects a student's strays
+# when they next start one, `class_live` collects a class's when a teacher
+# opens the monitor -- and a student who never comes back is collected by
+# neither. Seen in production as sessions still open two months on.
+
+def _open_session(sid, started_at, user=ALICE, answered=0):
+    return {"id": sid, "user_id": user, "started_at": started_at,
+            "ended_at": None, "questions_answered": answered,
+            "correct_answers": 0}
+
+
+def test_an_old_open_session_is_marked_abandoned(monkeypatch):
+    old = "2026-06-11T01:00:00Z"          # eleven hours before NOW_UTC
+    monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [_open_session("s-old", old)]}))
+    rows = main.student_sessions(ALICE, None)
+    assert rows[0]["abandoned"] is True
+
+
+def test_a_session_open_for_minutes_is_not_abandoned(monkeypatch):
+    recent = "2026-06-11T11:45:00Z"       # fifteen minutes before NOW_UTC
+    monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [_open_session("s-new", recent)]}))
+    assert main.student_sessions(ALICE, None)[0]["abandoned"] is False
+
+
+def test_a_closed_session_is_never_abandoned(monkeypatch):
+    """It ended. However long ago it started, there is nothing open."""
+    monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
+    row = _open_session("s-done", "2026-01-01T00:00:00Z")
+    row["ended_at"] = "2026-01-01T00:30:00Z"
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": [row]}))
+    assert main.student_sessions(ALICE, None)[0]["abandoned"] is False
+
+
+def test_an_unparseable_start_is_not_called_abandoned(monkeypatch):
+    """A bad timestamp is not evidence. Relabelling on one would close a
+    session the sweep should never touch."""
+    monkeypatch.setattr(main, "_can_view_student", lambda _v, _s: True)
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [_open_session("s-bad", "not-a-date")]}))
+    assert main.student_sessions(ALICE, None)[0]["abandoned"] is False
+
+
+# ─── the background sweeper ───────────────────────────────────────────────
+
+def test_the_sweep_closes_an_abandoned_session_through_the_shared_helper(monkeypatch):
+    """Not a hand-rolled stamp. The full sequence -- credit, rollup, archive,
+    alerts -- is what a close means, and SQL cannot do any of it, which is why
+    this is a backend thread rather than a pg_cron job."""
+    calls = []
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [_open_session("s-old", "2026-06-01T00:00:00Z")]}))
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a: calls.append(("stop", *a)))
+    monkeypatch.setattr(main, "_close_session",
+                        lambda *a, **k: calls.append(("close", a, k)) or {"discarded": False})
+
+    out = main._sweep_abandoned_sessions()
+    assert out["found"] == 1 and out["closed"] == 1
+    assert calls[0][0] == "stop", "the poller must be stopped before the close"
+    assert calls[1][2]["closed_by"] == main.CLOSED_BY_SWEEP
+
+
+def test_the_sweep_leaves_a_session_that_is_merely_running(monkeypatch):
+    """Asserted on the *filter*, since the fake returns whatever matches. A
+    sweep that closed a lesson in progress would discard the question a child
+    is part way through answering."""
+    fake = _FakeSupabase({"sessions": []})
+    monkeypatch.setattr(main, "supabase", fake)
+    main._sweep_abandoned_sessions()
+    q = fake.queries[0]
+    cols = [c for c, _ in q.filters]
+    assert "ended_at" in cols and "started_at" in cols
+
+
+def test_one_broken_session_does_not_stop_the_sweep(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase({"sessions": [
+        _open_session("s-1", "2026-06-01T00:00:00Z"),
+        _open_session("s-2", "2026-06-01T00:00:00Z"),
+    ]}))
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a: None)
+
+    def _close(_uid, session, *_a, **_k):
+        if session["id"] == "s-1":
+            raise RuntimeError("boom")
+        return {"discarded": False}
+
+    monkeypatch.setattr(main, "_close_session", _close)
+    out = main._sweep_abandoned_sessions()
+    assert out["failed"] == 1 and out["closed"] == 1
+
+
+def test_a_failed_listing_is_reported_not_swallowed(monkeypatch):
+    monkeypatch.setattr(main, "supabase",
+                        _FakeSupabase({}, table_raises=["sessions"]))
+    out = main._sweep_abandoned_sessions()
+    assert out["retrieved"] is False and out["found"] == 0
+
+
+def test_an_empty_session_is_discarded_rather_than_counted_closed(monkeypatch):
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        {"sessions": [_open_session("s-empty", "2026-06-01T00:00:00Z")]}))
+    monkeypatch.setattr(main.eeg_poller, "stop", lambda *a: None)
+    monkeypatch.setattr(main, "_close_session", lambda *a, **k: {"discarded": True})
+    out = main._sweep_abandoned_sessions()
+    assert out["discarded"] == 1 and out["closed"] == 0
+
+
+def test_the_sweeper_can_be_switched_off(monkeypatch):
+    """Zero disables it, which is what the test suite and any deployment
+    preferring the on-demand sweeps use."""
+    monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 0)
+    assert main.start_stale_sweeper() is False
+
+
+def test_the_sweeper_starts_and_is_joinable(monkeypatch):
+    """A thread that prints must be joined before the process exits, or a
+    print landing during interpreter shutdown is a fatal stdout-lock abort."""
+    monkeypatch.setattr(main, "_STALE_SWEEP_INTERVAL_SEC", 30)
+    assert main.start_stale_sweeper() is True
+    # Starting twice must not leave a second thread running.
+    assert main.start_stale_sweeper() is False
+    main.stop_stale_sweeper()
+    assert main._stale_sweep_thread is None

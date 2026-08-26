@@ -479,3 +479,97 @@ def test_the_per_student_read_is_bucketed_by_consent_like_the_trend(monkeypatch)
     calls = {frozenset(c["p_student_ids"]): c for c in _totals_calls(fake)}
     assert calls[frozenset([permits])]["p_include_heart"] is True
     assert calls[frozenset([declines])]["p_include_heart"] is False
+
+
+# ─── what a failed bucket does to the roster ──────────────────────────────
+
+def test_a_failed_trend_bucket_leaves_the_roster_unretrieved_too(monkeypatch):
+    """Breaking out of the bucket loop skips every totals call after it.
+
+    Those students were never asked about, so reporting them with zero counts
+    and `retrieved: True` says "recorded nothing" -- which is the one thing the
+    read did not establish. It renders as "No sensor", a fault indistinguishable
+    from a class that left the headbands in the cupboard.
+    """
+    ok, broken = _student(1), _student(2)
+    roster = [ok, broken] + [_student(n) for n in range(3, 7)]
+    fake = _BucketedFake(
+        _tables(roster,
+                consent=[_consent(ok, heart=True), _consent(broken, heart=False)]
+                        + [_consent(s) for s in roster[2:]]),
+        trend_by_ids={frozenset([broken]): RuntimeError("PGRST202")})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main.class_cohort_signals(CLASS, None)
+
+    assert out["retrieved"] is False
+    assert out["summaries_retrieved"] is False, \
+        "the roster claimed a read that never happened"
+    # Every row still says so, since that flag is what the tile reads.
+    for row in out["per_student"]:
+        assert row["summary"]["retrieved"] is False
+
+
+# ─── the roster's consent is one read, not one per student ────────────────
+
+def test_consent_for_the_roster_is_read_in_one_query(monkeypatch):
+    """A class of thirty was thirty sequential reads on a page load.
+
+    `my_children` keeps a per-student loop and can -- a family has a handful of
+    children. A roster is an order of magnitude larger, so the same shape is a
+    different cost.
+    """
+    roster = [_student(n) for n in range(1, 7)]
+    fake = _FakeSupabase(_tables(roster), rpc_results={TREND_RPC: [_row(focus=0.5)]})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    main.class_cohort_signals(CLASS, None)
+
+    assert fake.table_calls.count("signal_consent") == 1, \
+        f"read consent {fake.table_calls.count('signal_consent')} times for 6 students"
+
+
+def test_a_failed_consent_read_denies_every_student_rather_than_none(monkeypatch):
+    """Fails closed for a roster exactly as `_consent` does for one student.
+
+    The opposite direction would read channels nobody was confirmed to have
+    agreed to, which is the one mistake this helper may not make.
+    """
+    roster = [_student(n) for n in range(1, 7)]
+    fake = _FakeSupabase(_tables(roster), table_raises={"signal_consent"},
+                         rpc_results={TREND_RPC: [_row(focus=0.5)]})
+    monkeypatch.setattr(main, "supabase", fake)
+
+    out = main.class_cohort_signals(CLASS, None)
+
+    for row in out["per_student"]:
+        s = row["summary"]
+        assert s["consent_retrieved"] is False
+        # Denied, not permitted -- and every channel, not just the ones a
+        # partial row would have covered.
+        assert s["heart_included"] is False
+        assert s["emotion_included"] is False
+        assert s["eeg_enabled"] is False
+    # And nothing was read under a permission that could not be confirmed.
+    for params in _trend_calls(fake) + _totals_calls(fake):
+        assert params["p_include_heart"] is False
+        assert params["p_include_emotion"] is False
+
+
+def test_a_student_with_no_consent_row_is_denied_but_read_successfully(monkeypatch):
+    """The two silences stay apart in the batch form.
+
+    No row means nobody has consented yet, which the read established. A failed
+    read means we could not find out. Both deny; only the first is a fact.
+    """
+    roster = [_student(n) for n in range(1, 7)]
+    monkeypatch.setattr(main, "supabase", _FakeSupabase(
+        # Only student 1 has a row; the rest are absent.
+        _tables(roster, consent=[_consent(_student(1))]),
+        rpc_results={TREND_RPC: [_row(focus=0.5)]}))
+
+    out = main.class_cohort_signals(CLASS, None)
+    rows = {r["student_id"]: r["summary"] for r in out["per_student"]}
+    assert rows[_student(2)]["consent_retrieved"] is True
+    assert rows[_student(2)]["eeg_enabled"] is False
+    assert rows[_student(1)]["eeg_enabled"] is True

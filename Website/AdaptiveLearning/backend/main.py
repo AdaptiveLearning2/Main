@@ -1230,7 +1230,18 @@ def _reportable_channels(student_id: str, want_emotion: bool = True,
     revoked channel's rows are never read even if stale ones exist. Fails
     closed like `_consent`: an unreadable consent row reports nothing.
     """
-    consent = _consent(student_id)
+    return _channels_from_consent(_consent(student_id), want_emotion, want_heart)
+
+
+def _channels_from_consent(consent: dict, want_emotion: bool = True,
+                           want_heart: bool = True) -> ReportChannels:
+    """The consent row -> channels mapping, with no read of its own.
+
+    Split out so the single-student and roster forms cannot drift: one reads
+    consent per student, the other in a batch, and both have to derive the
+    flags the same way or a class page would disagree with the child page about
+    the same student.
+    """
     heart = bool(consent.get("headband_optical_enabled")) or bool(consent.get("camera_enabled"))
     emotion = bool(consent.get("camera_enabled"))
     # Heart can come from either sensor, so it's off only when both are, and the
@@ -4334,7 +4345,9 @@ def _cohort_signals(class_id: str, days: int) -> dict:
     one.
     """
     roster, roster_retrieved = _class_roster(class_id)
-    channels_by_student = {sid: _reportable_channels(sid) for sid in roster}
+    # One consent read for the roster, not one per student: a class of thirty
+    # made thirty sequential round-trips on a page load.
+    channels_by_student = _reportable_channels_many(roster)
 
     # Keyed on the flags alone, not the whole ReportChannels: `consent_retrieved`
     # doesn't change what is asked for, so including it would split two students
@@ -4355,6 +4368,14 @@ def _cohort_signals(class_id: str, days: int) -> dict:
             # merge would report the missing students as a quiet fortnight --
             # the one thing a failed read has not earned the right to say.
             trend_retrieved = False
+            # And the roster goes with it, because breaking here skips this
+            # bucket's totals call and every later bucket's. Those students were
+            # never asked about, so leaving `summaries` as {} would render them
+            # with zero counts and `retrieved: True` -- "recorded nothing", which
+            # is the one thing we have not found out. Buckets that already
+            # succeeded are discarded with them, for the reason above: one flag
+            # cannot describe a half-read roster.
+            summaries = None
             break
         parts.append(part)
 
@@ -4621,6 +4642,42 @@ def _consent(student_id: str) -> dict:
         # read deny, but only a missing row means a write should insert.
         return {**_CONSENT_DENIED, "retrieved": True, "exists": False}
     return {**_CONSENT_DENIED, **rows[0], "retrieved": True, "exists": True}
+
+
+def _consent_many(student_ids) -> dict[str, dict]:
+    """`_consent` for a roster, in one query rather than one per student.
+
+    A class of thirty was thirty sequential reads on a page load. `my_children`
+    keeps the per-student loop and can: a family has a handful of children, and
+    a roster is an order of magnitude larger.
+
+    Fails closed exactly as `_consent` does, and per student: a failed read
+    denies *every* requested id with `retrieved: False`, since none of them was
+    found out. A student with no row denies with `retrieved: True`, because that
+    read succeeded and the answer is that nobody has consented yet.
+    """
+    ids = _unique_ids(student_ids)
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("signal_consent").select("*") \
+            .in_("user_id", ids).execute().data or []
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[consent:read_many] {len(ids)} students: {e}")
+        return {sid: {**_CONSENT_DENIED, "retrieved": False, "exists": False}
+                for sid in ids}
+    by_id = {str(r["user_id"]): r for r in rows if r.get("user_id")}
+    return {sid: ({**_CONSENT_DENIED, **by_id[sid], "retrieved": True, "exists": True}
+                  if sid in by_id
+                  else {**_CONSENT_DENIED, "retrieved": True, "exists": False})
+            for sid in ids}
+
+
+def _reportable_channels_many(student_ids, want_emotion: bool = True,
+                              want_heart: bool = True) -> dict[str, ReportChannels]:
+    """`_reportable_channels` for a roster, over one consent read."""
+    return {sid: _channels_from_consent(consent, want_emotion, want_heart)
+            for sid, consent in _consent_many(student_ids).items()}
 
 
 # The poller writes `cognitive_signals` directly with the service-role client,

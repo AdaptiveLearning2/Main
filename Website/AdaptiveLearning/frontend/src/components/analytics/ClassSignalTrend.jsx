@@ -47,7 +47,13 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
   // column naming a line the chart does not draw reads a screen-reader user a
   // series no sighted reader can see — the defect this codebase has shipped
   // twice, and the reason the two are derived from one condition here.
-  const hasCognitive = rows.some(r => typeof r.avg_focus === 'number')
+  //
+  // `hideSensors` gates *both*, not just heart. Focus, stress and engagement are
+  // EEG-derived and are as much sensor data as a heart rate is — leaving them
+  // drawn under a note reading "sensor data is hidden" states the opposite of
+  // what the panel is doing, and CLAUDE.md's rule for this switch is that it
+  // hides all sensor data rather than the facial subset it began as.
+  const hasCognitive = !hideSensors && rows.some(r => typeof r.avg_focus === 'number')
   const hasHeart = !hideSensors && rows.some(r => typeof r.avg_heart_rate_bpm === 'number')
 
   // Ratios are stored 0..1 and read as percentages, so they carry

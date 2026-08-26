@@ -527,12 +527,23 @@ describe('ClassSignalTrend', () => {
     expect(summary).toMatch(/1 day with recordings/)
   })
 
-  it('withholds the heart line when the teacher has hidden sensor data', () => {
+  it('hides every series when the teacher has hidden sensor data, not just heart', () => {
+    // Focus/stress/engagement are EEG-derived and are sensor data too. An
+    // earlier version gated only the heart line, so the cognitive lines went on
+    // drawing real values underneath a note saying sensor data was hidden.
+    //
+    // The first version of this test asserted on that note, which is rendered
+    // either way -- so it passed against the bug it was written for. Assert on
+    // the data instead: no chart, no sr-only table, no numbers.
     render(<ClassSignalTrend hideSensors data={{
       retrieved: true, days: 30,
       series: [day('2026-06-10'), heart('2026-06-10', 72)],
     }} />)
-    expect(screen.getByText(/sensor data is hidden/i)).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/\d+%/)
+    expect(document.body.textContent).not.toMatch(/bpm/i)
+    expect(screen.getByText(/turn off "hide sensor data"/i)).toBeInTheDocument()
   })
 })
 

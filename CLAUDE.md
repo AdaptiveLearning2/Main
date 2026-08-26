@@ -1783,8 +1783,8 @@ per-student rows behind it, rendered by `ClassSignalTrend` and `ClassSignalRoste
 One endpoint for both, because they answer one question together and two fetches could disagree
 about when they were taken.
 
-**Consent buckets the roster before anything is read.** `_reportable_channels` per student, then
-grouped by `(heart, emotion)` flag pair — at most four calls — exactly as `my_children` does. One
+**Consent buckets the roster before anything is read.** `_reportable_channels_many` for the whole
+roster, then grouped by `(heart, emotion)` flag pair — at most four calls. One
 call for the whole class would either read a declining student's heart rows under a classmate's
 permission or hide the channel from everyone who allowed it; the bucket is what avoids choosing.
 The RPC does **not** filter consent itself, deliberately, so passing it a mixed roster with one flag
@@ -1807,9 +1807,20 @@ of six where two wore a headband is still a class of six, and gating on the smal
 expose that pair exactly when they are most identifiable. The class trend still renders; it is the
 aggregate the floor exists to protect.
 
-**One failed bucket fails the whole trend**, like `my_children`'s `summaries_retrieved`. A partial
-merge would report the missing students as a quiet fortnight. The per-student summaries fail
-*independently* of the trend, so a broken summary RPC leaves the chart standing.
+**`_consent_many` / `_reportable_channels_many` are the batch forms**, and a roster is where they
+matter: `my_children` keeps a per-student loop and can, since a family has a handful of children,
+but a class of thirty made thirty sequential reads on a page load. They fail closed exactly as
+`_consent` does and *per student* — a failed read denies **every** requested id with
+`retrieved: False`, since none of them was found out, while a student with no row denies with
+`retrieved: True`. `_channels_from_consent` is the shared pure mapping, so the single and batch
+forms cannot drift and disagree about the same student on two pages.
+
+**One failed bucket fails the whole trend, and takes the roster with it.** Breaking out of the
+bucket loop skips that bucket's totals call and every later one, so leaving `summaries` as `{}`
+reports students nobody asked about with zero counts and `retrieved: True` — "recorded nothing",
+which renders as `No sensor` and is indistinguishable from a class that left the headbands in the
+cupboard. Both flags go false together. The two reads still fail *independently* in the ordinary
+case: a broken totals RPC leaves the chart standing.
 
 **Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
 `student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly
@@ -1844,7 +1855,12 @@ whether or not the column is gated — inert against the exact bug it names. The
 `columnheader`, not the summary.
 
 Both panels honour `viewPrefs.js`'s "Hide sensor data" switch; the academic panels beside them do
-not, because that switch hides sensor data and those measure answers.
+not, because that switch hides sensor data and those measure answers. **It gates every series, not
+the heart one** — focus, stress and engagement are EEG-derived and are as much sensor data as a bpm
+is. Gating only heart left the cognitive lines drawing real values under a note reading "sensor data
+is hidden", which states the opposite of what the panel is doing. A test asserting on that note
+passes either way, since the note renders regardless; assert that no chart, no `sr-only` table and
+no numbers are on screen.
 
 ### Abandoned sessions: a third sweep, and two surfaces that were lying about them
 

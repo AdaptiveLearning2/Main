@@ -915,11 +915,17 @@ def test_children_endpoint_reports_a_working_read_with_no_rows_as_retrieved(monk
     assert children[0]["signal_summary"]["retrieved"] is True
 
 
-def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch):
+def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch, set_flag):
     """A failed aggregate leaves every average None, which the rules already
     read as "no signal to act on", so the advice correctly degrades to the
     generic list. What's checked here is that the response a parent reads
-    actually says the signals failed to load."""
+    actually says the signals failed to load.
+
+    strategy_llm_enabled is pinned off explicitly rather than left to the
+    suite's default: this test is about the rule-based fallback, not about
+    whether the model pass happens to also fail, and pinning it keeps the
+    test's meaning fixed regardless of what the flag's real-world default is.
+    """
     def boom(name, params):
         if name == "student_signal_summary":
             return RuntimeError("connection reset")
@@ -928,6 +934,7 @@ def test_strategies_basis_reports_that_its_signals_did_not_load(monkeypatch):
         "user_math_performance": [],
     }, rpc_results={}, rpc_raises=boom))
     monkeypatch.setattr(main, "get_user", lambda r: {"id": "student-1"})
+    set_flag("strategy_llm_enabled", False)
 
     out = main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest())
@@ -1667,7 +1674,7 @@ def _strategy_tables(topic_rows=None, cog_rows=None):
     }
 
 
-def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch):
+def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch, set_flag):
     """The rules and the prompt use six numbers between them.
 
     Reading them out of _weekly_signal_report would transfer up to
@@ -1686,6 +1693,7 @@ def test_strategy_basis_aggregates_instead_of_reading_signal_rows(monkeypatch):
     )
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    set_flag("strategy_llm_enabled", False)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
 
     assert "cognitive_signals" not in fake.table_calls
@@ -1758,7 +1766,7 @@ def test_strategy_basis_does_not_reuse_the_reports_retrieved_key(monkeypatch):
     assert isinstance(report["retrieved"], dict)
 
 
-def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch):
+def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch, set_flag):
     """The response field must be a bool on the success path too, not just on
     the failure path covered elsewhere.
 
@@ -1770,6 +1778,7 @@ def test_learning_strategies_reports_a_bool_for_signals_retrieved(monkeypatch):
         {"user_math_performance": []},
         rpc_results={"student_signal_summary": [{"focus": 0.7, "sessions": 3}]}))
     monkeypatch.setattr(main, "get_user", lambda r: {"id": "student-1"})
+    set_flag("strategy_llm_enabled", False)
 
     out = main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest())
@@ -1787,9 +1796,13 @@ def test_learning_strategies_rejects_a_viewer_with_no_relationship(monkeypatch):
     assert exc.value.status_code == 403
 
 
-def test_learning_strategies_allows_a_linked_parent(monkeypatch):
+def test_learning_strategies_allows_a_linked_parent(monkeypatch, set_flag):
+    """strategy_llm_enabled is pinned off: this test is about the access
+    gate and the rule-based shape, not the model pass, so it must not depend
+    on the flag's real-world default."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    set_flag("strategy_llm_enabled", False)
     out = main.student_learning_strategies("student-1", None, main.LearningStrategyRequest())
     assert out["student_id"] == "student-1"
     # Four with no signal data: the face-attention rule needs a low reading to
@@ -2626,13 +2639,17 @@ def test_a_finite_value_below_the_floor_still_clamps(monkeypatch):
 
 # ── strategy rate limit ──────────────────────────────────────────────────
 
-def _strategies_as(viewer, monkeypatch):
+def _strategies_as(viewer, monkeypatch, set_flag):
+    # These tests are about access/rate-limiting, not the model pass -- pinned
+    # off so they stay fast and deterministic regardless of the flag's
+    # real-world default (see the note on strategy_llm_enabled's default).
+    set_flag("strategy_llm_enabled", False)
     monkeypatch.setattr(main, "get_user", lambda _r: viewer)
     return main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest())
 
 
-def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch):
+def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch, set_flag):
     """This is the heaviest endpoint a click can trigger -- two capped signal
     reads, a topic breakdown, and optionally a model call -- behind a button
     that can be pressed as fast as a parent likes."""
@@ -2640,30 +2657,30 @@ def test_learning_strategies_rate_limits_a_repeating_caller(monkeypatch):
     monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 3)
 
     for _ in range(3):
-        assert _strategies_as(PARENT, monkeypatch)["student_id"] == "student-1"
+        assert _strategies_as(PARENT, monkeypatch, set_flag)["student_id"] == "student-1"
 
     with pytest.raises(main.HTTPException) as exc:
-        _strategies_as(PARENT, monkeypatch)
+        _strategies_as(PARENT, monkeypatch, set_flag)
     assert exc.value.status_code == 429
     # Without it the client is told to back off but not for how long.
     assert int(exc.value.headers["Retry-After"]) >= 1
 
 
-def test_learning_strategies_rate_limit_is_per_caller(monkeypatch):
+def test_learning_strategies_rate_limit_is_per_caller(monkeypatch, set_flag):
     """Counted per viewer, not globally: one parent exhausting their allowance
     must not lock out every other parent."""
     monkeypatch.setattr(main, "supabase", _FakeSupabase({**TABLES, **_strategy_tables()}))
     monkeypatch.setattr(main, "_STRATEGY_RATE_LIMIT", 1)
 
-    _strategies_as(PARENT, monkeypatch)
+    _strategies_as(PARENT, monkeypatch, set_flag)
     with pytest.raises(main.HTTPException):
-        _strategies_as(PARENT, monkeypatch)
+        _strategies_as(PARENT, monkeypatch, set_flag)
 
     # A teacher of student-1's class, with their own untouched allowance.
-    assert _strategies_as(TEACHER, monkeypatch)["student_id"] == "student-1"
+    assert _strategies_as(TEACHER, monkeypatch, set_flag)["student_id"] == "student-1"
 
 
-def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch):
+def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch, set_flag):
     """A caller with no relationship gets 403, not 429. The rate limit
     protects the work below it; letting it mask the access decision would make
     an unauthorised caller's result depend on how often they'd asked."""
@@ -2672,7 +2689,7 @@ def test_learning_strategies_checks_access_before_the_rate_limit(monkeypatch):
 
     for _ in range(3):
         with pytest.raises(main.HTTPException) as exc:
-            _strategies_as(STRANGER, monkeypatch)
+            _strategies_as(STRANGER, monkeypatch, set_flag)
         assert exc.value.status_code == 403
 
 
@@ -2720,10 +2737,11 @@ def test_rate_limit_sweep_does_not_run_on_every_request(monkeypatch):
     assert len(scans) == 1, f"swept {len(scans)} times for 6 requests"
 
 
-def test_learning_strategies_clamps_the_day_range(monkeypatch):
+def test_learning_strategies_clamps_the_day_range(monkeypatch, set_flag):
     fake = _FakeSupabase({**TABLES, **_strategy_tables()})
     monkeypatch.setattr(main, "supabase", fake)
     monkeypatch.setattr(main, "get_user", lambda _r: PARENT)
+    set_flag("strategy_llm_enabled", False)
     assert main.student_learning_strategies(
         "student-1", None, main.LearningStrategyRequest(days=999))["basis"]["days"] == 30
     assert main.student_learning_strategies(

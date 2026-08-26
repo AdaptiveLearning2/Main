@@ -73,6 +73,57 @@ def _as_floats(values):
     return out
 
 
+# Why the dataset check did or did not reach a comparison. `dataset_mismatch`
+# collapses all of these to a reason-or-None, which is the right shape for a
+# caller that only wants to accept or retry -- but it makes "compared and
+# agreed" indistinguishable from "never found anything to compare".
+#
+# CLAUDE.md's rule for this file is to measure how often a fail-open check
+# *engages*, not just how often it fires, because a check that can no longer
+# locate its input reports a perfect false-positive rate while doing nothing.
+# That has already happened here once, with fractions in `ordering`. So the
+# states are exposed from the one implementation rather than re-derived by
+# whatever is measuring -- a second copy of these conditions would drift, and
+# a drifted measurement is worse than none.
+ENGAGED_AGREED = "engaged_agreed"
+ENGAGED_MISMATCH = "engaged_mismatch"
+INERT_NO_INPUT = "inert_no_input"
+INERT_SCORED_NOT_COMPARABLE = "inert_scored_not_comparable"
+INERT_MIXED_NUMBER = "inert_mixed_number"
+INERT_NO_LIST_IN_TEXT = "inert_no_list_in_text"
+INERT_SHOWN_NOT_COMPARABLE = "inert_shown_not_comparable"
+
+
+def dataset_check(question_text, values):
+    """(state, reason) for the dataset comparison -- see the states above.
+
+    `reason` is non-None only for ENGAGED_MISMATCH; every other state means
+    there is nothing to report to the caller.
+    """
+    if not question_text or not values:
+        return INERT_NO_INPUT, None
+    scored = _as_floats(values)
+    if scored is None or len(scored) < 2:
+        return INERT_SCORED_NOT_COMPARABLE, None
+
+    if _MIXED_NUMBER.search(question_text):
+        return INERT_MIXED_NUMBER, None
+
+    matches = _LIST_AFTER_COLON.findall(question_text)
+    if not matches:
+        return INERT_NO_LIST_IN_TEXT, None
+    shown = _as_floats(_NUMBER.findall(matches[-1]))
+    if shown is None or len(shown) < 2:
+        return INERT_SHOWN_NOT_COMPARABLE, None
+
+    if sorted(shown) != sorted(scored):
+        return ENGAGED_MISMATCH, (
+            f"the question shows {shown} but the answer is computed from "
+            f"{scored} -- the student would be marked against data they "
+            f"were not given")
+    return ENGAGED_AGREED, None
+
+
 def dataset_mismatch(question_text, values):
     """Reason the dataset in `question_text` differs from `values`, or None.
 
@@ -81,29 +132,7 @@ def dataset_mismatch(question_text, values):
     routinely contains numbers that are not data ("during a school year").
     When no such list is found, this returns None rather than guessing.
     """
-    if not question_text or not values:
-        return None
-    scored = _as_floats(values)
-    if scored is None or len(scored) < 2:
-        return None
-
-    if _MIXED_NUMBER.search(question_text):
-        return None
-
-    matches = _LIST_AFTER_COLON.findall(question_text)
-    if not matches:
-        return None
-    shown = _as_floats(_NUMBER.findall(matches[-1]))
-    if shown is None:
-        return None
-    if len(shown) < 2:
-        return None
-
-    if sorted(shown) != sorted(scored):
-        return (f"the question shows {shown} but the answer is computed from "
-                f"{scored} -- the student would be marked against data they "
-                f"were not given")
-    return None
+    return dataset_check(question_text, values)[1]
 
 
 def negation_mismatch(question_text, scenario):

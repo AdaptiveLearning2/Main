@@ -41,6 +41,14 @@ export default function PracticeTest({ session, onFinish }) {
   // stale `revealed=false` closure and posted a second "timed out" answer,
   // so one timeout could land two-to-four rows for a single question.
   const answeredRef = useRef(false)
+  // The in-flight `recordPracticeAnswer` promise, if any -- the timeout path
+  // fires `postAnswer` without awaiting it (it runs from an effect, not an
+  // event handler), so on the last question `handleNext`'s `onFinish` could
+  // race it to `/end`. The 409 guard on `/answer` then rejects the
+  // now-too-late POST, `recordPracticeAnswer` toasts a save failure right as
+  // results appear, and the results screen shows one more question answered
+  // than the server recorded. `handleNext` awaits this before finishing.
+  const pendingAnswerRef = useRef(null)
 
   const loadQuestion = useCallback(async () => {
     setLoading(true)
@@ -95,12 +103,20 @@ export default function PracticeTest({ session, onFinish }) {
       score: tallyRef.current.score + (isCorrect ? 1 : 0),
       answered: tallyRef.current.answered + 1,
     }
-    await recordPracticeAnswer({
+    // Assigned before the `await` below, so it's set synchronously even when
+    // the caller (the timeout effect) doesn't itself await `postAnswer`.
+    const promise = recordPracticeAnswer({
       sessionId: session.id,
       questionId: rawId,
       selectedIndex: idx,
       correct: isCorrect,
     })
+    pendingAnswerRef.current = promise
+    try {
+      await promise
+    } finally {
+      if (pendingAnswerRef.current === promise) pendingAnswerRef.current = null
+    }
   }
 
   async function handleSelect(idx) {
@@ -112,7 +128,11 @@ export default function PracticeTest({ session, onFinish }) {
     await postAnswer(idx)
   }
 
-  function handleNext() {
+  async function handleNext() {
+    // The current question's answer may still be in flight (the timeout path
+    // never awaits `postAnswer`) -- wait for it so `onFinish`/`/end` can't
+    // race an `/answer` that would otherwise land after the session closed.
+    if (pendingAnswerRef.current) await pendingAnswerRef.current
     if (index + 1 >= QUESTION_COUNT) {
       onFinish({ questions_answered: tallyRef.current.answered, correct_answers: tallyRef.current.score })
     } else {

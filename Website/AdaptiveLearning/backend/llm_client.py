@@ -46,12 +46,23 @@ def _env_number(name, default, cast, minimum=None):
 # deployment opts in explicitly.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
-# The dated snapshot rather than the `claude-haiku-4-5` alias. The general
-# advice is not to pin a date, but the measurements this migration has to redo
-# -- the grade-appropriateness spot checks and the consistency-check engagement
-# rates in CLAUDE.md -- are claims about one model's output, and an alias that
-# moved under them would invalidate those numbers without changing a line here.
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+# The undated alias. This was `claude-haiku-4-5-20251001` on the reasoning
+# that pinning a snapshot protects the CLAUDE.md measurements from an alias
+# moving under them -- sound in principle, and the wrong trade here, because
+# the two IDs fail differently: the alias resolves whether or not a dated
+# snapshot exists, while a wrong dated string is `404 not_found_error` on
+# every question, on every topic, from the first call.
+#
+# The sources disagree and neither could be checked: Anthropic's published
+# model table lists `claude-haiku-4-5` and says the IDs there are complete as
+# given, while other references show a dated form for this model (plausible --
+# Haiku 4.5 predates the 4.6+ generation that dropped date suffixes). The
+# Models API settles it, and needs a key nobody has configured here yet.
+#
+# So: take the form that cannot be wrong, and pin the snapshot later if the
+# measurements ever need it. `GET /v1/models` (or `client.models.list()`)
+# under a real key is the check -- do that before pinning, not after.
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # Anthropic's `temperature` range is 0.0-1.0; Ollama's is not bounded there and
 # every generation call site passes 1.1. Passed through, that returns

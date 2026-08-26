@@ -4,7 +4,7 @@ import { BarChart3 } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { sliceSpec } from '../../components/charts/describeSeries'
-import { apiFetch } from '../../lib/api'
+import { fetchQuestionsCached } from '../../lib/questionsCache'
 import LoadError from '../../components/ui/LoadError'
 
 const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
@@ -28,7 +28,7 @@ export default function TeacherAnalytics() {
 
   // loading is already true on mount; no need to set it again here.
   const load = () => {
-    apiFetch('/api/questions?limit=1000')
+    fetchQuestionsCached(1000)
       .then(q => { setQuestions(q || []); setFailed(false); setLoading(false) })
       // Track failure explicitly, or the charts would render as all-zero
       // instead of showing that the load failed.

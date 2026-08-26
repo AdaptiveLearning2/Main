@@ -78,6 +78,19 @@ def _questions(monkeypatch):
     return _install
 
 
+@pytest.fixture(autouse=True)
+def _reset_questions_cache():
+    """`get_questions` now caches by key, and that cache is module-level state
+    shared across every test in this file. Without this, a test asserting on
+    what the fake was asked would instead observe a hit left over from an
+    earlier test with the same (limit, subject, difficulty) -- exactly the
+    kind of stale-answer bug the cache itself must never produce for a real
+    caller either.
+    """
+    main._questions_cache._store.clear()
+    yield
+
+
 # ── /api/questions/count ────────────────────────────────────────────────────
 
 def test_the_count_comes_from_the_header_not_the_rows(_questions):
@@ -179,3 +192,111 @@ def test_the_list_returns_an_empty_list_rather_than_none(_questions):
     _questions(rows=None)
 
     assert main.get_questions() == []
+
+
+# ── caching ──────────────────────────────────────────────────────────────
+
+def test_a_repeated_call_within_the_ttl_does_not_requery(_questions):
+    """Analytics.jsx and Questions.jsx both fetch `?limit=1000` on mount --
+    this is what stops the second one from hitting Supabase at all."""
+    c = _questions(rows=[{"id": "q1"}])
+
+    first = main.get_questions(limit=1000)
+    second = main.get_questions(limit=1000)
+
+    assert first == second == [{"id": "q1"}]
+    assert len(c.selects) == 1, (
+        f"expected one query for two calls inside the TTL, got {len(c.selects)}")
+
+
+def test_a_different_key_is_not_served_from_another_keys_cache(_questions):
+    c = _questions(rows=[{"id": "q1"}])
+
+    main.get_questions(limit=1000)
+    main.get_questions(limit=5)
+
+    assert len(c.selects) == 2, (
+        "a different limit collided with another limit's cache entry")
+
+
+def test_a_different_filter_is_not_served_from_another_filters_cache(_questions):
+    c = _questions(rows=[{"id": "q1"}])
+
+    main.get_questions(limit=100, subject="algebra")
+    main.get_questions(limit=100, subject="geometry")
+
+    assert len(c.selects) == 2, (
+        "different subjects collided on the same cache entry")
+
+
+def test_the_cache_expires_after_its_ttl(_questions, monkeypatch):
+    c = _questions(rows=[{"id": "q1"}])
+    clock = {"t": 1_000.0}
+    monkeypatch.setattr(main.time, "monotonic", lambda: clock["t"])
+
+    main.get_questions(limit=1000)
+    clock["t"] += main.QUESTIONS_CACHE_TTL + 1
+    main.get_questions(limit=1000)
+
+    assert len(c.selects) == 2, (
+        "a call past the TTL was served from a cache entry that should have expired")
+
+
+def test_the_count_endpoint_is_never_cached(_questions):
+    """`/api/questions/count` was added specifically to avoid the cost the
+    list cache targets -- it must keep querying every call."""
+    c = _questions(count=3)
+
+    main.count_questions()
+    main.count_questions()
+
+    assert len(c.selects) == 2, (
+        "count_questions is being served from the list cache")
+
+
+# ── cache bound ──────────────────────────────────────────────────────────
+#
+# `/api/questions` is unauthenticated and its cache key is taken straight
+# from query params, so without a bound a sweep of distinct
+# (limit, subject, difficulty) combinations plants one permanent entry per
+# combination. These test `_TTLCache` directly rather than through
+# `get_questions`, since exercising the real 256-entry cap through the
+# endpoint would mean 257 fake Supabase round trips for no extra coverage.
+
+def test_the_cache_evicts_the_least_recently_used_entry_once_full():
+    cache = main._TTLCache(ttl=60.0, max_size=2)
+
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.set("c", 3)  # over capacity -- "a" is the least recently used
+
+    assert cache.get("a") == (None, False), "the cache grew past its bound"
+    assert cache.get("b") == (2, True)
+    assert cache.get("c") == (3, True)
+
+
+def test_reading_an_entry_protects_it_from_eviction():
+    """Otherwise this would be a bare FIFO, evicting a key that is still in
+    active use just because it was set first."""
+    cache = main._TTLCache(ttl=60.0, max_size=2)
+
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.get("a")       # "a" is now the most-recently-used
+    cache.set("c", 3)    # "b" is evicted instead
+
+    assert cache.get("a") == (1, True)
+    assert cache.get("b") == (None, False)
+
+
+def test_a_sweep_of_distinct_keys_cannot_grow_the_cache_past_its_bound(_questions):
+    """The end-to-end version: hitting `/api/questions` with many distinct
+    limits (as an unauthenticated caller freely can) must not leave behind
+    one permanent entry per limit."""
+    _questions(rows=[{"id": "q1"}])
+    max_size = main._questions_cache._max_size
+
+    for limit in range(max_size + 50):
+        main.get_questions(limit=limit)
+
+    assert len(main._questions_cache._store) <= max_size

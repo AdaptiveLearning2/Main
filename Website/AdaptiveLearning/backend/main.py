@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Path, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
-import os, math, re, requests, random, string, threading, time
+import os, math, re, requests, random, string, threading, time, collections
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta, timezone, tzinfo
@@ -2305,15 +2305,74 @@ def update_my_profile(payload: UpdateProfileRequest, request: Request):
 
 # ─── questions ───────────────────────────────────────────────────────────
 
+class _TTLCache:
+    """A tiny in-process cache for genuinely static, display-only reads.
+
+    Not a general-purpose cache -- most of this codebase deliberately never
+    caches (see the three-state freshness rules elsewhere in this file), so
+    reach for this only for a read where staleness of a few seconds is an
+    accepted tradeoff, not for anything signal/consent/session-live.
+
+    Bounded at `max_size` entries, evicting the least-recently-used one to
+    make room. The caller here is an unauthenticated endpoint whose key
+    (limit, subject, difficulty) is taken straight from query params, so
+    without a bound a sweep of distinct combinations plants one permanent
+    entry per combination -- a memory-growth vector the cache itself would
+    be introducing, where an uncached endpoint only ever cost per-call
+    CPU/DB time and left nothing behind.
+    """
+    def __init__(self, ttl: float, max_size: int = 256):
+        self._ttl = ttl
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        # key -> (expires_at, value), ordered least- to most-recently-used.
+        self._store: "collections.OrderedDict" = collections.OrderedDict()
+
+    def get(self, key):
+        with self._lock:
+            hit = self._store.get(key)
+            if hit is None:
+                return None, False
+            expires_at, value = hit
+            if expires_at < time.monotonic():
+                del self._store[key]
+                return None, False
+            self._store.move_to_end(key)
+            return value, True
+
+    def set(self, key, value):
+        with self._lock:
+            self._store.pop(key, None)
+            if len(self._store) >= self._max_size:
+                self._store.popitem(last=False)
+            self._store[key] = (time.monotonic() + self._ttl, value)
+
+
+# The teacher question bank is fetched independently (and identically) by
+# Analytics.jsx and Questions.jsx on every mount -- two full-table reads of
+# the same data during ordinary teacher navigation. Reference data, not
+# session-live state, so a short TTL is an acceptable staleness tradeoff: a
+# newly generated question can take up to this long to appear in a teacher's
+# question-bank view, which only matters for browsing/analytics, never for
+# the student's live adaptive session (that path's own duplicate-check in
+# LLM_topic_decider.py stays live/uncached).
+QUESTIONS_CACHE_TTL = _env_number("QUESTIONS_CACHE_TTL", 30.0, float, minimum=1.0)
+_questions_cache = _TTLCache(QUESTIONS_CACHE_TTL)
+
 @app.get("/api/questions")
 def get_questions(limit: int = 100, subject: str | None = None, difficulty: str | None = None):
+    key = (limit, subject, difficulty)
+    cached, hit = _questions_cache.get(key)
+    if hit:
+        return cached
     # Newest first, so "Recent Questions" on the teacher dashboard is actually
     # chronological rather than whatever order Postgres happens to return.
     q = supabase.table("questions").select("*").order("created_at", desc=True).limit(limit)
     if subject:    q = q.eq("subject", subject)
     if difficulty: q = q.eq("difficulty", difficulty)
-    res = q.execute()
-    return res.data or []
+    data = q.execute().data or []
+    _questions_cache.set(key, data)
+    return data
 
 
 @app.get("/api/questions/count")

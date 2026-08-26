@@ -1823,13 +1823,22 @@ cupboard. Both flags go false together. The two reads still fail *independently*
 case: a broken totals RPC leaves the chart standing.
 
 **And the row's `retrieved` has to be read by the tile, or that fix stops at the API boundary.**
-`ClassSignalRoster`'s `reasons()` folds it into `offLabel`'s `consentRetrieved`, which already means
-"could we find out?" and owns the one `Unavailable` string — a second literal here would be free to
-drift from `CHANNEL_STATE`. Without it the row arrives correct and renders `No sensor` anyway, from
-the zero counts, so the backend flag reads as fixed while the screen still makes the claim. The day
-count needs the same guard: `0` asserts the student recorded on no day at all. Both directions need
-a test, since replacing `No sensor` with a permanent `Unavailable` is the same bug facing the other
-way.
+Without it the row arrives correct and renders `No sensor` anyway, from the zero counts an unread row
+carries — so the backend flag reads as fixed while the screen still makes the claim. The day count
+needs the same guard: `0` asserts the student recorded on no day at all.
+
+**`cellLabel` orders it, and the order is not the order the flags arrive in.** Consent unreadable
+first, then **a known revocation, which beats the unread row**, then unread, then the sample count.
+The consent fields come from `channels` — a *different query* from the totals RPC — so when that
+read fails the revocation and its date are still fully known; reporting the outage there discards a
+fact we hold for one we do not, and `Unavailable` implies a retry might yield a number that can never
+appear for a revoked channel. Folding `retrieved` straight into `consentRetrieved` gets this wrong
+and looks right, because both spellings produce the correct answer in the two simple cases.
+
+Four states means the tests have to cover the **compound** cases, not each flag alone: `retrieved`
+false and true separately both pass against the wrong precedence. And a fixture built from a
+happy-path helper has to null *every* average, or a leftover default renders a number where the test
+expects a reason.
 
 **Both panels read the rollup, and that is load-bearing rather than tidy.** The roster started on
 `student_signal_summary_many`, which reads the per-sample tables — the right source for the weekly

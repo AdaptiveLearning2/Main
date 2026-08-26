@@ -20,34 +20,51 @@ import Panel from './Panel'
  * Kept per channel rather than one per row: a student can have EEG on and the
  * camera off, and a single reason would explain the wrong null.
  *
- * **`retrieved` outranks the rest.** When the per-student read fails while the
- * trend's succeeds, the row arrives with `retrieved: false`, null averages and
- * zero counts — and zero counts are what `offLabel` reads as "No sensor", i.e.
- * an assertion that nothing was recorded. Nobody asked. That is the same defect
- * the backend fixed one layer in, and the flag it added for it has to actually
- * be read here or the fix stops at the API boundary.
- *
- * Folded into `consentRetrieved` rather than compared against a second literal,
- * because that input already means "could we find out?" and answers with the
- * one `Unavailable` string. A copy of that string here would be a second
- * definition free to drift from `CHANNEL_STATE`.
+ * Straight from the payload — `retrieved` is applied by `cellLabel` below,
+ * where the ordering against consent can be stated.
  */
 function reasons(summary) {
-  const known = summary?.retrieved !== false && summary?.consent_retrieved !== false
   return {
     eeg: {
       on: summary?.eeg_enabled !== false,
       revokedAt: summary?.eeg_revoked_at ?? null,
-      consentRetrieved: known,
+      consentRetrieved: summary?.consent_retrieved,
       samples: summary?.cognitive_samples,
     },
     heart: {
       on: summary?.heart_included !== false,
       revokedAt: summary?.heart_revoked_at ?? null,
-      consentRetrieved: known,
+      consentRetrieved: summary?.consent_retrieved,
       samples: summary?.heart_samples,
     },
   }
+}
+
+/** The label for a cell with no number, in precedence order.
+ *
+ * `offLabel` decides three of the four states from consent and sample counts.
+ * The fourth — the per-student read failed while the trend's succeeded, so the
+ * averages were never fetched — belongs *between* them, not on top:
+ *
+ *   1. consent unreadable → `Unavailable`. Nothing about the row is known.
+ *   2. channel off → `Off since <date>`. **This beats (3).** The consent fields
+ *      come from `channels`, a different query from the one that failed, so the
+ *      revocation and its date are fully known — and `Unavailable` implies a
+ *      retry might produce a number, when for a revoked channel none can ever
+ *      appear. Reporting the outage here would discard a fact we hold for one
+ *      we do not.
+ *   3. averages unread → `Unavailable`.
+ *   4. otherwise `Calibrating` / `No sensor`, from the sample count.
+ *
+ * (3) is expressed by handing `offLabel` a false `consentRetrieved` rather than
+ * a second `'Unavailable'` literal: that input already means "could we find
+ * out?", and a copy of the string here would be free to drift from
+ * `CHANNEL_STATE`.
+ */
+function cellLabel(summary, why) {
+  const decidedByConsent = why.consentRetrieved === false || !why.on
+  const unread = !decidedByConsent && summary?.retrieved === false
+  return offLabel(unread ? { ...why, consentRetrieved: false } : why)
 }
 
 /** The class mean of one field, over the students who have a reading.
@@ -144,15 +161,15 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
                     )}
                   </th>
                   <td className="py-2 pr-4 text-gray-900 dark:text-white">
-                    {typeof s.focus === 'number' ? pct(s.focus) : offLabel(why.eeg)}
+                    {typeof s.focus === 'number' ? pct(s.focus) : cellLabel(s, why.eeg)}
                   </td>
                   <td className="py-2 pr-4 text-gray-900 dark:text-white">
-                    {typeof s.stress === 'number' ? pct(s.stress) : offLabel(why.eeg)}
+                    {typeof s.stress === 'number' ? pct(s.stress) : cellLabel(s, why.eeg)}
                   </td>
                   <td className="py-2 pr-4 text-gray-900 dark:text-white">
                     {typeof s.heart_rate_bpm === 'number'
                       ? `${Math.round(s.heart_rate_bpm)} bpm`
-                      : offLabel(why.heart)}
+                      : cellLabel(s, why.heart)}
                   </td>
                   {/* A dash, not 0, when the row was never read — a zero here
                       asserts the student recorded on no day at all, which is

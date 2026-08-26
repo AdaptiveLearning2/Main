@@ -647,6 +647,49 @@ describe('ClassSignalRoster', () => {
     expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument()
   })
 
+  it('keeps a known revocation ahead of an unread row', () => {
+    // The compound case the two tests above miss by covering `retrieved` false
+    // and true separately. Consent comes from a different query than the
+    // averages, so when the totals read fails the revocation and its date are
+    // still fully known -- and "Unavailable" both discards that and implies a
+    // retry might produce a number, when for a revoked channel none can ever
+    // appear.
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
+      per_student: [student('a', {
+        focus: null, stress: null, heart_rate_bpm: null,
+        cognitive_samples: 0, heart_samples: 0, days_recorded: 0,
+        retrieved: false,
+        eeg_enabled: false, eeg_revoked_at: '2026-06-03T00:00:00Z',
+        heart_included: false, heart_revoked_at: '2026-06-03T00:00:00Z',
+      })],
+    }} />)
+    // Every signal cell knows why it is empty, and none of them blames the outage.
+    expect(screen.getAllByText(/off since/i).length).toBe(3)
+    expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument()
+  })
+
+  it('still reports the outage for a channel that is on', () => {
+    // Teeth for the precedence: the revocation wins only where there is one.
+    // A consented channel on an unread row is genuinely unknown.
+    render(<ClassSignalRoster data={{
+      retrieved: true, days: 30, class_size: 5, summaries_retrieved: false,
+      per_student: [student('a', {
+        // An unread row carries no averages at all -- the backend nulls every
+        // one of them, so leaving a default in place would test a payload it
+        // never sends.
+        focus: null, stress: null, heart_rate_bpm: null,
+        cognitive_samples: 0, heart_samples: 0, days_recorded: 0,
+        retrieved: false,
+        eeg_enabled: true,
+        heart_included: false, heart_revoked_at: '2026-06-03T00:00:00Z',
+      })],
+    }} />)
+    // EEG is on and unread; heart is off and known.
+    expect(screen.getAllByText(/unavailable/i).length).toBe(2)
+    expect(screen.getAllByText(/off since/i).length).toBe(1)
+  })
+
   it('hides the table when the teacher has hidden sensor data', () => {
     render(<ClassSignalRoster hideSensors data={{
       retrieved: true, days: 30, class_size: 5, per_student: [student('a')],

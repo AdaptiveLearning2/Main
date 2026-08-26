@@ -2121,7 +2121,16 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
 #
 # Read through `_env_number` with a floor of 0 like every other numeric setting
 # here: this is read at import, so a typo must not take the module down.
-QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", 0, int, minimum=0)
+#
+# The default is named rather than passed as a literal because it *is* the
+# decision -- 0 is a statement about spend, not a tuning default -- and a test
+# that wants to pin it has nowhere else to read it from. Asserting on
+# `QUEUE_SIZE` instead reads whatever `QUESTION_QUEUE_SIZE` is set to in the
+# environment, so a deployment exercising the very knob this exposes turns the
+# suite red; asserting on `_env_number(..., 0, ...)` passes the answer in as an
+# argument and checks nothing. Both were tried, in that order.
+QUESTION_QUEUE_SIZE_DEFAULT = 0
+QUEUE_SIZE = _env_number("QUESTION_QUEUE_SIZE", QUESTION_QUEUE_SIZE_DEFAULT, int, minimum=0)
 _prefetch_cache: dict[str, list] = {}   # user_id → list of questions
 _prefetch_lock = threading.Lock()
 _prefetch_active: dict[str, int] = {}   # user_id → count of in-flight workers
@@ -2226,6 +2235,10 @@ def _generation_waiter():
     finally:
         if admitted:
             _generation_waiters.release()
+
+
+# Guards `_generation_hits` above -- separated from it by the waiter block, so
+# keep the two visually together rather than letting this drift further.
 _generation_hits_lock = threading.Lock()
 _generation_sweep_at = time.monotonic()
 

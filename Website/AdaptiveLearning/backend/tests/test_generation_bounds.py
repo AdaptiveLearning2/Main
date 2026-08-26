@@ -205,15 +205,16 @@ def test_the_queue_is_off_by_default_so_nothing_is_generated_before_it_is_asked_
     of every student who closes the tab. Asserted on the default value *and* on
     the behaviour, because a default nothing reads is not a default.
     """
-    # Asserted on the *default resolution* with no env var set, not on
-    # main.QUEUE_SIZE, which resolves QUESTION_QUEUE_SIZE at import: reading
-    # the module value makes setting the very env var this exists to expose
-    # turn the suite red with a message blaming a source change that did not
-    # happen. Same trap CLAUDE.md documents for a locally-edited
-    # EEGResearch/.env, and the same shape test_llm_client.py avoids for
-    # LLM_PROVIDER.
-    monkeypatch.delenv("QUESTION_QUEUE_SIZE", raising=False)
-    assert main._env_number("QUESTION_QUEUE_SIZE", 0, int, minimum=0) == 0,         "the source default changed; this is a billing decision"
+    # Read from main's own named constant, which is the only place that holds
+    # the source default. Two wrong ways were tried first and both are worth
+    # not repeating: asserting on `main.QUEUE_SIZE` reads whatever
+    # QUESTION_QUEUE_SIZE is set to in the environment, so a deployment
+    # exercising this knob turns the suite red for a source change that never
+    # happened; asserting on `_env_number("QUESTION_QUEUE_SIZE", 0, ...)`
+    # passes the expected answer in as an argument and would pass with the
+    # source default flipped to anything.
+    assert main.QUESTION_QUEUE_SIZE_DEFAULT == 0, \
+        "the source default changed; this is a billing decision"
 
     # The behaviour is pinned explicitly rather than inherited, so this half
     # holds whatever the deployment has configured.

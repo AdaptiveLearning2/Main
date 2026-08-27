@@ -101,12 +101,15 @@ _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 # The default is sized off the product rather than picked round, and it is
 # counted in **calls**, not questions: a question served is two of them, the
 # topic-and-difficulty decision and the generation. A class of 30 answering 20
-# questions in a day is ~600 questions and so ~1200 calls. 1500 covers that
-# with headroom and stops well short of a second class -- which is the point.
-# This was 5000, described as "eightfold headroom on ~600 generations"; that
-# arithmetic compared a call ceiling against a question count and so overstated
-# the headroom by two, and 5000 is in any case a larger runaway than a product
-# with no deployment yet has any reason to leave available.
+# questions in a day is ~600 questions and so ~1200 calls; at 30 questions it
+# is ~1800. 2500 covers the second shape with room for retries, and stops well
+# short of a second class -- which is the point.
+#
+# It was 5000, described as "eightfold headroom on ~600 generations": that
+# compared a call ceiling against a question count and overstated the headroom
+# by two. Corrected to 1500 against a 20-question day, which was then under the
+# 1800 a 30-question day actually makes -- the ceiling has to be sized against
+# the workload, not against the example that happened to be written down.
 #
 # What bounds one call is `max_tokens`, not this: 2048 output tokens at Haiku
 # 4.5's $5/MTok is ~$0.0102, so the worst case here is ~$15/day where the
@@ -119,7 +122,7 @@ _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 # uvicorn workers multiply it, and a restart resets the window, so a crash-loop
 # defeats it entirely. Same tradeoff `_STRATEGY_RATE_LIMIT` documents -- the
 # job is to bound a runaway, not to bill-count exactly.
-GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 1500, int, minimum=1)
+GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 2500, int, minimum=1)
 _call_times: list[float] = []
 _call_lock = threading.Lock()
 

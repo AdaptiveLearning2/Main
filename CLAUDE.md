@@ -2579,15 +2579,17 @@ the hottest path in the product and had none:
 | Per-call deadline | `GENERATION_LLM_TIMEOUT` (30s) | The SDK's own default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
 | Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
-| Spend | `GENERATION_DAILY_CALL_LIMIT` (1500/24h, Claude only) | Nothing bounded it; free against a local model |
+| Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24h, Claude only) | Nothing bounded it; free against a local model |
 | Waiting callers | `GENERATION_MAX_WAITERS` (12) | See below — this was the fourth bound, and it was missing |
 
 **The spend ceiling counts calls, and a question served is two of them** — the topic-and-difficulty
 decision and the generation. It was 5000, justified as "eightfold headroom" on ~600 generations a
 day; that compared a call ceiling against a question count and overstated the headroom by two.
-1500 is ~1.25x a class of 30 answering 20 questions. **Size it against the worst case, not the
+Corrected to 1500 against a 20-question day, which was then *under* the ~1800 calls a 30-question
+day actually makes — **size it against the workload, not against whichever example is written
+down.** 2500 covers that with room for retries. **And size it against the worst case, not the
 average:** `max_tokens=2048` at Haiku 4.5's $5/MTok makes one call cost up to ~$0.0102, so the
-ceiling is ~$15/day where the ~$0.003-per-question average suggests ~$4.50. It bounds neither
+ceiling is ~$25/day where the ~$0.0023-per-question average suggests ~$2. It bounds neither
 tokens (seeding more lesson-plan text raises the bill without moving it) nor a restarting process
 (in-memory, so several uvicorn workers multiply it and a crash-loop defeats it).
 

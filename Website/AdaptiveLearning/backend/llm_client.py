@@ -98,16 +98,28 @@ _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 # Scoped to the Claude branch on purpose: Ollama is local and free, so a call
 # ceiling there would refuse a child a question to protect nothing.
 #
-# The default is sized off the product rather than picked round: a class of 30
-# answering 20 questions in a day is ~600 generations, plus prefetch discarded
-# when a session ends. 5000 is roughly eightfold headroom on that -- enough
-# that a pilot never meets it, low enough that a runaway loop is a knowable
-# amount of money rather than an open tab.
+# The default is sized off the product rather than picked round, and it is
+# counted in **calls**, not questions: a question served is two of them, the
+# topic-and-difficulty decision and the generation. A class of 30 answering 20
+# questions in a day is ~600 questions and so ~1200 calls. 1500 covers that
+# with headroom and stops well short of a second class -- which is the point.
+# This was 5000, described as "eightfold headroom on ~600 generations"; that
+# arithmetic compared a call ceiling against a question count and so overstated
+# the headroom by two, and 5000 is in any case a larger runaway than a product
+# with no deployment yet has any reason to leave available.
 #
-# In-process, so with several uvicorn workers the effective ceiling is this
-# many per worker. Same tradeoff `_STRATEGY_RATE_LIMIT` documents: the job is
-# to bound a runaway, not to bill-count exactly.
-GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 5000, int, minimum=1)
+# What bounds one call is `max_tokens`, not this: 2048 output tokens at Haiku
+# 4.5's $5/MTok is ~$0.0102, so the worst case here is ~$15/day where the
+# ~$0.003-per-question average suggests ~$4.50. Size this against the worst
+# case; the average is not what a runaway produces.
+#
+# Two things it does not bound, both worth knowing before trusting it. It
+# counts calls rather than tokens, so seeding more lesson-plan text raises the
+# bill without moving the ceiling. And it is in-process and in-memory: several
+# uvicorn workers multiply it, and a restart resets the window, so a crash-loop
+# defeats it entirely. Same tradeoff `_STRATEGY_RATE_LIMIT` documents -- the
+# job is to bound a runaway, not to bill-count exactly.
+GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 1500, int, minimum=1)
 _call_times: list[float] = []
 _call_lock = threading.Lock()
 

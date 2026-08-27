@@ -79,12 +79,22 @@ neither the module nor the fix. Silence it inside Python instead
 (`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe **one module per
 call**, so the error can say which import failed. Applies to every dependency check in that file.
 
-**Two venvs exist and only one is the sidecar's.** `EEGResearch/.venv` is what `start.ps1` uses;
-there is also a `.venv` at the repo root with a different OpenCV. `pip install -e ".[face,gaze]"`
-has to run *from* `EEGResearch`, or pip resolves `.` to the repo root and reports "neither setup.py
-nor pyproject.toml found".
+**Three venvs exist and `start.ps1` uses two of them.** `EEGResearch/.venv` is the sidecar's and
+`Website/AdaptiveLearning/backend/.venv` is the website backend's — that is the one
+`uvicorn main:app` runs under, so it is where `backend/requirements.txt` has to be installed. There
+is also a `.venv` at the repo root, with a different OpenCV, which is what `pytest` runs under.
+`pip install -e ".[face,gaze]"` has to run *from* `EEGResearch`, or pip resolves `.` to the repo
+root and reports "neither setup.py nor pyproject.toml found".
 
-**Both venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13). Every direct
+**A package present in the root venv says nothing about the backend's.** The suite passing is not
+evidence the app can import something: `anthropic` was in the root venv and absent from
+`backend/.venv` for the whole of the Claude migration, so every test passed while a live
+`LLM_PROVIDER=claude` run would have died on the first generation with `ModuleNotFoundError` — and
+`llm_client` imports it lazily, so not at boot, but on the first question a student asked. Install a
+new runtime dependency into `backend/.venv` in the same change that pins it.
+
+**The sidecar and root venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13;
+`backend/.venv` is on 3.14.7 too but was not part of that measurement). Every direct
 dependency in both trees already ships a `cp314`/`win_amd64` wheel or a version-agnostic
 `py3-none-any` one — `mediapipe`, `opencv-contrib-python`/`opencv-python` (the `<5` pin still
 resolves), `onnxruntime`, `numpy`, `scipy`, `jax`/`jaxlib`, `h5py`, `av` all installed clean.

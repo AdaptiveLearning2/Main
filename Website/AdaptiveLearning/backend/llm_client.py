@@ -134,6 +134,43 @@ _call_lock = threading.Lock()
 CLAUDE_MAX_RETRIES = _env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
 
 
+def _claude_sampling(claude_temperature):
+    """The sampling kwargs for one Claude call -- usually none at all.
+
+    `temperature` is NOT a parameter of `messages.create` in anthropic 1.x. It
+    went with the 0.x -> 1.x major version, so passing it raises `TypeError:
+    Messages.create() got an unexpected keyword argument 'temperature'` before
+    a request is ever built -- on every question, from the first call. The plan
+    for this migration corrected Ollama's 1.1 down into Anthropic's 0.0-1.0
+    range, which was a real problem and not this one.
+
+    Nothing caught it because the test double accepted `**kwargs`, so the suite
+    pinned a request shape the SDK cannot accept. `_FakeMessages.create` now
+    validates against the real signature.
+
+    The default is to send no sampling parameter at all: the API's own default
+    temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to,
+    so the hot path asks for nothing and cannot be refused for asking. A caller
+    wanting something else -- `_llm_strategies` wants 0.4, because advice a
+    parent reads is not the place for "keep it varied" -- gets it through
+    `extra_body`, the escape hatch for a wire parameter the typed signature no
+    longer carries.
+
+    That `extra_body` path is UNVERIFIED: the account had no credits when this
+    was written, so no billed call could confirm the wire still accepts
+    `temperature` for this model. It degrades safely -- `_llm_strategies`
+    catches everything and falls back to the rule-based list -- but if the
+    strategies pass reports `source: "rule-based"` against a working key, this
+    is the first thing to check.
+    """
+    if claude_temperature is None:
+        return {}
+    temp = min(1.0, max(0.0, claude_temperature))
+    if temp == CLAUDE_TEMPERATURE:
+        return {}
+    return {"extra_body": {"temperature": temp}}
+
+
 class GenerationUnavailable(RuntimeError):
     """A bound refused this call: the daily ceiling, or a concurrency slot.
 
@@ -237,14 +274,12 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
                 f"budget of {budget}s spent waiting for a model slot")
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
-            temp = CLAUDE_TEMPERATURE if claude_temperature is None \
-                else min(1.0, max(0.0, claude_temperature))
             client = _get_anthropic_client().with_options(timeout=remaining)
             resp = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=max_tokens,
-                temperature=temp,
                 messages=[{"role": "user", "content": prompt}],
+                **_claude_sampling(claude_temperature),
             )
             return next((b.text for b in resp.content if b.type == "text"), "")
 

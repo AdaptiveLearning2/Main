@@ -29,11 +29,36 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(llm_client, "_anthropic_client", None)
 
 
+def _real_create_params():
+    """Parameter names the installed SDK's `messages.create` actually accepts.
+
+    Read off `anthropic` itself rather than listed here, so the check tracks
+    the pinned version instead of a copy of it that ages.
+    """
+    import inspect
+    import anthropic
+    sig = inspect.signature(anthropic.Anthropic(api_key="x").messages.create)
+    return set(sig.parameters)
+
+
 class _FakeMessages:
     def __init__(self, owner):
         self._owner = owner
 
     def create(self, **kwargs):
+        # The load-bearing line. This double used to take `**kwargs` and record
+        # them, so every assertion about "the request we build" was made
+        # against a stub that accepts anything -- including `temperature`,
+        # which anthropic 1.x removed and which raises TypeError before a
+        # request is built. The suite was green over a call that could not run.
+        # A double that is more permissive than the thing it stands in for
+        # cannot fail on the one difference that matters.
+        unknown = set(kwargs) - _real_create_params()
+        assert not unknown, (
+            f"messages.create() does not accept {sorted(unknown)} in "
+            f"anthropic {__import__('anthropic').__version__} -- this would "
+            f"raise TypeError against the real SDK"
+        )
         self._owner.calls.append(kwargs)
         return type("Resp", (), {"content": [
             type("Block", (), {"type": "thinking", "text": "ignored"})(),
@@ -132,35 +157,60 @@ def test_the_ollama_model_is_selectable(monkeypatch):
 
 # ─── the sampling parameters that would have 400'd ───────────────────────
 
-def test_the_claude_branch_sends_a_temperature_in_range_and_no_top_p_or_top_k(monkeypatch):
+def test_the_ollama_sampling_parameters_do_not_reach_the_claude_request(monkeypatch):
     """The failure this pins is total, not partial.
 
-    `temperature=1.1` is every generation call site's default and is outside
-    Anthropic's accepted range, so passing the Ollama parameters through would
-    have failed every question on every topic -- not degraded them.
+    Every generation call site passes Ollama's `temperature=1.1, top_p=0.95,
+    top_k=100`. None of the three may reach `messages.create`: `top_p`/`top_k`
+    are not parameters of it in anthropic 1.x, and neither is `temperature`.
+    Sent, they raise TypeError before a request exists -- every question, on
+    every topic, from the first call.
     """
     fake = _claude(monkeypatch)
     llm_client.generate_text("p", temperature=1.1, top_p=0.95, top_k=100)
     sent = fake.calls[0]
-    assert 0.0 <= sent["temperature"] <= 1.0
+    assert "temperature" not in sent
     assert "top_p" not in sent
     assert "top_k" not in sent
     assert sent["model"] == llm_client.CLAUDE_MODEL
     assert sent["messages"] == [{"role": "user", "content": "p"}]
 
 
+def test_the_hot_path_asks_for_no_sampling_parameter_at_all(monkeypatch):
+    """Generation takes the API's own default temperature, which is 1.0 -- the
+    same value `CLAUDE_TEMPERATURE` defaults to.
+
+    Asking for nothing is what makes the hot path unrejectable: there is no
+    parameter for the wire to refuse. `extra_body` stays absent here, since an
+    unnecessary one would put the 99% path on the unverified escape hatch.
+    """
+    fake = _claude(monkeypatch)
+    llm_client.generate_text("p")
+    assert "extra_body" not in fake.calls[0]
+
+
 def test_a_caller_can_ask_for_its_own_claude_temperature(monkeypatch):
-    """The strategies pass writes advice a parent reads, and wants 0.4."""
+    """The strategies pass writes advice a parent reads, and wants 0.4.
+
+    It travels in `extra_body` because the typed signature no longer carries
+    it. Asserted on the wire shape rather than a kwarg, so this test cannot
+    again pass against a request the SDK would reject.
+    """
     fake = _claude(monkeypatch)
     llm_client.generate_text("p", claude_temperature=0.4)
-    assert fake.calls[0]["temperature"] == 0.4
+    assert fake.calls[0]["extra_body"] == {"temperature": 0.4}
 
 
 def test_an_out_of_range_claude_temperature_is_clamped_rather_than_sent(monkeypatch):
-    """A caller passing Ollama's 1.1 through the Claude knob still must not 400."""
+    """A caller passing Ollama's 1.1 through the Claude knob still must not 400.
+
+    Clamped to 1.0, which equals the default, so it collapses to sending
+    nothing -- the clamp and the omission agree rather than fighting.
+    """
     fake = _claude(monkeypatch)
     llm_client.generate_text("p", claude_temperature=1.1)
-    assert fake.calls[0]["temperature"] == 1.0
+    assert "extra_body" not in fake.calls[0]
+    assert "temperature" not in fake.calls[0]
 
 
 def test_the_timeout_reaches_the_client_rather_than_the_request(monkeypatch):

@@ -2560,15 +2560,32 @@ multiplies underneath that.
 an Anthropic account; a deployment opts in with `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. Both
 packages are pinned in `requirements.txt` and neither is imported until its branch is taken.
 
-**The sampling parameters do not carry across, and getting that wrong fails everything rather than
-degrading it.** Every generation call site passes `temperature=1.1`, which is outside Anthropic's
-0.0–1.0 range — passed through it returns `400 invalid_request_error` on every question, on every
-topic, from the first call. So the Claude branch takes its own `CLAUDE_TEMPERATURE` (default 1.0,
-clamped) and sends **no `top_p`/`top_k`**, since on Claude 4.x and later at most one of
-`temperature`/`top_p` should be set. `claude_temperature=` is the per-caller override; the strategies
-pass uses it to keep its 0.4, because advice a parent reads is not the place for "keep it varied".
-`test_llm_client.py` pins the request that is *built* — nothing else does, and a test that only
-checks a question came back passes against a fixture while saying nothing about what was sent.
+**`temperature` is not a parameter of `messages.create` in `anthropic` 1.x, so the Claude branch
+sends no sampling parameter at all.** It went with the 0.x → 1.x major version, along with `top_p`
+and `top_k`. Passing it raises `TypeError: Messages.create() got an unexpected keyword argument
+'temperature'` *before a request is built* — every question, on every topic, from the first call.
+The migration plan had corrected Ollama's `temperature=1.1` down into Anthropic's 0.0–1.0 range,
+which is a real constraint and a different problem; the corrected value was equally unsendable.
+
+The API's own default temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to, so
+the hot path asks for nothing and cannot be refused for asking. A caller wanting something else —
+`_llm_strategies` wants 0.4 — goes through `_claude_sampling`, which puts it in `extra_body`, the
+escape hatch for a wire parameter the typed signature no longer carries. **That path is unverified**
+(no credits when it was written) and degrades safely, but a strategies response reading
+`source: "rule-based"` against a working key is the first place to look.
+
+**A test double must not be more permissive than the thing it stands in for.** This survived every
+review and a green suite because `_FakeMessages.create` took `**kwargs` — so `test_llm_client.py`
+pinned a request shape the SDK cannot accept, and the one assertion anyone would have trusted
+(*"the request we build is valid"*) was the one that could not fail. It now validates every kwarg
+against `inspect.signature` of the **installed** SDK, read at call time rather than copied into a
+list that ages. Any future parameter the pinned version drops fails there instead of on a student's
+first question.
+
+Verification stops at the network boundary without credits, and that boundary is still worth
+reaching: a `400` carrying a `request_id` proves the request was built, sent, and validated — a
+`TypeError` proves it never left the process. Distinguish the two before concluding anything about
+a request's shape.
 
 **Four bounds, because CLAUDE.md already required them of the one model-backed endpoint that existed
 before this** (see *The strategies model pass is optional and bounded*). Question generation is on

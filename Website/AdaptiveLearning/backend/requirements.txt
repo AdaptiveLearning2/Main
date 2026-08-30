@@ -17,12 +17,12 @@
 #
 # To upgrade: bump a pin, rebuild the venv, run `python -m pytest tests/`.
 
-fastapi==0.139.2
-uvicorn[standard]==0.51.0
-python-dotenv==1.2.2
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+python-dotenv==1.2.3
 supabase==2.31.0
 requests==2.34.2
-openai==2.46.0
+openai==3.5.0
 flask==3.1.3
 flask_cors==6.0.5
 ollama==0.6.2
@@ -30,6 +30,6 @@ ollama==0.6.2
 # between them at runtime and defaults to ollama, so a deployment can be
 # switched over -- or switched back off a misbehaving model -- without a
 # rebuild. Neither import runs until its branch is taken.
-anthropic==1.0.0
+anthropic==1.1.0
 sympy==1.14.0
-tzdata==2026.1
+tzdata==2026.3

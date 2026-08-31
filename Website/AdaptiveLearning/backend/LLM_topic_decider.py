@@ -32,17 +32,54 @@ ALL_TOPICS = [
 # because an 8B model does not reliably follow prose instructions. Keyed on
 # the raw grade string rather than a _grade_band()-style band, since the rule
 # splits between grade 5 and grade 6 -- finer than any four-band split.
+# The grade at which each topic's core concept is introduced, by CCSS code.
+#
+# Per topic rather than three grade brackets, for the reason
+# `SCENARIO_MIN_GRADE` is per scenario: a bracket has to be *remembered* for
+# every topic it should exclude, and two were missed. Measured over 640
+# generated questions, grades 1-9 --
+#
+#   angle_relationships was allowed from grade 4 against 7.G.5. Every one of
+#   30 questions at grades 4, 5 and 6 was above grade: a 4th grader asked
+#   "Two angles form a linear pair. If one measures 65 degrees, find the
+#   other" is being asked a grade-7 question, three years early, every time.
+#
+#   probability was allowed from grade 6 against 7.SP.5. 10 of 10 at grade 6.
+#
+# Neither is fixable by prompt or by band table -- the topic reaches the
+# student before the concept does, so there is no version of the question that
+# is grade-appropriate.
+TOPIC_MIN_GRADE = {
+    "ordering":            1,   # 1.NBT.3, comparing whole numbers
+    "expressions":         1,   # 1.OA, add and subtract within 20
+    "geometry":            1,   # content is bounded by the band ceiling in
+                                # LLM_geometry_generation.SCENARIO_MIN_GRADE
+    "rationals":           4,   # 4.NF.3, fractions with like denominators
+    # KNOWN GAP, deliberately left: 6.SP.5c introduces mean, median and mode,
+    # so 4 is two years early and the audit flagged 10 of 10 at grades 4 and 5
+    # in all six cells. Left at 4 because raising it is a product decision
+    # about what grades 4-5 are offered at all -- with angle_relationships
+    # gone they would drop to five topics -- not a defect to fix in passing.
+    # Recorded here rather than in a comment elsewhere so the next reader sees
+    # it beside the numbers it contradicts.
+    "mean":                4,   # 6.SP.5c
+    "median":              4,   # 6.SP.5c
+    "mode":                4,   # 6.SP.5c
+    "algebra":             6,   # 6.EE.7, one-variable equations
+    "angle_relationships": 7,   # 7.G.5, complementary and supplementary
+    "probability":         7,   # 7.SP.5
+}
+
+
 def _allowed_topics(grade):
     # Reads the grade number via grade_levels instead of matching dropdown
     # strings exactly, since profiles.grade_level is free text. An unreadable
-    # grade is treated as the youngest, so it can't fall through to the
-    # fully-permissive branch.
+    # grade is treated as the youngest, so it cannot fall through to a
+    # permissive branch.
     number = grade_levels.grade_number(grade)
-    if number is None or number <= 3:
-        return ["ordering", "geometry", "expressions"]
-    if number <= 5:
-        return [t for t in ALL_TOPICS if t not in ("algebra", "probability")]
-    return list(ALL_TOPICS)  # 6th grade and up
+    if number is None:
+        number = 1
+    return [t for t in ALL_TOPICS if TOPIC_MIN_GRADE[t] <= number]
 
 
 def _safe_topic(topic, grade):

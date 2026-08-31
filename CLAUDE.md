@@ -2712,9 +2712,23 @@ algebra and probability should only appear after grade 6" -- but nothing enforce
 enough to matter -- picked uniformly across all 10 topics with **no grade parameter at all**. That
 was the most direct way a 1st grader landed on "algebra".
 
-`LLM_topic_decider._allowed_topics(grade)` is now the single source of truth for that rule, keyed
-on the grade *number* rather than a `_grade_band()`-style band -- the rule's own line falls
-between grade 5 and grade 6, finer than any four-band split.
+`LLM_topic_decider._allowed_topics(grade)` is the single source of truth for that rule, and it is
+keyed on **`TOPIC_MIN_GRADE`, one entry per topic**, not on grade brackets. Brackets were the
+original shape and they have to be *remembered* for every topic they should exclude — two were not.
+Measured over 640 generated questions, grades 1-9: `angle_relationships` was allowed from grade 4
+against **7.G.5**, and all 30 questions at grades 4, 5 and 6 were above grade; `probability` was
+allowed from grade 6 against **7.SP.5**, 10 of 10. Neither is reachable by prompt tuning or by a band
+table — the topic arrives before the concept, so no version of the question is grade-appropriate.
+Same lesson as `SCENARIO_MIN_GRADE` one file over: a per-bucket allowlist can omit a bucket, a
+per-item minimum cannot, and an item added without one fails a test rather than defaulting to
+available everywhere.
+
+**`mean`/`median`/`mode` sit at 4 against 6.SP.5c and that is a recorded decision, not an
+oversight.** The same audit flagged 10 of 10 at grades 4 and 5 in all six cells. They stay because
+raising them is a question about what grades 4-5 are offered at all — with `angle_relationships`
+gone they would drop to five topics — rather than a defect to fix in passing.
+`test_mean_median_mode_are_knowingly_early` is where that decision lives, so changing it means
+changing a test that says why.
 
 **A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
 youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"

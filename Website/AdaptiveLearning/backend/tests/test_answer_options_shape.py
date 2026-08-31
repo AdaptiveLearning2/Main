@@ -94,3 +94,40 @@ def test_no_two_options_render_the_same(name, module, entry, payload, monkeypatc
     shown = [rendered(o) for o in options]
     assert len(set(shown)) == len(shown), \
         f"{name}: two options look identical on screen: {shown}"
+
+
+@pytest.mark.parametrize("name,module,entry,payload",
+                         CASES, ids=[c[0] for c in CASES])
+def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
+    """The consistency the two tests above do not pin.
+
+    They assert what the client needs -- one JSON-identical match, no two
+    options rendering alike -- and both held against geometry's mixed
+    `['13.93', 27.86, 5.0, 41.79]`, correctly, because that list was not
+    broken. So a revert to `round(float(ans), 2)` would keep them green, which
+    makes them the wrong guard for the change they shipped with.
+
+    This is the right one. It fails on a mixed list directly, and it states the
+    property that made the mixed list worth changing: the correct option
+    matched only because it was the same object that went into the list, and
+    one type throughout is what turns that from an accident into a
+    construction.
+    """
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
+                        lambda prompt, topic, band: prompt)
+    if hasattr(module, "grade_appropriateness"):
+        monkeypatch.setattr(module.grade_appropriateness, "refuse",
+                            lambda *a, **k: False)
+    if hasattr(module, "question_consistency"):
+        monkeypatch.setattr(module.question_consistency, "dataset_mismatch",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(module.question_consistency, "negation_mismatch",
+                            lambda *a, **k: None)
+
+    question = getattr(module, entry)([], [], "medium", "8th Grade")
+    options = json.loads(json.dumps(question))["answer_options"]
+
+    types = {type(o).__name__ for o in options}
+    assert len(types) == 1, f"{name}: options mix {sorted(types)}: {options}"

@@ -466,26 +466,65 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [7, 8, 9, 17, 18],
 }
 
-# Circle, 3D volume, and pythagorean-theorem scenarios need formulas grades
-# 1-3 haven't reached, so "early" band is restricted to what grade-3 geometry
-# standards actually cover: area of a rectangle (3.MD.7, length x width) and
-# perimeter of a polygon (3.MD.8, add the sides). Grades 1-2 in that band get
-# the ceiling of what this topic can offer them, since bands are coarser than
-# a single grade.
+# The grade at which each scenario's formula is introduced, by CCSS code.
 #
-# Scenario 3 (triangle_area) was in this set and is not grade-3 material:
-# 1/2 x base x height is CCSS 6.G.1, three years above the top of this band.
-# Found by reading generated output rather than by any check -- a 1st grader
-# was asked "A triangle has a base of 8 units and a height of 5 units. What is
-# its area?", which `grade_appropriateness` passes because it looks only for
-# variable notation. The seeded lesson plans do not stop it either: they steer
-# what a scenario asks, not which scenarios are offered.
-EARLY_BAND_SCENARIOS = {1, 2, 4}
+# This replaces a single `EARLY_BAND_SCENARIOS` allowlist, and the replacement
+# is the point rather than the values. That allowlist filtered one band and
+# left the other three unfiltered, so fixing `early` did nothing for `middle`
+# -- grades 4-6 -- which was being offered the Pythagorean theorem (8.G.7),
+# circle area (7.G.4), and on the hard tier *only* volumes, two of them
+# 8.G.9. A 4th grader on that tier was always asked a grade-8 question.
+#
+# Keyed per scenario so no band can be forgotten: every band is filtered by
+# the same rule, and a scenario added without a grade here fails
+# `tests/test_early_band_geometry.py` rather than silently defaulting to
+# available everywhere.
+SCENARIO_MIN_GRADE = {
+    "rectangle_area":                    3,   # 3.MD.7
+    "rectangle_perimeter":               3,   # 3.MD.8
+    "triangle_perimeter":                3,   # 3.MD.8
+    "rect_area_missing_side":            4,   # 4.MD.3, unknown side from area
+    "rect_perimeter_missing_side":       4,   # 4.MD.3
+    "triangle_perimeter_missing_side":   4,   # 4.MD.3
+    "rect_volume":                       5,   # 5.MD.5
+    "cube_volume":                       5,   # 5.MD.5
+    "triangle_area":                     6,   # 6.G.1
+    "triangle_area_missing_side":        6,   # 6.G.1 inverted
+    "circle_area":                       7,   # 7.G.4
+    "circle_circumference":              7,   # 7.G.4
+    "circle_area_missing_side":          7,   # 7.G.4 inverted
+    "circle_circumference_missing_side": 7,   # 7.G.4 inverted
+    "pythagorean":                       8,   # 8.G.7
+    "cylinder_volume":                   8,   # 8.G.9
+    "sphere_volume":                     8,   # 8.G.9
+    "pyramid_volume":                    9,   # HS G-GMD.3; not in 8.G.9
+}
+
+# The top grade in each band -- `grade_levels.grade_band` buckets 1-3, 4-6,
+# 7-8, 9+.
+#
+# Gating on the *top* means a 4th grader can meet grade-6 content. That is the
+# cost of bands being coarser than grades, it is the same trade the early band
+# already made, and it is a far smaller one than offering that student the
+# Pythagorean theorem.
+_BAND_CEILING = {"early": 3, "middle": 6, "upper": 8, "advanced": 13}
+
+
+def _band_scenarios(grade_band):
+    """Scenario numbers whose formula the band has actually reached."""
+    ceiling = _BAND_CEILING.get(grade_band, _BAND_CEILING["advanced"])
+    return {number for number, name in _SCENARIO_NAMES.items()
+            if SCENARIO_MIN_GRADE[name] <= ceiling}
+
 
 def _pick_scenario(difficulty, grade_band):
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
-    if grade_band == "early":
-        candidates = [s for s in candidates if s in EARLY_BAND_SCENARIOS] or sorted(EARLY_BAND_SCENARIOS)
+    allowed = _band_scenarios(grade_band)
+    # Every band is filtered, not just `early`. Falling back to the whole
+    # allowed set matters most where a tier holds nothing the band has reached:
+    # the hard tier is entirely volumes, of which only the two rectangular ones
+    # are grade 5, so middle would otherwise have no candidates at all.
+    candidates = [s for s in candidates if s in allowed] or sorted(allowed)
     return random.choice(candidates)
 
 # Difficulty governs which scenario gets picked above; grade controls the

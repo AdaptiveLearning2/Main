@@ -2910,6 +2910,22 @@ It read as intermittent for two compounding reasons, and both are worth recognis
 reaches `simplify` about one time in three, and only above the `middle` band. **A hang that depends
 on a random branch below a grade gate looks like flakiness and is not.**
 
+**A CPU-bound sympy call cannot be bounded in-process, so `safe_solve.py` runs it in a killable
+subprocess** — `parse_expr("9**9**9")` and `solve` on `9**9**9 + x = 5` never return, the operand is
+the model's, and the spin holds the GIL inside CPython's long-integer code, so a watchdog thread
+never gets scheduled and a signal handler never runs. Only an external kill works. It costs ~0.85s of
+sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
+expression or equation is solved. **`algebra` and `expressions` both go through it**; wiring one and
+not the other is how this was found the second time.
+
+**A `raise` from a helper does not reach a retry loop the call site sits below.** Every generator's
+`for ... else` has already run by the time the solve happens, unless the solve was deliberately moved
+inside — so a helper that raises to signal "unusable reply" produces a 500, not another attempt.
+`incorrect_solution_generation`'s non-finite `ValueError` was documented as reaching the loop and
+could not; `LLM_geometry_generation._solve_scenario` is the fix, and the rule generalises: **if the
+recovery is a retry, the check belongs above the `break`, and returning `None` says so where raising
+does not.**
+
 **Use `faulthandler.dump_traceback_later(n, exit=True)` rather than reasoning about where a hang is.**
 Two plausible mechanisms were proposed and implemented against this one before it was measured —
 `parse_expr` eagerly evaluating an exponent tower (real: `9**9**9` never returns, and

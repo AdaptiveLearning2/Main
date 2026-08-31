@@ -1,4 +1,5 @@
 ﻿# Generates area/perimeter/volume geometry questions via LLM and solves them with sympy.
+import math
 import os
 import re
 import random
@@ -471,6 +472,87 @@ _SCENARIO_NAMES = {
 }
 
 
+def _solve_scenario(scenario, raw_vars, attempt):
+    """The scenario's numeric solution, or None to retry.
+
+    Extracted so it can run *inside* the retry loop. It used to sit below the
+    `for/else`, which made every way it can fail a 500 rather than another
+    attempt -- and `generate_general_incorrect_answers` raising on a
+    non-finite solution was documented here as "reaching the retry loop" when
+    it could not: `side: 1e200` makes `solve_cube_volume` return 1e600, and
+    that escaped `generate_geometry_question` on attempt 1.
+
+    `sympify` runs on the model's values, so it is bounded like every other
+    solve on this path -- an exponent tower in a variable would otherwise spin
+    holding the GIL, where nothing in-process can interrupt it.
+    """
+    try:
+        vars = preprocess_variables(raw_vars)
+    except Exception as e:
+        print(f"[Attempt {attempt}] Unusable variables: "
+              f"{type(e).__name__}: {e}")
+        return None
+
+    try:
+
+        match (scenario):
+            case "rectangle_area":
+                solution = solve_rectangle_area(vars["length"], vars["width"])
+            case "rectangle_perimeter":
+                solution = solve_rectangle_perimeter(vars["length"], vars["width"])
+            case "triangle_area":
+                solution = solve_triangle_area(vars["base"], vars["height"])
+            case "triangle_perimeter":
+                solution = solve_triangle_perimeter(vars["s1"], vars["s2"], vars["s3"])
+            case "circle_area":
+                solution = solve_circle_area(vars["radius"])
+            case "circle_circumference":
+                solution = solve_circle_circumference(vars["radius"])
+            case "rect_volume": 
+                solution = solve_rect_volume(vars["length"], vars["width"], vars["height"])
+            case "cylinder_volume":
+                solution = solve_cylinder_volume(vars["radius"], vars["height"])
+            case "sphere_volume":
+                solution = solve_sphere_volume(vars["radius"])
+            case "cube_volume":
+                solution = solve_cube_volume(vars["side"])
+            case "pyramid_volume":
+                solution = solve_pyramid_volume(vars["base_area"], vars["height"])
+            case "pythagorean":
+                solution = solve_pythag(vars["a"], vars["b"])
+            case "rect_area_missing_side" :
+                solution = rect_area_missing_side(vars["area"], vars["known_side"])
+            case "rect_perimeter_missing_side" :
+                solution = rect_perimeter_missing_side(vars["perimeter"], vars["known_side"])
+            case "circle_area_missing_side":
+                solution = circle_area_missing_side(vars["area"])
+            case "circle_circumference_missing_side":
+                solution = circle_circumference_missing_side(vars["circumference"])
+            case "triangle_area_missing_side" :
+                solution = triangle_area_missing_side(vars["area"], vars["known_side"])
+            case "triangle_perimeter_missing_side" :
+                solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
+    except Exception as e:
+        print(f"[Attempt {attempt}] Could not solve {scenario}: "
+              f"{type(e).__name__}: {e}")
+        return None
+
+    solution = normalize_solution(solution)
+    try:
+        value = float(solution)
+    except Exception as e:
+        print(f"[Attempt {attempt}] Solution is not a number: "
+              f"{type(e).__name__}: {e}")
+        return None
+    if not math.isfinite(value):
+        # `1e200` cubed is `1e600`, and `float()` of that is `inf`. There is
+        # no question here and no set of distractors around it, so this is a
+        # reply to ask again for rather than an error to raise.
+        print(f"[Attempt {attempt}] Non-finite solution for {scenario}")
+        return None
+    return value
+
+
 def _geometry_prompt(scenario):
     """Header + the one selected scenario's block + footer.
 
@@ -676,6 +758,18 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
                   f"{question_data['scenario']} missing variables: {missing}")
             continue
 
+        # Solved here rather than after the loop, so every way the solve can
+        # fail is another attempt. Below the `for/else` -- where this used to
+        # be -- a non-finite result, an unparseable variable or a solver raise
+        # were all 500s, and the non-finite case was documented in
+        # `incorrect_solution_generation` as reaching this loop when it could
+        # not.
+        solution_float = _solve_scenario(question_data["scenario"],
+                                         question_data["variables"],
+                                         attempt + 1)
+        if solution_float is None:
+            continue
+
         # Backstop on what the model actually produced, not just on what
         # the prompt asked for -- see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
@@ -688,51 +782,7 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    scenario = question_data["scenario"]
-    vars = question_data["variables"]
-    vars = preprocess_variables(vars)
-
-    match (scenario):
-        case "rectangle_area":
-            solution = solve_rectangle_area(vars["length"], vars["width"])
-        case "rectangle_perimeter":
-            solution = solve_rectangle_perimeter(vars["length"], vars["width"])
-        case "triangle_area":
-            solution = solve_triangle_area(vars["base"], vars["height"])
-        case "triangle_perimeter":
-            solution = solve_triangle_perimeter(vars["s1"], vars["s2"], vars["s3"])
-        case "circle_area":
-            solution = solve_circle_area(vars["radius"])
-        case "circle_circumference":
-            solution = solve_circle_circumference(vars["radius"])
-        case "rect_volume": 
-            solution = solve_rect_volume(vars["length"], vars["width"], vars["height"])
-        case "cylinder_volume":
-            solution = solve_cylinder_volume(vars["radius"], vars["height"])
-        case "sphere_volume":
-            solution = solve_sphere_volume(vars["radius"])
-        case "cube_volume":
-            solution = solve_cube_volume(vars["side"])
-        case "pyramid_volume":
-            solution = solve_pyramid_volume(vars["base_area"], vars["height"])
-        case "pythagorean":
-            solution = solve_pythag(vars["a"], vars["b"])
-        case "rect_area_missing_side" :
-            solution = rect_area_missing_side(vars["area"], vars["known_side"])
-        case "rect_perimeter_missing_side" :
-            solution = rect_perimeter_missing_side(vars["perimeter"], vars["known_side"])
-        case "circle_area_missing_side":
-            solution = circle_area_missing_side(vars["area"])
-        case "circle_circumference_missing_side":
-            solution = circle_circumference_missing_side(vars["circumference"])
-        case "triangle_area_missing_side" :
-            solution = triangle_area_missing_side(vars["area"], vars["known_side"])
-        case "triangle_perimeter_missing_side" :
-            solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
-
-    solution = normalize_solution(solution)
-    solution_float = float(solution)
-    solution = format_two_decimals(solution)
+    solution = format_two_decimals(solution_float)
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float)
     answers = [round(float(ans), 2) for ans in incorrect_answers] + [solution]
 

@@ -22,11 +22,20 @@ import re
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
+import pytest  # noqa: E402
+
 import LLM_geometry_generation as geo  # noqa: E402
 
 _SOURCE = open(geo.__file__, encoding="utf-8").read()
 # `\s*` before the colon is load-bearing -- see the docstring.
-_DISPATCHED = re.findall(r'^        case "([a-z_]+)"\s*:', _SOURCE, re.M)
+# Indentation-agnostic on purpose. These patterns were anchored at eight
+# spaces, and moving the `match` into `_solve_scenario` -- so the solve could
+# run inside the retry loop -- reindented every case and failed both source
+# checks at once. That is the guard working rather than a flaw in it: a silent
+# zero-match would have made every assertion here vacuous. Matching any indent
+# keeps the check alive across a refactor that does not change what is
+# dispatched.
+_DISPATCHED = re.findall(r'^\s+case "([a-z_]+)"\s*:', _SOURCE, re.M)
 
 
 def test_the_match_actually_has_branches_to_find():
@@ -52,9 +61,24 @@ def test_every_accepted_scenario_can_be_dispatched():
 # without it silently produced 17 scenarios where there are 18 -- a map missing
 # exactly one entry, which surfaces as three retries and a ValueError on
 # whichever scenario got dropped rather than as anything naming the cause.
-_CASE_BODIES = dict(re.findall(
-    r'^        case "([a-z_]+)"\s*:[ \t]*\n((?:^            .*\n)+)',
-    _SOURCE, re.M))
+def _case_bodies(source):
+    """scenario name -> the lines of its `case` block, at whatever indent."""
+    bodies = {}
+    for match in re.finditer(r'^([ \t]+)case "([a-z_]+)"\s*:[ \t]*\n',
+                             source, re.M):
+        indent, name = match.group(1), match.group(2)
+        lines = []
+        for line in source[match.end():].splitlines(keepends=True):
+            # A body line is indented further than its own `case`. A blank
+            # line belongs to whatever comes after it, so it ends the block.
+            if not line.strip() or not line.startswith(indent + " "):
+                break
+            lines.append(line)
+        bodies[name] = "".join(lines)
+    return bodies
+
+
+_CASE_BODIES = _case_bodies(_SOURCE)
 
 
 def test_every_scenario_body_was_found():
@@ -100,3 +124,25 @@ def test_the_prompt_states_the_scenario_and_its_keys():
         assert f'"scenario" MUST be exactly "{name}"' in prompt
         for key in geo.SCENARIO_VARS[name]:
             assert f'"{key}"' in prompt
+
+
+@pytest.mark.parametrize("scenario,variables,why", [
+    ("cube_volume", {"side": "1e200"}, "1e600 -> float() -> inf"),
+    ("cube_volume", {"side": "!!"}, "sympify refuses the value"),
+    ("pythagorean", {"a": "3"}, "a key the solver indexes is absent"),
+    ("circle_area", {"radius": "x"}, "solves to a symbol, not a number"),
+])
+def test_an_unsolvable_scenario_is_a_retry_not_a_raise(scenario, variables, why):
+    """`_solve_scenario` was below the `for/else`, so each of these was a 500.
+
+    The non-finite one is the reachable case and the one that was documented
+    wrongly: `incorrect_solution_generation` said its ValueError "reaches the
+    generator's retry loop", and it could not -- it escaped
+    `generate_geometry_question` on attempt 1.
+    """
+    assert geo._solve_scenario(scenario, variables, 1) is None, why
+
+
+def test_an_ordinary_scenario_still_solves():
+    """The bar every rejection above has to clear."""
+    assert geo._solve_scenario("cube_volume", {"side": "3"}, 1) == 27.0

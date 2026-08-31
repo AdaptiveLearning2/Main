@@ -20,13 +20,20 @@ def generate_general_incorrect_answers(answer):
     answer = float(sp.sympify(answer))
     if not math.isfinite(answer):
         # There is no set of three distinct wrong answers around infinity, and
-        # no question a student can be asked either. Raising sends this back up
-        # to the generator's retry loop, which is where an unusable solution
-        # belongs -- returning a list would put `inf` on screen as an option.
+        # no question a student can be asked either, so this raises rather than
+        # returning a list that would put `inf` on screen as an option.
         #
-        # Reachable rather than theoretical: `preprocess_variables` sympifies
+        # **It does not reach a retry loop from here.** An earlier version of
+        # this comment said it did; every one of the six call sites is below
+        # its generator's `for/else`, so the raise leaves the generator and
+        # becomes a 500. Callers that want a retry have to check *before*
+        # calling -- `LLM_geometry_generation._solve_scenario` does, inside its
+        # loop, which is the reachable path: `preprocess_variables` sympifies
         # whatever the model wrote, so a `side` of 1e200 makes
-        # `solve_cube_volume` produce 1e600, and `float()` of that is `inf`.
+        # `solve_cube_volume` produce 1e600 and `float()` of that is `inf`.
+        #
+        # This stays as the backstop for the other five, where a 500 is at
+        # least honest about not having a question to serve.
         raise ValueError(f"cannot build distractors around {answer}")
     attempts = 0
     # Bounded for the reason `generate_symbolic_incorrect_answers` documents,

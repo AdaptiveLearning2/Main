@@ -84,3 +84,36 @@ def test_the_timeout_is_read_through_env_number_with_a_floor(value, expected,
     monkeypatch.setenv("SOLVE_TIMEOUT", value)
     assert llm_client._env_number("SOLVE_TIMEOUT", 10.0, float,
                                   minimum=1.0) == expected
+
+
+# ─── the equation op, which algebra runs entirely in the worker ──────────
+
+@pytest.mark.parametrize("equation,expected", [
+    ("2*x+3=11", "4"),
+    ("x+7=15", "8"),
+])
+def test_an_ordinary_equation_solves_in_the_worker(equation, expected):
+    assert safe_solve.safe_solve(equation, "equation") == expected
+
+
+@pytest.mark.parametrize("equation,why", [
+    ("x+1=x+2", "no solution"),
+    ("x**2=4", "two roots -- this topic scores exactly one"),
+    ("2*x+3", "no equals sign"),
+    ("1=x=2", "two equals signs"),
+    ("a+b=c", "solution is not a number"),
+])
+def test_an_unscorable_equation_comes_back_none(equation, why):
+    assert safe_solve.safe_solve(equation, "equation") is None, why
+
+
+def test_an_unbounded_equation_is_killed_rather_than_waited_on():
+    """The finding this op exists for. `_solve_equation` used to call
+    `parse_expr`/`solve` in the request thread, and `9**9**9 + x = 5` never
+    returns -- the spin holds the GIL inside CPython's long-integer code, so no
+    watchdog thread and no signal handler can interrupt it. Only an external
+    kill works, which is what the subprocess provides.
+    """
+    started = time.monotonic()
+    assert safe_solve.safe_solve("9**9**9+x=5", "equation", timeout=3) is None
+    assert time.monotonic() - started < 30, "the bound did not take effect"

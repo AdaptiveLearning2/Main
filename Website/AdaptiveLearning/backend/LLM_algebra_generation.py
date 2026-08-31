@@ -18,6 +18,7 @@ from sympy.parsing.sympy_parser import (
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
 import token_join
 import grade_levels
 
@@ -98,27 +99,23 @@ def _solve_equation(variables, attempt):
     if equation_str is None:
         print(f"[Attempt {attempt}] Unusable variables: {variables!r:.80}")
         return None
-    sides = equation_str.split("=")
-    if len(sides) != 2:
-        print(f"[Attempt {attempt}] Not one equation: {equation_str[:80]!r}")
+    # Through the same bounded subprocess `LLM_expressions_generation` uses.
+    # `parse_expr` and `solve` are as unbounded here as they are there, and the
+    # operand is as much the model's: `["9**9**9", "+", "x", "=", "5"]` never
+    # returns. The spin holds the GIL inside CPython's long-integer code, so
+    # nothing in-process can stop it -- a watchdog thread never gets to run,
+    # and the process has to be killed from outside. `safe_solve` was added in
+    # this PR for exactly that and was wired into one of the two topics that
+    # needs it.
+    #
+    # The worker does the split, both parses, the solve and the
+    # one-finite-solution check together, because leaving any of it here would
+    # leave the unbounded half in the request thread.
+    solved = safe_solve.safe_solve(equation_str, "equation")
+    if solved is None:
+        print(f"[Attempt {attempt}] Unsolvable equation: {equation_str[:80]!r}")
         return None
-    try:
-        left = parse_expr(sides[0], transformations=transformations)
-        right = parse_expr(sides[1], transformations=transformations)
-        solutions = solve(Eq(left, right), symbols('x'))
-    except Exception as e:
-        print(f"[Attempt {attempt}] Could not solve {equation_str[:80]!r}: "
-              f"{type(e).__name__}: {e}")
-        return None
-
-    if len(solutions) != 1:
-        print(f"[Attempt {attempt}] {len(solutions)} solutions for "
-              f"{equation_str[:80]!r}; this topic scores exactly one")
-        return None
-    if not solutions[0].is_number:
-        print(f"[Attempt {attempt}] Solution is not a number: {solutions[0]}")
-        return None
-    return str(solutions[0])
+    return solved
 
 
 def _grade_band(grade):

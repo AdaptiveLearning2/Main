@@ -2909,6 +2909,32 @@ addition wearing a geometry label, and counting it would keep the topic list lon
 grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and
 `_grade_band` in treating an unknown student as the youngest.
 
+### Difficulty tiers are relative to what a grade can see, because the signals move them
+
+A topic used to map a difficulty to a fixed list of scenario numbers. That is right while every
+scenario is available and wrong once a grade filter removes some. Geometry's hard tier is the
+volumes, and the hard ones — cylinder and sphere, with π — are 8.G.9, so gating scenarios on grade
+left grades 6-7 with the two simplest:
+
+    grade 6  medium -> rect_area_missing_side, triangle_area_missing_side, …   (invert a formula)
+    grade 6  hard   -> cube_volume, rect_volume                                (multiply three)
+
+**That is not cosmetic, because difficulty is what the biosignals move.** `signal_fusion` labels a
+student `focused`, `LLM_topic_decider` shifts medium → hard, and at those grades that handed them an
+*easier* question — the fusion firing correctly and being undone one layer down. Anything that
+narrows what a difficulty tier can offer has to be checked against the tier ordering, not just
+against the grade rule it was written for.
+
+`scenario_tiers.pick` ranks the *available* scenarios by `SCENARIO_DIFFICULTY` and slices them into
+thirds, so `hard` is the hardest third of whatever remains and cannot invert however much the grade
+filter removes. Small sets overlap rather than emptying — a grade with one scenario gets it at every
+difficulty, which is honest, and `random.choice` never sees an empty list.
+
+**`SCENARIO_DIFFICULTY` is ordered by steps to solve, deliberately not by the grade that teaches
+it.** The two are different axes and conflating them reads `algebra_complementary` (7.G.5, set up
+and solve an equation) as easier than `triangle_sum` (8.G.5, one subtraction). A CCSS-grade metric
+reported angles as broken when it was correct; check difficulty claims against difficulty.
+
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 
 `advanced` was `upper` with the magnitude clause deleted — "No additional restriction", "beyond

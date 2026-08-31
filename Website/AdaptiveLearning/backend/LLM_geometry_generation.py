@@ -16,6 +16,7 @@ import lesson_plan_context
 import geometry_solvers
 import safe_solve
 import grade_levels
+import scenario_tiers
 import grade_appropriateness
 
 # Scenarios: perimeter, area, volume, missing_side, pythagorean_theorem.
@@ -570,15 +571,52 @@ def _band_scenarios(grade):
             if SCENARIO_MIN_GRADE[name] <= floor}
 
 
+# How hard each scenario is to *do*, independent of the grade that teaches it.
+# The two are different axes: `algebra_complementary` is 7.G.5 and harder than
+# `triangle_sum` at 8.G.5, and `circle_area_missing_side` is the same standard
+# as `circle_area` while needing a square root on top.
+#
+# Ordered by steps: count -> one operation -> two -> invert a formula -> invert
+# one containing pi or a square.
+SCENARIO_DIFFICULTY = {
+    "rectangle_area_by_counting":        1,   # count the squares
+    "rectangle_area":                    2,   # one multiplication
+    "rectangle_perimeter":               2,
+    "triangle_perimeter":                2,   # add three
+    "triangle_area":                     3,   # multiply then halve
+    "circle_circumference":              3,   # 2 pi r
+    "triangle_perimeter_missing_side":   3,   # invert by subtracting
+    "circle_area":                       4,   # pi r squared
+    "rect_volume":                       4,   # multiply three
+    "cube_volume":                       4,
+    "rect_area_missing_side":            4,   # invert by dividing
+    "rect_perimeter_missing_side":       4,
+    "pyramid_volume":                    5,   # a third of base times height
+    "cylinder_volume":                   5,   # pi r squared h
+    "pythagorean":                       5,   # squares and a root
+    "triangle_area_missing_side":        5,   # invert, with the halving
+    "circle_circumference_missing_side": 5,   # invert, with pi
+    "sphere_volume":                     6,   # four thirds pi r cubed
+    "circle_area_missing_side":          6,   # invert, with pi and a root
+}
+
+
 def _pick_scenario(difficulty, grade):
-    candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
+    """A scenario for this difficulty, chosen from what this grade can see.
+
+    Ranked and sliced rather than looked up in a fixed per-tier list. A fixed
+    list is right until a grade filter removes part of it -- geometry's hard
+    tier is the volumes, and the hard ones are 8.G.9, so grades 6-7 were left
+    with the two simplest and `hard` became easier than `medium`.
+
+    Not cosmetic: difficulty is what the biosignals move, so a focused student
+    pushed from medium to hard was getting an easier question. The fusion
+    fired correctly and was undone one layer down.
+    """
     allowed = _band_scenarios(grade)
-    # Every band is filtered, not just `early`. Falling back to the whole
-    # allowed set matters most where a tier holds nothing the band has reached:
-    # the hard tier is entirely volumes, of which only the two rectangular ones
-    # are grade 5, so middle would otherwise have no candidates at all.
-    candidates = [s for s in candidates if s in allowed] or sorted(allowed)
-    return random.choice(candidates)
+    return random.choice(scenario_tiers.pick(
+        difficulty, allowed,
+        lambda number: SCENARIO_DIFFICULTY[_SCENARIO_NAMES[number]]))
 
 # Difficulty governs which scenario gets picked above; grade controls the
 # magnitude of the given measurements (side lengths, radii, etc.) within

@@ -21,6 +21,7 @@ import lesson_plan_context
 import angle_solvers
 import safe_solve
 import grade_levels
+import scenario_tiers
 import grade_appropriateness
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -210,22 +211,34 @@ def _grade_scenarios(grade):
             if SCENARIO_MIN_GRADE[name] <= floor}
 
 
+# Difficulty, not grade -- see the note on geometry's SCENARIO_DIFFICULTY.
+# `triangle_sum` is 8.G.5 and one subtraction; `algebra_complementary` is
+# 7.G.5 and requires setting up an equation and solving it.
+SCENARIO_DIFFICULTY = {
+    "complementary":         1,   # subtract from 90
+    "supplementary":         1,   # subtract from 180
+    "linear_pair":           1,
+    "triangle_sum":          2,   # subtract two from 180
+    "algebra_complementary": 3,   # set up an equation and solve for x
+}
+
+
 def _pick_scenario(difficulty, grade):
-    """A scenario for this difficulty that the student's grade has reached.
+    """A scenario for this difficulty, chosen from what this grade can see.
 
-    Gated on the grade rather than the band. The band-level rule this replaces
-    withheld scenario 5 from grades 1-6, which `_allowed_topics` now does for
-    the whole topic anyway, and said nothing about `triangle_sum` being a grade
-    later than its neighbours.
+    Ranked and sliced rather than looked up in a fixed per-tier list. A fixed
+    list is right until a grade filter removes part of it -- geometry's hard
+    tier is the volumes, and the hard ones are 8.G.9, so grades 6-7 were left
+    with the two simplest and `hard` became easier than `medium`.
 
-    Falls back to the whole allowed set when a tier holds nothing this grade
-    has reached -- the medium tier is only `triangle_sum`, so grade 7 would
-    otherwise have no candidates at all.
+    Not cosmetic: difficulty is what the biosignals move, so a focused student
+    pushed from medium to hard was getting an easier question. The fusion
+    fired correctly and was undone one layer down.
     """
-    candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
     allowed = _grade_scenarios(grade)
-    candidates = [s for s in candidates if s in allowed] or sorted(allowed)
-    return random.choice(candidates)
+    return random.choice(scenario_tiers.pick(
+        difficulty, allowed,
+        lambda number: SCENARIO_DIFFICULTY[_SCENARIO_NAMES[number]]))
 
 def _grade_band(grade):
     # Shared with the other generation files so they can't drift apart.

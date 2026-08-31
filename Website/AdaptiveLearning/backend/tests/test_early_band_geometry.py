@@ -94,3 +94,34 @@ def test_the_older_bands_keep_what_they_have_reached():
     assert "pyramid_volume" not in upper
     assert "pyramid_volume" in {
         geo._SCENARIO_NAMES[n] for n in geo._band_scenarios("advanced")}
+
+
+@pytest.mark.parametrize("grade,hardest", [
+    ("4", 4), ("5", 5), ("6", 6), ("7", 7), ("8", 8), ("9", 9),
+])
+def test_scenarios_are_gated_on_the_grade_not_the_band_ceiling(grade, hardest):
+    """The band spans several grades and its ceiling is the top of them, so
+    gating there rounded a 4th grader up: rectangular-prism volume (5.MD.5)
+    reached grade 4 on 3 of 10 measured questions. The student's own grade is
+    known and `SCENARIO_MIN_GRADE` is per scenario, so there is nothing to
+    round.
+    """
+    offered = {geo._SCENARIO_NAMES[n] for n in geo._band_scenarios(grade)}
+    assert offered, grade
+    assert max(geo.SCENARIO_MIN_GRADE[n] for n in offered) <= int(grade)
+    assert offered <= {geo._SCENARIO_NAMES[n]
+                       for n in geo._band_scenarios(str(int(grade) + 1))}
+
+
+@pytest.mark.parametrize("grade", ["1", "2", "", None, "no idea"])
+def test_grades_below_the_easiest_scenario_still_get_geometry(grade):
+    """The easiest scenario here is area of a rectangle, 3.MD.7, so grades 1-2
+    reach nothing on a strict reading. They keep the grade-3 set rather than
+    losing the topic: removing it would leave those grades two topics, which is
+    a decision about what a 1st grader is offered rather than a defect. It is
+    why grades 1-2 measured 10 of 10 above grade, and it is the same open
+    question as mean/median/mode at grade 4.
+    """
+    offered = {geo._SCENARIO_NAMES[n] for n in geo._band_scenarios(grade)}
+    assert offered == {"rectangle_area", "rectangle_perimeter",
+                       "triangle_perimeter"}

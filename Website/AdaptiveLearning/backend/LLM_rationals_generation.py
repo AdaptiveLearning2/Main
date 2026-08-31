@@ -87,6 +87,14 @@ def _grade_band(grade):
 # *operations* grade-4/5+), so "early" here is defense-in-depth only --
 # kept to same-denominator halves/thirds/fourths framed as parts of a whole,
 # not the denominator/operation-count scaling middle band onward uses.
+# See the note in LLM_expressions_generation.GRADE_OVERRIDES. The same
+# band-ceiling effect gave a 4th grader unlike denominators on 7 of 10
+# measured questions; 4.NF.3 is like denominators, 5.NF.1 is unlike.
+GRADE_OVERRIDES = {
+    4: "This student is in GRADE 4. Every fraction must share the SAME denominator -- adding fractions with unlike denominators is a grade-5 standard (5.NF.1).",
+}
+
+
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use a SINGLE addition between two simple fractions sharing the same denominator (halves, thirds, or fourths only, e.g. 1/4 + 2/4).",
@@ -140,6 +148,9 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
+        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        if override:
+            prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "rationals", grade_band)
         response_text = llm_client.generate_text(prompt)
 

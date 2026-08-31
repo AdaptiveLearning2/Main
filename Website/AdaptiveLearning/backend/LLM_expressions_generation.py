@@ -178,6 +178,21 @@ The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
 # Which operations are available changes by grade, not just how many of them
 # or how big the numbers are -- multiplication, division, and parentheses
 # should only appear once a grade has actually been taught them.
+# Two grades inside the "middle" band have not met a concept the band's
+# tiers use. The band spans 4-6 and its tiers are written for its ceiling,
+# so a 4th grader was offered parentheses on 6 of 10 measured questions --
+# order of operations is 5.OA.1.
+#
+# Appended to the prompt rather than folded into COMPLEXITY_BY_GRADE,
+# because the table is keyed by band and this is keyed by grade; giving
+# the table a thirteenth column to express one rule would make every
+# other topic's table wrong by omission. Prompt-level, so it can leak --
+# `grade_appropriateness` is where a code-level check would go if it does.
+GRADE_OVERRIDES = {
+    4: "This student is in GRADE 4. Do NOT use parentheses of any kind -- order of operations is a grade-5 standard (5.OA.1).",
+}
+
+
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-9.",
@@ -239,6 +254,9 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         )
         if grade_band == "early":
             prompt += EARLY_BAND_EXAMPLE
+        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        if override:
+            prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
         response_text = llm_client.generate_text(prompt)
         raw = extract_json(response_text)

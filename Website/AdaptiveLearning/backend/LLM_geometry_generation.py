@@ -503,23 +503,48 @@ SCENARIO_MIN_GRADE = {
 # The top grade in each band -- `grade_levels.grade_band` buckets 1-3, 4-6,
 # 7-8, 9+.
 #
-# Gating on the *top* means a 4th grader can meet grade-6 content. That is the
-# cost of bands being coarser than grades, it is the same trade the early band
-# already made, and it is a far smaller one than offering that student the
-# Pythagorean theorem.
+# Gating used to be on the band's *top* grade, which put grade-6 content in
+# front of a 4th grader: the middle band spans 4-6, so a 4th grader was offered
+# rectangular-prism volume (5.MD.5) on 3 of 10 measured questions. There is no
+# reason to round up here -- `SCENARIO_MIN_GRADE` is per scenario and the
+# student's own grade is known, so the ceiling is only a fallback for a grade
+# that could not be read at all.
 _BAND_CEILING = {"early": 3, "middle": 6, "upper": 8, "advanced": 13}
 
 
-def _band_scenarios(grade_band):
-    """Scenario numbers whose formula the band has actually reached."""
-    ceiling = _BAND_CEILING.get(grade_band, _BAND_CEILING["advanced"])
-    return {number for number, name in _SCENARIO_NAMES.items()
-            if SCENARIO_MIN_GRADE[name] <= ceiling}
+def _band_scenarios(grade):
+    """Scenario numbers whose formula this student has actually reached.
+
+    Takes the grade -- a number, a string like "4th Grade", or a band name.
+    A band name resolves to that band's ceiling, which is what an unreadable
+    grade gets: `grade_levels.grade_number` answers None there, and
+    `_grade_band` answers "early", so the youngest content is the fallback in
+    both directions.
+    """
+    if grade in _BAND_CEILING:
+        ceiling = _BAND_CEILING[grade]
+    else:
+        number = grade_levels.grade_number(grade)
+        ceiling = number if number is not None else _BAND_CEILING["early"]
+    allowed = {number_ for number_, name in _SCENARIO_NAMES.items()
+               if SCENARIO_MIN_GRADE[name] <= ceiling}
+    if allowed:
+        return allowed
+    # Grades 1-2 reach nothing: the easiest scenario here is area of a
+    # rectangle, 3.MD.7. Falling back to the grade-3 scenarios keeps today's
+    # behaviour rather than silently removing geometry from those grades --
+    # which would leave them two topics, and is a decision about what a 1st
+    # grader is offered rather than a defect. It is the same open question as
+    # `mean`/`median`/`mode` at grade 4 in LLM_topic_decider.TOPIC_MIN_GRADE,
+    # and it is why grades 1-2 measured 10 of 10 above grade.
+    floor = min(SCENARIO_MIN_GRADE.values())
+    return {number_ for number_, name in _SCENARIO_NAMES.items()
+            if SCENARIO_MIN_GRADE[name] <= floor}
 
 
-def _pick_scenario(difficulty, grade_band):
+def _pick_scenario(difficulty, grade):
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
-    allowed = _band_scenarios(grade_band)
+    allowed = _band_scenarios(grade)
     # Every band is filtered, not just `early`. Falling back to the whole
     # allowed set matters most where a tier holds nothing the band has reached:
     # the hard tier is entirely volumes, of which only the two rectangular ones
@@ -556,7 +581,9 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         # Scenario first: the prompt is now built around it rather than
         # listing every scenario and naming one at the end.
         grade_band = _grade_band(grade)
-        scenario = _pick_scenario(difficulty, grade_band)
+        # The grade itself, not the band: the band rounds a 4th grader up
+        # to grade-6 content.
+        scenario = _pick_scenario(difficulty, grade)
 
         prompt = _geometry_prompt(scenario)
         if attempt > 0:

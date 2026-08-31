@@ -2840,6 +2840,34 @@ Each is now forbidden in the objectives *and* in the row's `notes`, which is whe
 will look. The general rule: **an objective that is pedagogically true can still be an instruction
 the solver cannot score** — check what a cell generates before trusting it, not just what it says.
 
+### A band's tiers are written for its ceiling, so its youngest grade is over-served
+
+`grade_band` buckets 1-3, 4-6, 7-8, 9+, and every `COMPLEXITY_BY_GRADE` tier is written for the top
+of its band. Measured at grade 4, which sits at the bottom of a three-grade band: **66% of questions
+above grade**, from three separate mechanisms —
+
+| cause | measured | standard |
+| --- | --- | --- |
+| geometry gated on the band ceiling (6), not the grade | 3/10 | volume is 5.MD.5 |
+| `expressions` middle tiers allow parentheses | 6/10 | 5.OA.1 |
+| `rationals` middle tiers use unlike denominators | 7/10 | 5.NF.1 |
+| `mean`/`median`/`mode` offered from grade 4 | 30/30 | 6.SP.5c |
+
+The first is fixed by gating on the grade rather than the band — `SCENARIO_MIN_GRADE` is per
+scenario and the student's grade is known, so there was never anything to round up. **Where a
+per-item minimum exists, use the grade; the band ceiling is only a fallback for a grade that cannot
+be read.**
+
+The next two are fixed by `GRADE_OVERRIDES`, a per-grade line appended to the prompt. Not folded
+into `COMPLEXITY_BY_GRADE`: that table is keyed by band, and giving it a thirteenth column to
+express one rule would make every other topic's table wrong by omission. It is prompt-level and can
+leak — `grade_appropriateness` is where a code-level check belongs if it does.
+
+Grade 4 went **66% → 43%** on a regenerated set. The remainder is entirely `mean`/`median`/`mode`,
+which is a decision rather than a defect (see `TOPIC_MIN_GRADE`). Grades 1-2 carry the same shape for
+geometry: the easiest scenario is 3.MD.7, so a strict reading leaves them no geometry at all, and
+they keep the grade-3 set rather than losing a third of their topics.
+
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 
 `advanced` was `upper` with the magnitude clause deleted — "No additional restriction", "beyond

@@ -86,3 +86,35 @@ def test_every_grade_has_something_to_ask():
     `random.choice` on this list."""
     for g in range(1, 13):
         assert decider._allowed_topics(str(g))
+
+
+# --- per-grade overrides inside a band --------------------------------------
+
+import LLM_expressions_generation as expressions  # noqa: E402
+import LLM_rationals_generation as rationals  # noqa: E402
+
+
+@pytest.mark.parametrize("module,concept", [
+    (expressions, "parentheses"),
+    (rationals, "denominator"),
+])
+def test_grade_four_is_held_back_from_a_grade_five_concept(module, concept):
+    """`COMPLEXITY_BY_GRADE` is keyed by band, and the middle band spans 4-6,
+    so its tiers are written for grade 6. Measured at grade 4: parentheses on
+    6 of 10 questions (5.OA.1), unlike denominators on 7 of 10 (5.NF.1).
+
+    Keyed by grade rather than folded into the table, because giving that table
+    a thirteenth column to express one rule would make every other topic's
+    table wrong by omission. Prompt-level, so it can leak; a code-level check
+    would go in `grade_appropriateness`.
+    """
+    assert 4 in module.GRADE_OVERRIDES
+    assert concept in module.GRADE_OVERRIDES[4].lower()
+    assert "GRADE 4" in module.GRADE_OVERRIDES[4]
+
+
+@pytest.mark.parametrize("module", [expressions, rationals])
+@pytest.mark.parametrize("grade", [5, 6, 7, 9])
+def test_the_override_does_not_reach_grades_that_have_met_the_concept(module, grade):
+    """5.OA.1 and 5.NF.1 are grade-5 standards, so grade 5 keeps them."""
+    assert grade not in module.GRADE_OVERRIDES

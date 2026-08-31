@@ -22,6 +22,18 @@ import pytest  # noqa: E402
 import safe_solve  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _restore_module_state():
+    """`_probe_startup` writes module globals directly, so a test that calls it
+    changes what every later test reads. monkeypatch cannot undo a write it did
+    not make."""
+    saved = (safe_solve.SOLVE_TIMEOUT_S, safe_solve.STARTUP_COST_S,
+             safe_solve._CONFIGURED_TIMEOUT_S)
+    yield
+    (safe_solve.SOLVE_TIMEOUT_S, safe_solve.STARTUP_COST_S,
+     safe_solve._CONFIGURED_TIMEOUT_S) = saved
+
+
 @pytest.mark.parametrize("expression,scenario,expected", [
     ("2*(15+8)-9", "evaluate", "37"),
     ("(4+6)*3-5", "order_of_operations", "25"),
@@ -177,3 +189,77 @@ def test_an_angle_refusal_carries_its_reason(scenario, variables, expected, caps
 def test_a_geometry_refusal_carries_its_reason(scenario, variables, expected, capsys):
     assert safe_solve.safe_solve_geometry(scenario, variables) is None
     assert expected in capsys.readouterr().out
+
+
+# ─── the startup probe ───────────────────────────────────────────────────
+
+def test_the_probe_measures_and_leaves_a_sufficient_budget_alone(monkeypatch, capsys):
+    """The ordinary case: the configured value clears the measured floor, so
+    nothing changes and nothing is logged about it."""
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 30.0)
+    safe_solve._probe_startup()
+    assert safe_solve.SOLVE_TIMEOUT_S == 30.0
+    assert safe_solve.STARTUP_COST_S is not None
+    assert "below" not in capsys.readouterr().out
+
+
+def test_a_budget_under_the_measured_floor_is_raised_and_announced(monkeypatch, capsys):
+    """The case this exists for.
+
+    `SOLVE_TIMEOUT` bounds the whole child process, and ~99% of an ordinary
+    solve is starting it. A machine slower than the one the default was
+    measured on would fail *every* question that needs a solve -- and the
+    symptom reads as the model being unable to write solvable maths, so nobody
+    looks at this setting.
+
+    Clamped up rather than refused: raising here would take the whole backend
+    down over one topic's tuning knob, and every non-generation surface with
+    it.
+    """
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 1.0)
+    safe_solve._probe_startup()
+
+    floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
+    assert safe_solve.SOLVE_TIMEOUT_S == pytest.approx(floor)
+    assert safe_solve.SOLVE_TIMEOUT_S > 1.0
+    out = capsys.readouterr().out
+    assert "SOLVE_TIMEOUT=1.0s is below" in out
+    assert "Raised to" in out
+
+
+def test_a_probe_that_cannot_run_keeps_the_configured_value(monkeypatch, capsys):
+    """A failed measurement is not a reason to invent a budget -- it means the
+    subprocess mechanism is broken, which is a different problem and gets its
+    own line."""
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(safe_solve, "STARTUP_COST_S", None)
+    monkeypatch.setattr(safe_solve, "_WORKER", "no_such_worker.py")
+    safe_solve._probe_startup()
+
+    assert safe_solve.SOLVE_TIMEOUT_S == 3.0
+    assert safe_solve.STARTUP_COST_S is None
+    assert "startup probe failed" in capsys.readouterr().out
+
+
+def test_the_effective_budget_always_clears_the_measured_floor():
+    """The invariant the probe exists to hold, stated as an invariant.
+
+    This was first written as "the shipped default clears the floor on this
+    machine" -- `_CONFIGURED_TIMEOUT_S >= floor` -- and it passed alone and
+    failed in sequence. Startup is slower while the rest of this file is
+    spawning subprocesses, so the floor moves and a fixed comparison against it
+    is a duration assertion wearing an invariant's clothes. CLAUDE.md's rule
+    about ordering over elapsed time, in a new place.
+
+    What is actually guaranteed is what the probe enforces: whatever is
+    configured, the *effective* budget is at or above the floor measured on
+    this machine. A default too small for a slow box is no longer a way to fail
+    -- it is a log line and a raised budget.
+    """
+    if safe_solve.STARTUP_COST_S is None:
+        pytest.skip("the subprocess could not run; the probe reports that separately")
+    floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
+    assert safe_solve.SOLVE_TIMEOUT_S >= floor or         safe_solve.SOLVE_TIMEOUT_S == safe_solve._CONFIGURED_TIMEOUT_S

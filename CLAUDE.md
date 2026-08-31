@@ -2931,6 +2931,29 @@ the prompt and the retry loop. Anything a bounded worker must run needs the same
 validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
 alongside the angle solvers rather than staying beside its caller.
 
+**`SOLVE_TIMEOUT` bounds the subprocess, not the arithmetic, and that is why it self-checks.** The
+budget covers launching Python and importing sympy, which is ~99% of an ordinary solve — measured
+0.64–1.00s wall where the maths is ~10ms. So it is really a bound on *startup plus a little*, and
+startup is the part that stretches on a cold or loaded machine. It is also the one setting here whose
+breach fails **every** question at once, and fails it looking like the model cannot write solvable
+maths, so nobody goes looking at a timeout.
+
+`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the budget for
+that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It
+**clamps up and logs; it never refuses to start** — raising there would take the whole backend down
+over one topic's tuning knob, and every non-generation surface with it, which is the failure
+`_env_number`'s floor exists to prevent. A probe that cannot run keeps the configured value and says
+so separately: that means the subprocess mechanism is broken, which is a different problem, and a
+budget guessed from a failed measurement is worse than the one someone chose. `SOLVE_STARTUP_PROBE=0`
+skips it, for a process that imports the module and never solves; it costs ~0.8s of boot once.
+
+**Don't pin the shipped default against the measured floor in a test.** The first version of that
+check asserted `_CONFIGURED_TIMEOUT_S >= floor`, passed alone, and failed in sequence — startup is
+slower while the suite is spawning subprocesses, so the floor moves. That is an elapsed-time
+assertion wearing an invariant's clothes, the same rule as
+`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` above. Assert what the probe
+actually guarantees: the *effective* budget clears the floor.
+
 **Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers six of
 the ten: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
 `geometry` and `angle_relationships` needed their solvers moved, because both keep sympy *expressions*

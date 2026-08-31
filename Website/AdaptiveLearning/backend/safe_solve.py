@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import llm_client
 
@@ -56,8 +57,29 @@ import llm_client
 # maths. A slower or loaded machine can push startup past 2s, and if it ever
 # exceeds this the symptom is every question failing to generate -- which reads
 # as the model being unable to write solvable questions rather than as a
-# misconfigured timeout. Raise it, don't lower it, if that is ever seen.
-SOLVE_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float, minimum=1.0)
+# misconfigured timeout.
+#
+# That instruction is not enough on its own, which is why `_probe_startup`
+# below exists: a comment saying "raise it" only helps someone who reads it
+# *after* every question has started failing, and the symptom points at the
+# model rather than at this line. The floor is measured instead of trusted.
+_CONFIGURED_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float,
+                                               minimum=1.0)
+
+# How much of the budget must remain for the arithmetic after the child has
+# finished starting up. 3x is generous against a solve that measures ~10ms, and
+# the point is not the arithmetic -- it is that a budget below this is not
+# separating a runaway from an ordinary question, it is cutting off both.
+_STARTUP_SAFETY_FACTOR = 3.0
+
+# The probe's own budget, deliberately unrelated to the setting it validates:
+# on a cold or heavily loaded machine a first subprocess can take several
+# seconds, and a probe that timed out would report the very problem it is meant
+# to measure.
+_PROBE_TIMEOUT_S = 60.0
+
+SOLVE_TIMEOUT_S = _CONFIGURED_TIMEOUT_S
+STARTUP_COST_S = None
 
 _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "_solve_worker.py")
@@ -68,6 +90,58 @@ _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # it in the parent -- which is outside the subprocess bound -- is exactly the
 # cost this module exists to avoid paying unboundedly.
 MAX_RESULT_CHARS = 200
+
+
+def _probe_startup():
+    """Measure what a trivial solve costs, and raise the budget if it is tight.
+
+    The whole subprocess -- launching Python and importing sympy -- is inside
+    the timeout, and that startup is ~99% of what an ordinary solve spends.
+    So `SOLVE_TIMEOUT` is not really a bound on the arithmetic; it is a bound
+    on startup plus a little, and startup is the part that stretches on a cold
+    or loaded machine.
+
+    That makes this the one setting here whose breach fails *every* question at
+    once, and fails it in a way that reads as the model being unable to write
+    solvable maths. A comment saying "raise it, don't lower it" only reaches
+    someone already debugging the wrong thing.
+
+    So it is **clamped up, not refused**. Raising here would take the whole
+    backend down over one topic's tuning knob -- the exact failure
+    `_env_number`'s floor exists to prevent, and every non-generation surface
+    (ingest, dashboards, consent) would go with it. Clamping keeps generation
+    working on a machine slower than the one the default was measured on, and
+    says so once, loudly, at boot rather than per question.
+
+    A probe that cannot run at all leaves the configured value alone: that
+    means the subprocess mechanism is broken, which is worth the log line, but
+    guessing a budget from a failed measurement would be worse than keeping the
+    one someone chose.
+    """
+    global SOLVE_TIMEOUT_S, STARTUP_COST_S
+    started = time.monotonic()
+    probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
+                  "startup probe")
+    elapsed = time.monotonic() - started
+    if probed is None:
+        print(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
+              f"solve subprocess could not run, so every question that needs "
+              f"one will fail. Leaving SOLVE_TIMEOUT at "
+              f"{_CONFIGURED_TIMEOUT_S}s; a budget guessed from a failed "
+              f"measurement would be worse than the one configured.")
+        return
+
+    STARTUP_COST_S = elapsed
+    floor = elapsed * _STARTUP_SAFETY_FACTOR
+    if _CONFIGURED_TIMEOUT_S < floor:
+        SOLVE_TIMEOUT_S = floor
+        print(f"[safe_solve] SOLVE_TIMEOUT={_CONFIGURED_TIMEOUT_S}s is below "
+              f"{_STARTUP_SAFETY_FACTOR:g}x the measured subprocess startup of "
+              f"{elapsed:.2f}s on this machine. Raised to {floor:.2f}s for this "
+              f"process. Left alone it would have failed every question that "
+              f"needs a solve, which reads as a model problem rather than a "
+              f"configuration one. Set SOLVE_TIMEOUT to at least {floor:.1f} "
+              f"to silence this.")
 
 
 def safe_sympify_values(values, timeout=None):
@@ -192,3 +266,11 @@ def _run(request: dict, timeout, label: str):
               f"answer; discarding")
         return None
     return result
+
+
+# Run at import, so a machine too slow for the configured budget says so at
+# boot rather than on a student's first question. `SOLVE_STARTUP_PROBE=0`
+# skips it -- for a process that imports this module and never solves, where
+# the ~0.8s would be paid for nothing.
+if os.getenv("SOLVE_STARTUP_PROBE", "1").strip() not in ("0", "false", "no"):
+    _probe_startup()

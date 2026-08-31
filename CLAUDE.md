@@ -2863,10 +2863,18 @@ into `COMPLEXITY_BY_GRADE`: that table is keyed by band, and giving it a thirtee
 express one rule would make every other topic's table wrong by omission. It is prompt-level and can
 leak — `grade_appropriateness` is where a code-level check belongs if it does.
 
-Grade 4 went **66% → 43%** on a regenerated set. The remainder is entirely `mean`/`median`/`mode`,
-which is a decision rather than a defect (see `TOPIC_MIN_GRADE`). Grades 1-2 carry the same shape for
-geometry: the easiest scenario is 3.MD.7, so a strict reading leaves them no geometry at all, and
-they keep the grade-3 set rather than losing a third of their topics.
+Grade 4 went **66% → 43%** on a regenerated set, and then **43% → 0%** when `mean`/`median`/`mode`
+were raised from 4 to 6 (6.SP.5c). Grade 5 is 0% and grade 6 was already.
+
+**That last step cost breadth, and the cost is the point of recording it**: grades 4-5 now offer four
+topics — `ordering`, `geometry`, `expressions`, `rationals` — where they offered eight before the
+audit. That is grades 1-3's list plus one. It is a deliberate trade of coverage for accuracy, pinned
+by `test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` so a later widening has
+to be a choice rather than a drift.
+
+Grades 1-2 carry the same shape for geometry and are the one place it is *not* resolved: the easiest
+scenario is 3.MD.7, so a strict reading leaves them no geometry at all, and they keep the grade-3 set
+rather than losing a third of their topics. They still measure 10 of 10 above grade.
 
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 

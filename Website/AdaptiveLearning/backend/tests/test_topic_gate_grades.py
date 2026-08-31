@@ -49,18 +49,31 @@ def test_the_two_measured_topics_are_gone_from_the_grades_that_had_them(grade):
     assert "probability" not in allowed
 
 
-def test_mean_median_mode_are_knowingly_early():
-    """Not an oversight, and pinned so it cannot become one.
+def test_mean_median_mode_wait_for_the_grade_that_teaches_them():
+    """Raised from 4 to 6, which is the decision this test used to record.
 
-    6.SP.5c introduces all three, and the audit flagged 10 of 10 at grades 4
-    and 5 in all six cells. They stay at 4 because raising them is a decision
-    about what grades 4-5 are offered at all -- they would drop to five topics
-    -- rather than a defect. If that decision is ever made, this test is the
-    thing to change, and its failure is the record of the decision.
+    Its previous form asserted `TOPIC_MIN_GRADE == 4` and said in as many
+    words that changing it meant changing a test that explains why. That is
+    what happened: 6.SP.5c introduces all three, and the audit measured 10 of
+    10 above grade at grades 4 and 5 in all six cells -- 30 of the 46
+    above-grade questions grade 4 received.
+
+    The cost was the reason for waiting and is worth keeping visible: grades
+    4-5 drop from seven topics to four, which is what grades 1-3 get plus
+    `rationals`. Breadth traded for accuracy, deliberately.
     """
     for topic in ("mean", "median", "mode"):
-        assert decider.TOPIC_MIN_GRADE[topic] == 4
-        assert topic in decider._allowed_topics("4")
+        assert decider.TOPIC_MIN_GRADE[topic] == 6
+        assert topic not in decider._allowed_topics("5")
+        assert topic in decider._allowed_topics("6")
+
+
+def test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five():
+    """Pinned so the narrowing is visible rather than incidental. If a future
+    change widens these grades again, it should be because someone chose to."""
+    for grade in ("4", "5"):
+        assert set(decider._allowed_topics(grade)) == {
+            "ordering", "geometry", "expressions", "rationals"}
 
 
 @pytest.mark.parametrize("grade", ["", None, "no idea", "2026 cohort"])

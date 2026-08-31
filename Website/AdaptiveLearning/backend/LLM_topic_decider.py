@@ -55,16 +55,17 @@ TOPIC_MIN_GRADE = {
     "geometry":            1,   # content is bounded by the band ceiling in
                                 # LLM_geometry_generation.SCENARIO_MIN_GRADE
     "rationals":           4,   # 4.NF.3, fractions with like denominators
-    # KNOWN GAP, deliberately left: 6.SP.5c introduces mean, median and mode,
-    # so 4 is two years early and the audit flagged 10 of 10 at grades 4 and 5
-    # in all six cells. Left at 4 because raising it is a product decision
-    # about what grades 4-5 are offered at all -- with angle_relationships
-    # gone they would drop to five topics -- not a defect to fix in passing.
-    # Recorded here rather than in a comment elsewhere so the next reader sees
-    # it beside the numbers it contradicts.
-    "mean":                4,   # 6.SP.5c
-    "median":              4,   # 6.SP.5c
-    "mode":                4,   # 6.SP.5c
+    # Raised from 4 to 6. 6.SP.5c introduces all three, and the audit flagged
+    # 10 of 10 at grades 4 and 5 in all six cells -- 30 of the 46 questions
+    # grade 4 received above its grade.
+    #
+    # The cost is real and was the reason for leaving it: grades 4-5 now have
+    # four topics rather than seven, which is what grades 1-3 get plus
+    # `rationals`. That is a deliberate trade of breadth for accuracy, taken
+    # knowing the size of it, rather than a standard applied blindly.
+    "mean":                6,   # 6.SP.5c
+    "median":              6,   # 6.SP.5c
+    "mode":                6,   # 6.SP.5c
     "algebra":             6,   # 6.EE.7, one-variable equations
     "angle_relationships": 7,   # 7.G.5, complementary and supplementary
     "probability":         7,   # 7.SP.5

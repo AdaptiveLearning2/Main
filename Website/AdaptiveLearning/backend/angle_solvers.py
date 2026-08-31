@@ -135,16 +135,21 @@ def invalid_reason(scenario, variables, solution):
 
 
 def solve_scenario(scenario, raw_variables):
-    """The scenario's numeric answer as a float, or None if there is not one.
+    """`(value, reason)` -- the answer as a float, or None and why not.
 
-    None for every failure rather than a raise, so the caller's retry loop has
-    one thing to test.
+    Both halves, because the caller is a subprocess whose only channel back is
+    a string: collapsing every failure to None made a degenerate triangle and
+    an unparseable variable print the same `unsolvable scenario`, while the
+    sentence explaining it was computed one frame away and dropped.
+
+    `reason` is None exactly when `value` is not.
     """
     arity = SCENARIO_ARITY.get(scenario)
     if arity is None:
-        return None
+        return None, f"no such scenario: {scenario!r}"
     if not isinstance(raw_variables, list) or len(raw_variables) < arity:
-        return None
+        return None, (f"{scenario} needs {arity} variable(s), got "
+                      f"{raw_variables!r:.60}")
     try:
         variables = preprocess_variables(raw_variables)
         match scenario:
@@ -163,17 +168,17 @@ def solve_scenario(scenario, raw_variables):
                 # the tests pin them equal -- but this is a standalone unit, so
                 # it holds that guarantee itself rather than borrowing the
                 # caller's.
-                return None
+                return None, f"no branch for scenario {scenario!r}"
         if solution is None:
-            return None
+            return None, f"{scenario} has no solution"
         # Checked here because it needs the parsed expressions, which do not
         # cross the process boundary.
         reason = invalid_reason(scenario, variables, solution)
         if reason:
-            return None
+            return None, reason
         value = float(solution)
-    except Exception:
-        return None
+    except Exception as e:
+        return None, f"could not solve {scenario}: {type(e).__name__}: {e}"
     if not math.isfinite(value):
-        return None
-    return value
+        return None, f"{scenario} solved to a non-finite value"
+    return value, None

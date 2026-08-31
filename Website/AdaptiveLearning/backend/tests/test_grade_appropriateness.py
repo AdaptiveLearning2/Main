@@ -178,15 +178,15 @@ def test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed():
 def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
     """(5x + 15) + (3x - 20) = 90 gives 11.875, a real observed answer.
     Whole numbers required through 5th grade, ordinary after."""
-    solved = angle_solvers.solve_scenario("algebra_complementary",
-                                          ["5x + 15", "3x - 20"])
+    solved, _ = angle_solvers.solve_scenario("algebra_complementary",
+                                             ["5x + 15", "3x - 20"])
     assert not float(solved).is_integer()
     assert ang._requires_whole_number_solution("5th grade")
     assert not ang._requires_whole_number_solution("6th grade")
 
 
 def test_a_whole_number_answer_passes_at_every_grade():
-    solved = angle_solvers.solve_scenario("complementary", ["35"])
+    solved, _ = angle_solvers.solve_scenario("complementary", ["35"])
     assert float(solved).is_integer()
     assert ang.format_answer(solved) == "55"
 
@@ -263,7 +263,11 @@ def test_algebra_complementary_is_judged_on_its_angles_not_on_x():
 def test_an_unrecognised_scenario_is_retryable_rather_than_fatal():
     """None sends the loop round again; raising would take out a question
     that a regenerate would have fixed."""
-    assert angle_solvers.solve_scenario("nope", angle_solvers.preprocess_variables(["1"])) is None
+    value, reason = angle_solvers.solve_scenario("nope", ["1"])
+    assert value is None
+    # The reason travels with it: the worker's only channel back is a string,
+    # and a placeholder there made every failure look the same.
+    assert "nope" in reason
 
 
 def test_a_topic_with_no_rule_is_never_a_violation():

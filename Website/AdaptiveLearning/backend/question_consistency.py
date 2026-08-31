@@ -29,10 +29,15 @@ contradiction; they are not a proof of agreement.
 import re
 from fractions import Fraction
 
-# A fraction is one token, not two numbers. `ordering` routinely scores
-# "3/4" alongside "0.27" -- `solve_ordering` sorts on float(sympify(v)), so
-# those ARE comparable, and reading them as a bare 3 and 4 made this check
-# inert on half the ordering questions sampled live (2026-08-21).
+# A fraction is one token, not two numbers. `ordering` routinely scores "3/4"
+# alongside "0.27", and those ARE comparable -- the values are parsed to floats
+# and sorted on those, so a fraction and a decimal sit on one scale. Reading
+# "3/4" as a bare 3 and 4 made this check inert on half the ordering questions
+# sampled live (2026-08-21).
+#
+# (The parse moved into the bounded worker, so `solve_ordering` now receives
+# numbers rather than calling `float(sympify(v))` itself. What matters here is
+# unchanged: one token, one value.)
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?")
 
 # "The numbers of hours were: 8, 4, 12" -- these prompts put the dataset

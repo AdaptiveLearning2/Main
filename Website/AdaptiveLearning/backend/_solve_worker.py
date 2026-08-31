@@ -30,10 +30,14 @@ def main():
         # cannot be separated from the solve.
         if scenario == "angle":
             import angle_solvers
-            value = angle_solvers.solve_scenario(req["angle_scenario"],
+            value, reason = angle_solvers.solve_scenario(req["angle_scenario"],
                                                  req["variables"])
             if value is None:
-                print(json.dumps({"ok": False, "error": "unsolvable scenario"}))
+                # The reason, not a placeholder. It is computed one frame away
+                # and was being dropped, so a degenerate figure and an
+                # unparseable variable printed the same `unsolvable scenario`
+                # -- and this string is the only channel the subprocess has.
+                print(json.dumps({"ok": False, "error": reason}))
             else:
                 print(json.dumps({"ok": True, "result": repr(value)}))
             return
@@ -69,10 +73,14 @@ def main():
         # that the keys exist, which says nothing about the values behind them.
         if scenario == "geometry":
             import geometry_solvers
-            value = geometry_solvers.solve_scenario(req["geometry_scenario"],
+            value, reason = geometry_solvers.solve_scenario(req["geometry_scenario"],
                                                     req["variables"])
             if value is None:
-                print(json.dumps({"ok": False, "error": "unsolvable scenario"}))
+                # The reason, not a placeholder. It is computed one frame away
+                # and was being dropped, so a degenerate figure and an
+                # unparseable variable printed the same `unsolvable scenario`
+                # -- and this string is the only channel the subprocess has.
+                print(json.dumps({"ok": False, "error": reason}))
             else:
                 print(json.dumps({"ok": True, "result": repr(value)}))
             return

@@ -130,11 +130,20 @@ SOLVABLE_SCENARIOS = frozenset(SCENARIO_VARS)
 
 
 def solve_scenario(scenario, raw_vars):
-    """The scenario's numeric solution, or None if there is not one.
+    """`(value, reason)` -- the solution as a float, or None and why not.
 
-    None for every failure rather than a raise, so the caller's retry loop has
-    a single thing to test.
+    Both halves, because the caller is a subprocess whose only channel back is
+    a string: collapsing every failure to None made an unparseable variable and
+    an unknown scenario print the same `unsolvable scenario`.
+
+    `reason` is None exactly when `value` is not.
     """
+    if scenario not in SCENARIO_VARS:
+        return None, f"no such scenario: {scenario!r}"
+    missing = [k for k in SCENARIO_VARS[scenario]
+               if k not in (raw_vars or {})]
+    if missing:
+        return None, f"{scenario} is missing variables: {missing}"
     try:
         vars = preprocess_variables(raw_vars)
         match (scenario):
@@ -181,13 +190,13 @@ def solve_scenario(scenario, raw_vars):
                 # different file. Without the default, an unlisted scenario
                 # leaves `solution` unbound and raises UnboundLocalError from a
                 # line that reads like arithmetic.
-                return None
+                return None, f"no branch for scenario {scenario!r}"
         solution = normalize_solution(solution)
         value = float(solution)
-    except Exception:
-        return None
+    except Exception as e:
+        return None, f"could not solve {scenario}: {type(e).__name__}: {e}"
     if not math.isfinite(value):
         # `1e200` cubed is `1e600`, and `float()` of that is `inf`. There is no
         # question here, and no set of distractors around it.
-        return None
-    return value
+        return None, f"{scenario} solved to a non-finite value"
+    return value, None

@@ -145,3 +145,35 @@ def test_an_unlisted_geometry_scenario_comes_back_none():
     checks SOLVABLE_SCENARIOS first -- but the extraction made it a standalone
     unit, so the guarantee now lives in a different file from the check."""
     assert safe_solve.safe_solve_geometry("no_such_scenario", {"a": "1"}) is None
+
+
+# ─── a refusal has to say which refusal it was ───────────────────────────
+
+@pytest.mark.parametrize("scenario,variables,expected", [
+    ("triangle_sum", ["75", "105"], "no such figure"),
+    ("triangle_sum", ["!!", "105"], "could not solve"),
+    ("nope", ["1"], "no such scenario"),
+    ("triangle_sum", ["50"], "needs 2 variable"),
+])
+def test_an_angle_refusal_carries_its_reason(scenario, variables, expected, capsys):
+    """The reason is computed one frame from the worker's only channel back --
+    a string -- and was being thrown away for a placeholder.
+
+    A degenerate triangle and an unparseable variable both printed
+    `unsolvable scenario`, so the log could not tell "the model wrote a figure
+    that does not exist" from "the model wrote something sympy cannot read".
+    Those need different fixes.
+    """
+    assert safe_solve.safe_solve_angle(scenario, variables) is None
+    assert expected in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("scenario,variables,expected", [
+    ("pythagorean", {"a": "3"}, "missing variables"),
+    ("cube_volume", {"side": "1e200"}, "non-finite"),
+    ("cube_volume", {"side": "!!"}, "could not solve"),
+    ("nope", {"side": "3"}, "no such scenario"),
+])
+def test_a_geometry_refusal_carries_its_reason(scenario, variables, expected, capsys):
+    assert safe_solve.safe_solve_geometry(scenario, variables) is None
+    assert expected in capsys.readouterr().out

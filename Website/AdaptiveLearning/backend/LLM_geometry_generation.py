@@ -467,11 +467,20 @@ DIFFICULTY_SCENARIOS = {
 }
 
 # Circle, 3D volume, and pythagorean-theorem scenarios need formulas grades
-# 1-3 haven't reached, so "early" band is restricted to flat rectangle/
-# triangle area and perimeter -- roughly where grade-3 geometry standards
-# land. Grades 1-2 in that band get the ceiling of what this topic can offer
-# them, since bands are coarser than a single grade.
-EARLY_BAND_SCENARIOS = {1, 2, 3, 4}
+# 1-3 haven't reached, so "early" band is restricted to what grade-3 geometry
+# standards actually cover: area of a rectangle (3.MD.7, length x width) and
+# perimeter of a polygon (3.MD.8, add the sides). Grades 1-2 in that band get
+# the ceiling of what this topic can offer them, since bands are coarser than
+# a single grade.
+#
+# Scenario 3 (triangle_area) was in this set and is not grade-3 material:
+# 1/2 x base x height is CCSS 6.G.1, three years above the top of this band.
+# Found by reading generated output rather than by any check -- a 1st grader
+# was asked "A triangle has a base of 8 units and a height of 5 units. What is
+# its area?", which `grade_appropriateness` passes because it looks only for
+# variable notation. The seeded lesson plans do not stop it either: they steer
+# what a scenario asks, not which scenarios are offered.
+EARLY_BAND_SCENARIOS = {1, 2, 4}
 
 def _pick_scenario(difficulty, grade_band):
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])

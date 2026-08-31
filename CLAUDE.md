@@ -2772,6 +2772,17 @@ topic itself was already reachable):
 `EARLY_BAND_SCENARIOS` filter on top, since circle/volume/pythagorean-theorem scenarios assume
 formulas grades 1-3 haven't reached regardless of which difficulty tier picked them.
 
+**That filter was itself too generous, and only reading output found it.** It admitted
+`triangle_area` — ½ × base × height, CCSS **6.G.1**, three years above the top of a band that means
+grades 1-3 — and a grade-1 session was duly generated asking for the area of a triangle. Nothing
+could have caught it: `grade_appropriateness` looks for variable notation, and a seeded lesson plan
+steers what a scenario *asks* rather than which scenarios are offered. The early band is now
+`{rectangle_area, rectangle_perimeter, triangle_perimeter}` — 3.MD.7 and 3.MD.8, what grade 3
+actually covers — pinned by name in `tests/test_early_band_geometry.py` so a renumbering has to face
+the reason. **Check a band's scenarios against the standard they claim to match, not against whether
+they look simple**: area of a triangle looks as elementary as area of a rectangle and is three grades
+apart.
+
 **Most of the ten topics are still defense-in-depth for "early" band, not primary content**, since
 `_allowed_topics()` above keeps `algebra`/`probability`/`rationals`/`mean`/`median`/`mode`/
 `angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"

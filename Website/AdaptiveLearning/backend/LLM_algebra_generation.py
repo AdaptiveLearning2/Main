@@ -71,6 +71,49 @@ Rules:
 
 solution = -1
 
+def _solve_equation(variables, attempt):
+    """The equation's single solution as a string, or None to retry.
+
+    Every rejection here is an equation this topic cannot score, and each one
+    used to be an exception out of a generator rather than another attempt:
+
+    - **No solution.** `x+1 = x+2` makes `solve` return `[]`, which became
+      `None` and then `float(None)` in the distractor generator -- a TypeError
+      from the endpoint. 1 of 3 generations against Haiku 4.5.
+    - **More than one.** CLAUDE.md states the constraint this enforces: this
+      topic is "one linear equation with one solution -- a quadratic would
+      present one root as the answer and mark the other correct choice wrong."
+      That was documented as a limit and enforced nowhere, so `solve(...)[0]`
+      silently picked a root.
+    - **Not a number.** A solution still carrying a symbol cannot be scored
+      against multiple-choice options, and `float()` would raise on it.
+    - **Malformed.** No `=`, two of them, or something `parse_expr` refuses:
+      `split('=')` raised ValueError on unpacking before anything looked.
+    """
+    equation_str = "".join(variables)
+    sides = equation_str.split("=")
+    if len(sides) != 2:
+        print(f"[Attempt {attempt}] Not one equation: {equation_str[:80]!r}")
+        return None
+    try:
+        left = parse_expr(sides[0], transformations=transformations)
+        right = parse_expr(sides[1], transformations=transformations)
+        solutions = solve(Eq(left, right), symbols('x'))
+    except Exception as e:
+        print(f"[Attempt {attempt}] Could not solve {equation_str[:80]!r}: "
+              f"{type(e).__name__}: {e}")
+        return None
+
+    if len(solutions) != 1:
+        print(f"[Attempt {attempt}] {len(solutions)} solutions for "
+              f"{equation_str[:80]!r}; this topic scores exactly one")
+        return None
+    if not solutions[0].is_number:
+        print(f"[Attempt {attempt}] Solution is not a number: {solutions[0]}")
+        return None
+    return str(solutions[0])
+
+
 def _grade_band(grade):
     # Shared with the other generation files so they can't drift apart.
     # An unreadable grade like "Grade 1" falls back to "early", not "advanced".
@@ -151,21 +194,21 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # Solved inside the loop, so an equation this cannot score is a retry
+        # rather than a 500. It used to run after the loop, where `solve`
+        # returning `[]` -- an equation with no solution, like `x+1 = x+2` --
+        # became `solution = None` and then `float(None)` inside the distractor
+        # generator, a TypeError out of the endpoint. Measured against Haiku
+        # 4.5: 1 of 3 algebra generations, on the most-served topic in the
+        # product.
+        solution = _solve_equation(question_data["variables"], attempt + 1)
+        if solution is None:
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
-
-    parts = question_data['variables']
-    equation_stra = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
-    x = symbols('x')
-    left, right = equation_stra.split('=')
-    left_expr = parse_expr(left, transformations=transformations)
-    right_expr = parse_expr(right, transformations=transformations)
-    equation = Eq(left_expr, right_expr)
-    solution = solve(equation, x)
-
-    solution = str(solution[0]) if solution else None # solve returns a list; take the first solution if any
 
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]

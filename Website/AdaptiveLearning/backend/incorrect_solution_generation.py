@@ -2,6 +2,7 @@
 # Algebra/angles/geometry/mean/median/probability: offset the solution.
 # Expressions: perturb the 'x' term. Rationals: random numerator/denominator.
 
+import math
 import random
 import sympy as sp 
 from sympy import symbols, Add, Mul
@@ -17,6 +18,16 @@ def generate_general_incorrect_answers(answer):
     generated_answers = []
 
     answer = float(sp.sympify(answer))
+    if not math.isfinite(answer):
+        # There is no set of three distinct wrong answers around infinity, and
+        # no question a student can be asked either. Raising sends this back up
+        # to the generator's retry loop, which is where an unusable solution
+        # belongs -- returning a list would put `inf` on screen as an option.
+        #
+        # Reachable rather than theoretical: `preprocess_variables` sympifies
+        # whatever the model wrote, so a `side` of 1e200 makes
+        # `solve_cube_volume` produce 1e600, and `float()` of that is `inf`.
+        raise ValueError(f"cannot build distractors around {answer}")
     attempts = 0
     # Bounded for the reason `generate_symbolic_incorrect_answers` documents,
     # though this one has not been seen to hang: its offsets are drawn from a
@@ -45,8 +56,15 @@ def generate_general_incorrect_answers(answer):
         if incorrect_answer != answer and formatted not in generated_answers:
             generated_answers.append(formatted)
 
+    # Bounded like the loop above it. An unbounded filler is the same bug in a
+    # new place -- and it was: `f"{inf + n:.2f}"` is `"inf"` whatever `n` is, so
+    # the distinctness check never passed and this spun for ever, inside
+    # `_generation_waiter()`, leaking its permit. Twelve of those and generation
+    # is off for the life of the process. The `isfinite` guard above is what
+    # makes it unreachable; this bound is what makes it survivable if some other
+    # input ever produces a constant format.
     offset = 1
-    while len(generated_answers) < 3:
+    while len(generated_answers) < 3 and offset <= 3 + MAX_ATTEMPTS:
         formatted = f"{answer + offset:.2f}".rstrip('0').rstrip('.')
         if formatted not in generated_answers:
             generated_answers.append(formatted)
@@ -93,8 +111,12 @@ def generate_incorrect_rational(answer):
         else:
             continue
 
+    # Bounded like the other two fillers. Distinct `Rational + n` values always
+    # stringify differently, so this cannot spin the way the numeric one did --
+    # but "cannot" is what was believed about that one, and the cost of the
+    # bound is nothing.
     offset = 1
-    while len(generated_answers) < 3:
+    while len(generated_answers) < 3 and offset <= 3 + MAX_ATTEMPTS:
         candidate = str(sp.sympify(answer) + offset)
         if candidate not in generated_answers:
             generated_answers.append(candidate)

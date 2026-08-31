@@ -69,3 +69,34 @@ def test_the_required_variables_match_what_each_solver_indexes():
     for name, body in _CASE_BODIES.items():
         indexed = set(re.findall(r'vars\["([a-z0-9_]+)"\]', body))
         assert set(geo.SCENARIO_VARS[name]) == indexed, name
+
+
+_BLOCK_NAMES = dict(re.findall(
+    r'^    (\d+): """.*?"scenario": "([a-z_]+)"', _SOURCE, re.M | re.S))
+
+
+def test_every_block_name_was_found():
+    """Guards the regex, like the one above it."""
+    assert len(_BLOCK_NAMES) == len(geo.SCENARIO_BLOCKS)
+
+
+def test_each_blocks_name_is_a_scenario_the_dispatch_handles():
+    """`_geometry_prompt` restates the name and required keys as a rule, so a
+    block whose example names something the dispatch cannot solve would ask the
+    model for a reply the validation then rejects on every attempt -- three
+    retries and a ValueError, for a question that was never askable."""
+    for number, name in _BLOCK_NAMES.items():
+        assert name in geo.SCENARIO_VARS, f"block {number} asks for {name}"
+        assert geo._SCENARIO_NAMES[int(number)] == name
+
+
+def test_the_prompt_states_the_scenario_and_its_keys():
+    """Sending the block alone was not enough: Haiku answered
+    `rect_perimeter_missing_side` carrying `{"area", "known_side"}` -- two
+    scenarios blended, which SCENARIO_VARS refuses and which, before that check
+    existed, was a KeyError or a question scored against the wrong formula."""
+    for number, name in geo._SCENARIO_NAMES.items():
+        prompt = geo._geometry_prompt(number)
+        assert f'"scenario" MUST be exactly "{name}"' in prompt
+        for key in geo.SCENARIO_VARS[name]:
+            assert f'"{key}"' in prompt

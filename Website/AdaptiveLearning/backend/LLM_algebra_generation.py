@@ -18,6 +18,7 @@ from sympy.parsing.sympy_parser import (
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import token_join
 import grade_levels
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -89,8 +90,14 @@ def _solve_equation(variables, attempt):
       against multiple-choice options, and `float()` would raise on it.
     - **Malformed.** No `=`, two of them, or something `parse_expr` refuses:
       `split('=')` raised ValueError on unpacking before anything looked.
+    - **Not a list of scalars.** `[3, "+", 2]` is JSON-legal and made
+      `"".join` raise TypeError -- before the solve, so moving the solve into
+      the retry loop did not help. See `token_join`.
     """
-    equation_str = "".join(variables)
+    equation_str = token_join.join_tokens(variables)
+    if equation_str is None:
+        print(f"[Attempt {attempt}] Unusable variables: {variables!r:.80}")
+        return None
     sides = equation_str.split("=")
     if len(sides) != 2:
         print(f"[Attempt {attempt}] Not one equation: {equation_str[:80]!r}")

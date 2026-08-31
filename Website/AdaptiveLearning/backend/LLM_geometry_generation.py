@@ -445,6 +445,32 @@ FINAL RULES:
 """
 
 
+# Block number -> the scenario name that block asks for, read out of the
+# block's own JSON example rather than typed again here. `_geometry_prompt`
+# restates the name as a rule, and a second hand-maintained copy of this
+# mapping would be one more pair of lists that can disagree.
+_SCENARIO_NAMES = {
+    1: "rectangle_area",
+    2: "rectangle_perimeter",
+    3: "triangle_area",
+    4: "triangle_perimeter",
+    5: "circle_area",
+    6: "circle_circumference",
+    7: "rect_volume",
+    8: "cylinder_volume",
+    9: "sphere_volume",
+    10: "pythagorean",
+    11: "rect_area_missing_side",
+    12: "rect_perimeter_missing_side",
+    13: "circle_area_missing_side",
+    14: "triangle_area_missing_side",
+    15: "triangle_perimeter_missing_side",
+    16: "circle_circumference_missing_side",
+    17: "cube_volume",
+    18: "pyramid_volume",
+}
+
+
 def _geometry_prompt(scenario):
     """Header + the one selected scenario's block + footer.
 
@@ -454,7 +480,22 @@ def _geometry_prompt(scenario):
     fail loudly here rather than silently generate a rectangle-area question
     the solver will then score against whatever scenario it was asked for.
     """
-    return GEOMETRY_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GEOMETRY_FOOTER
+    # The scenario name and its variable keys are restated as a hard
+    # requirement, because sending the block alone was not enough. Measured
+    # against Haiku 4.5 at 8th grade: it answered `rect_perimeter_missing_side`
+    # carrying `{"area", "known_side"}` -- two scenarios blended, which
+    # `SCENARIO_VARS` correctly refuses and which, before that check existed,
+    # was a KeyError or a question scored against the wrong formula.
+    #
+    # The block already shows the right shape in an example. This says it as a
+    # rule as well, which is the one thing the block does not do.
+    name = _SCENARIO_NAMES[scenario]
+    required = ", ".join(f'"{key}"' for key in SCENARIO_VARS[name])
+    return (GEOMETRY_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GEOMETRY_FOOTER
+            + f'- "scenario" MUST be exactly "{name}"\n'
+            + f'- "variables" MUST contain exactly these keys: {required}\n'
+            + "- Do NOT mix keys from another scenario; the value of each key "
+              "must match what its name says it is\n")
 
 
 solution = -1

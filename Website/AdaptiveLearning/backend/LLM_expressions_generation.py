@@ -17,6 +17,7 @@ from sympy.parsing.sympy_parser import (
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import safe_solve
+import token_join
 import grade_levels
 import grade_appropriateness
 
@@ -263,7 +264,11 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         # records for `angle_relationships`, and for the same reason: whether
         # the answer is usable is a property of the solved value, not of the
         # text, so it cannot be checked before solving.
-        equation_stra = "".join(question_data["variables"]).replace("−", "-")
+        equation_stra = token_join.join_tokens(question_data["variables"])
+        if equation_stra is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data["variables"])[:80])
+            continue
         solved = safe_solve.safe_solve(equation_stra, question_data["scenario"])
         if solved is None:
             print(f"[Attempt {attempt+1}] Unsolvable or unbounded expression:",

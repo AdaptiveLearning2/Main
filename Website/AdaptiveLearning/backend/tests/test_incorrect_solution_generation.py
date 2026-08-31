@@ -64,3 +64,33 @@ def test_a_single_term_has_more_than_two_reachable_variants():
     expr = sp.sympify("5*x")
     reachable = {str(inc.wrong_coefficient(expr)) for _ in range(200)}
     assert len(reachable) >= 3, f"only {reachable} reachable"
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_a_non_finite_solution_is_refused_rather_than_looped_over(bad):
+    """The filler added below the bounded loop was itself unbounded, and
+    `f"{inf + n:.2f}"` is `"inf"` whatever `n` is -- so the distinctness check
+    never passed and it spun for ever. That is the same bug as the one it was
+    written to fix, one line lower.
+
+    It runs inside `_generation_waiter()`, so the spin also leaked that
+    permit: twelve of them and generation is off for the life of the process.
+
+    Reachable rather than theoretical: `preprocess_variables` sympifies
+    whatever the model wrote, so a `side` of 1e200 makes `solve_cube_volume`
+    produce 1e600, and `float()` of that is `inf`.
+    """
+    with pytest.raises(ValueError):
+        inc.generate_general_incorrect_answers(bad)
+
+
+def test_the_numeric_filler_is_bounded_even_if_the_guard_is_bypassed(monkeypatch):
+    """Belt and braces, and deliberately so: the `isfinite` guard makes the
+    spin unreachable, but "unreachable" is what was believed about the loop
+    above it. The bound is what makes a future constant-format input
+    survivable rather than fatal."""
+    import math
+    monkeypatch.setattr(math, "isfinite", lambda _v: True)
+    # Returns rather than hanging. What it returns is not interesting; that it
+    # returns at all is the whole assertion.
+    inc.generate_general_incorrect_answers(float("inf"))

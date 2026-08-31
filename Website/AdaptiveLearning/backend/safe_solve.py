@@ -25,11 +25,25 @@ import os
 import subprocess
 import sys
 
+import llm_client
+
 # Wall-clock bound for one parse/solve. Generous against the ~10ms an ordinary
 # expression takes: this is a backstop for a pathological input, not a
 # performance budget, and cutting a legitimate solve short would reject a
 # perfectly good question.
-SOLVE_TIMEOUT_S = float(os.getenv("SOLVE_TIMEOUT", "10"))
+#
+# Read through `_env_number` with a floor, which CLAUDE.md requires of every
+# numeric setting and this file did not do. It was `float(os.getenv(...))` at
+# import, so `SOLVE_TIMEOUT=abc` raised ValueError out of `import main` and took
+# the whole backend down over one topic's solver knob -- exactly the failure
+# that rule exists to prevent. `SOLVE_TIMEOUT=0` was worse than a crash: it
+# imported fine and failed every expression question instantly, which reads as
+# the model being unable to write a solvable expression.
+#
+# The floor is 1s rather than something smaller because this bound is only ever
+# meant to catch a computation that will not finish at all; a value low enough
+# to cut off real work is a misconfiguration, not a tuning choice.
+SOLVE_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 10.0, float, minimum=1.0)
 
 _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "_solve_worker.py")

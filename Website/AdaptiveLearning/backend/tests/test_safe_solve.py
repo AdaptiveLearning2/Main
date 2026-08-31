@@ -60,3 +60,27 @@ def test_a_syntactically_invalid_expression_is_none_not_a_raise():
     """Every caller treats None as "retry this question"; a raise would escape
     the retry loop instead."""
     assert safe_solve.safe_solve("2 +* 3", "evaluate") is None
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("abc", 10.0),   # unparseable -- falls back rather than killing the import
+    ("", 10.0),      # empty
+    ("0", 1.0),      # below the floor -- clamped, not honoured
+    ("0.1", 1.0),    # ditto
+    ("30", 30.0),    # a real value still works
+])
+def test_the_timeout_is_read_through_env_number_with_a_floor(value, expected,
+                                                             monkeypatch):
+    """CLAUDE.md requires every numeric setting to go through `_env_number`
+    with a floor, and this one did not: it was `float(os.getenv(...))` at
+    import, so `SOLVE_TIMEOUT=abc` raised ValueError out of `import main` and
+    took the entire backend down over one topic's solver knob.
+
+    `SOLVE_TIMEOUT=0` was the worse half -- it imported cleanly and then failed
+    every expression question instantly, which reads as the model being unable
+    to write a solvable expression rather than as a misconfiguration.
+    """
+    import llm_client
+    monkeypatch.setenv("SOLVE_TIMEOUT", value)
+    assert llm_client._env_number("SOLVE_TIMEOUT", 10.0, float,
+                                  minimum=1.0) == expected

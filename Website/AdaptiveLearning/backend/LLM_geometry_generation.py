@@ -612,7 +612,20 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
 
     solution = format_two_decimals(solution_float)
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float)
-    answers = [round(float(ans), 2) for ans in incorrect_answers] + [solution]
+    # Formatted the same way as the solution, so every option is a string.
+    #
+    # This was `round(float(ans), 2)`, which made geometry the one topic
+    # shipping a mixed list -- `['13.93', 27.86, 5.0, 41.79]`, the correct
+    # answer a string among floats. `Adaptive.jsx` decides correctness with
+    # `JSON.stringify(option) === JSON.stringify(correct_answer)`, which is
+    # type-sensitive: `24` and `"24"` do not match. It happened to work because
+    # `correct_answer` is the same object that goes into the list, so it always
+    # matched itself -- an invariant held by accident rather than by
+    # construction, and one a later edit that re-serialised the options would
+    # break with no visible symptom, since React renders 13.93 and "13.93"
+    # identically.
+    answers = [format_two_decimals(float(ans)) for ans in incorrect_answers] \
+        + [solution]
 
     random.shuffle(answers)
 

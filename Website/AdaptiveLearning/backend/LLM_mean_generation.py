@@ -12,6 +12,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
+import answer_format
 import lesson_plan_context
 import safe_solve
 import grade_levels
@@ -198,8 +199,13 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
     solution = sum(numbers) / len(numbers)
 
     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
-    solution = serialize_sympy(solution) if solution is not None else None
-    answers = [serialize_sympy(ans) for ans in incorrect_answers] + [solution]
+    # Both through the same formatter. `serialize_sympy` does not recognise a
+    # plain Python float -- which is what `sum(numbers)/len(numbers)` now is --
+    # so it fell through to `str()` and produced "6.0" beside distractors of
+    # "31", "11", "12". On a whole-number average, which the easy and medium
+    # tiers ask for, the answer was the only option ending in `.0`.
+    solution = answer_format.format_value(solution) if solution is not None else None
+    answers = [answer_format.format_value(ans) for ans in incorrect_answers] + [solution]
 
     random.shuffle(answers)
 

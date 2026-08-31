@@ -13,6 +13,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
+import answer_format
 import lesson_plan_context
 import safe_solve
 import grade_levels
@@ -36,11 +37,19 @@ def extract_json(text):
     return None
 
 def serialize_answer(ans):
+    """Through the shared formatter, like the distractors.
+
+    `str()` here rendered the correct answer as `["4.0"]` beside distractors of
+    `["10"]`, `["8"]`, `["2"]` -- the same tell `mean` had, one layer further
+    on. Fixing the distractor pool alone left the answer as the odd one out,
+    which is why the test asserts every option is in canonical form rather
+    than checking any single path.
+    """
     if isinstance(ans, list):
-        return [str(x) for x in ans]
+        return [answer_format.format_value(x) for x in ans]
     if isinstance(ans, sp.Basic):
-        return str(ans)
-    return str(ans)
+        return answer_format.format_value(float(ans))
+    return answer_format.format_value(ans)
 
 mode_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
@@ -100,18 +109,26 @@ def generate_incorrect_answers(solution, values):
     # held fewer distinct values than the mode has members. Enumerating instead
     # of sampling is what makes both terminate -- the candidate pool is small
     # and finite, so there is nothing to search for.
-    distinct = list(dict.fromkeys(str(v) for v in values))
+    # Formatted, not `str()`. The values are floats since the parse moved
+    # into the worker, so `str()` rendered a dataset written "5, 5, 5, 7"
+    # as options of "5.0" and "7.0" -- no tell, but no option matching
+    # how the question reads.
+    distinct = list(dict.fromkeys(answer_format.format_value(v) for v in values))
 
     # CASE 1: SINGLE MODE
     if not isinstance(solution, list):
-        solution = str(solution)
+        # Formatted through the same function as `distinct`, or the comparison
+        # below never matches and the correct answer is offered as a
+        # distractor. `str(5.0)` is "5.0" and the pool holds "5".
+        solution = answer_format.format_value(solution)
         others = [v for v in distinct if v != solution]
         random.shuffle(others)
         generated_answers = others[:3]
 
     # CASE 2: MULTIPLE MODES
     else:
-        solution_set = set(map(str, solution))
+        # Same reason as CASE 1: `str` here, formatted values there.
+        solution_set = {answer_format.format_value(v) for v in solution}
         size = len(solution)
         pool = list(distinct)
         random.shuffle(pool)
@@ -129,11 +146,16 @@ def generate_incorrect_answers(solution, values):
         # same shape as the answer.
         offset = 1
         base = solution if isinstance(solution, list) else [solution]
-        while len(generated_answers) < 3 and offset <= 5:
-            candidate = [str(float(v) + offset) for v in base]
+        while len(generated_answers) < 3 and offset <= 8:
+            values_ = [answer_format.format_value(float(v) + offset) for v in base]
+            # Compared in the shape the list actually holds. It was built as a
+            # list and compared against a list of strings in the single-mode
+            # branch, so the check never matched and the filler produced
+            # `['7.0', '6.0', '7.0']` -- the same Rational-against-strings
+            # mistake `generate_incorrect_rational` had.
+            candidate = values_ if isinstance(solution, list) else values_[0]
             if candidate not in generated_answers:
-                generated_answers.append(
-                    candidate if isinstance(solution, list) else candidate[0])
+                generated_answers.append(candidate)
             offset += 1
 
     return generated_answers

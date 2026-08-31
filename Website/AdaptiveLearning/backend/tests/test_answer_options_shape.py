@@ -131,3 +131,72 @@ def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
 
     types = {type(o).__name__ for o in options}
     assert len(types) == 1, f"{name}: options mix {sorted(types)}: {options}"
+
+
+@pytest.mark.parametrize("name,module,entry,payload",
+                         CASES, ids=[c[0] for c in CASES])
+def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
+                                                     payload, monkeypatch):
+    """The correct answer must not be the odd one out to look at.
+
+    `mean` returned `"6.0"` beside distractors of `"31"`, `"11"`, `"12"` --
+    `serialize_sympy` does not recognise a plain float, which is what the mean
+    became when the parse moved into the worker, so it fell through to
+    `str()`. On a whole-number average, which the easy and medium tiers ask
+    for explicitly, **the answer was the only option ending in `.0` and could
+    be picked without doing the arithmetic.**
+
+    The other three tests in this file all pass against that: every option is
+    a string, they all render distinctly, and exactly one matches
+    `correct_answer`. None of them looks at whether the options were rendered
+    by the *same rule*, which is the property that was broken.
+
+    `answer_format.format_value` is idempotent, so an option already in
+    canonical form passes through unchanged -- an option that changes when
+    re-formatted came from a different rule than its neighbours.
+    """
+    import answer_format
+
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
+                        lambda prompt, topic, band: prompt)
+    if hasattr(module, "grade_appropriateness"):
+        monkeypatch.setattr(module.grade_appropriateness, "refuse",
+                            lambda *a, **k: False)
+    if hasattr(module, "question_consistency"):
+        monkeypatch.setattr(module.question_consistency, "dataset_mismatch",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(module.question_consistency, "negation_mismatch",
+                            lambda *a, **k: None)
+
+    question = getattr(module, entry)([], [], "medium", "8th Grade")
+    options = json.loads(json.dumps(question))["answer_options"]
+
+    def canonical(option):
+        if isinstance(option, list):
+            return [answer_format.format_value(v) for v in option]
+        return answer_format.format_value(option)
+
+    odd = [o for o in options if canonical(o) != o]
+    assert not odd, (
+        f"{name}: {odd} rendered by a different rule from {options}")
+
+
+@pytest.mark.parametrize("solution,values,why", [
+    (5.0, [5.0, 5.0, 5.0, 7.0], "one non-modal value, formatted pool"),
+    ([4.0, 9.0], [4.0, 9.0], "bimodal with no spare value"),
+])
+def test_mode_never_offers_the_answer_as_a_distractor(solution, values, why):
+    """Formatting the pool without formatting the solution made the comparison
+    that excludes the answer stop matching -- `str(5.0)` is `"5.0"` and the
+    pool holds `"5"`. Introduced while fixing the formatting, and worse than
+    what it fixed: the correct answer appeared twice."""
+    import answer_format
+    import LLM_mode_generation as mode_gen
+
+    answers = mode_gen.generate_incorrect_answers(solution, values)
+    canonical = (answer_format.format_value(solution)
+                 if not isinstance(solution, list)
+                 else [answer_format.format_value(v) for v in solution])
+    assert canonical not in answers, why

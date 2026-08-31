@@ -559,13 +559,12 @@ def _band_scenarios(grade):
                if SCENARIO_MIN_GRADE[name] <= ceiling}
     if allowed:
         return allowed
-    # Grades 1-2 reach nothing: the easiest scenario here is area of a
-    # rectangle, 3.MD.7. Falling back to the grade-3 scenarios keeps today's
-    # behaviour rather than silently removing geometry from those grades --
-    # which would leave them two topics, and is a decision about what a 1st
-    # grader is offered rather than a defect. It is the same open question as
-    # `mean`/`median`/`mode` at grade 4 in LLM_topic_decider.TOPIC_MIN_GRADE,
-    # and it is why grades 1-2 measured 10 of 10 above grade.
+    # Reached only by a grade below the easiest scenario, which is now
+    # `rectangle_area_by_counting` at 2.G.2. Grade 2 is served directly, and
+    # grade 1 has no geometry at all -- `TOPIC_MIN_GRADE["geometry"]` is 2 --
+    # so this is a backstop for a caller that asks anyway rather than a path
+    # the product takes. It returns the easiest scenarios that exist rather
+    # than nothing, because an empty set would make `random.choice` raise.
     floor = min(SCENARIO_MIN_GRADE.values())
     return {number_ for number_, name in _SCENARIO_NAMES.items()
             if SCENARIO_MIN_GRADE[name] <= floor}

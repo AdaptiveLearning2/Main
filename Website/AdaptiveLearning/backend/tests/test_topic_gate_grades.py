@@ -151,3 +151,22 @@ def test_grade_four_is_held_back_from_a_grade_five_concept(module, concept):
 def test_the_override_does_not_reach_grades_that_have_met_the_concept(module, grade):
     """5.OA.1 and 5.NF.1 are grade-5 standards, so grade 5 keeps them."""
     assert grade not in module.GRADE_OVERRIDES
+
+
+def test_a_topic_without_a_minimum_grade_fails_loudly():
+    """`_allowed_topics` indexes `TOPIC_MIN_GRADE[t]` directly, so a topic
+    added to `ALL_TOPICS` without one raises KeyError on the next question
+    rather than defaulting to available at every grade.
+
+    That is the intended behaviour and worth pinning: the alternative -- a
+    `.get(t, 1)` -- is how `angle_relationships` would have reached grade 4
+    again, silently, the next time someone added a topic.
+    """
+    import pytest as _pytest
+    original = list(decider.ALL_TOPICS)
+    try:
+        decider.ALL_TOPICS.append("brand_new_topic")
+        with _pytest.raises(KeyError):
+            decider._allowed_topics("7")
+    finally:
+        decider.ALL_TOPICS[:] = original

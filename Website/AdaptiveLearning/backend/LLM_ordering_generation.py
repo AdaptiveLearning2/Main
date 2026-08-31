@@ -132,10 +132,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions. Magnitude up to 200.",
         "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value. Magnitude up to 200.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values. No fractions.",
-        "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions.",
-        "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value.",
+        "easy":   "Use 4-5 values mixing whole numbers and decimals, including at least one NEGATIVE value.",
+        "medium": "Use 5-6 values mixing decimals to two places, simple fractions, and at least one negative.",
+        "hard":   "Use 6 values mixing decimals to two places, fractions with UNLIKE denominators, and at least TWO negatives. At least two of the values must be within 0.1 of each other, so they cannot be ordered at a glance.",
     },
 }
 

@@ -540,7 +540,11 @@ GRADE_COMPLEXITY = {
     "early":    "Keep all given measurements (lengths, radii, etc.) between 1 and 12.",
     "middle":   "Measurements may range from 1 to 30.",
     "upper":    "Measurements may range from 1 to 100.",
-    "advanced": "No additional restriction.",
+    # Grades 9+. "No additional restriction" read to the model as no
+    # requirement and produced the easiest shape that fit -- an audit of 640
+    # questions found 8 of 10 grade-9 geometry questions three or more
+    # grades below grade.
+    "advanced": "Use two-digit measurements, and include one value with a decimal place (e.g. 12.5) so the arithmetic does not stay whole-number.",
 }
 # Kept separate from EARLY_BAND_SCENARIOS above rather than folded into one
 # dict: this scales a number, that gates which formulas are even in play,

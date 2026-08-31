@@ -2840,6 +2840,31 @@ Each is now forbidden in the objectives *and* in the row's `notes`, which is whe
 will look. The general rule: **an objective that is pedagogically true can still be an instruction
 the solver cannot score** — check what a cell generates before trusting it, not just what it says.
 
+### Grades 9+ have no content of their own, and prompts cannot give them any
+
+`advanced` was `upper` with the magnitude clause deleted — "No additional restriction", "beyond
+what's typical". **An empty restriction reads to a model as no requirement, not a harder one**, so it
+produced the easiest shape that fit the topic. Measured over 640 generated questions, grades 1-9:
+**83% of grade-9 questions were three or more grades below grade**, including `Simplify 5/9 + 7/11 -
+2/9` (5.NF.1) and `Evaluate 72 / 8 + 5 * (9 - 4) - 3 * 2 + 10` (5.OA.1) on the **hard** tier.
+
+Every `advanced` tier now states a requirement, and the model complies: negatives in `mean` went
+3/10 → 10/10, in `ordering` 0/7 → 10/10, nested parentheses in `expressions` 0/10 → 2/10.
+
+**It barely moved the number — 83% → 81% — and that is the real finding.** The score is by the CCSS
+grade of the *concept*, and every concept these solvers can score tops out at grade 8: `algebra` is
+one linear equation with one solution (a quadratic is correctly refused, so 8.EE.7b is the ceiling),
+`mean`/`median`/`mode` are one statistic over a listed dataset (6.SP.5c), `probability` is a single
+event (7.SP.5), `rationals` is fraction arithmetic (7.NS.1). Harder numbers inside 8.EE.7b are still
+8.EE.7b.
+
+So **`advanced` means "the hardest grade-8 content", and grades 9-12 cannot be served appropriately
+at all.** Closing that needs solvers — quadratics, systems, functions, spread — not prompt text, and
+each new solver has to be able to *score* what it asks, which is the constraint that rules out most
+of high-school mathematics here. Verified before those tiers were written: variables on both sides,
+distribution and fractional coefficients all score correctly; a quadratic and a two-unknown equation
+are both correctly refused.
+
 ### Angle answers are whole numbers through 5th grade, and decimals after
 
 Scenario 5's coefficients are unconstrained, so `algebra_complementary` returns things like 11.875

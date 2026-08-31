@@ -103,10 +103,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use TWO operations between fractions with different denominators. Negative fractions are allowed.",
         "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators. Negative fractions are allowed.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use a SINGLE operation between two fractions that already share the same denominator.",
-        "medium": "Use TWO operations between fractions with different denominators.",
-        "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths).",
+        "easy":   "Use TWO fractions with DIFFERENT denominators (e.g. 2/3 + 1/4).",
+        "medium": "Use THREE fractions with different denominators, at least one of them NEGATIVE (e.g. -3/4 + 5/6 - 1/3).",
+        "hard":   "Use THREE or FOUR fractions with different denominators up to 12, including at least TWO negatives and both addition and subtraction (e.g. 7/12 - (-5/8) + 1/3 - 3/4).",
     },
 }
 

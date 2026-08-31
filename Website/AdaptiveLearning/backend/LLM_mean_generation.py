@@ -106,10 +106,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
         "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers; negative whole numbers may be used (e.g. representing temperatures or scores relative to zero).",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 3-4 values, each a one or two-digit whole number.",
-        "medium": "Use 5-6 values, which may include two-digit or three-digit whole numbers.",
-        "hard":   "Use 7-8 values, which may include two-digit or three-digit whole numbers; negative numbers may be used freely.",
+        "easy":   "Use 4-5 values including at least one NEGATIVE number.",
+        "medium": "Use 6-7 values including negatives and at least one value above 100.",
+        "hard":   "Use 8-10 values including negatives and at least two three-digit values. The mean does NOT need to be a whole number.",
     },
 }
 

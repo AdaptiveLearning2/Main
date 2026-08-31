@@ -180,7 +180,9 @@ GRADE_COMPLEXITY = {
     "early":    "Use angle measures that are whole numbers between 10 and 80, in multiples of 5 for easy mental math.",
     "middle":   "Use angle measures that are whole numbers between 5 and 170.",
     "upper":    "No additional restriction on angle measures.",
-    "advanced": "No additional restriction on angle measures.",
+    # Grades 9+. See the note in LLM_geometry_generation: an empty
+    # restriction is not a harder one.
+    "advanced": "Use angle measures that are whole numbers NOT divisible by 5 (e.g. 37, 112, 143), so the arithmetic cannot be done by inspection. For the algebraic scenario use coefficients between 2 and 9.",
 }
 
 # Through 5th grade, answers must be whole degrees; from 6th grade, a

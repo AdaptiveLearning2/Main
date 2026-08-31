@@ -194,10 +194,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 3-4 operations total. You may use up to one set of parentheses. Numbers may be up to three digits (1-200).",
         "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses. Numbers may be up to three digits (1-200).",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 2-3 operations total. Do NOT use any parentheses.",
-        "medium": "Use 3-4 operations total. You may use up to one set of parentheses.",
-        "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses.",
+        "easy":   "Use 3-4 operations including at least TWO negative integers (e.g. -15 + 6 - (-8)). No parentheses.",
+        "medium": "Use 4-5 operations with one set of parentheses and at least one integer exponent such as 2**3. For a simplify question instead, use at least three like terms with one negative coefficient.",
+        "hard":   "Use 5-6 operations with TWO levels of nested parentheses and negative integers (e.g. ((8-3)*2 - 7)*2 + 18/3). For a simplify question instead, use four or more like terms including negative coefficients. Do NOT raise a variable to a power.",
     },
 }
 

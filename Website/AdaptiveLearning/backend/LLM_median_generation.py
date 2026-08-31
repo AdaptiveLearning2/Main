@@ -155,10 +155,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use an ODD number of values (5-7 total). Whole numbers between 1 and 500; negative numbers may be used.",
         "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values. Whole numbers between 1 and 500; negative numbers may be used.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use an ODD number of values (3-5 total).",
-        "medium": "Use an ODD number of values (5-7 total).",
-        "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values.",
+        "easy":   "Use an ODD number of values (5-7 total) including at least two NEGATIVE numbers.",
+        "medium": "Use an ODD number of values (7-9 total) including negatives and at least one value above 100.",
+        "hard":   "Use an EVEN number of values (8-10 total) including negatives, so the median is the average of the two middle values and may be a decimal.",
     },
 }
 

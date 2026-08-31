@@ -66,10 +66,6 @@ def format_two_decimals(x):
         return f"{val:.2f}"
 
 
-def to_num(x):
-    return sympify(x)
-
-
 # The scenario is chosen in code by _pick_scenario before the prompt is
 # built, so only that one block is sent. Sending all eighteen -- as this
 # prompt did until the switch to a billed API made the waste visible -- put

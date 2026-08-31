@@ -13,6 +13,8 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
+import token_join
 import grade_levels
 import grade_appropriateness
 
@@ -164,10 +166,18 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    parts = question_data['variables']
-    equation_str = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
-
-    solution = sympify(equation_str)
+    # Through the bounded worker, like algebra and expressions. `sympify` on
+    # the model's expression is the unbounded step -- `sympify("9**9**9")`
+    # never returns -- and this topic joins tokens the model wrote, so the
+    # operand is entirely its choice. `evaluate` returns the canonical form,
+    # which for this topic is the fraction a student is shown ("5/6").
+    equation_str = token_join.join_tokens(question_data['variables'])
+    if equation_str is None:
+        raise ValueError(f"unusable variables: {question_data['variables']!r}")
+    solved = safe_solve.safe_solve(equation_str, "evaluate")
+    if solved is None:
+        raise ValueError(f"could not solve {equation_str[:80]!r}")
+    solution = sympify(solved)
 
     incorrect_answers = inc_gen.generate_incorrect_rational(solution) if solution is not None else []
     solution = serialize_sympy(solution) if solution is not None else None

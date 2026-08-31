@@ -2917,16 +2917,31 @@ never gets scheduled and a signal handler never runs. Only an external kill work
 sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
 expression, equation or scenario is solved.
 
-**Wiring some of a topic is the trap.** This was found three times: `expressions` bounded while
-`algebra` still parsed in the request thread; then `algebra` bounded while `geometry` still ran
-`preprocess_variables` — `sympify` over the model's raw values — in-process, with a docstring
-claiming otherwise. `SCENARIO_VARS` checks that the keys are *present*, which says nothing about the
+**All ten topics are wired, and getting there took four rounds of finding the next unwired one.**
+`expressions` bounded while `algebra` still parsed in the request thread; then `algebra` bounded
+while `geometry` still ran `preprocess_variables` — `sympify` over the model's raw values —
+in-process, with a docstring claiming otherwise; then the remaining seven, which had never been
+looked at. `SCENARIO_VARS` checks that the keys are *present*, which says nothing about the
 values behind them, and a `try/except` catches exceptions rather than non-termination. If a topic
 touches model text with sympy anywhere, all of that topic belongs in the worker.
 
-`geometry_solvers.py` exists for that: the worker cannot import `LLM_geometry_generation`, which
-pulls in supabase, flask and dotenv at import, so the pure arithmetic lives apart from the prompt and
-the retry loop. Anything a bounded worker must run needs the same separation.
+`geometry_solvers.py` and `angle_solvers.py` exist for that: the worker cannot import a generator
+module, which pulls in supabase, flask and dotenv at import, so the pure arithmetic lives apart from
+the prompt and the retry loop. Anything a bounded worker must run needs the same separation — and a
+validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
+alongside the angle solvers rather than staying beside its caller.
+
+**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers six of
+the ten: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
+`geometry` and `angle_relationships` needed their solvers moved, because both keep sympy *expressions*
+past the parse — geometry solves for a missing side, and `algebra_complementary` substitutes a solved
+`x` back into two angle expressions. Reach for the value parser first; move a solver only when
+something downstream needs the sympy object rather than a number.
+
+Three parses stay in-process deliberately, and all three read the **worker's own output** rather than
+the model's: `sympify(solved)` in `expressions` and `rationals`, and `format_number`'s fallback in
+`median`. `MAX_RESULT_CHARS` is what makes those bounded — a short canonical literal parses in linear
+time. A parse whose operand came from the model belongs in the worker, full stop.
 
 **A `raise` from a helper does not reach a retry loop the call site sits below.** Every generator's
 `for ... else` has already run by the time the solve happens, unless the solve was deliberately moved

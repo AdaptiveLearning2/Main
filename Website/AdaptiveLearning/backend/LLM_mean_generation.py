@@ -13,6 +13,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 import question_consistency
@@ -172,14 +173,30 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
+        # Parsed in the bounded worker, inside the loop: `sympify` on the
+        # model's values is the one unbounded step here, and the mean of a list
+        # of floats cannot hang.
+        numbers = safe_solve.safe_sympify_values(question_data["variables"])
+        if numbers is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data["variables"])[:80])
+            continue
+
+        # Parsed in the bounded worker, inside the loop: `sympify` on the
+        # model's values is the one unbounded step here, and the mean of a list
+        # of floats cannot hang.
+        numbers = safe_solve.safe_sympify_values(question_data["variables"])
+        if numbers is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data["variables"])[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    parts = question_data['variables']
-    vals = [sympify(part) for part in parts]
-    solution = sum(vals) / len(vals)
+    solution = sum(numbers) / len(numbers)
 
     incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
     solution = serialize_sympy(solution) if solution is not None else None

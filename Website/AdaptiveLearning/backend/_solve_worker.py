@@ -5,6 +5,7 @@ returns is a string -- pickling a sympy object across the boundary would mean
 unpickling data the model influenced, and the parent re-parses anyway.
 """
 import json
+import math
 import sys
 
 
@@ -23,6 +24,45 @@ def main():
         implicit_multiplication_application,)
     try:
         scenario = req.get("scenario")
+        # Angles: the whole solve, like geometry. Four of the five scenarios
+        # need only a number, but `algebra_complementary` solves an equation in
+        # `x`, so the variables have to stay sympy expressions and the parse
+        # cannot be separated from the solve.
+        if scenario == "angle":
+            import angle_solvers
+            value = angle_solvers.solve_scenario(req["angle_scenario"],
+                                                 req["variables"])
+            if value is None:
+                print(json.dumps({"ok": False, "error": "unsolvable scenario"}))
+            else:
+                print(json.dumps({"ok": True, "result": repr(value)}))
+            return
+
+        # A list of scalar values, sympified. This is the shape six of the
+        # ten topics need: they parse the model's numbers and then do ordinary
+        # arithmetic on them, so only the parse has to be bounded.
+        #
+        # Floats out, not sympy's canonical strings: `str(sympify("0.75"))` is
+        # `"0.750000000000000"`, and every caller here either does arithmetic
+        # or keeps the model's original string for display. Nothing needs the
+        # sympy object, which is what lets the parent avoid a second parse.
+        if scenario == "values":
+            out = []
+            for raw in req["values"]:
+                value = sp.sympify(raw)
+                if not value.is_number:
+                    print(json.dumps({
+                        "ok": False, "error": f"not a number: {raw!r}"}))
+                    return
+                as_float = float(value)
+                if not math.isfinite(as_float):
+                    print(json.dumps({
+                        "ok": False, "error": f"not finite: {raw!r}"}))
+                    return
+                out.append(as_float)
+            print(json.dumps({"ok": True, "result": json.dumps(out)}))
+            return
+
         # Geometry's whole solve, including `preprocess_variables` -- which is
         # `sympify` over the model's raw values and is the unbounded part.
         # `sympify("9**9**9")` never returns, and `SCENARIO_VARS` checks only

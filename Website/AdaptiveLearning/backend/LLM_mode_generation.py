@@ -13,6 +13,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 import question_consistency
@@ -76,7 +77,13 @@ Rules:
 solution = -1
 
 def mode(values):
-    vals = [sympify(v) for v in values]
+    """`values` are already numbers -- parsed in the bounded worker.
+
+    They used to be sympified here, which is the one unbounded step on this
+    path: `sympify("9**9**9")` never returns and holds the GIL while it does
+    not. Counting floats cannot hang.
+    """
+    vals = list(values)
     count = Counter(vals)
     max_count = max(count.values())
 
@@ -218,15 +225,23 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
+        # Parsed in the bounded worker, inside the loop: `sympify` on the
+        # model's values is the one unbounded step here, and counting floats
+        # cannot hang.
+        numbers = safe_solve.safe_sympify_values(question_data["variables"])
+        if numbers is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data["variables"])[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    parts = question_data['variables']
-    solution = mode(parts)
+    solution = mode(numbers)
 
-    incorrect_answers = generate_incorrect_answers(solution, parts)
+    incorrect_answers = generate_incorrect_answers(solution, numbers)
     solution = serialize_answer(solution)
     answers = [serialize_answer(ans) for ans in incorrect_answers] + [solution]
 

@@ -56,6 +56,53 @@ _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MAX_RESULT_CHARS = 200
 
 
+def safe_sympify_values(values, timeout=None):
+    """The model's numbers, parsed in the worker, as floats.
+
+    `["1/2", "0.75", "3"]` in, `[0.5, 0.75, 3.0]` out; None if any value is not
+    a finite number, or if the parse did not finish.
+
+    Six of the ten topics need exactly this and no more: they parse the model's
+    values and then do ordinary arithmetic on them. `sympify` is the unbounded
+    half -- `sympify("9**9**9")` never returns -- and the arithmetic afterwards
+    is not, so bounding the parse alone covers them without moving six solvers
+    into the worker the way geometry and angles needed.
+
+    Floats rather than sympy's canonical strings: `str(sympify("0.75"))` is
+    `"0.750000000000000"`, and every caller either does arithmetic or keeps the
+    model's own string for display. Nothing needs the sympy object, which is
+    what lets the parent avoid a second parse.
+    """
+    if not isinstance(values, (list, tuple)) or not values:
+        return None
+    solved = _run({"scenario": "values", "values": list(values)}, timeout,
+                  f"values:{len(values)}")
+    if solved is None:
+        return None
+    try:
+        parsed = json.loads(solved)
+    except ValueError:
+        return None
+    if not isinstance(parsed, list) or len(parsed) != len(values):
+        return None
+    return parsed
+
+
+def safe_solve_angle(angle_scenario: str, variables: list,
+                     timeout: float | None = None):
+    """The angle scenario's answer as a float, or None if it did not finish."""
+    solved = _run({"scenario": "angle", "angle_scenario": angle_scenario,
+                   "variables": variables}, timeout,
+                  f"angle:{angle_scenario}")
+    if solved is None:
+        return None
+    try:
+        return float(solved)
+    except ValueError:
+        print(f"[safe_solve] worker returned a non-number: {solved[:60]!r}")
+        return None
+
+
 def safe_solve_geometry(geometry_scenario: str, variables: dict,
                         timeout: float | None = None):
     """Geometry's solved value as a float, or None if it did not finish.

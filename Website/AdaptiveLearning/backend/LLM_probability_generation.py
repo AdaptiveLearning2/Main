@@ -13,6 +13,7 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer, Rational
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 import question_consistency
@@ -247,14 +248,26 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
     scenario = question_data["scenario"]
     target = question_data["target"]
 
+    # Parsed in the bounded worker. `sympify` on the model's counts is the one
+    # unbounded step here -- `sympify("9**9**9")` never returns, and holds the
+    # GIL while it does not -- and the probability arithmetic afterwards is
+    # ordinary division. Whole numbers throughout, so the floats come back
+    # exact; `solve_probability` builds the Rational from them.
     if scenario == "dice":
-        sides = sympify(question_data["sides"])
-        target = [sympify(t) for t in target]
-        items = sides  
-
+        parsed = safe_solve.safe_sympify_values([question_data["sides"], *target])
+        if parsed is None:
+            raise ValueError(f"unusable dice values: {question_data['sides']!r}")
+        items = parsed[0]
+        target = parsed[1:]
     else:
-        items = {k: sympify(v) for k, v in question_data["items"].items()}
-    
+        raw_items = question_data["items"]
+        if not isinstance(raw_items, dict) or not raw_items:
+            raise ValueError("Invalid items in question data")
+        counts = safe_solve.safe_sympify_values(list(raw_items.values()))
+        if counts is None:
+            raise ValueError(f"unusable item counts: {raw_items!r}")
+        items = dict(zip(raw_items.keys(), counts))
+
     if not items or not target:
         raise ValueError("Invalid items or target in question data")
 

@@ -2880,10 +2880,16 @@ numeric geometry standard below grade 3, and the only thing those grades can be 
 reuses `solve_rectangle_area` because rows × columns *is* length × width — the difference is entirely
 in the wording, which is the scenario block's job, and a second solver would be a copy free to drift.
 
-Generated at grade 1: *"A rectangle is divided into 5 rows of 2 same-size squares. How many squares
-fill the rectangle altogether?"* — countable without multiplying, which is why 2.G.2 exists as the
-bridge to 3.MD.7. Grade 1 is still one grade early by the standard; the task is counting, and the
-alternative is no geometry.
+Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squares. How many squares
+fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
+3.MD.7.
+
+**Grade 1 has no geometry at all**, and that is the end of this thread rather than a gap in it. 1.G
+is defining attributes of shapes and partitioning into halves and fourths: nothing that produces a
+number a solver can score. The tempting fix — *"3 triangles and 4 squares, how many shapes?"* — is
+addition wearing a geometry label, and counting it would keep the topic list long while teaching
+1.OA. So `TOPIC_MIN_GRADE["geometry"]` is 2, and **grade 1 has two topics, `ordering` and
+`expressions`**. That is the honest size of what this system can ask a 6-year-old.
 
 **An unreadable grade lands there too.** It used to resolve to the early band's ceiling of 3 — two
 grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and

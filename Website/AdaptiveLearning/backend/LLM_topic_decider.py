@@ -52,7 +52,17 @@ ALL_TOPICS = [
 TOPIC_MIN_GRADE = {
     "ordering":            1,   # 1.NBT.3, comparing whole numbers
     "expressions":         1,   # 1.OA, add and subtract within 20
-    "geometry":            1,   # content is bounded by the band ceiling in
+    # 2.G.2 is the earliest numeric geometry standard -- counting the squares
+    # that fill a rectangle. Grade 1's geometry (1.G) is defining attributes of
+    # shapes and partitioning into halves and fourths: nothing that produces a
+    # number a solver can score, and nothing worth faking. A question like
+    # "3 triangles and 4 squares -- how many shapes?" is addition wearing a
+    # geometry label, and counting it as geometry would keep the topic count up
+    # while teaching 1.OA.
+    #
+    # The cost: grade 1 has two topics, `ordering` and `expressions`. That is
+    # the honest size of what this system can ask a 6-year-old.
+    "geometry":            2,   # 2.G.2; per-scenario floor in
                                 # LLM_geometry_generation.SCENARIO_MIN_GRADE
     "rationals":           4,   # 4.NF.3, fractions with like denominators
     # Raised from 4 to 6. 6.SP.5c introduces all three, and the audit flagged

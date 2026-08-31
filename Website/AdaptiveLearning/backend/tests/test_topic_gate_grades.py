@@ -35,6 +35,7 @@ def test_every_topic_has_a_minimum_grade():
     ("probability", 7, "7.SP.5"),
     ("algebra", 6, "6.EE.7"),
     ("rationals", 4, "4.NF.3"),
+    ("geometry", 2, "2.G.2"),
 ])
 def test_a_topic_first_appears_at_the_grade_that_teaches_it(topic, first, code):
     assert topic not in decider._allowed_topics(str(first - 1)), \
@@ -68,6 +69,26 @@ def test_mean_median_mode_wait_for_the_grade_that_teaches_them():
         assert topic in decider._allowed_topics("6")
 
 
+def test_grade_one_has_no_geometry():
+    """1.G is defining attributes of shapes and partitioning into halves and
+    fourths -- nothing that produces a number a solver can score. 2.G.2,
+    counting the squares that fill a rectangle, is the earliest that does.
+
+    The alternative was dressing addition as geometry ("3 triangles and 4
+    squares -- how many shapes?"), which keeps a topic count up while teaching
+    1.OA. Grade 1 has two topics, and that is the honest size of what this
+    system can ask a 6-year-old.
+    """
+    assert set(decider._allowed_topics("1")) == {"ordering", "expressions"}
+    assert "geometry" in decider._allowed_topics("2")
+
+
+def test_an_unreadable_grade_gets_grade_ones_topics():
+    """It is treated as the youngest, so it narrows with grade 1 rather than
+    keeping a list that used to include geometry."""
+    assert set(decider._allowed_topics("no idea")) == {"ordering", "expressions"}
+
+
 def test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five():
     """Pinned so the narrowing is visible rather than incidental. If a future
     change widens these grades again, it should be because someone chose to."""
@@ -81,8 +102,7 @@ def test_an_unreadable_grade_gets_the_youngest_topics(grade):
     """`profiles.grade_level` is free text. An unreadable one must not fall
     through to a permissive branch -- the failure `_allowed_topics` was
     rewritten for once already."""
-    assert set(decider._allowed_topics(grade)) == {
-        "ordering", "geometry", "expressions"}
+    assert set(decider._allowed_topics(grade)) == {"ordering", "expressions"}
 
 
 def test_a_narrower_grade_is_a_subset_of_a_wider_one():

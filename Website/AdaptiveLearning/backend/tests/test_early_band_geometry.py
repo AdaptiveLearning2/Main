@@ -149,3 +149,38 @@ def test_grade_three_gains_the_formula_scenarios():
     offered = {geo._SCENARIO_NAMES[n] for n in geo._band_scenarios("3")}
     assert offered == {"rectangle_area_by_counting", "rectangle_area",
                        "rectangle_perimeter", "triangle_perimeter"}
+
+
+def test_a_reply_naming_a_scenario_above_the_grade_is_refused():
+    """`_band_scenarios` gates which block is *sent*, and the checks that
+    follow ask whether the reply is dispatchable and carries the right variable
+    keys -- never whether this grade may see it.
+
+    So a `sphere_volume` reply to a grade-4 request was solved and served: "A
+    sphere has a radius of 3 units. What is its volume?" -- 8.G.9, walking
+    straight past the gate written to stop exactly that.
+
+    Not defensive: this PR series records Haiku returning a scenario other than
+    the one asked for twice, once as `circle_missing_radius_circumference` and
+    once blending two scenarios' keys.
+    """
+    import json
+    import llm_client
+
+    payload = {"question_text": "A sphere has a radius of 3 units. "
+                                "What is its volume?",
+               "scenario": "sphere_volume", "variables": {"radius": "3"}}
+    original = llm_client.generate_text
+    lesson = geo.lesson_plan_context.append_lesson_context
+    try:
+        llm_client.generate_text = lambda *a, **k: json.dumps(payload)
+        geo.lesson_plan_context.append_lesson_context = lambda p, t, b: p
+        with pytest.raises(ValueError):
+            geo.generate_geometry_question([], [], "medium", "4th Grade")
+        # Grade 8 takes the same reply, so it is the grade being refused and
+        # not the scenario being unusable.
+        question = geo.generate_geometry_question([], [], "medium", "8th Grade")
+        assert question["question_text"] == payload["question_text"]
+    finally:
+        llm_client.generate_text = original
+        geo.lesson_plan_context.append_lesson_context = lesson

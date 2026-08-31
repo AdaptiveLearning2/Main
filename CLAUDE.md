@@ -2795,6 +2795,18 @@ question. `LLM_angle_relationship_generation.SCENARIO_MIN_GRADE` mirrors geometr
 medium tier now falls back to the rest of the topic. Regenerated: 10 of 10 complementary,
 supplementary or linear pair, 0 triangle.
 
+**A grade gate has two halves, and the second is easy to leave out.** `SCENARIO_MIN_GRADE` decides
+which prompt block is *sent*; nothing about that constrains what comes *back*. Both topics shipped
+with only the first half: a `sphere_volume` reply to a grade-4 request was solved and served (8.G.9),
+and a `triangle_sum` reply to a grade-7 one likewise (8.G.5) — each walking straight past the gate
+written to stop it. The reply is now checked against the same allowed set inside the retry loop.
+
+That is not a defensive check. **Haiku returned a scenario other than the one asked for twice in
+this work** — `circle_missing_radius_circumference` for a scenario spelled
+`circle_circumference_missing_side`, and a `rect_perimeter_missing_side` carrying
+`rect_area_missing_side`'s keys. Selecting a block is a prompt-level act; only validating the reply
+is enforcement, which is the same split as `grade_appropriateness` beside it.
+
 **The generalisation, having needed it three times: a per-bucket minimum cannot describe an item that
 arrives after the bucket it belongs to.** Topics inside a grade bracket, scenarios inside a topic,
 scenarios inside a band. Whenever a gate is one number for a group, ask which member of the group

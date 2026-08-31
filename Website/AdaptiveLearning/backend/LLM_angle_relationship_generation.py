@@ -161,8 +161,13 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [5],
 }
 
-# Block number -> the scenario name that block asks for, read out of the
-# block's own JSON example rather than typed again here.
+# Block number -> the scenario name that block asks for.
+#
+# A literal, unlike geometry's, and so cross-checked against the blocks by
+# `test_the_names_match_the_blocks_they_send`. It has to be: every grade and
+# tier test in this file keys off this dict, so an entry naming the wrong
+# scenario would send one block, validate against another, and be invisible to
+# all of them at once.
 _SCENARIO_NAMES = {
     1: "complementary",
     2: "supplementary",
@@ -331,6 +336,19 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # The scenario the model returned, not the one that was asked for.
+        # `SCENARIO_MIN_GRADE` gates which block is *sent*; nothing checked the
+        # reply, so a `triangle_sum` answer to a grade-7 request produced "In a
+        # triangle two angles measure 75 and 60 degrees. What is the third?" --
+        # 8.G.5, which the grade gate exists to withhold. Haiku returned a
+        # scenario other than the one asked for twice in this work, so this is
+        # an ordinary case rather than a defensive one.
+        if question_data["scenario"] not in {
+                _SCENARIO_NAMES[n] for n in _grade_scenarios(grade)}:
+            print(f"[Attempt {attempt+1}] Scenario above this grade:",
+                  question_data["scenario"])
             continue
 
         # Backstop on what the model actually produced, not just on what

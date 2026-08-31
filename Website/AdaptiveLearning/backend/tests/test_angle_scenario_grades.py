@@ -73,3 +73,54 @@ def test_a_narrower_grade_is_a_subset_of_a_wider_one():
             for g in range(7, 13)]
     for narrower, wider in zip(sets, sets[1:]):
         assert narrower <= wider
+
+
+def test_the_names_match_the_blocks_they_send():
+    """`_SCENARIO_NAMES` is a literal here, not derived from `SCENARIO_BLOCKS`
+    the way geometry's is, so nothing but this test ties the two together.
+
+    It matters more than the duplication suggests: every grade and tier
+    assertion in this file keys off `_SCENARIO_NAMES`, so a wrong entry would
+    send one block, validate the reply against another, and be invisible to all
+    of them at once. The comment on that dict used to claim it was derived --
+    it is not, and this is what makes the claim true in effect.
+    """
+    import re
+    source = open(angles.__file__, encoding="utf-8").read()
+    from_blocks = dict(re.findall(
+        r'^    (\d+): """Scenario \d+: ([a-z_]+)', source, re.M))
+    assert from_blocks, "the block regex matched nothing -- see the comment above"
+    assert {int(n): name for n, name in from_blocks.items()} == angles._SCENARIO_NAMES
+
+
+def test_a_reply_naming_a_scenario_above_the_grade_is_refused():
+    """`SCENARIO_MIN_GRADE` gates which block is *sent*. Nothing checked the
+    reply, so a `triangle_sum` answer to a grade-7 request was solved and
+    served: "In a triangle two angles measure 75 and 60 degrees. What is the
+    third?" -- 8.G.5, which the gate exists to withhold.
+
+    Not a defensive test. Haiku returned a scenario other than the one asked
+    for twice in this work -- `circle_missing_radius_circumference` for
+    geometry, and a blended `rect_perimeter_missing_side`.
+    """
+    import json
+    import llm_client
+
+    payload = {"question_text": "In a triangle two angles measure 75 and 60 "
+                                "degrees. What is the third?",
+               "scenario": "triangle_sum", "variables": ["75", "60"]}
+    original = llm_client.generate_text
+    lesson = angles.lesson_plan_context.append_lesson_context
+    try:
+        llm_client.generate_text = lambda *a, **k: json.dumps(payload)
+        angles.lesson_plan_context.append_lesson_context = lambda p, t, b: p
+        with pytest.raises(ValueError):
+            angles.generate_angle_relationship_question([], [], "medium", "7th Grade")
+        # ...and grade 8 accepts the same reply, so the refusal is the grade
+        # rather than the scenario being unusable.
+        question = angles.generate_angle_relationship_question(
+            [], [], "medium", "8th Grade")
+        assert question["question_text"] == payload["question_text"]
+    finally:
+        llm_client.generate_text = original
+        angles.lesson_plan_context.append_lesson_context = lesson

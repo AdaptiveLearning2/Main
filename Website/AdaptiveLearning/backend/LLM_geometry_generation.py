@@ -710,6 +710,19 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
                   question_data["scenario"])
             continue
 
+        # And one this grade may actually see. Everything above gates which
+        # *block is sent*; nothing checked what came back, so a reply naming a
+        # different scenario was solved and served. Not hypothetical: Haiku
+        # returned a scenario other than the one asked for twice in this work.
+        # A `sphere_volume` reply to a grade-4 request produced "A sphere has a
+        # radius of 3 units. What is its volume?" -- 8.G.9, the exact defect
+        # the grade gate was written to fix, walking straight past it.
+        if question_data["scenario"] not in {
+                _SCENARIO_NAMES[n] for n in _band_scenarios(grade)}:
+            print(f"[Attempt {attempt+1}] Scenario above this grade:",
+                  question_data["scenario"])
+            continue
+
         # A known scenario with the wrong variables raises KeyError out of the
         # dispatch instead -- also a 500, and the commoner of the two: Haiku
         # answered `pythagorean` without a `b` on 2 of 3 upper-band

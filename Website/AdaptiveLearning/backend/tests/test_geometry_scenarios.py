@@ -45,3 +45,27 @@ def test_every_dispatched_scenario_is_accepted():
 def test_every_accepted_scenario_can_be_dispatched():
     """The direction that produces the UnboundLocalError."""
     assert not geo.SOLVABLE_SCENARIOS - set(_DISPATCHED)
+
+
+# `[ \t]*` before the newline is the same lesson as `\s*` before the colon a
+# few lines up: `case "rect_volume": ` carries a trailing space, and a regex
+# without it silently produced 17 scenarios where there are 18 -- a map missing
+# exactly one entry, which surfaces as three retries and a ValueError on
+# whichever scenario got dropped rather than as anything naming the cause.
+_CASE_BODIES = dict(re.findall(
+    r'^        case "([a-z_]+)"\s*:[ \t]*\n((?:^            .*\n)+)',
+    _SOURCE, re.M))
+
+
+def test_every_scenario_body_was_found():
+    """Guards the regex above, not the code -- see the comment on it."""
+    assert set(_CASE_BODIES) == set(_DISPATCHED)
+
+
+def test_the_required_variables_match_what_each_solver_indexes():
+    """A valid scenario carrying the wrong variables is a KeyError out of the
+    dispatch -- a 500, not a retry. Haiku answered `pythagorean` with no `b`
+    on 2 of 3 upper-band generations, so this is the ordinary case."""
+    for name, body in _CASE_BODIES.items():
+        indexed = set(re.findall(r'vars\["([a-z0-9_]+)"\]', body))
+        assert set(geo.SCENARIO_VARS[name]) == indexed, name

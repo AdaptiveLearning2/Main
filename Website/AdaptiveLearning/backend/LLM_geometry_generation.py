@@ -462,6 +462,35 @@ solution = -1
 # Every scenario the `match` below dispatches on, derived by hand from it and
 # asserted against it in tests/test_geometry_scenarios.py -- two lists that
 # can disagree is how the crash this prevents would come back.
+# The variables each scenario's solver indexes, derived from the dispatch
+# below and pinned against it in tests/test_geometry_scenarios.py.
+#
+# A valid scenario name with the wrong variables is a KeyError out of
+# the dispatch -- a 500, not a retry. Measured against Haiku 4.5 on
+# 2026-08-26: 2 of 3 upper-band geometry generations answered
+# `pythagorean` with no `b`, so this is the ordinary case, not an edge.
+SCENARIO_VARS = {
+    "rectangle_area": ("length", "width",),
+    "rectangle_perimeter": ("length", "width",),
+    "triangle_area": ("base", "height",),
+    "triangle_perimeter": ("s1", "s2", "s3",),
+    "circle_area": ("radius",),
+    "circle_circumference": ("radius",),
+    "rect_volume": ("height", "length", "width",),
+    "cylinder_volume": ("height", "radius",),
+    "sphere_volume": ("radius",),
+    "cube_volume": ("side",),
+    "pyramid_volume": ("base_area", "height",),
+    "pythagorean": ("a", "b",),
+    "rect_area_missing_side": ("area", "known_side",),
+    "rect_perimeter_missing_side": ("known_side", "perimeter",),
+    "circle_area_missing_side": ("area",),
+    "circle_circumference_missing_side": ("circumference",),
+    "triangle_area_missing_side": ("area", "known_side",),
+    "triangle_perimeter_missing_side": ("perimeter", "s1", "s2",),
+}
+
+
 SOLVABLE_SCENARIOS = frozenset({
     "rectangle_area",
     "rectangle_perimeter",
@@ -592,6 +621,18 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         if question_data["scenario"] not in SOLVABLE_SCENARIOS:
             print(f"[Attempt {attempt+1}] Unknown scenario:",
                   question_data["scenario"])
+            continue
+
+        # A known scenario with the wrong variables raises KeyError out of the
+        # dispatch instead -- also a 500, and the commoner of the two: Haiku
+        # answered `pythagorean` without a `b` on 2 of 3 upper-band
+        # generations. Checked here so it retries like any other malformed
+        # reply.
+        missing = [k for k in SCENARIO_VARS[question_data["scenario"]]
+                   if k not in (question_data.get("variables") or {})]
+        if missing:
+            print(f"[Attempt {attempt+1}] Scenario "
+                  f"{question_data['scenario']} missing variables: {missing}")
             continue
 
         # Backstop on what the model actually produced, not just on what

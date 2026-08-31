@@ -43,7 +43,21 @@ import llm_client
 # The floor is 1s rather than something smaller because this bound is only ever
 # meant to catch a computation that will not finish at all; a value low enough
 # to cut off real work is a misconfiguration, not a tuning choice.
-SOLVE_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 10.0, float, minimum=1.0)
+#
+# 3s, down from 10s. What this bounds is the *worst case*: a generator retries
+# three times, so a reply that hangs cost ~30s of a request thread and now
+# costs ~9s.
+#
+# The headroom is smaller than it looks, and the reason is worth knowing before
+# lowering it further. The budget covers the whole child process, and nearly
+# all of that is importing sympy, not solving: measured 2026-08-31 across all
+# five request shapes, a legitimate solve takes **0.64-1.00s wall**, of which
+# the arithmetic is ~10ms. So 3s is ~3x margin over startup, not 300x over the
+# maths. A slower or loaded machine can push startup past 2s, and if it ever
+# exceeds this the symptom is every question failing to generate -- which reads
+# as the model being unable to write solvable questions rather than as a
+# misconfigured timeout. Raise it, don't lower it, if that is ever seen.
+SOLVE_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float, minimum=1.0)
 
 _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "_solve_worker.py")

@@ -2947,6 +2947,16 @@ so separately: that means the subprocess mechanism is broken, which is a differe
 budget guessed from a failed measurement is worse than the one someone chose. `SOLVE_STARTUP_PROBE=0`
 skips it, for a process that imports the module and never solves; it costs ~0.8s of boot once.
 
+**A threshold that depends on how fast the machine is has to be measured on that machine, not
+written down.** Both tests around the probe got this wrong in different directions. One pinned the
+shipped default against the measured floor and failed *locally* under suite load. The other hardcoded
+1.0s as "obviously below the floor" — true on a laptop where startup is ~0.8s and the floor ~2.4s,
+false on CI where startup is 0.32s and the floor 0.97s, so the clamp correctly did not fire and the
+test failed for asserting it had. **CI is the faster machine here, which is the opposite of the usual
+flakiness direction** and is why this passed several runs before failing. Probe first, derive the
+value from that measurement, and leave an order of magnitude rather than a factor of two so a second
+measurement's variance cannot cross it.
+
 **Don't pin the shipped default against the measured floor in a test.** The first version of that
 check asserted `_CONFIGURED_TIMEOUT_S >= floor`, passed alone, and failed in sequence — startup is
 slower while the suite is spawning subprocesses, so the floor moves. That is an elapsed-time

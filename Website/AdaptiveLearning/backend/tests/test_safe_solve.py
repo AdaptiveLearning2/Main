@@ -217,15 +217,34 @@ def test_a_budget_under_the_measured_floor_is_raised_and_announced(monkeypatch, 
     down over one topic's tuning knob, and every non-generation surface with
     it.
     """
-    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 1.0)
-    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 1.0)
+    # Ask the machine what a solve costs before choosing a budget it should
+    # refuse. The first version hardcoded 1.0s as "obviously too small" -- true
+    # on the laptop this was written on, where startup is ~0.8s and the floor
+    # is ~2.4s, and false on CI, where startup is 0.32s and the floor is 0.97s.
+    # So the clamp correctly did not fire and the test failed for asserting it
+    # had. A threshold that depends on how fast the machine is has to be
+    # derived from that machine, not written down.
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 3600.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 3600.0)
+    safe_solve._probe_startup()
+    assert safe_solve.STARTUP_COST_S is not None, "the probe could not measure"
+    capsys.readouterr()
+
+    # A tenth of the floor, not half: the assertion below re-measures, and two
+    # probes on a noisy runner differ. A tenth cannot be crossed by variance.
+    too_small = (safe_solve.STARTUP_COST_S
+                 * safe_solve._STARTUP_SAFETY_FACTOR / 10)
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", too_small)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", too_small)
     safe_solve._probe_startup()
 
+    # Against the second probe's own measurement, since that is the one the
+    # clamp used.
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
     assert safe_solve.SOLVE_TIMEOUT_S == pytest.approx(floor)
-    assert safe_solve.SOLVE_TIMEOUT_S > 1.0
+    assert safe_solve.SOLVE_TIMEOUT_S > too_small
     out = capsys.readouterr().out
-    assert "SOLVE_TIMEOUT=1.0s is below" in out
+    assert "is below" in out
     assert "Raised to" in out
 
 

@@ -13,6 +13,12 @@ bound.
 Counting at runtime rather than grepping: `probability` legitimately has two
 call sites on mutually exclusive branches, so a source count reports it as the
 same defect and reports nothing at all about a duplicate inside one branch.
+
+All four entry points are counted, not just `safe_sympify_values`. Counting one
+of them covered five of the ten topics while the docstring claimed to be about
+the subprocess in general -- so a duplicate in algebra, expressions, rationals,
+geometry or angles, which reach the worker through `safe_solve`,
+`safe_solve_geometry` or `safe_solve_angle`, would have passed it.
 """
 import json
 import os
@@ -30,6 +36,16 @@ import LLM_median_generation as median_gen  # noqa: E402
 import LLM_mode_generation as mode_gen  # noqa: E402
 import LLM_ordering_generation as ordering_gen  # noqa: E402
 import LLM_probability_generation as prob_gen  # noqa: E402
+import LLM_algebra_generation as algebra_gen  # noqa: E402
+import LLM_expressions_generation as expr_gen  # noqa: E402
+import LLM_rationals_generation as rationals_gen  # noqa: E402
+import LLM_geometry_generation as geometry_gen  # noqa: E402
+import LLM_angle_relationship_generation as angle_gen  # noqa: E402
+
+# Every way into the subprocess. A test that counted one of these read as a
+# statement about the worker and was a statement about one of its doors.
+_ENTRY_POINTS = ("safe_sympify_values", "safe_solve", "safe_solve_geometry",
+                 "safe_solve_angle")
 
 _VALUES = ["4", "8", "6", "2", "10"]
 
@@ -52,6 +68,25 @@ CASES = [
                        "What is the probability of drawing a red marble?",
       "question_topic": "probability", "scenario": "probability_of",
       "items": {"red": "6", "blue": "4", "green": "2"}, "target": "red"}),
+    ("algebra", algebra_gen, "generate_algebra_question",
+     {"question_text": "Solve for x: 2x + 3 = 11.", "question_topic": "algebra",
+      "variables": ["2x", "+", "3", "=", "11"]}),
+    ("expressions", expr_gen, "generate_expression_question",
+     {"question_text": "Evaluate 2*(15+8)-9.", "question_topic": "expressions",
+      "scenario": "evaluate",
+      "variables": ["2", "*", "(", "15", "+", "8", ")", "-", "9"]}),
+    ("rationals", rationals_gen, "generate_rational_question",
+     {"question_text": "What is 1/2 + 1/3?", "question_topic": "rationals",
+      "variables": ["1/2", "+", "1/3"]}),
+    ("geometry", geometry_gen, "generate_geometry_question",
+     {"question_text": "A cube has a side of 3 units. What is its volume?",
+      "question_topic": "geometry", "scenario": "cube_volume",
+      "variables": {"side": "3"}}),
+    ("angle_relationships", angle_gen, "generate_angle_relationship_question",
+     {"question_text": "Two angles are complementary. One is 35 degrees. "
+                       "What is the other?",
+      "question_topic": "angle_relationships", "scenario": "complementary",
+      "variables": ["35"]}),
 ]
 
 
@@ -60,13 +95,16 @@ CASES = [
 def test_a_successful_attempt_makes_exactly_one_worker_call(
         name, module, entry, payload, monkeypatch):
     calls = []
-    real = safe_solve.safe_sympify_values
 
-    def counting(values, timeout=None):
-        calls.append(list(values))
-        return real(values, timeout)
+    def counter(entry_name, real):
+        def counting(*args, **kwargs):
+            calls.append(entry_name)
+            return real(*args, **kwargs)
+        return counting
 
-    monkeypatch.setattr(safe_solve, "safe_sympify_values", counting)
+    for entry_name in _ENTRY_POINTS:
+        monkeypatch.setattr(safe_solve, entry_name,
+                            counter(entry_name, getattr(safe_solve, entry_name)))
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",

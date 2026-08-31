@@ -459,6 +459,32 @@ def _geometry_prompt(scenario):
 
 solution = -1
 
+# Every scenario the `match` below dispatches on, derived by hand from it and
+# asserted against it in tests/test_geometry_scenarios.py -- two lists that
+# can disagree is how the crash this prevents would come back.
+SOLVABLE_SCENARIOS = frozenset({
+    "rectangle_area",
+    "rectangle_perimeter",
+    "triangle_area",
+    "triangle_perimeter",
+    "circle_area",
+    "circle_circumference",
+    "rect_volume",
+    "cylinder_volume",
+    "sphere_volume",
+    "cube_volume",
+    "pyramid_volume",
+    "pythagorean",
+    "rect_area_missing_side",
+    "rect_perimeter_missing_side",
+    "circle_area_missing_side",
+    "circle_circumference_missing_side",
+    "triangle_area_missing_side",
+    "triangle_perimeter_missing_side",
+})
+
+
+
 # Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
 # TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side
 # area/perimeter) aren't listed there by name but belong to the same
@@ -549,6 +575,23 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         required_keys = ["scenario", "variables", "question_text"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # A scenario the dispatch below has no branch for is as unusable as a
+        # missing key, and has to be caught *here* -- the `match` has no
+        # `case _`, so an unrecognised name leaves `solution` unbound and
+        # raises UnboundLocalError from a line that reads like arithmetic.
+        # That is a 500 to a student where a retry would have cost nothing.
+        #
+        # Not hypothetical: measured against Haiku 4.5 on 2026-08-26, 2 of 3
+        # geometry generations failed this way. It answered
+        # `circle_missing_radius_circumference`, which is a reasonable name for
+        # a scenario that exists here as `circle_circumference_missing_side`.
+        # The prompt lists the valid names; a model reordering the words is
+        # exactly what a validation step is for.
+        if question_data["scenario"] not in SOLVABLE_SCENARIOS:
+            print(f"[Attempt {attempt+1}] Unknown scenario:",
+                  question_data["scenario"])
             continue
 
         # Backstop on what the model actually produced, not just on what

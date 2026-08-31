@@ -51,68 +51,104 @@ import question_consistency as qc     # noqa: E402
 import llm_client                     # noqa: E402
 import LLM_topic_decider as decider    # noqa: E402
 
-# The five topics whose scored field is a comparable multiset -- the same five
-# `question_consistency` is wired into. algebra/expressions/geometry/
-# angle_relationships mix operators and labels with numbers, so there is no
-# list to compare and the dataset check correctly does not apply to them.
-DATASET_TOPICS = ("mean", "median", "mode", "ordering", "probability")
+# No list of "topics the dataset check applies to" is kept here any more, and
+# that is the point: this script observes the real call sites, so which topics
+# wire which check is something it *reports* rather than something it asserts.
+# The list that used to sit here named five topics including `probability`,
+# copied from CLAUDE.md, which was wrong -- `LLM_probability_generation` wires
+# `negation_mismatch` and not `dataset_mismatch`. A harness carrying its own
+# copy of the answer cannot discover that the answer changed.
+
+# A user id that owns no rows. `question_generation` reads recent questions for
+# it to build the "do not repeat" block; a miss fails open to an empty list,
+# which is what this harness wants -- a real student's history would make each
+# run's prompts depend on whoever was picked.
+MEASURE_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 ALL_TOPICS = ("algebra", "ordering", "rationals", "mean", "median", "mode",
               "probability", "geometry", "angle_relationships", "expressions")
 
 
-def _scored_values(topic, data):
-    """The list the solver will actually compute over, per topic."""
-    if topic == "ordering":
-        return data.get("values")
-    if topic == "probability":
-        items = data.get("items")
-        # `items` is a mapping of category -> count for the probability
-        # generator; the comparable multiset is the counts.
-        if isinstance(items, dict):
-            return list(items.values())
-        return items
-    return data.get("variables")
+# ─── observing the checks where they actually run ────────────────────────
+#
+# The first version of this re-derived each check's inputs from the dict the
+# generator RETURNS, and reported the dataset check inert on 15 of 15 -- which
+# reads exactly like the finding this script was written to produce, and was an
+# artefact. The generators run the check against the raw model JSON, which
+# carries `variables`/`values`/`items`; what they return is
+# question_text/answer_options/correct_answer, with the scored field stripped.
+# So the harness was measuring an object the check never sees, and answering
+# "no input" about its own reconstruction.
+#
+# The lesson is the script's own: a measurement that cannot see its input
+# reports absence, and absence reads as a finding. So observe the real calls
+# instead of rebuilding their arguments -- module attributes, which every
+# generator reaches through the module object, so one swap covers all ten.
+
+_SEEN = collections.defaultdict(list)
+
+_orig_dataset_mismatch = qc.dataset_mismatch
+_orig_negation_mismatch = qc.negation_mismatch
+_orig_refuse = grade_appropriateness.refuse
 
 
-def _classify(topic, data, grade_band):
-    """One question -> {check_name: outcome}."""
-    text = data.get("question_text") or ""
+def _spy_dataset(text, values):
+    state, reason = qc.dataset_check(text, values)
+    _SEEN["dataset"].append(state)
+    return reason
+
+
+def _spy_negation(text, scenario):
+    reason = _orig_negation_mismatch(text, scenario)
+    _SEEN["negation"].append(qc.ENGAGED_MISMATCH if reason else qc.ENGAGED_AGREED)
+    return reason
+
+
+def _spy_refuse(text, topic, band, difficulty, attempt):
+    refused = _orig_refuse(text, topic, band, difficulty, attempt)
+    _SEEN["grade"].append(bool(refused))
+    return refused
+
+
+def _install_spies():
+    qc.dataset_mismatch = _spy_dataset
+    qc.negation_mismatch = _spy_negation
+    grade_appropriateness.refuse = _spy_refuse
+
+
+def _classify(topic):
+    """What the checks did during the generation that just finished.
+
+    Reads `_SEEN`, which the spies filled as the generator ran, then clears it.
+    A check with no entry was never *called* for this topic -- "not wired"
+    ("n/a"), which is a different fact from "called and found no input"
+    ("inert"). Collapsing those two is how a check that was never connected
+    reads as a check that is working.
+    """
     out = {}
 
-    # --- dataset agreement -------------------------------------------------
-    if topic not in DATASET_TOPICS:
-        out["dataset"] = "n/a"
-    else:
-        state, _ = qc.dataset_check(text, _scored_values(topic, data))
-        if state == qc.ENGAGED_MISMATCH:
-            out["dataset"] = "engaged/rejected"
-        elif state == qc.ENGAGED_AGREED:
-            out["dataset"] = "engaged/agreed"
+    for name in ("dataset", "negation"):
+        states = _SEEN.get(name) or []
+        if not states:
+            out[name] = "n/a"
+        elif qc.ENGAGED_MISMATCH in states:
+            out[name] = "engaged/rejected"
+        elif qc.ENGAGED_AGREED in states:
+            out[name] = "engaged/agreed"
         else:
-            # Carry the specific inert state: "no list in the text" and
-            # "the scored field was not numeric" are different problems.
-            out["dataset"] = f"inert:{state.removeprefix('inert_')}"
+            # Carry the specific inert state: "no list in the text" and "the
+            # scored field was not numeric" are different problems.
+            out[name] = f"inert:{states[-1].removeprefix('inert_')}"
 
-    # --- negation agreement (probability only) -----------------------------
-    if topic != "probability":
-        out["negation"] = "n/a"
-    elif "scenario" not in data:
-        out["negation"] = "inert:no_scenario"
+    refusals = _SEEN.get("grade") or []
+    if not refusals:
+        out["grade"] = "n/a"
     else:
-        out["negation"] = ("engaged/rejected"
-                           if qc.negation_mismatch(text, data["scenario"])
-                           else "engaged/agreed")
+        # Every attempt is recorded, so a question that took two tries shows
+        # the rejection that caused the retry as well as the acceptance.
+        out["grade"] = "engaged/rejected" if any(refusals) else "engaged/agreed"
 
-    # --- grade appropriateness ---------------------------------------------
-    # Unlike the two above this one always has its input (the question text),
-    # so it cannot go inert -- it is reported for the rejection rate only.
-    if not text:
-        out["grade"] = "inert:no_text"
-    else:
-        out["grade"] = ("engaged/rejected"
-                        if grade_appropriateness.find_violation(text, topic, grade_band)
-                        else "engaged/agreed")
+    _SEEN.clear()
     return out
 
 
@@ -130,23 +166,34 @@ def main():
           f"model={llm_client.CLAUDE_MODEL if llm_client.LLM_PROVIDER == 'claude' else 'llama'} "
           f"grade={args.grade!r} band={grade_band} difficulty={args.difficulty}\n")
 
+    _install_spies()
     tally = collections.defaultdict(collections.Counter)
     failures = collections.Counter()
 
     for topic in args.topics:
         for i in range(args.per_topic):
             try:
-                data = decider.question_generation(topic, args.difficulty, args.grade, [], [])
+                # (topic, difficulty, user_id, grade) -- the history lists are
+                # the generators' own arguments, not this one's. Called with
+                # five positionals this raised TypeError before any request was
+                # made, so the run reported an empty table and zero findings:
+                # this script's own thesis, applied to itself. A harness that
+                # cannot fail loudly measures nothing and says so quietly.
+                data = decider.question_generation(
+                    topic, args.difficulty, MEASURE_USER_ID, args.grade)
             except Exception as e:
                 # A generator that exhausts its retries raises; that is a real
                 # outcome to report, not a reason to stop measuring.
                 failures[topic] += 1
                 print(f"  {topic}[{i}] generation failed: {type(e).__name__}: {e}")
+                # Or the checks this question did run would be counted against
+                # the next one.
+                _SEEN.clear()
                 continue
             if not isinstance(data, dict):
                 failures[topic] += 1
                 continue
-            for check, outcome in _classify(topic, data, grade_band).items():
+            for check, outcome in _classify(topic).items():
                 tally[(topic, check)][outcome] += 1
 
     print(f"\n{'topic':<20} {'check':<10} {'outcome':<28} n")

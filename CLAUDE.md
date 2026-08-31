@@ -2899,7 +2899,14 @@ question, which costs one retry and nothing else.
 scored list (these prompts all put the dataset there, which is what makes locating it reliable);
 `negation_mismatch` requires a negated wording and `not_probability_of` to imply each other, **in
 both directions**, since a negated question scored as `probability_of` is wrong by the same amount.
-Wired into `mean`/`median`/`mode`/`ordering`/`probability` inside the existing retry loops.
+Wired inside the existing retry loops, and **the two checks do not cover the same topics**:
+`dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only, and `negation_mismatch` is in
+`probability` only. This file said `dataset_mismatch` covered probability too, for months; it never
+has. Probability's counts live in the sentence body ("a bag contains 17 red, 23 blue"), not after a
+colon, so the check would be inert there anyway — but *documented as wired and absent* is the worst
+of the three states, because it is the one nobody re-checks. Verified by
+`grep -l dataset_mismatch LLM_*_generation.py`, which is a cheaper habit than trusting this
+paragraph.
 
 **Both fail open**, and that is what makes them safe to run on every question: order is ignored (the
 solvers sort anyway), non-numeric `variables` are skipped, and a question with no colon-delimited
@@ -2927,6 +2934,25 @@ are now one token and both sides are compared **by value**, so `4/5` shown again
 agrees, and so does `32/40`. A **mixed number** anywhere in the text fails open: `1 1/2` is one value
 to a reader and two tokens to the regex, which truncates the list at it and would report the
 tokenisation as a dataset disagreement.
+
+**`scripts/measure_generation_checks.py` is where that measurement lives now**, instead of being
+done by hand. Run it against `ollama` for a free baseline and `claude` for the number that describes
+production; it bills like any other caller (~30 calls at `--per-topic 3`).
+
+Measured on **claude-haiku-4-5, 2026-08-26, 5th grade / medium, 3 per topic**: the dataset check
+engaged on **12 of 12** applicable questions and agreed on all of them, `negation_mismatch` engaged
+3 of 3 on probability, and `grade_appropriateness` engaged on all 27 of the nine topics it is wired
+into, refusing none. So the fraction fix holds against Haiku — its `ordering` output is exactly the
+`1/2, 0.75, 2/5` mix that used to go inert.
+
+**Two things about running it are worth more than the numbers.** It must observe the checks *where
+they run* — the generators call them against the raw model JSON, and the dict they **return** has
+the scored field stripped, so a harness that re-derives the inputs from the return value reports
+`inert` on everything. That produced a confident "0 of 15, the check is switched off" that was
+entirely an artefact of the measurement, which is this rule eating its own tail: a measurement that
+cannot see its input reports absence, and absence reads as a finding. And it must keep **`n/a` (never
+called) apart from `inert` (called, found nothing)** — collapsing them is how a check that was never
+wired reads as one that is working, which is exactly how the probability gap above survived.
 
 ### A lesson-plan cell has four ways to contribute nothing, and they are named
 

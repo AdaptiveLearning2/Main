@@ -13,7 +13,14 @@ import time
 
 from dotenv import load_dotenv
 
+import console_encoding
+
 load_dotenv()
+
+# Applied here because every generator imports this module, so it takes
+# effect wherever generation happens -- the app, the measurement script, a
+# direct call -- without each of them having to remember.
+console_encoding.make_console_safe()
 
 
 def _env_number(name, default, cast, minimum=None):
@@ -53,15 +60,15 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 # snapshot exists, while a wrong dated string is `404 not_found_error` on
 # every question, on every topic, from the first call.
 #
-# The sources disagree and neither could be checked: Anthropic's published
-# model table lists `claude-haiku-4-5` and says the IDs there are complete as
-# given, while other references show a dated form for this model (plausible --
-# Haiku 4.5 predates the 4.6+ generation that dropped date suffixes). The
-# Models API settles it, and needs a key nobody has configured here yet.
+# Settled against the live Models API on 2026-08-26, once a key existed:
+# `models.list()` returns `claude-haiku-4-5-20251001`, and
+# `models.retrieve("claude-haiku-4-5")` resolves to it. So both forms are
+# valid -- the dated string this replaced was not wrong, and the argument for
+# the alias is the asymmetry above rather than a defect in the snapshot.
 #
-# So: take the form that cannot be wrong, and pin the snapshot later if the
-# measurements ever need it. `GET /v1/models` (or `client.models.list()`)
-# under a real key is the check -- do that before pinning, not after.
+# Pin the snapshot if the CLAUDE.md measurements ever need to be reproducible
+# against one specific build. Until then the alias is the safer default,
+# because it cannot become a 404 by being mistyped or by ageing out.
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # Anthropic's `temperature` range is 0.0-1.0; Ollama's is not bounded there and

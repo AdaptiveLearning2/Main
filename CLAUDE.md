@@ -2875,6 +2875,56 @@ model follow it, and neither does an unambiguous instruction sitting next to a c
 example.** Anything added to these prompts needs its effect read off generated output before it is
 believed — which is what `scripts/` has no home for yet and was done by hand here.
 
+### The solvers trust model output the retry loop above them already distrusts
+
+Switching to Haiku found five bugs, none of them in the migration: all five were in code that had
+only ever seen `llama3.1:8b`'s output shape, and every one is the same mistake — a solver, or a
+distractor generator, taking the model's reply as well-formed *after* the retry loop that exists to
+reject malformed replies has already broken.
+
+**Solve inside the retry loop, never after it.** That placement is what turns each of these from a
+retry into a 500. Measured against Haiku 4.5 at 8th grade, 3 generations per topic:
+
+| Site | Failure | Was |
+| --- | --- | --- |
+| `LLM_geometry_generation` | a scenario name the `match` has no branch for | `UnboundLocalError` on `solution`, 2 in 3 |
+| `LLM_geometry_generation` | a known scenario missing a variable the solver indexes | `KeyError: 'b'`, 2 in 3 |
+| `LLM_algebra_generation` | `solve` returning `[]` for `x+1 = x+2` | `float(None)` → `TypeError`, 1 in 3 |
+| `LLM_algebra_generation` | `solve` returning two roots | **a wrong answer** — `[0]` scored one root and marked the other choice wrong |
+| `incorrect_solution_generation` | a one-term answer like `5*x` | **an infinite loop**, 28 minutes at 100% CPU |
+
+The algebra multi-root case is the one to notice: this file already *said* the topic is "one linear
+equation with one solution — a quadratic would present one root as the answer and mark the other
+correct choice wrong", and nothing enforced it. A constraint documented as a limit is a wrong answer
+waiting for a model that writes one.
+
+**`while len(results) < n` needs a bound and a deterministic filler.** All three generators in
+`incorrect_solution_generation` were unbounded. The symbolic one did not merely risk hanging, it hung
+*deterministically* on its commonest input: `wrong_coefficient` only perturbed an `Add`, so for `5*x`
+— what simplifying `2x+3x` produces — it returned the expression unchanged, leaving `sign_error`'s
+negation as the only reachable alternative. Two distinct values where three are needed. Whether a
+randomised search can reach `n` distinct results is a property of the *input*, not of how long you
+try, so the retry count is not the bound — the filler is.
+
+It read as intermittent for two compounding reasons, and both are worth recognising: `_pick_scenario`
+reaches `simplify` about one time in three, and only above the `middle` band. **A hang that depends
+on a random branch below a grade gate looks like flakiness and is not.**
+
+**Use `faulthandler.dump_traceback_later(n, exit=True)` rather than reasoning about where a hang is.**
+Two plausible mechanisms were proposed and implemented against this one before it was measured —
+`parse_expr` eagerly evaluating an exponent tower (real: `9**9**9` never returns, and
+`safe_solve.py` now bounds it in a killable subprocess) and `sp.simplify` being slow (not real, it is
+fast on every shape these prompts produce). Neither was the bug. The stack dump named it in one run.
+
+**A diagnostic print must not be able to kill what it is describing.** The generators print the raw
+reply on their error paths; Windows console streams are cp1252, so a `π`, an em-dash or an accented
+name raised `UnicodeEncodeError` — from inside the retry loop, which absorbs bad JSON and bad shapes
+and then died on printing them. `console_encoding.make_console_safe()` sets `errors="replace"` on
+both streams and is applied from `llm_client`, which every generator imports. Deliberately at the
+stream and not at the 23 print sites: the next print cannot forget, and it covers the ones passing
+model-derived values without looking like it (`question_data`, a rejection reason). The console's own
+encoding is left alone — forcing UTF-8 onto a cp1252 console trades a crash for mojibake.
+
 ### The question shown and the data scored are two fields, and they must agree
 
 Every generator returns a `question_text` the student reads and a separate structured field the

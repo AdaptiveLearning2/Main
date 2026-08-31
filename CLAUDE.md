@@ -79,12 +79,22 @@ neither the module nor the fix. Silence it inside Python instead
 (`import sys, os; sys.stderr = open(os.devnull, 'w'); import cv2`) and probe **one module per
 call**, so the error can say which import failed. Applies to every dependency check in that file.
 
-**Two venvs exist and only one is the sidecar's.** `EEGResearch/.venv` is what `start.ps1` uses;
-there is also a `.venv` at the repo root with a different OpenCV. `pip install -e ".[face,gaze]"`
-has to run *from* `EEGResearch`, or pip resolves `.` to the repo root and reports "neither setup.py
-nor pyproject.toml found".
+**Three venvs exist and `start.ps1` uses two of them.** `EEGResearch/.venv` is the sidecar's and
+`Website/AdaptiveLearning/backend/.venv` is the website backend's — that is the one
+`uvicorn main:app` runs under, so it is where `backend/requirements.txt` has to be installed. There
+is also a `.venv` at the repo root, with a different OpenCV, which is what `pytest` runs under.
+`pip install -e ".[face,gaze]"` has to run *from* `EEGResearch`, or pip resolves `.` to the repo
+root and reports "neither setup.py nor pyproject.toml found".
 
-**Both venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13). Every direct
+**A package present in the root venv says nothing about the backend's.** The suite passing is not
+evidence the app can import something: `anthropic` was in the root venv and absent from
+`backend/.venv` for the whole of the Claude migration, so every test passed while a live
+`LLM_PROVIDER=claude` run would have died on the first generation with `ModuleNotFoundError` — and
+`llm_client` imports it lazily, so not at boot, but on the first question a student asked. Install a
+new runtime dependency into `backend/.venv` in the same change that pins it.
+
+**The sidecar and root venvs are rebuilt on Python 3.14.7** (2026-08-20; previously 3.12/3.13;
+`backend/.venv` is on 3.14.7 too but was not part of that measurement). Every direct
 dependency in both trees already ships a `cp314`/`win_amd64` wheel or a version-agnostic
 `py3-none-any` one — `mediapipe`, `opencv-contrib-python`/`opencv-python` (the `<5` pin still
 resolves), `onnxruntime`, `numpy`, `scipy`, `jax`/`jaxlib`, `h5py`, `av` all installed clean.
@@ -2550,15 +2560,32 @@ multiplies underneath that.
 an Anthropic account; a deployment opts in with `LLM_PROVIDER=claude` and `ANTHROPIC_API_KEY`. Both
 packages are pinned in `requirements.txt` and neither is imported until its branch is taken.
 
-**The sampling parameters do not carry across, and getting that wrong fails everything rather than
-degrading it.** Every generation call site passes `temperature=1.1`, which is outside Anthropic's
-0.0–1.0 range — passed through it returns `400 invalid_request_error` on every question, on every
-topic, from the first call. So the Claude branch takes its own `CLAUDE_TEMPERATURE` (default 1.0,
-clamped) and sends **no `top_p`/`top_k`**, since on Claude 4.x and later at most one of
-`temperature`/`top_p` should be set. `claude_temperature=` is the per-caller override; the strategies
-pass uses it to keep its 0.4, because advice a parent reads is not the place for "keep it varied".
-`test_llm_client.py` pins the request that is *built* — nothing else does, and a test that only
-checks a question came back passes against a fixture while saying nothing about what was sent.
+**`temperature` is not a parameter of `messages.create` in `anthropic` 1.x, so the Claude branch
+sends no sampling parameter at all.** It went with the 0.x → 1.x major version, along with `top_p`
+and `top_k`. Passing it raises `TypeError: Messages.create() got an unexpected keyword argument
+'temperature'` *before a request is built* — every question, on every topic, from the first call.
+The migration plan had corrected Ollama's `temperature=1.1` down into Anthropic's 0.0–1.0 range,
+which is a real constraint and a different problem; the corrected value was equally unsendable.
+
+The API's own default temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to, so
+the hot path asks for nothing and cannot be refused for asking. A caller wanting something else —
+`_llm_strategies` wants 0.4 — goes through `_claude_sampling`, which puts it in `extra_body`, the
+escape hatch for a wire parameter the typed signature no longer carries. **That path is unverified**
+(no credits when it was written) and degrades safely, but a strategies response reading
+`source: "rule-based"` against a working key is the first place to look.
+
+**A test double must not be more permissive than the thing it stands in for.** This survived every
+review and a green suite because `_FakeMessages.create` took `**kwargs` — so `test_llm_client.py`
+pinned a request shape the SDK cannot accept, and the one assertion anyone would have trusted
+(*"the request we build is valid"*) was the one that could not fail. It now validates every kwarg
+against `inspect.signature` of the **installed** SDK, read at call time rather than copied into a
+list that ages. Any future parameter the pinned version drops fails there instead of on a student's
+first question.
+
+Verification stops at the network boundary without credits, and that boundary is still worth
+reaching: a `400` carrying a `request_id` proves the request was built, sent, and validated — a
+`TypeError` proves it never left the process. Distinguish the two before concluding anything about
+a request's shape.
 
 **Four bounds, because CLAUDE.md already required them of the one model-backed endpoint that existed
 before this** (see *The strategies model pass is optional and bounded*). Question generation is on
@@ -2569,8 +2596,19 @@ the hottest path in the product and had none:
 | Per-call deadline | `GENERATION_LLM_TIMEOUT` (30s) | The SDK's own default is **ten minutes**; a prefetch worker blocked that long never refills the queue |
 | Process-wide concurrency | `GENERATION_MAX_CONCURRENCY` (8) | `_prefetch_active` bounds *per user*, so the peak was however many children pressed start at once |
 | Per-student volume | `GENERATION_RATE_LIMIT` / `_WINDOW` (60/min) | The queue bounds calls *in flight*, not calls *over time* |
-| Spend | `GENERATION_DAILY_CALL_LIMIT` (5000/24h, Claude only) | Nothing bounded it; free against a local model |
+| Spend | `GENERATION_DAILY_CALL_LIMIT` (2500/24h, Claude only) | Nothing bounded it; free against a local model |
 | Waiting callers | `GENERATION_MAX_WAITERS` (12) | See below — this was the fourth bound, and it was missing |
+
+**The spend ceiling counts calls, and a question served is two of them** — the topic-and-difficulty
+decision and the generation. It was 5000, justified as "eightfold headroom" on ~600 generations a
+day; that compared a call ceiling against a question count and overstated the headroom by two.
+Corrected to 1500 against a 20-question day, which was then *under* the ~1800 calls a 30-question
+day actually makes — **size it against the workload, not against whichever example is written
+down.** 2500 covers that with room for retries. **And size it against the worst case, not the
+average:** `max_tokens=2048` at Haiku 4.5's $5/MTok makes one call cost up to ~$0.0102, so the
+ceiling is ~$25/day where the ~$0.0023-per-question average suggests ~$2. It bounds neither
+tokens (seeding more lesson-plan text raises the bill without moving it) nor a restarting process
+(in-memory, so several uvicorn workers multiply it and a crash-loop defeats it).
 
 **`GENERATION_MAX_WAITERS` is the threadpool bound, and it is not the concurrency one.**
 `GENERATION_MAX_CONCURRENCY` bounds calls *in flight*; this bounds callers *blocked waiting to
@@ -2837,6 +2875,130 @@ model follow it, and neither does an unambiguous instruction sitting next to a c
 example.** Anything added to these prompts needs its effect read off generated output before it is
 believed — which is what `scripts/` has no home for yet and was done by hand here.
 
+### The solvers trust model output the retry loop above them already distrusts
+
+Switching to Haiku found five bugs, none of them in the migration: all five were in code that had
+only ever seen `llama3.1:8b`'s output shape, and every one is the same mistake — a solver, or a
+distractor generator, taking the model's reply as well-formed *after* the retry loop that exists to
+reject malformed replies has already broken.
+
+**Solve inside the retry loop, never after it.** That placement is what turns each of these from a
+retry into a 500. Measured against Haiku 4.5 at 8th grade, 3 generations per topic:
+
+| Site | Failure | Was |
+| --- | --- | --- |
+| `LLM_geometry_generation` | a scenario name the `match` has no branch for | `UnboundLocalError` on `solution`, 2 in 3 |
+| `LLM_geometry_generation` | a known scenario missing a variable the solver indexes | `KeyError: 'b'`, 2 in 3 |
+| `LLM_algebra_generation` | `solve` returning `[]` for `x+1 = x+2` | `float(None)` → `TypeError`, 1 in 3 |
+| `LLM_algebra_generation` | `solve` returning two roots | **a wrong answer** — `[0]` scored one root and marked the other choice wrong |
+| `incorrect_solution_generation` | a one-term answer like `5*x` | **an infinite loop**, 28 minutes at 100% CPU |
+
+The algebra multi-root case is the one to notice: this file already *said* the topic is "one linear
+equation with one solution — a quadratic would present one root as the answer and mark the other
+correct choice wrong", and nothing enforced it. A constraint documented as a limit is a wrong answer
+waiting for a model that writes one.
+
+**`while len(results) < n` needs a bound and a deterministic filler.** All three generators in
+`incorrect_solution_generation` were unbounded. The symbolic one did not merely risk hanging, it hung
+*deterministically* on its commonest input: `wrong_coefficient` only perturbed an `Add`, so for `5*x`
+— what simplifying `2x+3x` produces — it returned the expression unchanged, leaving `sign_error`'s
+negation as the only reachable alternative. Two distinct values where three are needed. Whether a
+randomised search can reach `n` distinct results is a property of the *input*, not of how long you
+try, so the retry count is not the bound — the filler is.
+
+It read as intermittent for two compounding reasons, and both are worth recognising: `_pick_scenario`
+reaches `simplify` about one time in three, and only above the `middle` band. **A hang that depends
+on a random branch below a grade gate looks like flakiness and is not.**
+
+**All three solver topics go through `safe_solve.py`, and the boundary is the whole solve, not the
+last step of it.** A CPU-bound sympy call cannot be bounded in-process — `parse_expr("9**9**9")` and `solve` on `9**9**9 + x = 5` never return, the operand is
+the model's, and the spin holds the GIL inside CPython's long-integer code, so a watchdog thread
+never gets scheduled and a signal handler never runs. Only an external kill works. It costs ~0.85s of
+sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
+expression, equation or scenario is solved.
+
+**All ten topics are wired, and getting there took four rounds of finding the next unwired one.**
+`expressions` bounded while `algebra` still parsed in the request thread; then `algebra` bounded
+while `geometry` still ran `preprocess_variables` — `sympify` over the model's raw values —
+in-process, with a docstring claiming otherwise; then the remaining seven, which had never been
+looked at. `SCENARIO_VARS` checks that the keys are *present*, which says nothing about the
+values behind them, and a `try/except` catches exceptions rather than non-termination. If a topic
+touches model text with sympy anywhere, all of that topic belongs in the worker.
+
+`geometry_solvers.py` and `angle_solvers.py` exist for that: the worker cannot import a generator
+module, which pulls in supabase, flask and dotenv at import, so the pure arithmetic lives apart from
+the prompt and the retry loop. Anything a bounded worker must run needs the same separation — and a
+validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
+alongside the angle solvers rather than staying beside its caller.
+
+**`SOLVE_TIMEOUT` bounds the subprocess, not the arithmetic, and that is why it self-checks.** The
+budget covers launching Python and importing sympy, which is ~99% of an ordinary solve — measured
+0.64–1.00s wall where the maths is ~10ms. So it is really a bound on *startup plus a little*, and
+startup is the part that stretches on a cold or loaded machine. It is also the one setting here whose
+breach fails **every** question at once, and fails it looking like the model cannot write solvable
+maths, so nobody goes looking at a timeout.
+
+`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the budget for
+that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It
+**clamps up and logs; it never refuses to start** — raising there would take the whole backend down
+over one topic's tuning knob, and every non-generation surface with it, which is the failure
+`_env_number`'s floor exists to prevent. A probe that cannot run keeps the configured value and says
+so separately: that means the subprocess mechanism is broken, which is a different problem, and a
+budget guessed from a failed measurement is worse than the one someone chose. `SOLVE_STARTUP_PROBE=0`
+skips it, for a process that imports the module and never solves; it costs ~0.8s of boot once.
+
+**A threshold that depends on how fast the machine is has to be measured on that machine, not
+written down.** Both tests around the probe got this wrong in different directions. One pinned the
+shipped default against the measured floor and failed *locally* under suite load. The other hardcoded
+1.0s as "obviously below the floor" — true on a laptop where startup is ~0.8s and the floor ~2.4s,
+false on CI where startup is 0.32s and the floor 0.97s, so the clamp correctly did not fire and the
+test failed for asserting it had. **CI is the faster machine here, which is the opposite of the usual
+flakiness direction** and is why this passed several runs before failing. Probe first, derive the
+value from that measurement, and leave an order of magnitude rather than a factor of two so a second
+measurement's variance cannot cross it.
+
+**Don't pin the shipped default against the measured floor in a test.** The first version of that
+check asserted `_CONFIGURED_TIMEOUT_S >= floor`, passed alone, and failed in sequence — startup is
+slower while the suite is spawning subprocesses, so the floor moves. That is an elapsed-time
+assertion wearing an invariant's clothes, the same rule as
+`test_time_spent_queueing_comes_out_of_the_budget_it_was_promised` above. Assert what the probe
+actually guarantees: the *effective* budget clears the floor.
+
+**Most topics need only the parse bounded, not the whole solve.** `safe_sympify_values` covers six of
+the ten: they parse the model's numbers and then do ordinary arithmetic, which cannot hang. Only
+`geometry` and `angle_relationships` needed their solvers moved, because both keep sympy *expressions*
+past the parse — geometry solves for a missing side, and `algebra_complementary` substitutes a solved
+`x` back into two angle expressions. Reach for the value parser first; move a solver only when
+something downstream needs the sympy object rather than a number.
+
+Three parses stay in-process deliberately, and all three read the **worker's own output** rather than
+the model's: `sympify(solved)` in `expressions` and `rationals`, and `format_number`'s fallback in
+`median`. `MAX_RESULT_CHARS` is what makes those bounded — a short canonical literal parses in linear
+time. A parse whose operand came from the model belongs in the worker, full stop.
+
+**A `raise` from a helper does not reach a retry loop the call site sits below.** Every generator's
+`for ... else` has already run by the time the solve happens, unless the solve was deliberately moved
+inside — so a helper that raises to signal "unusable reply" produces a 500, not another attempt.
+`incorrect_solution_generation`'s non-finite `ValueError` was documented as reaching the loop and
+could not; `LLM_geometry_generation._solve_scenario` is the fix, and the rule generalises: **if the
+recovery is a retry, the check belongs above the `break`, and returning `None` says so where raising
+does not.**
+
+**Use `faulthandler.dump_traceback_later(n, exit=True)` rather than reasoning about where a hang is.**
+Two plausible mechanisms were proposed and implemented against this one before it was measured —
+`parse_expr` eagerly evaluating an exponent tower (real: `9**9**9` never returns, and
+`safe_solve.py` now bounds it in a killable subprocess) and `sp.simplify` being slow (not real, it is
+fast on every shape these prompts produce). Neither was the bug. The stack dump named it in one run.
+
+**A diagnostic print must not be able to kill what it is describing.** The generators print the raw
+reply on their error paths; Windows console streams are cp1252, so a `π`, an em-dash or an accented
+name raised `UnicodeEncodeError` — from inside the retry loop, which absorbs bad JSON and bad shapes
+and then died on printing them. `console_encoding.make_console_safe()` sets `errors="replace"` on
+both streams and is applied from `llm_client`, which every generator imports. Deliberately at the
+stream and not at the 23 print sites: the next print cannot forget, and it covers the ones passing
+model-derived values without looking like it (`question_data`, a rejection reason). The console's own
+encoding is left alone — forcing UTF-8 onto a cp1252 console trades a crash for mojibake.
+
 ### The question shown and the data scored are two fields, and they must agree
 
 Every generator returns a `question_text` the student reads and a separate structured field the
@@ -2861,7 +3023,14 @@ question, which costs one retry and nothing else.
 scored list (these prompts all put the dataset there, which is what makes locating it reliable);
 `negation_mismatch` requires a negated wording and `not_probability_of` to imply each other, **in
 both directions**, since a negated question scored as `probability_of` is wrong by the same amount.
-Wired into `mean`/`median`/`mode`/`ordering`/`probability` inside the existing retry loops.
+Wired inside the existing retry loops, and **the two checks do not cover the same topics**:
+`dataset_mismatch` is in `mean`/`median`/`mode`/`ordering` only, and `negation_mismatch` is in
+`probability` only. This file said `dataset_mismatch` covered probability too, for months; it never
+has. Probability's counts live in the sentence body ("a bag contains 17 red, 23 blue"), not after a
+colon, so the check would be inert there anyway — but *documented as wired and absent* is the worst
+of the three states, because it is the one nobody re-checks. Verified by
+`grep -l dataset_mismatch LLM_*_generation.py`, which is a cheaper habit than trusting this
+paragraph.
 
 **Both fail open**, and that is what makes them safe to run on every question: order is ignored (the
 solvers sort anyway), non-numeric `variables` are skipped, and a question with no colon-delimited
@@ -2889,6 +3058,25 @@ are now one token and both sides are compared **by value**, so `4/5` shown again
 agrees, and so does `32/40`. A **mixed number** anywhere in the text fails open: `1 1/2` is one value
 to a reader and two tokens to the regex, which truncates the list at it and would report the
 tokenisation as a dataset disagreement.
+
+**`scripts/measure_generation_checks.py` is where that measurement lives now**, instead of being
+done by hand. Run it against `ollama` for a free baseline and `claude` for the number that describes
+production; it bills like any other caller (~30 calls at `--per-topic 3`).
+
+Measured on **claude-haiku-4-5, 2026-08-26, 5th grade / medium, 3 per topic**: the dataset check
+engaged on **12 of 12** applicable questions and agreed on all of them, `negation_mismatch` engaged
+3 of 3 on probability, and `grade_appropriateness` engaged on all 27 of the nine topics it is wired
+into, refusing none. So the fraction fix holds against Haiku — its `ordering` output is exactly the
+`1/2, 0.75, 2/5` mix that used to go inert.
+
+**Two things about running it are worth more than the numbers.** It must observe the checks *where
+they run* — the generators call them against the raw model JSON, and the dict they **return** has
+the scored field stripped, so a harness that re-derives the inputs from the return value reports
+`inert` on everything. That produced a confident "0 of 15, the check is switched off" that was
+entirely an artefact of the measurement, which is this rule eating its own tail: a measurement that
+cannot see its input reports absence, and absence reads as a finding. And it must keep **`n/a` (never
+called) apart from `inert` (called, found nothing)** — collapsing them is how a check that was never
+wired reads as one that is working, which is exactly how the probability gap above survived.
 
 ### A lesson-plan cell has four ways to contribute nothing, and they are named
 

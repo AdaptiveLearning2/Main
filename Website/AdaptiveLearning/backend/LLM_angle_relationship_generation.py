@@ -15,7 +15,11 @@ from sympy.parsing.sympy_parser import (
     implicit_multiplication_application
 )
 import incorrect_solution_generation as inc_gen
+# The solve path -- the five solvers, the parse and the degenerate-figure
+# check -- lives in `angle_solvers`, which the bounded worker imports.
 import lesson_plan_context
+import angle_solvers
+import safe_solve
 import grade_levels
 import grade_appropriateness
 
@@ -56,31 +60,6 @@ def format_answer(x):
     if x.is_integer():
         return str(int(x))
     return f"{round(x, 2)}"
-
-def preprocess_variables(vars):
-    parsed = []
-    for v in vars:
-        parsed.append(parse_expr(v, transformations=transformations))
-    return parsed
-
-
-def complementary_angle(a):
-    return 90 - a
-
-def supplementary_angle(a):
-    return 180 - a
-
-def linear_pair(a):
-    return 180 - a
-
-def triangle_missing_angle(a,b):
-    return 180 - a - b
-
-def solve_complementary(expr1, expr2):
-    x = sp.symbols('x')
-    equation = sp.Eq(expr1 + expr2, 90)
-    result= sp.solve(equation, x)
-    return result[0] if result else None
 
 # Only the selected scenario's block is sent -- see the same note in
 # LLM_geometry_generation.py. _pick_scenario has already applied difficulty
@@ -222,88 +201,6 @@ def _requires_whole_number_solution(grade):
 
 # What each scenario's angles must add up to. Every angle in the question --
 # given or asked for -- has to be strictly between 0 and this total.
-_SCENARIO_TOTAL = {
-    "complementary":         90,
-    "supplementary":         180,
-    "linear_pair":           180,
-    "triangle_sum":          180,
-    "algebra_complementary": 90,
-}
-
-
-def _invalid_angle_reason(scenario, variables, solution):
-    """Why this angle configuration is invalid, or None if it's fine.
-
-    Measured 2026-08-18: a triangle question with angles 75 and 105 was
-    generated with the answer 0 -- correct arithmetic, but not a real
-    triangle, since 75 and 105 already use up the full 180 degrees.
-    `complementary` has the same failure at 90. Keyed on each scenario's
-    total (see _SCENARIO_TOTAL) so both are caught by one check.
-
-    This is wrong at every grade, so it's checked unconditionally, before
-    the whole-number rule below.
-
-    Takes the already-parsed `variables` so sympy only parses once per
-    attempt, instead of again inside `_solve_scenario`.
-    """
-    if scenario == "algebra_complementary":
-        # `solution` here is x, not an angle, and x itself has no bound --
-        # check the two angle expressions evaluated at x instead.
-        x = sp.symbols('x')
-        try:
-            angles = [float(expr.subs(x, solution)) for expr in variables]
-        except (TypeError, ValueError):
-            return None
-        if any(a <= 0 or a >= 90 for a in angles):
-            return (f"solving gives angles {angles} degrees; each must be "
-                    f"strictly between 0 and 90 to be complementary")
-        return None
-
-    total = _SCENARIO_TOTAL.get(scenario)
-    if total is None:
-        return None
-
-    try:
-        given = [float(expr) for expr in variables]
-    except (TypeError, ValueError):
-        # Not numeric -- nothing to check here rather than a reason to refuse.
-        return None
-
-    for angle in given:
-        if angle <= 0 or angle >= total:
-            return (f"a given angle is {angle} degrees; it must be strictly "
-                    f"between 0 and {total}")
-
-    if solution <= 0:
-        return (f"the answer is {solution} degrees -- the given angles already "
-                f"use the whole {total}-degree total, so there is no such figure")
-    if solution >= total:
-        return (f"the answer is {solution} degrees, which leaves nothing for "
-                f"the other angle(s)")
-    return None
-
-
-def _solve_scenario(scenario, variables):
-    """The numeric answer for one parsed question, or None for an
-    unrecognised scenario.
-
-    Split out so the solve happens inside the retry loop: whether the
-    answer is a whole number can only be checked once the scenario has
-    actually been solved, and a question that fails that check needs to be
-    regenerated, not patched after the fact.
-    """
-    match scenario:
-        case "complementary":
-            return complementary_angle(variables[0])
-        case "supplementary":
-            return supplementary_angle(variables[0])
-        case "linear_pair":
-            return linear_pair(variables[0])
-        case "triangle_sum":
-            return triangle_missing_angle(variables[0], variables[1])
-        case "algebra_complementary":
-            return solve_complementary(variables[0], variables[1])
-    return None
 
 
 def generate_angle_relationship_question(global_questions,prev_questions, difficulty, grade, max_retries=3):
@@ -375,26 +272,19 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         # but isn't reliably obeyed -- measured 2026-08-18:
         # (5x+15)+(3x-20)=90 came back as 11.875 -- so it's checked in code.
         scenario_name = question_data.get("scenario")
-        try:
-            # Parsed once and handed to both, rather than each re-parsing
-            # the same strings through sympy on every attempt.
-            variables = preprocess_variables(question_data["variables"])
-            solution = _solve_scenario(scenario_name, variables)
-        except Exception as e:
-            print(f"[Attempt {attempt+1}] Could not solve: {e}")
-            continue
-
+        # Parsed and solved in the bounded worker. `parse_expr` on the model's
+        # variable strings is the unbounded step -- `parse_expr("9**9**9")`
+        # never returns, and holds the GIL while it does not, so no watchdog
+        # thread can stop it. The degenerate-figure check goes with it because
+        # it needs the parsed expressions: `algebra_complementary` substitutes
+        # the solved `x` back into both angle expressions, which is impossible
+        # once only a float has crossed the process boundary.
+        solution = safe_solve.safe_solve_angle(scenario_name,
+                                               question_data["variables"])
         if solution is None:
-            print(f"[Attempt {attempt+1}] Unrecognised scenario:", scenario_name)
-            continue
-
-        solution = normalize_solution(solution)
-
-        # Checked before the grade rule: a degenerate figure is wrong for
-        # every student, not just a young one.
-        invalid = _invalid_angle_reason(scenario_name, variables, solution)
-        if invalid:
-            print(f"[Attempt {attempt+1}] Invalid angle question: {invalid}")
+            print(f"[Attempt {attempt+1}] Unsolvable or invalid "
+                  f"{scenario_name} question:",
+                  repr(question_data["variables"])[:60])
             continue
 
         if _requires_whole_number_solution(grade) and not float(solution).is_integer():

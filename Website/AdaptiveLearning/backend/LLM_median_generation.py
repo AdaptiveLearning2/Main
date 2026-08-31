@@ -13,12 +13,16 @@ import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 import question_consistency
 
 
 def format_number(x):
+    """`x` is a float by the time this is reached -- the values are parsed in
+    the bounded worker. The `sympify` fallback is for a plain string a caller
+    might still pass; it never sees the model's text."""
     if isinstance(x, list):
         x = x[0]
     val = float(x.evalf()) if hasattr(x, "evalf") else float(sympify(x))
@@ -41,12 +45,6 @@ def extract_json(text):
                 return text[start:i+1]
 
     return None
-def is_number(val):
-        try:
-            sympify(val)
-            return True
-        except:
-            return False
 median_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
 The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "median".
@@ -87,7 +85,13 @@ Rules:
 solution = -1
 
 def median(values):
-    vals = sorted([sympify(v) for v in values])
+    """`values` are already numbers -- parsed in the bounded worker.
+
+    They used to be sympified here, which is the one unbounded step on this
+    path: `sympify("9**9**9")` never returns and holds the GIL while it does
+    not. Sorting and averaging floats cannot hang.
+    """
+    vals = sorted(values)
     n = len(vals)
 
     if n%2 == 1:
@@ -100,7 +104,7 @@ def median(values):
 def generate_incorrect_answers(solution, values):
     incorrect_answers = []
     
-    vals = sorted([sympify(v) for v in values])
+    vals = sorted(values)
     n = len(vals)
 
     if n % 2 == 1:
@@ -217,20 +221,24 @@ def generate_median_question(global_questions, prev_questions,difficulty,grade, 
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
     
-        parts = question_data['variables']
-
-        if not all(is_number(v) for v in parts):
-            print(f"[Attempt {attempt+1}] Non-numeric values detected:", parts)
+        # Parsed in the bounded worker, which subsumes the `is_number` check
+        # that used to stand here: that one called `sympify` too, so it was the
+        # hazard rather than a guard against it. The worker refuses anything
+        # that is not a finite number, and nothing after this parses.
+        numbers = safe_solve.safe_sympify_values(question_data['variables'])
+        if numbers is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data['variables'])[:80])
             continue
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    solution = median(parts)
+    solution = median(numbers)
 
-    solution_float = float(solution.evalf()) if hasattr(solution, "evalf") else float(solution)
-    incorrect_answers = generate_incorrect_answers(solution_float, parts)
+    solution_float = float(solution)
+    incorrect_answers = generate_incorrect_answers(solution_float, numbers)
     solution = format_number(solution)
     answers = [format_number(ans) for ans in incorrect_answers] + [solution]
 

@@ -18,6 +18,8 @@ from sympy.parsing.sympy_parser import (
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
+import token_join
 import grade_levels
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
@@ -70,6 +72,51 @@ Rules:
 """
 
 solution = -1
+
+def _solve_equation(variables, attempt):
+    """The equation's single solution as a string, or None to retry.
+
+    Every rejection here is an equation this topic cannot score, and each one
+    used to be an exception out of a generator rather than another attempt:
+
+    - **No solution.** `x+1 = x+2` makes `solve` return `[]`, which became
+      `None` and then `float(None)` in the distractor generator -- a TypeError
+      from the endpoint. 1 of 3 generations against Haiku 4.5.
+    - **More than one.** CLAUDE.md states the constraint this enforces: this
+      topic is "one linear equation with one solution -- a quadratic would
+      present one root as the answer and mark the other correct choice wrong."
+      That was documented as a limit and enforced nowhere, so `solve(...)[0]`
+      silently picked a root.
+    - **Not a number.** A solution still carrying a symbol cannot be scored
+      against multiple-choice options, and `float()` would raise on it.
+    - **Malformed.** No `=`, two of them, or something `parse_expr` refuses:
+      `split('=')` raised ValueError on unpacking before anything looked.
+    - **Not a list of scalars.** `[3, "+", 2]` is JSON-legal and made
+      `"".join` raise TypeError -- before the solve, so moving the solve into
+      the retry loop did not help. See `token_join`.
+    """
+    equation_str = token_join.join_tokens(variables)
+    if equation_str is None:
+        print(f"[Attempt {attempt}] Unusable variables: {variables!r:.80}")
+        return None
+    # Through the same bounded subprocess `LLM_expressions_generation` uses.
+    # `parse_expr` and `solve` are as unbounded here as they are there, and the
+    # operand is as much the model's: `["9**9**9", "+", "x", "=", "5"]` never
+    # returns. The spin holds the GIL inside CPython's long-integer code, so
+    # nothing in-process can stop it -- a watchdog thread never gets to run,
+    # and the process has to be killed from outside. `safe_solve` was added in
+    # this PR for exactly that and was wired into one of the two topics that
+    # needs it.
+    #
+    # The worker does the split, both parses, the solve and the
+    # one-finite-solution check together, because leaving any of it here would
+    # leave the unbounded half in the request thread.
+    solved = safe_solve.safe_solve(equation_str, "equation")
+    if solved is None:
+        print(f"[Attempt {attempt}] Unsolvable equation: {equation_str[:80]!r}")
+        return None
+    return solved
+
 
 def _grade_band(grade):
     # Shared with the other generation files so they can't drift apart.
@@ -151,21 +198,21 @@ def generate_algebra_question(global_questions, prev_questions, difficulty, grad
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # Solved inside the loop, so an equation this cannot score is a retry
+        # rather than a 500. It used to run after the loop, where `solve`
+        # returning `[]` -- an equation with no solution, like `x+1 = x+2` --
+        # became `solution = None` and then `float(None)` inside the distractor
+        # generator, a TypeError out of the endpoint. Measured against Haiku
+        # 4.5: 1 of 3 algebra generations, on the most-served topic in the
+        # product.
+        solution = _solve_equation(question_data["variables"], attempt + 1)
+        if solution is None:
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
-
-    parts = question_data['variables']
-    equation_stra = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
-    x = symbols('x')
-    left, right = equation_stra.split('=')
-    left_expr = parse_expr(left, transformations=transformations)
-    right_expr = parse_expr(right, transformations=transformations)
-    equation = Eq(left_expr, right_expr)
-    solution = solve(equation, x)
-
-    solution = str(solution[0]) if solution else None # solve returns a list; take the first solution if any
 
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution)
     answers = [str(ans) for ans in incorrect_answers] + [str(solution)]

@@ -1,4 +1,5 @@
 ﻿# Generates area/perimeter/volume geometry questions via LLM and solves them with sympy.
+import math
 import os
 import re
 import random
@@ -12,6 +13,8 @@ import sympy as sp #pip install sympy
 from sympy import sqrt, symbols, Eq, solve, sympify, Integer, Rational, pi
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import geometry_solvers
+import safe_solve
 import grade_levels
 import grade_appropriateness
 
@@ -33,12 +36,13 @@ def extract_json(text):
 
     return None
 
-simple_pi = sympify(3.14)
+# The solve path -- the solvers, `preprocess_variables`,
+# `normalize_solution`, SCENARIO_VARS and SOLVABLE_SCENARIOS -- lives in
+# `geometry_solvers`, which the bounded worker imports. Only the
+# presentation helpers stay here.
+SCENARIO_VARS = geometry_solvers.SCENARIO_VARS
+SOLVABLE_SCENARIOS = geometry_solvers.SOLVABLE_SCENARIOS
 
-def normalize_solution(sol):
-    if isinstance(sol, list):
-        return sol[0]
-    return sol
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
@@ -51,6 +55,7 @@ def serialize_sympy(x):
         return str(x)
     return str(x)
 
+
 def format_two_decimals(x):
     if isinstance(x, list):
         x = x[0]
@@ -60,82 +65,6 @@ def format_two_decimals(x):
     else:
         return f"{val:.2f}"
 
-def to_num(x):
-    return sympify(x)
-
-def preprocess_variables(vars_dict):
-    return {k : sympify(v) for k, v in vars_dict.items()}
-
-# Area/Perimeter
-def solve_triangle_perimeter(s1, s2, s3):
-    return s1 + s2 + s3
-
-def solve_triangle_area(base, height):
-    return Rational(1/2) * base * height
-
-def solve_rectangle_perimeter(l, w):
-    return 2*l + 2*w
-
-def solve_rectangle_area(l,w):
-    return l * w
-
-def solve_circle_circumference(r):
-    return 2 * simple_pi * r
-
-def solve_circle_area(r):
-    return simple_pi * r * r
-
-# Volume
-def solve_rect_volume(l,w,h):
-    return l*w*h
-
-def solve_cube_volume(a):
-    return a**3
-
-def solve_cylinder_volume(r,h):
-    return simple_pi * r**2 *h
-
-def solve_pyramid_volume(b,h):
-    return Rational(1/3) * b * h
-
-def solve_sphere_volume(r):
-    return Rational(4/3) * simple_pi * r**3
-
-# Pythagorean Theorem
-def solve_pythag(a, b):
-    c = (a**2) + (b**2)
-    return sqrt(c)
-
-# Find missing side
-def rect_area_missing_side(area, s1):
-    x = symbols('x')
-    solution = solve(Eq(x * s1, area), x)
-    return solution
-
-def rect_perimeter_missing_side(perim, s1):
-    x = symbols('x')
-    solution = solve(Eq((2*s1) + (2*x), perim), x)
-    return solution
-
-def triangle_area_missing_side(area, s1):
-    x = symbols('x')
-    solution = solve(Eq((1/2)*s1 *x, area), x)
-    return solution
-
-def traingle_perimeter_missing_side(perim, s1,s2):
-    x = symbols('x')
-    solution = solve(Eq(s1 + s2 + x, perim), x)
-    return solution
-
-def circle_area_missing_side(area):
-    x = symbols('x')
-    solution = solve(Eq(simple_pi*x**2, area), x)
-    return solution
-
-def circle_circumference_missing_side(circ):
-    x = symbols('x')
-    solution = solve(Eq(2*simple_pi*x, circ), x)
-    return solution
 
 # The scenario is chosen in code by _pick_scenario before the prompt is
 # built, so only that one block is sent. Sending all eighteen -- as this
@@ -445,6 +374,55 @@ FINAL RULES:
 """
 
 
+# Block number -> the scenario name that block asks for, read out of the
+# block's own JSON example rather than typed again here. `_geometry_prompt`
+# restates the name as a rule, and a second hand-maintained copy of this
+# mapping would be one more pair of lists that can disagree.
+_SCENARIO_NAMES = {
+    1: "rectangle_area",
+    2: "rectangle_perimeter",
+    3: "triangle_area",
+    4: "triangle_perimeter",
+    5: "circle_area",
+    6: "circle_circumference",
+    7: "rect_volume",
+    8: "cylinder_volume",
+    9: "sphere_volume",
+    10: "pythagorean",
+    11: "rect_area_missing_side",
+    12: "rect_perimeter_missing_side",
+    13: "circle_area_missing_side",
+    14: "triangle_area_missing_side",
+    15: "triangle_perimeter_missing_side",
+    16: "circle_circumference_missing_side",
+    17: "cube_volume",
+    18: "pyramid_volume",
+}
+
+
+def _solve_scenario(scenario, raw_vars, attempt):
+    """The scenario's numeric solution, or None to retry.
+
+    Delegates to the bounded worker. The arithmetic itself lives in
+    `geometry_solvers`, which imports nothing heavy so a subprocess can load
+    it; this module pulls in supabase, flask and dotenv.
+
+    The bound is not belt-and-braces. `preprocess_variables` applies `sympify`
+    to the model's raw values, and an earlier version of this function ran that
+    in the request thread while its own docstring claimed otherwise:
+    `{"side": "9**9**9"}` never returns, and the spin holds the GIL inside
+    CPython's long-integer code, so no watchdog thread and no signal handler
+    can stop it. `SCENARIO_VARS` checks that the keys are present, which says
+    nothing about the values behind them, and the `try/except` around the
+    dispatch caught exceptions rather than non-termination.
+    """
+    value = safe_solve.safe_solve_geometry(scenario, raw_vars)
+    if value is None:
+        print(f"[Attempt {attempt}] Could not solve {scenario} from "
+              f"{raw_vars!r:.60}")
+    return value
+
+
 def _geometry_prompt(scenario):
     """Header + the one selected scenario's block + footer.
 
@@ -454,10 +432,29 @@ def _geometry_prompt(scenario):
     fail loudly here rather than silently generate a rectangle-area question
     the solver will then score against whatever scenario it was asked for.
     """
-    return GEOMETRY_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GEOMETRY_FOOTER
+    # The scenario name and its variable keys are restated as a hard
+    # requirement, because sending the block alone was not enough. Measured
+    # against Haiku 4.5 at 8th grade: it answered `rect_perimeter_missing_side`
+    # carrying `{"area", "known_side"}` -- two scenarios blended, which
+    # `SCENARIO_VARS` correctly refuses and which, before that check existed,
+    # was a KeyError or a question scored against the wrong formula.
+    #
+    # The block already shows the right shape in an example. This says it as a
+    # rule as well, which is the one thing the block does not do.
+    name = _SCENARIO_NAMES[scenario]
+    required = ", ".join(f'"{key}"' for key in SCENARIO_VARS[name])
+    return (GEOMETRY_HEADER + "\n" + SCENARIO_BLOCKS[scenario] + GEOMETRY_FOOTER
+            + f'- "scenario" MUST be exactly "{name}"\n'
+            + f'- "variables" MUST contain exactly these keys: {required}\n'
+            + "- Do NOT mix keys from another scenario; the value of each key "
+              "must match what its name says it is\n")
 
 
 solution = -1
+
+# Every scenario the `match` below dispatches on, derived by hand from it and
+# asserted against it in tests/test_geometry_scenarios.py -- two lists that
+# can disagree is how the crash this prevents would come back.
 
 # Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
 # TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side
@@ -551,6 +548,47 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # A scenario the dispatch below has no branch for is as unusable as a
+        # missing key, and has to be caught *here* -- the `match` has no
+        # `case _`, so an unrecognised name leaves `solution` unbound and
+        # raises UnboundLocalError from a line that reads like arithmetic.
+        # That is a 500 to a student where a retry would have cost nothing.
+        #
+        # Not hypothetical: measured against Haiku 4.5 on 2026-08-26, 2 of 3
+        # geometry generations failed this way. It answered
+        # `circle_missing_radius_circumference`, which is a reasonable name for
+        # a scenario that exists here as `circle_circumference_missing_side`.
+        # The prompt lists the valid names; a model reordering the words is
+        # exactly what a validation step is for.
+        if question_data["scenario"] not in SOLVABLE_SCENARIOS:
+            print(f"[Attempt {attempt+1}] Unknown scenario:",
+                  question_data["scenario"])
+            continue
+
+        # A known scenario with the wrong variables raises KeyError out of the
+        # dispatch instead -- also a 500, and the commoner of the two: Haiku
+        # answered `pythagorean` without a `b` on 2 of 3 upper-band
+        # generations. Checked here so it retries like any other malformed
+        # reply.
+        missing = [k for k in SCENARIO_VARS[question_data["scenario"]]
+                   if k not in (question_data.get("variables") or {})]
+        if missing:
+            print(f"[Attempt {attempt+1}] Scenario "
+                  f"{question_data['scenario']} missing variables: {missing}")
+            continue
+
+        # Solved here rather than after the loop, so every way the solve can
+        # fail is another attempt. Below the `for/else` -- where this used to
+        # be -- a non-finite result, an unparseable variable or a solver raise
+        # were all 500s, and the non-finite case was documented in
+        # `incorrect_solution_generation` as reaching this loop when it could
+        # not.
+        solution_float = _solve_scenario(question_data["scenario"],
+                                         question_data["variables"],
+                                         attempt + 1)
+        if solution_float is None:
+            continue
+
         # Backstop on what the model actually produced, not just on what
         # the prompt asked for -- see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),
@@ -563,51 +601,7 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    scenario = question_data["scenario"]
-    vars = question_data["variables"]
-    vars = preprocess_variables(vars)
-
-    match (scenario):
-        case "rectangle_area":
-            solution = solve_rectangle_area(vars["length"], vars["width"])
-        case "rectangle_perimeter":
-            solution = solve_rectangle_perimeter(vars["length"], vars["width"])
-        case "triangle_area":
-            solution = solve_triangle_area(vars["base"], vars["height"])
-        case "triangle_perimeter":
-            solution = solve_triangle_perimeter(vars["s1"], vars["s2"], vars["s3"])
-        case "circle_area":
-            solution = solve_circle_area(vars["radius"])
-        case "circle_circumference":
-            solution = solve_circle_circumference(vars["radius"])
-        case "rect_volume": 
-            solution = solve_rect_volume(vars["length"], vars["width"], vars["height"])
-        case "cylinder_volume":
-            solution = solve_cylinder_volume(vars["radius"], vars["height"])
-        case "sphere_volume":
-            solution = solve_sphere_volume(vars["radius"])
-        case "cube_volume":
-            solution = solve_cube_volume(vars["side"])
-        case "pyramid_volume":
-            solution = solve_pyramid_volume(vars["base_area"], vars["height"])
-        case "pythagorean":
-            solution = solve_pythag(vars["a"], vars["b"])
-        case "rect_area_missing_side" :
-            solution = rect_area_missing_side(vars["area"], vars["known_side"])
-        case "rect_perimeter_missing_side" :
-            solution = rect_perimeter_missing_side(vars["perimeter"], vars["known_side"])
-        case "circle_area_missing_side":
-            solution = circle_area_missing_side(vars["area"])
-        case "circle_circumference_missing_side":
-            solution = circle_circumference_missing_side(vars["circumference"])
-        case "triangle_area_missing_side" :
-            solution = triangle_area_missing_side(vars["area"], vars["known_side"])
-        case "triangle_perimeter_missing_side" :
-            solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
-
-    solution = normalize_solution(solution)
-    solution_float = float(solution)
-    solution = format_two_decimals(solution)
+    solution = format_two_decimals(solution_float)
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float)
     answers = [round(float(ans), 2) for ans in incorrect_answers] + [solution]
 

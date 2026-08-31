@@ -109,6 +109,12 @@ import grade_levels  # noqa: E402
 import LLM_topic_decider as td  # noqa: E402
 import LLM_angle_relationship_generation as ang  # noqa: E402
 
+# The angle solve path moved to `angle_solvers` so the bounded worker can
+# import it without dragging in supabase, flask and dotenv. These tests follow
+# it: they are about the arithmetic and the degenerate-figure rule, not about
+# which module those live in.
+import angle_solvers  # noqa: E402
+
 
 @pytest.mark.parametrize("grade,number", [
     ("1st grade", 1), ("Grade 1", 1), ("grade 1", 1), ("1", 1),
@@ -172,16 +178,15 @@ def test_the_cutoff_splits_the_middle_band_which_is_why_it_is_grade_keyed():
 def test_the_measured_decimal_case_is_the_one_that_gets_rejected():
     """(5x + 15) + (3x - 20) = 90 gives 11.875, a real observed answer.
     Whole numbers required through 5th grade, ordinary after."""
-    solved = ang.normalize_solution(ang._solve_scenario(
-        "algebra_complementary", ang.preprocess_variables(["5x + 15", "3x - 20"])))
+    solved, _ = angle_solvers.solve_scenario("algebra_complementary",
+                                             ["5x + 15", "3x - 20"])
     assert not float(solved).is_integer()
     assert ang._requires_whole_number_solution("5th grade")
     assert not ang._requires_whole_number_solution("6th grade")
 
 
 def test_a_whole_number_answer_passes_at_every_grade():
-    solved = ang.normalize_solution(ang._solve_scenario(
-        "complementary", ang.preprocess_variables(["35"])))
+    solved, _ = angle_solvers.solve_scenario("complementary", ["35"])
     assert float(solved).is_integer()
     assert ang.format_answer(solved) == "55"
 
@@ -189,9 +194,24 @@ def test_a_whole_number_answer_passes_at_every_grade():
 # --- degenerate angle configurations ------------------------------------
 
 def _solved(scenario, variables):
-    parsed = ang.preprocess_variables(variables)
-    return (scenario, parsed,
-            ang.normalize_solution(ang._solve_scenario(scenario, parsed)))
+    """The scenario solved *without* the validity check applied.
+
+    `solve_scenario` folds `invalid_reason` in and returns None when a figure
+    is degenerate, which is the right shape for its callers -- but these tests
+    are about that check, so they need the arithmetic answer it rejects. The
+    solvers are reached directly for that reason, not to dodge the worker: this
+    is pure arithmetic over expressions that are already parsed.
+    """
+    parsed = angle_solvers.preprocess_variables(variables)
+    raw = {
+        "complementary": lambda v: angle_solvers.complementary_angle(v[0]),
+        "supplementary": lambda v: angle_solvers.supplementary_angle(v[0]),
+        "linear_pair": lambda v: angle_solvers.linear_pair(v[0]),
+        "triangle_sum": lambda v: angle_solvers.triangle_missing_angle(v[0], v[1]),
+        "algebra_complementary":
+            lambda v: angle_solvers.solve_complementary(v[0], v[1]),
+    }[scenario](parsed)
+    return scenario, parsed, float(raw)
 
 
 def test_the_measured_degenerate_triangle_is_refused():
@@ -199,7 +219,7 @@ def test_the_measured_degenerate_triangle_is_refused():
     angle" of 0. The arithmetic is correct; there is no such triangle."""
     scenario_name, parsed, solution = _solved("triangle_sum", ["75", "105"])
     assert solution == 0
-    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
+    assert angle_solvers.invalid_reason(scenario_name, parsed, solution) is not None
 
 
 @pytest.mark.parametrize("scenario,variables", [
@@ -214,7 +234,7 @@ def test_degenerate_configurations_are_refused(scenario, variables):
     """Keyed on each scenario's angle total, not just triangles --
     `complementary` given 90 fails the same way."""
     scenario_name, parsed, solution = _solved(scenario, variables)
-    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is not None
+    assert angle_solvers.invalid_reason(scenario_name, parsed, solution) is not None
 
 
 @pytest.mark.parametrize("scenario,variables", [
@@ -226,24 +246,28 @@ def test_degenerate_configurations_are_refused(scenario, variables):
 ])
 def test_valid_configurations_are_not_refused(scenario, variables):
     scenario_name, parsed, solution = _solved(scenario, variables)
-    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is None
+    assert angle_solvers.invalid_reason(scenario_name, parsed, solution) is None
 
 
 def test_algebra_complementary_is_judged_on_its_angles_not_on_x():
     """`solution` there is x, which is unbounded -- 0 < x < 90 would be the
     wrong test. The two expressions evaluated at x are the angles."""
     scenario_name, parsed, solution = _solved("algebra_complementary", ["x + 20", "4x - 15"])
-    assert ang._invalid_angle_reason(scenario_name, parsed, solution) is None
+    assert angle_solvers.invalid_reason(scenario_name, parsed, solution) is None
     # x = 0 is ordinary; the angles it produces (100 and -10) are not.
     bad_scenario, bad_parsed, bad_solution = _solved("algebra_complementary", ["2x + 100", "-x - 10"])
     assert bad_solution == 0
-    assert ang._invalid_angle_reason(bad_scenario, bad_parsed, bad_solution) is not None
+    assert angle_solvers.invalid_reason(bad_scenario, bad_parsed, bad_solution) is not None
 
 
 def test_an_unrecognised_scenario_is_retryable_rather_than_fatal():
     """None sends the loop round again; raising would take out a question
     that a regenerate would have fixed."""
-    assert ang._solve_scenario("nope", ang.preprocess_variables(["1"])) is None
+    value, reason = angle_solvers.solve_scenario("nope", ["1"])
+    assert value is None
+    # The reason travels with it: the worker's only channel back is a string,
+    # and a placeholder there made every failure look the same.
+    assert "nope" in reason
 
 
 def test_a_topic_with_no_rule_is_never_a_violation():

@@ -12,6 +12,7 @@ from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 import question_consistency
@@ -26,11 +27,6 @@ def to_native(value):
     if isinstance(value, Integer): 
         return int(value) 
     return value
-def normalize(value):
-    try: 
-        return float(sympify(value))
-    except: 
-        raise ValueError(f"Invalid value: {value}")
 def extract_json(text):
     start = text.find("{")
     if start == -1:
@@ -73,8 +69,18 @@ Rules:
 - Do NOT include any characters outside the JSON object.
 """
 
-def solve_ordering(values, direction="least_to_greatest"):
-    normalized = [(v, normalize(v)) for v in values] # treat strings from JSON as floats
+def solve_ordering(values, numbers, direction="least_to_greatest"):
+    """`values` in sorted order, sorted by the matching entry in `numbers`.
+
+    The numbers are parsed in the bounded worker and handed in, rather than
+    read here through `normalize`: `sympify` on the model's text is the one
+    unbounded step, and `sympify("9**9**9")` never returns. The sort itself
+    cannot hang, so only the parse had to move.
+
+    The model's own strings are what get returned, so a value shown as "2/5"
+    is still shown that way after ordering.
+    """
+    normalized = list(zip(values, numbers))
 
     sorted_vals = sorted(normalized, 
                          key=lambda x:x[1],
@@ -191,13 +197,21 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
             print(f"[Attempt {attempt+1}] Inconsistent question: {inconsistent}")
             continue
 
+        # Parsed inside the loop, in the worker, so an unparseable or
+        # unbounded value is another attempt rather than a hang.
+        numbers = safe_solve.safe_sympify_values(question_data["values"])
+        if numbers is None:
+            print(f"[Attempt {attempt+1}] Unusable values:",
+                  repr(question_data["values"])[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    if question_data:
-        solution = solve_ordering(question_data["values"], question_data["direction"])
+    solution = solve_ordering(question_data["values"], numbers,
+                              question_data["direction"])
 
     incorrect_answers = shuffle_incorrect_answers(solution)
     answers = incorrect_answers + [solution]

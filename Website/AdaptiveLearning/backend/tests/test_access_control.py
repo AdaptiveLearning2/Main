@@ -18,6 +18,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
 
+import llm_client  # noqa: E402
 import main  # noqa: E402
 
 
@@ -2152,7 +2153,19 @@ def test_learning_strategies_uses_validated_model_output(monkeypatch, set_flag):
 
 
 def _fake_ollama(monkeypatch, generate):
-    """Installs a stand-in ollama module exposing a Client with `generate`."""
+    """Installs a stand-in ollama module exposing a Client with `generate`.
+
+    Pins the provider too, rather than inheriting it. `llm_client.LLM_PROVIDER`
+    is read from the environment at import and `load_dotenv()` picks up
+    `backend/.env`, so a developer whose local .env says `LLM_PROVIDER=claude`
+    ran these against the Claude branch -- the fake module installed here
+    reached nothing. One test failed outright; the neighbouring
+    "returns None when ollama is unreachable" one *passed*, because the Claude
+    branch also returns None when its own client is unavailable. A vacuous pass
+    is the worse half: it claims a fallback works while exercising a different
+    fallback for a different reason.
+    """
+    monkeypatch.setattr(llm_client, "LLM_PROVIDER", "ollama")
     class _Client:
         def __init__(self, **kwargs):
             self.kwargs = kwargs

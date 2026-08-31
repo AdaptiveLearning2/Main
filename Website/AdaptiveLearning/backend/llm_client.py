@@ -13,7 +13,14 @@ import time
 
 from dotenv import load_dotenv
 
+import console_encoding
+
 load_dotenv()
+
+# Applied here because every generator imports this module, so it takes
+# effect wherever generation happens -- the app, the measurement script, a
+# direct call -- without each of them having to remember.
+console_encoding.make_console_safe()
 
 
 def _env_number(name, default, cast, minimum=None):
@@ -46,12 +53,23 @@ def _env_number(name, default, cast, minimum=None):
 # deployment opts in explicitly.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
-# The dated snapshot rather than the `claude-haiku-4-5` alias. The general
-# advice is not to pin a date, but the measurements this migration has to redo
-# -- the grade-appropriateness spot checks and the consistency-check engagement
-# rates in CLAUDE.md -- are claims about one model's output, and an alias that
-# moved under them would invalidate those numbers without changing a line here.
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+# The undated alias. This was `claude-haiku-4-5-20251001` on the reasoning
+# that pinning a snapshot protects the CLAUDE.md measurements from an alias
+# moving under them -- sound in principle, and the wrong trade here, because
+# the two IDs fail differently: the alias resolves whether or not a dated
+# snapshot exists, while a wrong dated string is `404 not_found_error` on
+# every question, on every topic, from the first call.
+#
+# Settled against the live Models API on 2026-08-26, once a key existed:
+# `models.list()` returns `claude-haiku-4-5-20251001`, and
+# `models.retrieve("claude-haiku-4-5")` resolves to it. So both forms are
+# valid -- the dated string this replaced was not wrong, and the argument for
+# the alias is the asymmetry above rather than a defect in the snapshot.
+#
+# Pin the snapshot if the CLAUDE.md measurements ever need to be reproducible
+# against one specific build. Until then the alias is the safer default,
+# because it cannot become a 404 by being mistyped or by ageing out.
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # Anthropic's `temperature` range is 0.0-1.0; Ollama's is not bounded there and
 # every generation call site passes 1.1. Passed through, that returns
@@ -87,16 +105,31 @@ _generation_slots = threading.BoundedSemaphore(GENERATION_MAX_CONCURRENCY)
 # Scoped to the Claude branch on purpose: Ollama is local and free, so a call
 # ceiling there would refuse a child a question to protect nothing.
 #
-# The default is sized off the product rather than picked round: a class of 30
-# answering 20 questions in a day is ~600 generations, plus prefetch discarded
-# when a session ends. 5000 is roughly eightfold headroom on that -- enough
-# that a pilot never meets it, low enough that a runaway loop is a knowable
-# amount of money rather than an open tab.
+# The default is sized off the product rather than picked round, and it is
+# counted in **calls**, not questions: a question served is two of them, the
+# topic-and-difficulty decision and the generation. A class of 30 answering 20
+# questions in a day is ~600 questions and so ~1200 calls; at 30 questions it
+# is ~1800. 2500 covers the second shape with room for retries, and stops well
+# short of a second class -- which is the point.
 #
-# In-process, so with several uvicorn workers the effective ceiling is this
-# many per worker. Same tradeoff `_STRATEGY_RATE_LIMIT` documents: the job is
-# to bound a runaway, not to bill-count exactly.
-GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 5000, int, minimum=1)
+# It was 5000, described as "eightfold headroom on ~600 generations": that
+# compared a call ceiling against a question count and overstated the headroom
+# by two. Corrected to 1500 against a 20-question day, which was then under the
+# 1800 a 30-question day actually makes -- the ceiling has to be sized against
+# the workload, not against the example that happened to be written down.
+#
+# What bounds one call is `max_tokens`, not this: 2048 output tokens at Haiku
+# 4.5's $5/MTok is ~$0.0102, so the worst case here is ~$15/day where the
+# ~$0.003-per-question average suggests ~$4.50. Size this against the worst
+# case; the average is not what a runaway produces.
+#
+# Two things it does not bound, both worth knowing before trusting it. It
+# counts calls rather than tokens, so seeding more lesson-plan text raises the
+# bill without moving the ceiling. And it is in-process and in-memory: several
+# uvicorn workers multiply it, and a restart resets the window, so a crash-loop
+# defeats it entirely. Same tradeoff `_STRATEGY_RATE_LIMIT` documents -- the
+# job is to bound a runaway, not to bill-count exactly.
+GENERATION_DAILY_CALL_LIMIT = _env_number("GENERATION_DAILY_CALL_LIMIT", 2500, int, minimum=1)
 _call_times: list[float] = []
 _call_lock = threading.Lock()
 
@@ -106,6 +139,56 @@ _call_lock = threading.Lock()
 # sites own is the one to keep, because it can also reject a *well-formed*
 # response for being bad JSON or the wrong shape, which no transport retry can.
 CLAUDE_MAX_RETRIES = _env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
+
+
+# What the Messages API uses when no `temperature` is sent. Named because
+# `_claude_sampling` compares against it to decide whether to send anything,
+# and comparing against the wrong constant silently disables the setting.
+_API_DEFAULT_TEMPERATURE = 1.0
+
+
+def _claude_sampling(claude_temperature):
+    """The sampling kwargs for one Claude call -- usually none at all.
+
+    `temperature` is NOT a parameter of `messages.create` in anthropic 1.x. It
+    went with the 0.x -> 1.x major version, so passing it raises `TypeError:
+    Messages.create() got an unexpected keyword argument 'temperature'` before
+    a request is ever built -- on every question, from the first call. The plan
+    for this migration corrected Ollama's 1.1 down into Anthropic's 0.0-1.0
+    range, which was a real problem and not this one.
+
+    Nothing caught it because the test double accepted `**kwargs`, so the suite
+    pinned a request shape the SDK cannot accept. `_FakeMessages.create` now
+    validates against the real signature.
+
+    The default is to send no sampling parameter at all: the API's own default
+    temperature is 1.0, which is exactly what `CLAUDE_TEMPERATURE` defaults to,
+    so the hot path asks for nothing and cannot be refused for asking. A caller
+    wanting something else -- `_llm_strategies` wants 0.4, because advice a
+    parent reads is not the place for "keep it varied" -- gets it through
+    `extra_body`, the escape hatch for a wire parameter the typed signature no
+    longer carries.
+
+    That `extra_body` path is UNVERIFIED: the account had no credits when this
+    was written, so no billed call could confirm the wire still accepts
+    `temperature` for this model. It degrades safely -- `_llm_strategies`
+    catches everything and falls back to the rule-based list -- but if the
+    strategies pass reports `source: "rule-based"` against a working key, this
+    is the first thing to check.
+    """
+    temp = CLAUDE_TEMPERATURE if claude_temperature is None else claude_temperature
+    temp = min(1.0, max(0.0, temp))
+    # Against the API's default, which is what omitting the parameter selects
+    # -- NOT against CLAUDE_TEMPERATURE. Comparing to the setting inverted the
+    # feature: with CLAUDE_TEMPERATURE=0.4, `_llm_strategies` asking for 0.4
+    # matched, so nothing was sent, so the call ran at the API default of 1.0
+    # -- the one value that configuration existed to avoid. And generation
+    # passes None, which returned early before the setting was ever read, so
+    # CLAUDE_TEMPERATURE was inert on both paths while `.env.example`
+    # documented it as the knob.
+    if temp == _API_DEFAULT_TEMPERATURE:
+        return {}
+    return {"extra_body": {"temperature": temp}}
 
 
 class GenerationUnavailable(RuntimeError):
@@ -211,14 +294,12 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
                 f"budget of {budget}s spent waiting for a model slot")
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
-            temp = CLAUDE_TEMPERATURE if claude_temperature is None \
-                else min(1.0, max(0.0, claude_temperature))
             client = _get_anthropic_client().with_options(timeout=remaining)
             resp = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=max_tokens,
-                temperature=temp,
                 messages=[{"role": "user", "content": prompt}],
+                **_claude_sampling(claude_temperature),
             )
             return next((b.text for b in resp.content if b.type == "text"), "")
 

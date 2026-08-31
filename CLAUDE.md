@@ -2872,9 +2872,22 @@ audit. That is grades 1-3's list plus one. It is a deliberate trade of coverage 
 by `test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` so a later widening has
 to be a choice rather than a drift.
 
-Grades 1-2 carry the same shape for geometry and are the one place it is *not* resolved: the easiest
-scenario is 3.MD.7, so a strict reading leaves them no geometry at all, and they keep the grade-3 set
-rather than losing a third of their topics. They still measure 10 of 10 above grade.
+Grades 1-2 had the same shape for geometry and were fixed by **adding a scenario rather than
+removing the topic**. The easiest scenario was `rectangle_area` (3.MD.7), so a strict reading left
+those grades no geometry at all — and the alternative, dropping the topic, left them two topics.
+`rectangle_area_by_counting` is **2.G.2**, counting the squares that fill a rectangle: the one
+numeric geometry standard below grade 3, and the only thing those grades can be asked here. It
+reuses `solve_rectangle_area` because rows × columns *is* length × width — the difference is entirely
+in the wording, which is the scenario block's job, and a second solver would be a copy free to drift.
+
+Generated at grade 1: *"A rectangle is divided into 5 rows of 2 same-size squares. How many squares
+fill the rectangle altogether?"* — countable without multiplying, which is why 2.G.2 exists as the
+bridge to 3.MD.7. Grade 1 is still one grade early by the standard; the task is counting, and the
+alternative is no geometry.
+
+**An unreadable grade lands there too.** It used to resolve to the early band's ceiling of 3 — two
+grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and
+`_grade_band` in treating an unknown student as the youngest.
 
 ### Grades 9+ have no content of their own, and prompts cannot give them any
 

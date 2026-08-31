@@ -95,6 +95,25 @@ IMPORTANT:
 # the difficulty tier and the grade-band restriction by this point.
 
 SCENARIO_BLOCKS = {
+    19: """SCENARIO 19: rectangle_area_by_counting
+Example:
+"A rectangle is split into 3 rows of 4 same-size squares. How many squares is that in total?"
+
+This scenario is for the youngest students. Ask ONLY how many squares fill the
+rectangle -- do NOT use the words "area", "multiply" or "units squared", and do
+NOT ask for a formula. Keep both numbers between 2 and 6.
+
+{
+  "question_text": "A rectangle is split into 3 rows of 4 same-size squares. How many squares is that in total?",
+  "type": "geometry",
+  "scenario": "rectangle_area_by_counting",
+  "variables": {
+    "rows": "3",
+    "columns": "4"
+  }
+}
+""",
+
     1: """SCENARIO 1: rectangle_area
 Example:
 "A rectangle has a length of 5 units and a width of 3 units. What is its area?"
@@ -379,6 +398,7 @@ FINAL RULES:
 # restates the name as a rule, and a second hand-maintained copy of this
 # mapping would be one more pair of lists that can disagree.
 _SCENARIO_NAMES = {
+    19: "rectangle_area_by_counting",
     1: "rectangle_area",
     2: "rectangle_perimeter",
     3: "triangle_area",
@@ -461,7 +481,7 @@ solution = -1
 # area/perimeter) aren't listed there by name but belong to the same
 # "solve for a missing side" family as the other MEDIUM scenarios.
 DIFFICULTY_SCENARIOS = {
-    "easy":   [1, 2, 3, 4, 5, 6],
+    "easy":   [19, 1, 2, 3, 4, 5, 6],
     "medium": [10, 11, 12, 13, 14, 15, 16],
     "hard":   [7, 8, 9, 17, 18],
 }
@@ -480,6 +500,11 @@ DIFFICULTY_SCENARIOS = {
 # `tests/test_early_band_geometry.py` rather than silently defaulting to
 # available everywhere.
 SCENARIO_MIN_GRADE = {
+    "rectangle_area_by_counting":        2,   # 2.G.2 -- count the squares that
+                                              # fill a rectangle. The only
+                                              # numeric geometry standard below
+                                              # grade 3, and so the only thing
+                                              # grades 1-2 can be asked here.
     "rectangle_area":                    3,   # 3.MD.7
     "rectangle_perimeter":               3,   # 3.MD.8
     "triangle_perimeter":                3,   # 3.MD.8
@@ -525,7 +550,11 @@ def _band_scenarios(grade):
         ceiling = _BAND_CEILING[grade]
     else:
         number = grade_levels.grade_number(grade)
-        ceiling = number if number is not None else _BAND_CEILING["early"]
+        # An unreadable grade is the youngest, matching
+        # `LLM_topic_decider._allowed_topics` and `_grade_band`. It used to
+        # resolve to the early band's ceiling of 3, which is two grades of
+        # content granted to a student nobody could identify.
+        ceiling = number if number is not None else 1
     allowed = {number_ for number_, name in _SCENARIO_NAMES.items()
                if SCENARIO_MIN_GRADE[name] <= ceiling}
     if allowed:

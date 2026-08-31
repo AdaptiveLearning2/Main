@@ -114,14 +114,38 @@ def test_scenarios_are_gated_on_the_grade_not_the_band_ceiling(grade, hardest):
 
 
 @pytest.mark.parametrize("grade", ["1", "2", "", None, "no idea"])
-def test_grades_below_the_easiest_scenario_still_get_geometry(grade):
-    """The easiest scenario here is area of a rectangle, 3.MD.7, so grades 1-2
-    reach nothing on a strict reading. They keep the grade-3 set rather than
-    losing the topic: removing it would leave those grades two topics, which is
-    a decision about what a 1st grader is offered rather than a defect. It is
-    why grades 1-2 measured 10 of 10 above grade, and it is the same open
-    question as mean/median/mode at grade 4.
+def test_the_youngest_grades_get_the_one_scenario_they_have_reached(grade):
+    """2.G.2 -- count the squares that fill a rectangle -- is the only numeric
+    geometry standard below grade 3, so it is the only thing grades 1-2 can be
+    asked here.
+
+    They used to get the grade-3 set (area and perimeter of a rectangle,
+    3.MD.7 and 3.MD.8) because that was the easiest scenario that existed, and
+    measured 10 of 10 above grade. Adding a scenario was the fix rather than
+    removing the topic: the alternative left grades 1-2 with two topics.
+
+    An unreadable grade lands here too, matching `_allowed_topics` and
+    `_grade_band`. It previously resolved to the early band's ceiling of 3 --
+    two grades of content granted to a student nobody could identify.
     """
     offered = {geo._SCENARIO_NAMES[n] for n in geo._band_scenarios(grade)}
-    assert offered == {"rectangle_area", "rectangle_perimeter",
-                       "triangle_perimeter"}
+    assert offered == {"rectangle_area_by_counting"}
+
+
+def test_the_counting_scenario_reuses_the_area_solver():
+    """rows x columns is the same arithmetic as length x width. A second
+    solver would be a copy that can drift from the one it duplicates; the
+    difference between the two scenarios is entirely in the wording, which is
+    the prompt block's job."""
+    import geometry_solvers
+    value, reason = geometry_solvers.solve_scenario(
+        "rectangle_area_by_counting", {"rows": "3", "columns": "4"})
+    assert value == 12.0 and reason is None
+
+
+def test_grade_three_gains_the_formula_scenarios():
+    """The counting scenario does not replace area and perimeter -- it sits
+    below them, and grade 3 gets both."""
+    offered = {geo._SCENARIO_NAMES[n] for n in geo._band_scenarios("3")}
+    assert offered == {"rectangle_area_by_counting", "rectangle_area",
+                       "rectangle_perimeter", "triangle_perimeter"}

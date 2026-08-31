@@ -72,3 +72,28 @@ def test_tiers_are_ordered_and_non_empty_for_any_number_of_scenarios(count):
     band = scenario_tiers.tiers(list(range(1, count + 1)))
     assert band["easy"] and band["medium"] and band["hard"]
     assert max(band["easy"]) <= max(band["medium"]) <= max(band["hard"])
+
+
+def test_the_fixed_tier_tables_are_gone_from_the_two_topics_that_rank():
+    """`DIFFICULTY_SCENARIOS` is the shape this module replaced, and both
+    topics kept theirs after the switch -- defined, read by nothing, and still
+    named by `_geometry_prompt`'s docstring as where `_pick_scenario` gets its
+    numbers.
+
+    Dead is the least of it. Geometry's table held the exact fixed mapping that
+    inverted under a grade filter, and angles' comment pinned `triangle_sum` to
+    MEDIUM, which is precisely what ranking stopped guaranteeing. Both read as
+    the live rule to anyone who finds them, and a future edit to move a tier
+    would change nothing while CI stayed green -- there is no behaviour to
+    assert on, which is why this is a source check.
+
+    `LLM_probability_generation` keeps its own and is not covered: that topic
+    does not rank, so a fixed table is still what it uses.
+    """
+    for module in (geo, angles):
+        source = open(module.__file__, encoding="utf-8").read()
+        assert "DIFFICULTY_SCENARIOS" not in source, (
+            f"{os.path.basename(module.__file__)} names DIFFICULTY_SCENARIOS. "
+            "Tiers here are a slice of what the grade allows, ranked by "
+            "SCENARIO_DIFFICULTY -- a fixed per-tier list cannot express that "
+            "and inverts once a grade filter removes part of one.")

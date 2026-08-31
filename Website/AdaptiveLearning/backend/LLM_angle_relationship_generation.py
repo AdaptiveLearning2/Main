@@ -152,15 +152,6 @@ def _angle_prompt(scenario):
 
 solution = -1
 
-# complementary/supplementary/linear_pair are all a single subtraction from a
-# known constant (EASY). triangle_sum needs two known values combined (MEDIUM).
-# algebra_complementary requires setting up and solving an equation for x (HARD).
-DIFFICULTY_SCENARIOS = {
-    "easy":   [1, 2, 3],
-    "medium": [4],
-    "hard":   [5],
-}
-
 # Block number -> the scenario name that block asks for.
 #
 # A literal, unlike geometry's, and so cross-checked against the blocks by

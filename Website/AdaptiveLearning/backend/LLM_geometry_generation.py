@@ -448,8 +448,9 @@ def _geometry_prompt(scenario):
     """Header + the one selected scenario's block + footer.
 
     KeyError rather than a default block on an unknown scenario: every caller
-    gets its number from _pick_scenario, which draws from DIFFICULTY_SCENARIOS,
-    so an unknown one means those two tables have drifted apart -- which should
+    gets its number from _pick_scenario, which draws from the scenarios
+    SCENARIO_MIN_GRADE allows, ranked by SCENARIO_DIFFICULTY, so an unknown one
+    means those tables have drifted apart -- which should
     fail loudly here rather than silently generate a rectangle-area question
     the solver will then score against whatever scenario it was asked for.
     """
@@ -476,16 +477,6 @@ solution = -1
 # Every scenario the `match` below dispatches on, derived by hand from it and
 # asserted against it in tests/test_geometry_scenarios.py -- two lists that
 # can disagree is how the crash this prevents would come back.
-
-# Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
-# TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side
-# area/perimeter) aren't listed there by name but belong to the same
-# "solve for a missing side" family as the other MEDIUM scenarios.
-DIFFICULTY_SCENARIOS = {
-    "easy":   [19, 1, 2, 3, 4, 5, 6],
-    "medium": [10, 11, 12, 13, 14, 15, 16],
-    "hard":   [7, 8, 9, 17, 18],
-}
 
 # The grade at which each scenario's formula is introduced, by CCSS code.
 #

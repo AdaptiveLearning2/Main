@@ -272,5 +272,16 @@ def _run(request: dict, timeout, label: str):
 # boot rather than on a student's first question. `SOLVE_STARTUP_PROBE=0`
 # skips it -- for a process that imports this module and never solves, where
 # the ~0.8s would be paid for nothing.
-if os.getenv("SOLVE_STARTUP_PROBE", "1").strip() not in ("0", "false", "no"):
+def _startup_probe_enabled():
+    """Whether the boot-time probe should run.
+
+    A named predicate rather than an inline check, so a test can tell "the
+    probe is switched off" from "the probe ran and failed". Inferring that from
+    `STARTUP_COST_S is None` conflates the two, and they mean opposite things:
+    one is a deliberate trade, the other is a broken subprocess.
+    """
+    return os.getenv("SOLVE_STARTUP_PROBE", "1").strip().lower()         not in ("0", "false", "no")
+
+
+if _startup_probe_enabled():
     _probe_startup()

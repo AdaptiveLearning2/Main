@@ -244,22 +244,45 @@ def test_a_probe_that_cannot_run_keeps_the_configured_value(monkeypatch, capsys)
     assert "startup probe failed" in capsys.readouterr().out
 
 
-def test_the_effective_budget_always_clears_the_measured_floor():
-    """The invariant the probe exists to hold, stated as an invariant.
+def test_the_probe_runs_at_import_and_leaves_the_budget_above_the_floor():
+    """Two things the tests above cannot cover, because they call
+    `_probe_startup()` themselves.
 
-    This was first written as "the shipped default clears the floor on this
-    machine" -- `_CONFIGURED_TIMEOUT_S >= floor` -- and it passed alone and
-    failed in sequence. Startup is slower while the rest of this file is
-    spawning subprocesses, so the floor moves and a fixed comparison against it
-    is a duration assertion wearing an invariant's clothes. CLAUDE.md's rule
-    about ordering over elapsed time, in a new place.
+    First, that a normal process gets the guard **without asking**: delete the
+    import-time call and every other test here still passes, while generation
+    silently loses its floor.
 
-    What is actually guaranteed is what the probe enforces: whatever is
-    configured, the *effective* budget is at or above the floor measured on
-    this machine. A default too small for a slow box is no longer a way to fail
-    -- it is a log line and a raised budget.
+    Second, the post-condition, with no escape clause. The version this
+    replaces read `SOLVE_TIMEOUT_S >= floor or SOLVE_TIMEOUT_S ==
+    _CONFIGURED_TIMEOUT_S`, which cannot fail: the clamp sets the budget to
+    exactly `floor`, so the first disjunct holds whenever it fired and the
+    second holds whenever it did not. It asserted the disjunction of "clamped"
+    and "not clamped". Dropping the second half is what makes it able to fail
+    -- a clamp that computed the wrong value, or forgot to assign, now shows
+    up here.
+
+    This is the second tautological test written in this work; the first
+    passed the expected answer in as an argument. Both looked like assertions
+    about behaviour and were assertions about arithmetic.
     """
-    if safe_solve.STARTUP_COST_S is None:
-        pytest.skip("the subprocess could not run; the probe reports that separately")
+    if not safe_solve._startup_probe_enabled():
+        pytest.skip("SOLVE_STARTUP_PROBE is off, so no floor was measured")
+    assert safe_solve.STARTUP_COST_S is not None, (
+        "the import-time probe did not run, so nothing measured the floor")
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
-    assert safe_solve.SOLVE_TIMEOUT_S >= floor or         safe_solve.SOLVE_TIMEOUT_S == safe_solve._CONFIGURED_TIMEOUT_S
+    assert safe_solve.SOLVE_TIMEOUT_S >= floor
+
+
+def test_with_the_probe_off_the_configured_value_stands_unchecked():
+    """The honest description of `SOLVE_STARTUP_PROBE=0`: the budget is used
+    exactly as configured and nothing has verified it is large enough.
+
+    Worth its own test because the skip above must not be read as "the
+    invariant holds here too". It does not -- that is the trade the switch
+    makes, and `SOLVE_TIMEOUT=1` with the probe off is precisely the
+    configuration the probe exists to catch.
+    """
+    if safe_solve._startup_probe_enabled():
+        pytest.skip("the probe is on; the case under test is it being off")
+    assert safe_solve.STARTUP_COST_S is None
+    assert safe_solve.SOLVE_TIMEOUT_S == safe_solve._CONFIGURED_TIMEOUT_S

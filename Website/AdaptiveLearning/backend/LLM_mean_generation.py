@@ -182,15 +182,6 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
                   repr(question_data["variables"])[:80])
             continue
 
-        # Parsed in the bounded worker, inside the loop: `sympify` on the
-        # model's values is the one unbounded step here, and the mean of a list
-        # of floats cannot hang.
-        numbers = safe_solve.safe_sympify_values(question_data["variables"])
-        if numbers is None:
-            print(f"[Attempt {attempt+1}] Unusable variables:",
-                  repr(question_data["variables"])[:80])
-            continue
-
         break
 
     else:

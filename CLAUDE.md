@@ -2786,6 +2786,20 @@ topic itself was already reachable):
 `EARLY_BAND_SCENARIOS` filter on top, since circle/volume/pythagorean-theorem scenarios assume
 formulas grades 1-3 haven't reached regardless of which difficulty tier picked them.
 
+**A per-scenario grade is now the pattern in three places, and the third was found by audit.**
+`angle_relationships` sits at grade 7 in `TOPIC_MIN_GRADE` for 7.G.5 — complementary, supplementary,
+linear pairs — but `triangle_sum` is **8.G.5**, a grade later, and a topic-level minimum cannot say
+so. Measured over 539 questions: **4 of 10 at grade 7 were triangle-sum**, and not by chance — the
+medium difficulty tier is *only* that scenario, so every grade-7 student on that tier got a grade-8
+question. `LLM_angle_relationship_generation.SCENARIO_MIN_GRADE` mirrors geometry's, and grade 7's
+medium tier now falls back to the rest of the topic. Regenerated: 10 of 10 complementary,
+supplementary or linear pair, 0 triangle.
+
+**The generalisation, having needed it three times: a per-bucket minimum cannot describe an item that
+arrives after the bucket it belongs to.** Topics inside a grade bracket, scenarios inside a topic,
+scenarios inside a band. Whenever a gate is one number for a group, ask which member of the group
+arrives last.
+
 **That filter was itself too generous, and it filtered one band.** It admitted `triangle_area` —
 ½ × base × height, CCSS **6.G.1** — to a band meaning grades 1-3, and a grade-1 session was duly
 generated asking for the area of a triangle. Fixing that band alone then left the *larger* half:

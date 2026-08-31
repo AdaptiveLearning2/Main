@@ -160,15 +160,71 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [5],
 }
 
-# Scenario 5 (algebra_complementary) needs setting up and solving an
-# equation for x, so it's withheld from "early"/"middle" grades (1-6) here
-# regardless of difficulty -- difficulty alone isn't a safe gate, since a
-# struggling-topic or randomized "hard" pick could still reach it at any
-# grade. Falls back to the medium tier's non-algebraic scenarios instead.
-def _pick_scenario(difficulty, grade_band):
+# Block number -> the scenario name that block asks for, read out of the
+# block's own JSON example rather than typed again here.
+_SCENARIO_NAMES = {
+    1: "complementary",
+    2: "supplementary",
+    3: "linear_pair",
+    4: "triangle_sum",
+    5: "algebra_complementary",
+}
+
+# The grade at which each scenario's relationship is introduced.
+#
+# Per scenario, not per topic. `TOPIC_MIN_GRADE` puts angle_relationships at 7
+# for 7.G.5 -- complementary, supplementary and linear pairs -- but the
+# triangle angle sum is **8.G.5**, one grade later. Measured over 539 generated
+# questions: 4 of 10 at grade 7 were triangle-sum questions, because the medium
+# difficulty tier is *only* that scenario, so a grade-7 student on that tier got
+# a grade-8 question every time.
+#
+# Same shape and same fix as `SCENARIO_MIN_GRADE` in
+# LLM_geometry_generation: a topic-level minimum cannot express a scenario that
+# arrives a year after the rest of its topic.
+SCENARIO_MIN_GRADE = {
+    "complementary":         7,   # 7.G.5
+    "supplementary":         7,   # 7.G.5
+    "linear_pair":           7,   # 7.G.5
+    "triangle_sum":          8,   # 8.G.5, angle sum of a triangle
+    "algebra_complementary": 7,   # 7.G.5 with 7.EE.4, solve for x
+}
+
+
+def _grade_scenarios(grade):
+    """Scenario numbers whose relationship this student has reached.
+
+    An unreadable grade is the youngest, so it gets the grade-7 set -- which
+    it never reaches in practice, since `_allowed_topics` withholds this topic
+    below grade 7 entirely.
+    """
+    number = grade_levels.grade_number(grade)
+    if number is None:
+        number = 1
+    allowed = {n for n, name in _SCENARIO_NAMES.items()
+               if SCENARIO_MIN_GRADE[name] <= number}
+    if allowed:
+        return allowed
+    floor = min(SCENARIO_MIN_GRADE.values())
+    return {n for n, name in _SCENARIO_NAMES.items()
+            if SCENARIO_MIN_GRADE[name] <= floor}
+
+
+def _pick_scenario(difficulty, grade):
+    """A scenario for this difficulty that the student's grade has reached.
+
+    Gated on the grade rather than the band. The band-level rule this replaces
+    withheld scenario 5 from grades 1-6, which `_allowed_topics` now does for
+    the whole topic anyway, and said nothing about `triangle_sum` being a grade
+    later than its neighbours.
+
+    Falls back to the whole allowed set when a tier holds nothing this grade
+    has reached -- the medium tier is only `triangle_sum`, so grade 7 would
+    otherwise have no candidates at all.
+    """
     candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
-    if grade_band in ("early", "middle"):
-        candidates = [s for s in candidates if s != 5] or DIFFICULTY_SCENARIOS["medium"]
+    allowed = _grade_scenarios(grade)
+    candidates = [s for s in candidates if s in allowed] or sorted(allowed)
     return random.choice(candidates)
 
 def _grade_band(grade):
@@ -210,7 +266,9 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
         # select a scenario from the tier matching this question's difficulty
         # and grade; the prompt is built around it rather than listing all five
         grade_band = _grade_band(grade)
-        scenario = _pick_scenario(difficulty, grade_band)
+        # The grade, not the band: `triangle_sum` is 8.G.5 while the rest
+        # of this topic is 7.G.5.
+        scenario = _pick_scenario(difficulty, grade)
 
         prompt = _angle_prompt(scenario)
         if attempt > 0:

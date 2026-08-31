@@ -56,18 +56,49 @@ _WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MAX_RESULT_CHARS = 200
 
 
+def safe_solve_geometry(geometry_scenario: str, variables: dict,
+                        timeout: float | None = None):
+    """Geometry's solved value as a float, or None if it did not finish.
+
+    A separate entry point rather than another `scenario` string, because this
+    one carries a dict of the model's values rather than one expression.
+    """
+    solved = _run({"scenario": "geometry",
+                   "geometry_scenario": geometry_scenario,
+                   "variables": variables}, timeout,
+                  f"geometry:{geometry_scenario}")
+    if solved is None:
+        return None
+    try:
+        return float(solved)
+    except ValueError:
+        print(f"[safe_solve] worker returned a non-number: {solved[:60]!r}")
+        return None
+
+
 def safe_solve(expression: str, scenario: str, timeout: float | None = None):
     """`str(solution)` for one expression, or None if it did not finish.
 
     None means "retry this question", which is what every caller already does
     with a reply it cannot use.
     """
+    return _run({"expr": expression, "scenario": scenario}, timeout,
+                f"{scenario}:{expression[:80]}")
+
+
+def _run(request: dict, timeout, label: str):
+    """One worker call. The result string, or None if it did not produce one.
+
+    Shared by both entry points so the kill, the exit-code check and the
+    length cap cannot end up applying to one solve path and not the other --
+    which is how the unbounded half of geometry survived a round of this.
+    """
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
-    payload = json.dumps({"expr": expression, "scenario": scenario})
     try:
         proc = subprocess.run(
             [sys.executable, _WORKER],
-            input=payload, capture_output=True, text=True, timeout=budget,
+            input=json.dumps(request), capture_output=True, text=True,
+            timeout=budget,
             # Inherit nothing the child does not need.
             env={"PATH": os.environ.get("PATH", ""),
                  "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
@@ -76,8 +107,7 @@ def safe_solve(expression: str, scenario: str, timeout: float | None = None):
         # subprocess.run kills the child here, which is the whole point: the
         # in-process equivalent leaves the spin running for the life of the
         # worker.
-        print(f"[safe_solve] {scenario} exceeded {budget}s and was killed: "
-              f"{expression[:80]!r}")
+        print(f"[safe_solve] exceeded {budget}s and was killed: {label!r}")
         return None
     except Exception as e:                      # pragma: no cover - defensive
         print(f"[safe_solve] could not run: {type(e).__name__}: {e}")

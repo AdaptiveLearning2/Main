@@ -23,6 +23,20 @@ def main():
         implicit_multiplication_application,)
     try:
         scenario = req.get("scenario")
+        # Geometry's whole solve, including `preprocess_variables` -- which is
+        # `sympify` over the model's raw values and is the unbounded part.
+        # `sympify("9**9**9")` never returns, and `SCENARIO_VARS` checks only
+        # that the keys exist, which says nothing about the values behind them.
+        if scenario == "geometry":
+            import geometry_solvers
+            value = geometry_solvers.solve_scenario(req["geometry_scenario"],
+                                                    req["variables"])
+            if value is None:
+                print(json.dumps({"ok": False, "error": "unsolvable scenario"}))
+            else:
+                print(json.dumps({"ok": True, "result": repr(value)}))
+            return
+
         # Algebra's whole solve runs here, not just its parse. Splitting the
         # work would leave `parse_expr` in the parent, which is the unbounded
         # half: `9**9**9 + x = 5` never returns, and because the spin holds the

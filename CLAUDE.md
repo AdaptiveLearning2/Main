@@ -2910,13 +2910,23 @@ It read as intermittent for two compounding reasons, and both are worth recognis
 reaches `simplify` about one time in three, and only above the `middle` band. **A hang that depends
 on a random branch below a grade gate looks like flakiness and is not.**
 
-**A CPU-bound sympy call cannot be bounded in-process, so `safe_solve.py` runs it in a killable
-subprocess** — `parse_expr("9**9**9")` and `solve` on `9**9**9 + x = 5` never return, the operand is
+**All three solver topics go through `safe_solve.py`, and the boundary is the whole solve, not the
+last step of it.** A CPU-bound sympy call cannot be bounded in-process — `parse_expr("9**9**9")` and `solve` on `9**9**9 + x = 5` never return, the operand is
 the model's, and the spin holds the GIL inside CPython's long-integer code, so a watchdog thread
 never gets scheduled and a signal handler never runs. Only an external kill works. It costs ~0.85s of
 sympy import per call, which is a minority addition to a ~1-3s model call and is paid only where an
-expression or equation is solved. **`algebra` and `expressions` both go through it**; wiring one and
-not the other is how this was found the second time.
+expression, equation or scenario is solved.
+
+**Wiring some of a topic is the trap.** This was found three times: `expressions` bounded while
+`algebra` still parsed in the request thread; then `algebra` bounded while `geometry` still ran
+`preprocess_variables` — `sympify` over the model's raw values — in-process, with a docstring
+claiming otherwise. `SCENARIO_VARS` checks that the keys are *present*, which says nothing about the
+values behind them, and a `try/except` catches exceptions rather than non-termination. If a topic
+touches model text with sympy anywhere, all of that topic belongs in the worker.
+
+`geometry_solvers.py` exists for that: the worker cannot import `LLM_geometry_generation`, which
+pulls in supabase, flask and dotenv at import, so the pure arithmetic lives apart from the prompt and
+the retry loop. Anything a bounded worker must run needs the same separation.
 
 **A `raise` from a helper does not reach a retry loop the call site sits below.** Every generator's
 `for ... else` has already run by the time the solve happens, unless the solve was deliberately moved

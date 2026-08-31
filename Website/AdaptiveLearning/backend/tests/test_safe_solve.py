@@ -117,3 +117,31 @@ def test_an_unbounded_equation_is_killed_rather_than_waited_on():
     started = time.monotonic()
     assert safe_solve.safe_solve("9**9**9+x=5", "equation", timeout=3) is None
     assert time.monotonic() - started < 30, "the bound did not take effect"
+
+
+# ─── geometry, whose `sympify` is the unbounded part ─────────────────────
+
+def test_a_geometry_scenario_solves_in_the_worker():
+    assert safe_solve.safe_solve_geometry("cube_volume", {"side": "3"}) == 27.0
+
+
+def test_an_unbounded_geometry_variable_is_killed_rather_than_waited_on():
+    """`_solve_scenario` ran `preprocess_variables` -- `sympify` over the
+    model's raw values -- in the request thread, while its own docstring said
+    the call was bounded. `{"side": "9**9**9"}` never returns.
+
+    `SCENARIO_VARS` checks that the keys are present, which says nothing about
+    the values behind them, and the `try/except` around the dispatch caught
+    exceptions rather than non-termination.
+    """
+    started = time.monotonic()
+    assert safe_solve.safe_solve_geometry(
+        "cube_volume", {"side": "9**9**9"}, timeout=3) is None
+    assert time.monotonic() - started < 30, "the bound did not take effect"
+
+
+def test_an_unlisted_geometry_scenario_comes_back_none():
+    """`solve_scenario`'s `case _`. Unreachable through the generator, which
+    checks SOLVABLE_SCENARIOS first -- but the extraction made it a standalone
+    unit, so the guarantee now lives in a different file from the check."""
+    assert safe_solve.safe_solve_geometry("no_such_scenario", {"a": "1"}) is None

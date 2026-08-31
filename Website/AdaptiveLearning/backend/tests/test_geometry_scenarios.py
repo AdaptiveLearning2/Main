@@ -1,10 +1,14 @@
 """The geometry scenario whitelist has to match the dispatch it guards.
 
 `generate_geometry_question` validates the model's `scenario` against
-`SOLVABLE_SCENARIOS` inside the retry loop, because the `match` that dispatches
-on it has no `case _`: an unrecognised name leaves `solution` unbound and
-raises `UnboundLocalError` from a line that reads like arithmetic -- a 500 to a
-student where a retry costs nothing.
+`SOLVABLE_SCENARIOS` inside the retry loop. The `match` that dispatches on it
+now has a `case _` as well -- it did not when this was written, and an
+unrecognised name left `solution` unbound and raised `UnboundLocalError` from a
+line that reads like arithmetic: a 500 to a student where a retry costs
+nothing. Both guards stay. The whitelist keeps the rejection near the model's
+reply where it can be logged and retried, and the default keeps
+`geometry_solvers.solve_scenario` correct as a standalone unit, since the
+extraction moved that guarantee into a different file from the check.
 
 Measured against Haiku 4.5 on 2026-08-26, 2 of 3 geometry generations failed
 exactly that way. The model answered `circle_missing_radius_circumference`,
@@ -26,8 +30,12 @@ import pytest  # noqa: E402
 
 import LLM_geometry_generation as geo  # noqa: E402
 
-_SOURCE = open(geo.__file__, encoding="utf-8").read()
-# `\s*` before the colon is load-bearing -- see the docstring.
+# The dispatch moved to `geometry_solvers` so the bounded worker can import it
+# without dragging in supabase, flask and dotenv. These checks follow it: they
+# are about the `match`, not about which file it lives in.
+import geometry_solvers  # noqa: E402
+
+_SOURCE = open(geometry_solvers.__file__, encoding="utf-8").read()
 # Indentation-agnostic on purpose. These patterns were anchored at eight
 # spaces, and moving the `match` into `_solve_scenario` -- so the solve could
 # run inside the retry loop -- reindented every case and failed both source
@@ -95,8 +103,12 @@ def test_the_required_variables_match_what_each_solver_indexes():
         assert set(geo.SCENARIO_VARS[name]) == indexed, name
 
 
+# The prompt blocks stayed behind when the dispatch moved, so this reads the
+# generator module rather than `_SOURCE`. Scanning the wrong file would find
+# nothing and make both tests below vacuous -- which is why one of them counts.
+_PROMPT_SOURCE = open(geo.__file__, encoding="utf-8").read()
 _BLOCK_NAMES = dict(re.findall(
-    r'^    (\d+): """.*?"scenario": "([a-z_]+)"', _SOURCE, re.M | re.S))
+    r'^    (\d+): """.*?"scenario": "([a-z_]+)"', _PROMPT_SOURCE, re.M | re.S))
 
 
 def test_every_block_name_was_found():

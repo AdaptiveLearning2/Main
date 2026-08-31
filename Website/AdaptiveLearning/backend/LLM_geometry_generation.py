@@ -13,6 +13,8 @@ import sympy as sp #pip install sympy
 from sympy import sqrt, symbols, Eq, solve, sympify, Integer, Rational, pi
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import geometry_solvers
+import safe_solve
 import grade_levels
 import grade_appropriateness
 
@@ -34,12 +36,13 @@ def extract_json(text):
 
     return None
 
-simple_pi = sympify(3.14)
+# The solve path -- the solvers, `preprocess_variables`,
+# `normalize_solution`, SCENARIO_VARS and SOLVABLE_SCENARIOS -- lives in
+# `geometry_solvers`, which the bounded worker imports. Only the
+# presentation helpers stay here.
+SCENARIO_VARS = geometry_solvers.SCENARIO_VARS
+SOLVABLE_SCENARIOS = geometry_solvers.SOLVABLE_SCENARIOS
 
-def normalize_solution(sol):
-    if isinstance(sol, list):
-        return sol[0]
-    return sol
 
 def serialize_sympy(x):
     if isinstance(x, sp.Rational):
@@ -52,6 +55,7 @@ def serialize_sympy(x):
         return str(x)
     return str(x)
 
+
 def format_two_decimals(x):
     if isinstance(x, list):
         x = x[0]
@@ -61,82 +65,10 @@ def format_two_decimals(x):
     else:
         return f"{val:.2f}"
 
+
 def to_num(x):
     return sympify(x)
 
-def preprocess_variables(vars_dict):
-    return {k : sympify(v) for k, v in vars_dict.items()}
-
-# Area/Perimeter
-def solve_triangle_perimeter(s1, s2, s3):
-    return s1 + s2 + s3
-
-def solve_triangle_area(base, height):
-    return Rational(1/2) * base * height
-
-def solve_rectangle_perimeter(l, w):
-    return 2*l + 2*w
-
-def solve_rectangle_area(l,w):
-    return l * w
-
-def solve_circle_circumference(r):
-    return 2 * simple_pi * r
-
-def solve_circle_area(r):
-    return simple_pi * r * r
-
-# Volume
-def solve_rect_volume(l,w,h):
-    return l*w*h
-
-def solve_cube_volume(a):
-    return a**3
-
-def solve_cylinder_volume(r,h):
-    return simple_pi * r**2 *h
-
-def solve_pyramid_volume(b,h):
-    return Rational(1/3) * b * h
-
-def solve_sphere_volume(r):
-    return Rational(4/3) * simple_pi * r**3
-
-# Pythagorean Theorem
-def solve_pythag(a, b):
-    c = (a**2) + (b**2)
-    return sqrt(c)
-
-# Find missing side
-def rect_area_missing_side(area, s1):
-    x = symbols('x')
-    solution = solve(Eq(x * s1, area), x)
-    return solution
-
-def rect_perimeter_missing_side(perim, s1):
-    x = symbols('x')
-    solution = solve(Eq((2*s1) + (2*x), perim), x)
-    return solution
-
-def triangle_area_missing_side(area, s1):
-    x = symbols('x')
-    solution = solve(Eq((1/2)*s1 *x, area), x)
-    return solution
-
-def traingle_perimeter_missing_side(perim, s1,s2):
-    x = symbols('x')
-    solution = solve(Eq(s1 + s2 + x, perim), x)
-    return solution
-
-def circle_area_missing_side(area):
-    x = symbols('x')
-    solution = solve(Eq(simple_pi*x**2, area), x)
-    return solution
-
-def circle_circumference_missing_side(circ):
-    x = symbols('x')
-    solution = solve(Eq(2*simple_pi*x, circ), x)
-    return solution
 
 # The scenario is chosen in code by _pick_scenario before the prompt is
 # built, so only that one block is sent. Sending all eighteen -- as this
@@ -475,81 +407,23 @@ _SCENARIO_NAMES = {
 def _solve_scenario(scenario, raw_vars, attempt):
     """The scenario's numeric solution, or None to retry.
 
-    Extracted so it can run *inside* the retry loop. It used to sit below the
-    `for/else`, which made every way it can fail a 500 rather than another
-    attempt -- and `generate_general_incorrect_answers` raising on a
-    non-finite solution was documented here as "reaching the retry loop" when
-    it could not: `side: 1e200` makes `solve_cube_volume` return 1e600, and
-    that escaped `generate_geometry_question` on attempt 1.
+    Delegates to the bounded worker. The arithmetic itself lives in
+    `geometry_solvers`, which imports nothing heavy so a subprocess can load
+    it; this module pulls in supabase, flask and dotenv.
 
-    `sympify` runs on the model's values, so it is bounded like every other
-    solve on this path -- an exponent tower in a variable would otherwise spin
-    holding the GIL, where nothing in-process can interrupt it.
+    The bound is not belt-and-braces. `preprocess_variables` applies `sympify`
+    to the model's raw values, and an earlier version of this function ran that
+    in the request thread while its own docstring claimed otherwise:
+    `{"side": "9**9**9"}` never returns, and the spin holds the GIL inside
+    CPython's long-integer code, so no watchdog thread and no signal handler
+    can stop it. `SCENARIO_VARS` checks that the keys are present, which says
+    nothing about the values behind them, and the `try/except` around the
+    dispatch caught exceptions rather than non-termination.
     """
-    try:
-        vars = preprocess_variables(raw_vars)
-    except Exception as e:
-        print(f"[Attempt {attempt}] Unusable variables: "
-              f"{type(e).__name__}: {e}")
-        return None
-
-    try:
-
-        match (scenario):
-            case "rectangle_area":
-                solution = solve_rectangle_area(vars["length"], vars["width"])
-            case "rectangle_perimeter":
-                solution = solve_rectangle_perimeter(vars["length"], vars["width"])
-            case "triangle_area":
-                solution = solve_triangle_area(vars["base"], vars["height"])
-            case "triangle_perimeter":
-                solution = solve_triangle_perimeter(vars["s1"], vars["s2"], vars["s3"])
-            case "circle_area":
-                solution = solve_circle_area(vars["radius"])
-            case "circle_circumference":
-                solution = solve_circle_circumference(vars["radius"])
-            case "rect_volume": 
-                solution = solve_rect_volume(vars["length"], vars["width"], vars["height"])
-            case "cylinder_volume":
-                solution = solve_cylinder_volume(vars["radius"], vars["height"])
-            case "sphere_volume":
-                solution = solve_sphere_volume(vars["radius"])
-            case "cube_volume":
-                solution = solve_cube_volume(vars["side"])
-            case "pyramid_volume":
-                solution = solve_pyramid_volume(vars["base_area"], vars["height"])
-            case "pythagorean":
-                solution = solve_pythag(vars["a"], vars["b"])
-            case "rect_area_missing_side" :
-                solution = rect_area_missing_side(vars["area"], vars["known_side"])
-            case "rect_perimeter_missing_side" :
-                solution = rect_perimeter_missing_side(vars["perimeter"], vars["known_side"])
-            case "circle_area_missing_side":
-                solution = circle_area_missing_side(vars["area"])
-            case "circle_circumference_missing_side":
-                solution = circle_circumference_missing_side(vars["circumference"])
-            case "triangle_area_missing_side" :
-                solution = triangle_area_missing_side(vars["area"], vars["known_side"])
-            case "triangle_perimeter_missing_side" :
-                solution = traingle_perimeter_missing_side(vars["perimeter"], vars["s1"], vars["s2"])
-    except Exception as e:
-        print(f"[Attempt {attempt}] Could not solve {scenario}: "
-              f"{type(e).__name__}: {e}")
-        return None
-
-    solution = normalize_solution(solution)
-    try:
-        value = float(solution)
-    except Exception as e:
-        print(f"[Attempt {attempt}] Solution is not a number: "
-              f"{type(e).__name__}: {e}")
-        return None
-    if not math.isfinite(value):
-        # `1e200` cubed is `1e600`, and `float()` of that is `inf`. There is
-        # no question here and no set of distractors around it, so this is a
-        # reply to ask again for rather than an error to raise.
-        print(f"[Attempt {attempt}] Non-finite solution for {scenario}")
-        return None
+    value = safe_solve.safe_solve_geometry(scenario, raw_vars)
+    if value is None:
+        print(f"[Attempt {attempt}] Could not solve {scenario} from "
+              f"{raw_vars!r:.60}")
     return value
 
 
@@ -585,57 +459,6 @@ solution = -1
 # Every scenario the `match` below dispatches on, derived by hand from it and
 # asserted against it in tests/test_geometry_scenarios.py -- two lists that
 # can disagree is how the crash this prevents would come back.
-# The variables each scenario's solver indexes, derived from the dispatch
-# below and pinned against it in tests/test_geometry_scenarios.py.
-#
-# A valid scenario name with the wrong variables is a KeyError out of
-# the dispatch -- a 500, not a retry. Measured against Haiku 4.5 on
-# 2026-08-26: 2 of 3 upper-band geometry generations answered
-# `pythagorean` with no `b`, so this is the ordinary case, not an edge.
-SCENARIO_VARS = {
-    "rectangle_area": ("length", "width",),
-    "rectangle_perimeter": ("length", "width",),
-    "triangle_area": ("base", "height",),
-    "triangle_perimeter": ("s1", "s2", "s3",),
-    "circle_area": ("radius",),
-    "circle_circumference": ("radius",),
-    "rect_volume": ("height", "length", "width",),
-    "cylinder_volume": ("height", "radius",),
-    "sphere_volume": ("radius",),
-    "cube_volume": ("side",),
-    "pyramid_volume": ("base_area", "height",),
-    "pythagorean": ("a", "b",),
-    "rect_area_missing_side": ("area", "known_side",),
-    "rect_perimeter_missing_side": ("known_side", "perimeter",),
-    "circle_area_missing_side": ("area",),
-    "circle_circumference_missing_side": ("circumference",),
-    "triangle_area_missing_side": ("area", "known_side",),
-    "triangle_perimeter_missing_side": ("perimeter", "s1", "s2",),
-}
-
-
-SOLVABLE_SCENARIOS = frozenset({
-    "rectangle_area",
-    "rectangle_perimeter",
-    "triangle_area",
-    "triangle_perimeter",
-    "circle_area",
-    "circle_circumference",
-    "rect_volume",
-    "cylinder_volume",
-    "sphere_volume",
-    "cube_volume",
-    "pyramid_volume",
-    "pythagorean",
-    "rect_area_missing_side",
-    "rect_perimeter_missing_side",
-    "circle_area_missing_side",
-    "circle_circumference_missing_side",
-    "triangle_area_missing_side",
-    "triangle_perimeter_missing_side",
-})
-
-
 
 # Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
 # TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side

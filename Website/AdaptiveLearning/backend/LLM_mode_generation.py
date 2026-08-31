@@ -3,6 +3,7 @@
 from collections import Counter
 import os
 import re
+import itertools
 import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
@@ -92,39 +93,48 @@ def mode(values):
 def generate_incorrect_answers(solution, values):
     generated_answers = []
 
+    # Both branches below drew randomly until they had three distinct answers,
+    # with no bound. Whether three exist is a property of the dataset: a set
+    # with only two non-modal values cannot supply them, and the nested loop in
+    # the multi-mode branch could not even finish one answer when the dataset
+    # held fewer distinct values than the mode has members. Enumerating instead
+    # of sampling is what makes both terminate -- the candidate pool is small
+    # and finite, so there is nothing to search for.
+    distinct = list(dict.fromkeys(str(v) for v in values))
+
     # CASE 1: SINGLE MODE
     if not isinstance(solution, list):
         solution = str(solution)
-
-        while len(generated_answers) < 3:
-            incorrect_answer = str(random.choice(values))
-
-            if (
-                incorrect_answer != solution and
-                incorrect_answer not in generated_answers
-            ):
-                generated_answers.append(incorrect_answer)
+        others = [v for v in distinct if v != solution]
+        random.shuffle(others)
+        generated_answers = others[:3]
 
     # CASE 2: MULTIPLE MODES
     else:
         solution_set = set(map(str, solution))
+        size = len(solution)
+        pool = list(distinct)
+        random.shuffle(pool)
+        # Every same-size subset of the dataset that is not the answer, up to
+        # the three needed. `combinations` is finite by construction.
+        for combo in itertools.combinations(pool, size):
+            if set(combo) != solution_set:
+                generated_answers.append(list(combo))
+            if len(generated_answers) == 3:
+                break
 
-        while len(generated_answers) < 3:
-            generated = []
-            seen = set()
-
-            while len(generated) < len(solution):
-                candidate = str(random.choice(values))
-
-                if candidate not in seen:
-                    seen.add(candidate)
-                    generated.append(candidate)
-
-            if (
-                set(generated) != solution_set and
-                generated not in generated_answers
-            ):
-                generated_answers.append(generated)
+    if len(generated_answers) < 3:
+        # A dataset too small to supply three wrong answers of the right shape.
+        # Offsetting the mode's own values always can, and keeps the option the
+        # same shape as the answer.
+        offset = 1
+        base = solution if isinstance(solution, list) else [solution]
+        while len(generated_answers) < 3 and offset <= 5:
+            candidate = [str(float(v) + offset) for v in base]
+            if candidate not in generated_answers:
+                generated_answers.append(
+                    candidate if isinstance(solution, list) else candidate[0])
+            offset += 1
 
     return generated_answers
 

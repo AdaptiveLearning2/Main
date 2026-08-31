@@ -108,14 +108,22 @@ def generate_incorrect_answers(solution, values):
     n = len(vals)
 
     if n % 2 == 1:
-        while len(incorrect_answers) < 3:
-            index = random.randint(0, n-1) 
-            if vals[index] != solution and vals[index] not in incorrect_answers:
-                incorrect_answers.append(vals[index])
-            else:
-                continue
-    else:
-       incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
+        # Bounded, and with a fallback that can always finish. Whether three
+        # distinct non-median values exist is a property of the dataset, not of
+        # how long you try: `[5, 7, 9]` has a median of 7 and exactly two other
+        # values, so this looped for ever. Reachable by design -- the middle
+        # band's easy tier asks for "3-5 values" in as many words -- and it is
+        # what hung a 650-question audit at 1627 seconds of CPU.
+        others = [v for v in dict.fromkeys(vals) if v != solution]
+        random.shuffle(others)
+        incorrect_answers = others[:3]
+
+    if len(incorrect_answers) < 3:
+        # The even-length branch's generator, reused: it is bounded, always
+        # returns three, and is already what this function produces when the
+        # dataset has no middle value to borrow from.
+        incorrect_answers = (inc_gen.generate_general_incorrect_answers(float(solution))
+                             if solution is not None else [])
 
     return incorrect_answers
 

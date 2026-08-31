@@ -16,6 +16,7 @@ from sympy.parsing.sympy_parser import (
 ) # treat 2x as 2*x for sympy parsing
 import incorrect_solution_generation as inc_gen
 import lesson_plan_context
+import safe_solve
 import grade_levels
 import grade_appropriateness
 
@@ -257,23 +258,41 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
                                         attempt + 1):
             continue
 
+        # Solved inside the loop, so an expression that cannot be solved is a
+        # retry rather than a failed question -- the same move CLAUDE.md
+        # records for `angle_relationships`, and for the same reason: whether
+        # the answer is usable is a property of the solved value, not of the
+        # text, so it cannot be checked before solving.
+        equation_stra = "".join(question_data["variables"]).replace("−", "-")
+        solved = safe_solve.safe_solve(equation_stra, question_data["scenario"])
+        if solved is None:
+            print(f"[Attempt {attempt+1}] Unsolvable or unbounded expression:",
+                  equation_stra[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    parts = question_data['variables']
-    equation_stra = "".join(parts) # turn individual variables/operations into a single string to be parsed by sympy
-    equation_stra = equation_stra.replace("âˆ’", "-")
-    expr = parse_expr(equation_stra, transformations=transformations)
-
     scenario = question_data["scenario"]
 
-    match scenario:
-        case "evaluate" | "order_of_operations":
-            solution = expr
-        case "simplify":
-            solution = sp.simplify(expr)
+    # `solved` was produced inside the loop above, in a subprocess with a hard
+    # time bound, because the operand comes from the model and `parse_expr`
+    # evaluates eagerly: `9**9**9` never returns -- a number with ~370 million
+    # digits -- and no in-process timeout can stop it, since a thread cannot be
+    # killed and a signal is not delivered while the interpreter is inside a
+    # long integer computation. Measured here: generation span at 100% CPU for
+    # 28 minutes before being killed by hand. On the inline path -- every
+    # question, with QUESTION_QUEUE_SIZE at 0 -- that is a request holding one
+    # of anyio's ~40 threadpool slots until the process restarts.
+    # `GENERATION_LLM_TIMEOUT` bounded the model call; nothing bounded what was
+    # done with the answer.
+    #
+    # Re-parsing here is safe where the original was not: the worker's result
+    # is length-capped, so this is a short string rather than whatever the
+    # model asked for.
+    solution = sp.sympify(solved)
 
     if scenario == "simplify":
         incorrect_answers = inc_gen.generate_symbolic_incorrect_answers(solution)

@@ -134,6 +134,12 @@ _call_lock = threading.Lock()
 CLAUDE_MAX_RETRIES = _env_number("CLAUDE_MAX_RETRIES", 0, int, minimum=0)
 
 
+# What the Messages API uses when no `temperature` is sent. Named because
+# `_claude_sampling` compares against it to decide whether to send anything,
+# and comparing against the wrong constant silently disables the setting.
+_API_DEFAULT_TEMPERATURE = 1.0
+
+
 def _claude_sampling(claude_temperature):
     """The sampling kwargs for one Claude call -- usually none at all.
 
@@ -163,10 +169,17 @@ def _claude_sampling(claude_temperature):
     strategies pass reports `source: "rule-based"` against a working key, this
     is the first thing to check.
     """
-    if claude_temperature is None:
-        return {}
-    temp = min(1.0, max(0.0, claude_temperature))
-    if temp == CLAUDE_TEMPERATURE:
+    temp = CLAUDE_TEMPERATURE if claude_temperature is None else claude_temperature
+    temp = min(1.0, max(0.0, temp))
+    # Against the API's default, which is what omitting the parameter selects
+    # -- NOT against CLAUDE_TEMPERATURE. Comparing to the setting inverted the
+    # feature: with CLAUDE_TEMPERATURE=0.4, `_llm_strategies` asking for 0.4
+    # matched, so nothing was sent, so the call ran at the API default of 1.0
+    # -- the one value that configuration existed to avoid. And generation
+    # passes None, which returned early before the setting was ever read, so
+    # CLAUDE_TEMPERATURE was inert on both paths while `.env.example`
+    # documented it as the knob.
+    if temp == _API_DEFAULT_TEMPERATURE:
         return {}
     return {"extra_body": {"temperature": temp}}
 

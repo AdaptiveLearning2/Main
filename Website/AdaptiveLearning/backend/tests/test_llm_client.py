@@ -380,3 +380,58 @@ def test_a_bad_numeric_setting_falls_back_rather_than_crashing_the_app(monkeypat
     assert llm_client._env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 30.0
     monkeypatch.setenv("SOME_KNOB", "0")
     assert llm_client._env_number("SOME_KNOB", 30.0, float, minimum=1.0) == 1.0
+
+
+def test_the_configured_temperature_reaches_generation(monkeypatch):
+    """CLAUDE_TEMPERATURE was inert on both paths and documented as the knob.
+
+    Generation passes `claude_temperature=None`, and the first version of
+    `_claude_sampling` returned early on None -- so the setting was never read
+    at all, and a deployment tuning it saw no effect.
+    """
+    monkeypatch.setattr(llm_client, "CLAUDE_TEMPERATURE", 0.7)
+    fake = _claude(monkeypatch)
+    llm_client.generate_text("p")
+    assert fake.calls[0]["extra_body"] == {"temperature": 0.7}
+
+
+def test_a_callers_temperature_survives_matching_the_configured_one(monkeypatch):
+    """The inversion, and the reason the comparison is against 1.0.
+
+    Omitting the parameter selects the API's default of 1.0 -- not
+    CLAUDE_TEMPERATURE. Comparing against the setting meant that with
+    CLAUDE_TEMPERATURE=0.4, `_llm_strategies` asking for 0.4 matched, nothing
+    was sent, and the call ran at 1.0: the single value that configuration
+    exists to avoid, reached only when someone configured it.
+    """
+    monkeypatch.setattr(llm_client, "CLAUDE_TEMPERATURE", 0.4)
+    fake = _claude(monkeypatch)
+    llm_client.generate_text("p", claude_temperature=0.4)
+    assert fake.calls[0]["extra_body"] == {"temperature": 0.4}, \
+        "the requested temperature was dropped and the call ran at 1.0"
+
+
+def test_the_installed_sdk_is_the_pinned_one():
+    """`_real_create_params` reads the *installed* SDK, so the guard above is
+    only as good as the venv it runs in.
+
+    `anthropic` was pinned at 1.1.0 in requirements.txt and 1.0.0 was installed
+    in both venvs for the whole of the Claude migration -- so the check that
+    exists to catch a parameter the SDK does not accept was measuring a
+    different SDK from the one a deployment gets. A signature guard against the
+    wrong version is worse than none: it reports agreement it never tested.
+
+    Same rule as CLAUDE.md's on backend/.venv -- install a runtime dependency
+    in the same change that pins it.
+    """
+    import re
+    import anthropic
+    from pathlib import Path
+
+    req = (Path(__file__).resolve().parent.parent / "requirements.txt").read_text()
+    m = re.search(r'^anthropic==(\S+)$', req, re.M)
+    assert m, "anthropic is no longer pinned in requirements.txt"
+    assert anthropic.__version__ == m.group(1), (
+        f"installed anthropic {anthropic.__version__} but requirements.txt "
+        f"pins {m.group(1)} -- the signature guard is measuring the wrong SDK"
+    )

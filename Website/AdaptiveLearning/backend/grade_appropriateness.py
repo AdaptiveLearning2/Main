@@ -52,6 +52,11 @@ FORBIDDEN_BANDS = {
     "median":              {"early", "middle"},
     "mode":                {"early", "middle"},
     "probability":         {"early", "middle"},
+    # Both are elementary topics whose whole point is that the unknown is a
+    # `?` and not an `x`. `missing_number` is one notation away from `algebra`
+    # (6.EE.7), so a reply that reaches for `2x` has left the topic.
+    "missing_number":      {"early", "middle"},
+    "patterns":            {"early", "middle"},
 }
 
 # Each pattern avoids the one false positive that actually occurs here: "x"

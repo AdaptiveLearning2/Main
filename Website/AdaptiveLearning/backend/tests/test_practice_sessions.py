@@ -187,8 +187,14 @@ def test_topics_marks_which_are_allowed_at_a_young_grade():
 
 
 def test_topics_allows_everything_from_sixth_grade_up():
+    """Everything that has no ceiling. `missing_number` and `patterns` are
+    capped at grades 3 and 5, so an 8th grader is correctly not offered them --
+    this surface would otherwise let one pick "8 + ? = 11" as practice."""
+    import LLM_topic_decider as decider
     topics = main.list_topics(grade="8th Grade")
-    assert all(t["allowed"] for t in topics)
+    for topic in topics:
+        capped = topic["name"] in decider.TOPIC_MAX_GRADE
+        assert topic["allowed"] is not capped, topic["name"]
 
 
 # ─── POST /api/practice-sessions/start ──────────────────────────────────

@@ -17,6 +17,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import importlib  # noqa: E402
 
+import json  # noqa: E402
 import pytest  # noqa: E402
 
 import lesson_plan_context  # noqa: E402
@@ -62,3 +63,43 @@ def test_a_response_with_no_json_is_retried_rather_than_raising(topic, monkeypat
     assert not isinstance(exc.value, AttributeError), \
         f"{topic} crashed on attempt {len(attempts)} instead of retrying: {exc.value}"
     assert len(attempts) == 3, f"{topic} made {len(attempts)} attempts, not 3"
+
+
+@pytest.mark.parametrize("variables,branch", [
+    # `join_tokens` returns None: not a list, empty, or a non-scalar token.
+    ([], "Unusable variables"),
+    ([None], "Unusable variables"),
+    ("1/2 + 1/3", "Unusable variables"),
+    (["1", "+", None], "Unusable variables"),
+    # Joins fine, and the worker refuses the result.
+    (["1", "/", "0"], "Could not solve"),
+    (["0", "/", "0"], "Could not solve"),
+    (["!!"], "Could not solve"),
+])
+def test_rationals_retries_an_unsolvable_reply_rather_than_raising(variables,
+                                                                   branch,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """`rationals` was the last generator solving below its `for/else`, so each
+    of these was a 500 on attempt 1 -- and the division by zero was worse than
+    that before the worker guard, since "zoo" came back as a usable result and
+    was *served* as the correct answer.
+
+    Asserted on which branch fired, not only that it raised. The first version
+    of this test claimed to cover both and covered one: `["!!"]` joins fine
+    (`join_tokens` returns `'!!'`) and fails at the solve, so both its cases
+    exercised the same path and the `equation_str is None` branch had no test
+    at all. Two cases that cannot be told apart are one case.
+    """
+    import LLM_rationals_generation as rationals
+
+    payload = {"question_text": "Solve it", "question_topic": "rationals",
+               "variables": variables}
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(rationals.lesson_plan_context, "append_lesson_context",
+                        lambda prompt, topic, band: prompt)
+    with pytest.raises(ValueError, match="after retries"):
+        rationals.generate_rational_question([], [], "medium", "7th Grade")
+    printed = capsys.readouterr().out
+    assert branch in printed, f"expected the {branch!r} branch; got: {printed}"

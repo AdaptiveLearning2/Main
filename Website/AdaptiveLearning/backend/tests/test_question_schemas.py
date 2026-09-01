@@ -227,4 +227,5 @@ def test_every_generator_stores_its_own_topic_name_not_the_models():
                 "the attempt is attributed to nothing, silently.")
         checked.append(filename)
 
-    assert len(checked) == 10, f"expected ten generators, found {checked}"
+    assert len(checked) == len(LLM_topic_decider.ALL_TOPICS), (
+        f"a generator file per topic; found {checked}")

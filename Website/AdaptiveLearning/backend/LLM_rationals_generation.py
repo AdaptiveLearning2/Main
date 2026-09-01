@@ -182,22 +182,33 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
                                         attempt + 1):
             continue
 
+        # Through the bounded worker, like algebra and expressions. `sympify`
+        # on the model's expression is the unbounded step -- `sympify("9**9**9")`
+        # never returns -- and this topic joins tokens the model wrote, so the
+        # operand is entirely its choice. `evaluate` returns the canonical form,
+        # which for this topic is the fraction a student is shown ("5/6").
+        #
+        # Inside the loop, and this was the last generator where it was not.
+        # Below the `for/else` both of these were a 500 on attempt 1: tokens
+        # that will not join, and a division by zero, which the worker now
+        # reports as unusable rather than answering "zoo". Neither says the
+        # next reply will be bad, so both are worth a retry.
+        equation_str = token_join.join_tokens(question_data['variables'])
+        if equation_str is None:
+            print(f"[Attempt {attempt+1}] Unusable variables:",
+                  repr(question_data['variables'])[:80])
+            continue
+        solved = safe_solve.safe_solve(equation_str, "evaluate")
+        if solved is None:
+            print(f"[Attempt {attempt+1}] Could not solve:",
+                  repr(equation_str)[:80])
+            continue
+
         break
 
     else:
         raise ValueError("Failed to generate valid JSON after retries")
 
-    # Through the bounded worker, like algebra and expressions. `sympify` on
-    # the model's expression is the unbounded step -- `sympify("9**9**9")`
-    # never returns -- and this topic joins tokens the model wrote, so the
-    # operand is entirely its choice. `evaluate` returns the canonical form,
-    # which for this topic is the fraction a student is shown ("5/6").
-    equation_str = token_join.join_tokens(question_data['variables'])
-    if equation_str is None:
-        raise ValueError(f"unusable variables: {question_data['variables']!r}")
-    solved = safe_solve.safe_solve(equation_str, "evaluate")
-    if solved is None:
-        raise ValueError(f"could not solve {equation_str[:80]!r}")
     solution = sympify(solved)
 
     incorrect_answers = inc_gen.generate_incorrect_rational(solution) if solution is not None else []

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -124,5 +126,34 @@ describe('the streak card', () => {
 
     await waitFor(() => expect(screen.getByText('9')).toBeInTheDocument())
     expect(screen.queryByText(/best 9 days/)).not.toBeInTheDocument()
+  })
+})
+
+describe('the topic tiles', () => {
+  // A source check, because the defect is invisible at runtime: React renders
+  // `undefined` as nothing, so a topic with no icon is an empty slot rather
+  // than an error. `TOPICS` and `ICONS` are two literals one line apart, and
+  // an edit adding `missing_number` and `patterns` to the first and not the
+  // second landed exactly that way -- on the panel a student sees, for the two
+  // topics aimed at the youngest users.
+  //
+  // The other three topic lists in this app all default a missing icon; this
+  // one did not, which is why half an edit showed nowhere else.
+  const source = readFileSync(
+    resolve(process.cwd(), 'src/pages/student/Dashboard.jsx'), 'utf8')
+
+  const listOf = (name) => {
+    const line = source.split('\n').find(l => l.startsWith(`const ${name}`))
+    return [...line.matchAll(/([a-z_]+)\s*:/g)].map(m => m[1])
+  }
+
+  it('gives every topic an icon', () => {
+    const topics = [...source.split('\n')
+      .find(l => l.startsWith('const TOPICS'))
+      .matchAll(/'([a-z_]+)'/g)].map(m => m[1])
+    const icons = listOf('ICONS')
+    expect(topics.length).toBeGreaterThan(0)
+    expect(icons.length).toBeGreaterThan(0)
+    expect(topics.filter(t => !icons.includes(t))).toEqual([])
   })
 })

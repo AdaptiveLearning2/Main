@@ -141,8 +141,9 @@ def test_a_grade_the_dropdown_did_not_write_is_still_kept_from_algebra(grade):
     assert "probability" not in allowed
     # `geometry` left this set when its floor rose to 2.G.2: grade 1 has no
     # numeric geometry standard, so an unreadable grade -- treated as the
-    # youngest -- has none either.
-    assert set(allowed) == {"ordering", "expressions"}
+    # youngest -- has none either. `missing_number` and `patterns` joined it
+    # later; both are grade-1 standards.
+    assert set(allowed) == {"ordering", "expressions", "missing_number", "patterns"}
 
 
 @pytest.mark.parametrize("grade", ["Grade 1", "1", "", None, "no idea"])

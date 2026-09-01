@@ -125,6 +125,22 @@ def main():
             print(json.dumps({"ok": False,
                               "error": f"unknown scenario {scenario!r}"}))
             return
+        # The one branch that had no usability check, unlike every sibling
+        # here and in geometry_solvers/angle_solvers. `1/0` came back as the
+        # string "zoo" and `0/0` as "nan": `rationals` served them as the
+        # correct answer among the options, and `expressions` raised
+        # `TypeError: Cannot convert complex to float` -- a 500, since both
+        # topics solve after their `for/else`.
+        #
+        # `is_number` cannot be the test, because `simplify` legitimately
+        # returns `5*x`. `is_finite is False` alone cannot be either:
+        # **`nan.is_finite` is None, not False**, so it catches zoo and the
+        # infinities and lets nan through. Both halves are needed.
+        if solution.is_finite is False or solution.has(sp.nan, sp.zoo, sp.oo):
+            print(json.dumps({
+                "ok": False,
+                "error": f"not a usable answer: {solution}"}))
+            return
         print(json.dumps({"ok": True, "result": str(solution)}))
     except Exception as e:
         print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}))

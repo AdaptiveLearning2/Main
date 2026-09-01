@@ -19,6 +19,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import pytest  # noqa: E402
 
+import llm_client  # noqa: E402
 import safe_solve  # noqa: E402
 
 
@@ -49,9 +50,16 @@ def test_an_unbounded_expression_is_killed_rather_than_waited_on():
 
     Asserted as an upper bound on elapsed time, not a lower one: the claim is
     that it *stopped*, and a machine slower than this one must not fail.
+
+    `SolverUnavailable` rather than `None`, and the type is the assertion: a
+    kill says nothing about the input, so reporting it the same way as a
+    rejected one made a load-dependent timeout read as a bad model reply --
+    which is how one showed up as an intermittent failure in an unrelated
+    topic's test.
     """
     started = time.monotonic()
-    assert safe_solve.safe_solve("9**9**9", "evaluate", timeout=3) is None
+    with pytest.raises(safe_solve.SolverUnavailable, match="killed"):
+        safe_solve.safe_solve("9**9**9", "evaluate", timeout=3)
     assert time.monotonic() - started < 30, "the bound did not take effect"
 
 
@@ -127,7 +135,8 @@ def test_an_unbounded_equation_is_killed_rather_than_waited_on():
     kill works, which is what the subprocess provides.
     """
     started = time.monotonic()
-    assert safe_solve.safe_solve("9**9**9+x=5", "equation", timeout=3) is None
+    with pytest.raises(safe_solve.SolverUnavailable):
+        safe_solve.safe_solve("9**9**9+x=5", "equation", timeout=3)
     assert time.monotonic() - started < 30, "the bound did not take effect"
 
 
@@ -147,8 +156,9 @@ def test_an_unbounded_geometry_variable_is_killed_rather_than_waited_on():
     exceptions rather than non-termination.
     """
     started = time.monotonic()
-    assert safe_solve.safe_solve_geometry(
-        "cube_volume", {"side": "9**9**9"}, timeout=3) is None
+    with pytest.raises(safe_solve.SolverUnavailable):
+        safe_solve.safe_solve_geometry(
+        "cube_volume", {"side": "9**9**9"}, timeout=3)
     assert time.monotonic() - started < 30, "the bound did not take effect"
 
 
@@ -305,3 +315,71 @@ def test_with_the_probe_off_the_configured_value_stands_unchecked():
         pytest.skip("the probe is on; the case under test is it being off")
     assert safe_solve.STARTUP_COST_S is None
     assert safe_solve.SOLVE_TIMEOUT_S == safe_solve._CONFIGURED_TIMEOUT_S
+
+
+def test_a_solver_that_cannot_run_is_not_reported_as_a_bad_reply():
+    """Five things used to return `None` and only one was the model's fault.
+
+    Collapsed, a load-dependent timeout retried three times -- billing a model
+    call each time that could not possibly help -- and then raised "Failed to
+    generate valid JSON after retries", a claim about the model for a
+    subprocess that never ran. That misdiagnosis is the reason for the type:
+    an intermittent timeout under suite load reads as a defect in whichever
+    topic drew the short straw.
+    """
+    assert issubclass(safe_solve.SolverUnavailable, llm_client.GenerationUnavailable), (
+        "it must reach a student as the 503 that already means 'cannot serve "
+        "right now', not as a 500")
+
+
+def test_a_worker_that_ran_and_rejected_the_input_still_returns_none():
+    """The teeth. Raising on everything would make the distinction useless --
+    a reply the worker read and refused *is* the model's fault, and must stay a
+    retry."""
+    assert safe_solve.safe_sympify_values(["not a number"]) is None
+    assert safe_solve.safe_solve("2+2", "no_such_scenario") is None
+
+
+def test_the_startup_probe_never_propagates_it(monkeypatch, capsys):
+    """`_probe_startup` runs at import, so a raise escaping it takes the whole
+    backend down -- ingest, dashboards and consent with it -- over one topic's
+    tuning knob. That is the one thing its docstring says it may not do, and
+    making `_run` raise nearly did it.
+    """
+    def _cannot_run(*a, **k):
+        raise safe_solve.SolverUnavailable("the solver could not be started")
+
+    monkeypatch.setattr(safe_solve, "_run", _cannot_run)
+    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 3.0)
+    safe_solve._probe_startup()          # must not raise
+    assert "could not run" in capsys.readouterr().out
+    # And the configured budget is left alone, not guessed at from a failure.
+    assert safe_solve.SOLVE_TIMEOUT_S == 3.0
+
+
+@pytest.mark.parametrize("expression", ["1/0", "0/0", "1/0 + 2", "(3-3)/(3-3)"])
+def test_a_division_by_zero_is_not_an_answer(expression):
+    """The `evaluate`/`simplify` branch was the one place in the worker with no
+    usability check, unlike every sibling here and in the two solver modules.
+
+    `1/0` came back as the string "zoo" and `0/0` as "nan". `rationals` served
+    them: `correct_answer='zoo'` among the options. `expressions` raised
+    `TypeError: Cannot convert complex to float` building distractors -- a 500,
+    since it is past the point where a retry is possible.
+    """
+    assert safe_solve.safe_solve(expression, "evaluate") is None
+
+
+@pytest.mark.parametrize("expression,expected", [
+    ("2*x + 3*x", "5*x"),
+    ("x + x + y", "2*x + y"),
+])
+def test_a_symbolic_result_is_still_an_answer(expression, expected):
+    """The teeth, and the reason `is_number` cannot be the check: `simplify`
+    exists to return `5*x`. Rejecting anything non-numeric would refuse every
+    question that scenario is for.
+
+    `is_finite is False` alone is not the check either -- **`nan.is_finite` is
+    None, not False** -- which is why the guard tests for the symbols as well.
+    """
+    assert safe_solve.safe_solve(expression, "simplify") == expected

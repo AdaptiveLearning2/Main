@@ -383,3 +383,59 @@ def test_a_symbolic_result_is_still_an_answer(expression, expected):
     None, not False** -- which is why the guard tests for the symbols as well.
     """
     assert safe_solve.safe_solve(expression, "simplify") == expected
+
+
+def test_a_caller_blocks_when_every_worker_slot_is_taken(monkeypatch):
+    """The bound's teeth, asserted without threads.
+
+    The budget covers the whole child process and nearly all of it is sympy
+    startup, so concurrent solves contend for CPU and the budget collapses for
+    all of them together rather than degrading. Measured unbounded on this
+    machine: 16 concurrent all succeeded, 32 gave 7 of 32, 48 gave 0 of 48 --
+    and since a solve failure became `SolverUnavailable`, that took every
+    solve-backed topic down as a 503 with no retry.
+
+    `GENERATION_MAX_CONCURRENCY` does not cover this: a solve is not a model
+    call, and prefetch, the inline path and practice all reach here
+    independently.
+
+    Holding the permits directly rather than measuring a peak across threads.
+    A peak is not deterministic -- an earlier version of this test passed
+    against a build with the bound removed, because the pool happened to start
+    its threads in groups no larger than the bound. What is deterministic is
+    that a caller finding no free slot is refused rather than run.
+    """
+    monkeypatch.setattr(safe_solve, "SOLVE_QUEUE_TIMEOUT_S", 0.1)
+    held = [safe_solve._solve_slots.acquire(blocking=False)
+            for _ in range(safe_solve.SOLVE_MAX_CONCURRENCY)]
+    assert all(held), "the semaphore holds fewer permits than it claims"
+    try:
+        assert not safe_solve._solve_slots.acquire(blocking=False), (
+            "it holds more permits than the bound")
+        with pytest.raises(safe_solve.SolverUnavailable, match="no solver slot"):
+            safe_solve.safe_sympify_values(["1"])
+    finally:
+        for _ in held:
+            safe_solve._solve_slots.release()
+
+    # And once a permit is free it runs again, so the refusal was the bound
+    # rather than something broken.
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+
+
+def test_a_permit_is_returned_even_when_the_solve_fails(monkeypatch):
+    """A `BoundedSemaphore` acquired with a timeout turns a leaked permit into
+    solving being off for the life of the process, and the leaking path is the
+    one most likely to run under load. The context manager releases in a
+    `finally` for the reason `llm_client._generation_waiter` does."""
+    def _always_times_out(*a, **k):
+        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=1)
+
+    monkeypatch.setattr(safe_solve.subprocess, "run", _always_times_out)
+    for _ in range(safe_solve.SOLVE_MAX_CONCURRENCY * 2):
+        with pytest.raises(safe_solve.SolverUnavailable):
+            safe_solve.safe_sympify_values(["1"])
+
+    # If permits leaked, this real solve would refuse rather than answer.
+    monkeypatch.undo()
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]

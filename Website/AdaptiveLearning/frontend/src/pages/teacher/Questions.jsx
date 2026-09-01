@@ -8,6 +8,7 @@ import SkeletonList from '../../components/ui/Skeleton'
 import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
+import QuestionFigure from '../../components/questions/QuestionFigure'
 
 const TOPICS = ['all','ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const DIFFS  = ['all','easy','medium','hard']
@@ -53,6 +54,7 @@ function QuestionModal({ question, onClose }) {
           </button>
         </div>
         <p id="question-modal-text" className="text-base font-semibold text-gray-900 dark:text-white mb-5 leading-relaxed">{question.question_text}</p>
+        <QuestionFigure figure={question.figure} />
         <div className="space-y-2 mb-5">
           {question.options?.map((opt, i) => (
             <div key={i}

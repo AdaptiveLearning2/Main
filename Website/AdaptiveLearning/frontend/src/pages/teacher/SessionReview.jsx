@@ -9,6 +9,7 @@ import {
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
+import QuestionFigure from '../../components/questions/QuestionFigure'
 
 // Fixed per label so the same emotion is always the same colour across sessions.
 // Keyed on the FER+ labels the backend actually stores.
@@ -706,6 +707,11 @@ function SessionReviewBody({ sessionId }) {
                                 <p className="text-sm font-bold text-gray-900 dark:text-white">
                                   {q.question_text}
                                 </p>
+                                {/* The wording without the picture is a
+                                    different question from the one the student
+                                    answered -- "3 rows of 4 same-size squares"
+                                    with nothing to count. */}
+                                <QuestionFigure figure={q.figure} />
                                 {q.difficulty && (
                                   <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
                                     Difficulty: {q.difficulty}

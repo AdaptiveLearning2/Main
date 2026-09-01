@@ -3030,6 +3030,15 @@ because a bank row outlives the code that wrote it.
 `'{}'::jsonb` default would claim every question ever generated was considered for a figure and found
 to need none. The generators return the key as `None` rather than omitting it, for the same reason.
 
+**Every surface that *presents* a question renders its figure, and there are five.** This shipped
+wired into two — the adaptive view and flashcards — leaving the teacher's session review, the bank
+modal and practice test mode showing the wording with nothing to count, which is a different question
+from the one the student answered. `normalizeQuestion` returns a fixed object, so a key it does not
+name does not exist for any caller downstream; it carries `figure` through. `QuestionFigure.test.jsx`
+walks the source and fails on a file that renders question text without it. The teacher dashboard's
+"Recent Questions" list is the one stated exception: a `line-clamp-2` row is a *reference* to a
+question, not the question.
+
 **A read path that names its columns has to name this one.** `/api/signals/session/{id}` embeds
 `questions(...)` by name, so the session review would have shown the wording without the picture —
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
@@ -3292,6 +3301,32 @@ fails on exactly the `nan` cases.
 
 **`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
 a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
+
+**Concurrent solves are bounded, because the budget collapses for all of them at once rather than
+degrading.** The timeout covers the whole child process and nearly all of it is sympy startup, so
+solves contend for CPU. Measured unbounded: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
+0 of 48**. Nothing bounded it — `GENERATION_MAX_CONCURRENCY` bounds *model calls*, and a solve is not
+one; prefetch, the inline path and practice reach the worker independently. So a class starting
+together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
+did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
+succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
+
+**Waiting for a slot deliberately does *not* come out of the solve budget** — the opposite of
+`llm_client`, and for a stated reason. There the wait is the caller's own deadline, so charging the
+model call the remainder is right. Here the deadline exists to bound a CPU spin, and a spin does not
+start until the process does; charging the wait would fail solves that then had no budget left to run
+in, under exactly the load the bound exists for.
+
+Take the permit through `_solve_slot`, never a bare acquire/release — the refusal raises *inside* the
+guarded region, which is the path most likely to run under load, and a `BoundedSemaphore` turns one
+leaked permit into solving being off for the life of the process. Same rule as
+`llm_client._generation_waiter`.
+
+**Test the bound by holding the permits, not by measuring a peak across threads.** An earlier version
+of that test passed against a build with the bound removed, because the pool happened to start its
+threads in groups no larger than the bound — a peak is not deterministic, and a mutation check that
+passes is worse than no check. What is deterministic is that a caller finding no free slot is refused
+rather than run.
 
 **A solver that could not *run* is not a bad model reply, and `SolverUnavailable` is the difference.**
 Five things in `_run` returned `None` and only one was the model's fault — a worker that read the

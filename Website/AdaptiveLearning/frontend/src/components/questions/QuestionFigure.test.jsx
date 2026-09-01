@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import QuestionFigure from './QuestionFigure'
@@ -62,5 +65,37 @@ describe('QuestionFigure', () => {
     const { container } = render(
       <QuestionFigure figure={{ type: 'rect_grid', rows: 2, columns: 2 }} />)
     expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
+describe('every surface that presents a question', () => {
+  // Exhaustiveness, like the backend's close-site and _MODE_AWARE tests, and
+  // for the same reason: this shipped wired into two of five surfaces. A
+  // question rendered without its figure is not a smaller version of the
+  // question -- "3 rows of 4 same-size squares" with nothing to count is a
+  // different question, and the student answering it in one place and the
+  // teacher reviewing it in another see different things.
+  const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
+
+  // Presents a *reference* to a question rather than the question: a
+  // `line-clamp-2` row in a "Recent Questions" list, with no options and no
+  // way to answer. A figure there is noise, not completeness.
+  const REFERENCES_ONLY = [resolve(root, 'pages', 'teacher', 'Dashboard.jsx')]
+
+  const walk = (dir) => readdirSync(dir).flatMap(name => {
+    const full = join(dir, name)
+    return statSync(full).isDirectory() ? walk(full)
+      : full.endsWith('.jsx') && !full.includes('.test.') ? [full] : []
+  })
+
+  it('renders its figure too', () => {
+    const presenting = walk(root)
+      .filter(f => !REFERENCES_ONLY.includes(f))
+      .filter(f => /\{(q|data|question)\.(question_text|text)\}/.test(
+        readFileSync(f, 'utf8')))
+    expect(presenting.length).toBeGreaterThan(0)
+    const missing = presenting.filter(
+      f => !readFileSync(f, 'utf8').includes('QuestionFigure'))
+    expect(missing).toEqual([])
   })
 })

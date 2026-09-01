@@ -7,6 +7,7 @@ from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
 import question_schemas
+import question_figures
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -777,6 +778,11 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
     return {
         "question_text": question_data["question_text"],
         "question_topic": "geometry",
+        # Built from `variables` -- the same dict the solver above indexed --
+        # so the picture cannot describe different numbers from the ones being
+        # scored. None for a scenario with no figure, which is most of them.
+        "figure": question_figures.figure_for(question_data["scenario"],
+                                              question_data["variables"]),
         "answer_options": answers,
         "correct_answer": solution
     }

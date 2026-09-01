@@ -357,6 +357,10 @@ def add_question_to_supabase(question, difficulty):
 
     response = supabase.table("questions").insert({
         "subject" : question["question_topic"],
+        # NULL when there is none. A question is served from this row when the
+        # generator reproduces its text, so a figure that is not stored is a
+        # figure the second student never sees.
+        "figure": question.get("figure"),
         "difficulty": difficulty,
         "question_text": question["question_text"],
         "options" : question["answer_options"],

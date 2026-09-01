@@ -2996,6 +2996,58 @@ Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squa
 fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
 3.MD.7.
 
+### A question may carry a figure, and it is a spec the client draws
+
+`questions.figure` (`20260909000000`) holds a specification, built by
+`question_figures.py`; `components/questions/QuestionFigure.jsx` is the only thing that turns one
+into pixels. It exists because grades 1-3 mathematics is largely visual and the standards this system
+could not ask were mostly the visual ones — `rectangle_area_by_counting` (2.G.2) was being asked in
+*words*, "a rectangle split into 3 rows of 4 same-size squares", which is a description of a picture
+rather than the picture.
+
+**The figure is derived from the data the solver uses, and no generator asks a model for one.** That
+is the design, not a preference. `question_consistency` exists because a model free to write the
+question text and the scored data separately eventually disagrees with itself, and the student
+answers the version on screen while being marked against the other. A picture is the same hazard with
+**no text for any check to read** — nothing downstream could compare a model-drawn diagram against
+the numbers it is scored on. Reading `variables`, the same dict `geometry_solvers` indexes, makes
+that disagreement unrepresentable rather than unlikely.
+
+**A spec, not an SVG**, for two reasons. The drawing and the sentence a screen reader is given come
+from one object, so they cannot describe different pictures — the rule `AccessibleChart` exists for,
+after its chart and its `sr-only` table drifted twice as separate literals, and it binds harder here
+because a figure has no text of its own. And a renderer fixed later applies to every question already
+in the bank; stored markup bakes today's renderer into rows that outlive it.
+
+**A figure is an enrichment and never a requirement.** `figure_for` returns `None` for a scenario
+with no figure, values it cannot use, or a size it will not draw, and it never raises — it runs after
+the solve, so an escaping exception would turn a checked, grade-appropriate question into a 500 over
+a decoration. The client matches that: an unrecognised `type` renders nothing rather than throwing,
+which is what an older bundle meets against a newer bank. Both ends bound the grid at 12 a side,
+because a bank row outlives the code that wrote it.
+
+**The column is nullable with no default** — same four-state rule as `sessions.chart_paths`. A
+`'{}'::jsonb` default would claim every question ever generated was considered for a figure and found
+to need none. The generators return the key as `None` rather than omitting it, for the same reason.
+
+**Every surface that *presents* a question renders its figure, and there are five.** This shipped
+wired into two — the adaptive view and flashcards — leaving the teacher's session review, the bank
+modal and practice test mode showing the wording with nothing to count, which is a different question
+from the one the student answered. `normalizeQuestion` returns a fixed object, so a key it does not
+name does not exist for any caller downstream; it carries `figure` through. `QuestionFigure.test.jsx`
+walks the source and fails on a file that renders question text without it — matching
+`<QuestionFigure`, **not the bare name**, which a dangling import satisfies and which is exactly what
+deleting the element leaves behind. The first version of that check passed against a build with the
+render removed and the import kept; `no-unused-vars` would have flagged it, but lint is non-blocking
+in CI here, so it would have landed. The teacher dashboard's
+"Recent Questions" list is the one stated exception: a `line-clamp-2` row is a *reference* to a
+question, not the question.
+
+**A read path that names its columns has to name this one.** `/api/signals/session/{id}` embeds
+`questions(...)` by name, so the session review would have shown the wording without the picture —
+"3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
+student answered. `/api/questions` uses `select("*")` and needed nothing.
+
 ### Grade 1 had two topics, and now has four
 
 `missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
@@ -3253,6 +3305,32 @@ fails on exactly the `nan` cases.
 
 **`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
 a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
+
+**Concurrent solves are bounded, because the budget collapses for all of them at once rather than
+degrading.** The timeout covers the whole child process and nearly all of it is sympy startup, so
+solves contend for CPU. Measured unbounded: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
+0 of 48**. Nothing bounded it — `GENERATION_MAX_CONCURRENCY` bounds *model calls*, and a solve is not
+one; prefetch, the inline path and practice reach the worker independently. So a class starting
+together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
+did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
+succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
+
+**Waiting for a slot deliberately does *not* come out of the solve budget** — the opposite of
+`llm_client`, and for a stated reason. There the wait is the caller's own deadline, so charging the
+model call the remainder is right. Here the deadline exists to bound a CPU spin, and a spin does not
+start until the process does; charging the wait would fail solves that then had no budget left to run
+in, under exactly the load the bound exists for.
+
+Take the permit through `_solve_slot`, never a bare acquire/release — the refusal raises *inside* the
+guarded region, which is the path most likely to run under load, and a `BoundedSemaphore` turns one
+leaked permit into solving being off for the life of the process. Same rule as
+`llm_client._generation_waiter`.
+
+**Test the bound by holding the permits, not by measuring a peak across threads.** An earlier version
+of that test passed against a build with the bound removed, because the pool happened to start its
+threads in groups no larger than the bound — a peak is not deterministic, and a mutation check that
+passes is worse than no check. What is deterministic is that a caller finding no free slot is refused
+rather than run.
 
 **A solver that could not *run* is not a bad model reply, and `SolverUnavailable` is the difference.**
 Five things in `_run` returned `None` and only one was the model's fault — a worker that read the

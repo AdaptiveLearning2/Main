@@ -26,6 +26,10 @@ export function normalizeQuestion(raw) {
     difficulty: raw.difficulty,
     options,
     correctAnswer: raw.correct_answer,
+    // Carried through, or test mode loses the picture flashcards shows for
+    // the same question from the same endpoint. This returns a fixed object,
+    // so a key it does not name does not exist for any caller downstream.
+    figure: raw.figure ?? null,
   }
 }
 

@@ -20,10 +20,12 @@ only where an expression is evaluated, not on every generation.
 Returns None on timeout or failure, which every caller already treats as "retry
 this question".
 """
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import llm_client
@@ -70,6 +72,64 @@ _CONFIGURED_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float,
 # finished starting up. 3x is generous against a solve that measures ~10ms, and
 # the point is not the arithmetic -- it is that a budget below this is not
 # separating a runaway from an ordinary question, it is cutting off both.
+# How many worker processes may run at once.
+#
+# The budget covers the whole child process and nearly all of it is sympy
+# startup, so concurrent solves contend for CPU and the budget collapses for
+# *all* of them together rather than degrading. Measured on this machine
+# against an unbounded pool:
+#
+#     8 concurrent   8/8 ok, slowest 1.12s
+#    16 concurrent  16/16 ok, slowest 1.91s
+#    32 concurrent   7/32 ok, slowest 3.07s     <- past the 3.0s budget
+#    48 concurrent   0/48 ok
+#
+# Nothing bounded this. `GENERATION_MAX_CONCURRENCY` bounds model calls, and a
+# solve is not a model call -- prefetch, the inline path and practice all reach
+# here independently. So a class starting together took every solve-backed
+# topic down at once, and since the solver's failure became `SolverUnavailable`
+# it did so as a 503 with no retry rather than as a retry.
+#
+# Queueing is strictly better than refusing here: the work is ~1s and the
+# caller wants an answer. 8 is the comfortable rung above, not the last one
+# that worked.
+SOLVE_MAX_CONCURRENCY = llm_client._env_number(
+    "SOLVE_MAX_CONCURRENCY", 8, int, minimum=1)
+
+# The bound on *waiting*, which the per-solve budget deliberately does not
+# cover: a caller that queues does not lose the time it waited from the time
+# its subprocess is allowed to take, or a busy moment would fail solves that
+# then had no budget left to run in. `llm_client` charges its model call the
+# remainder for the opposite reason -- there the wait is the caller's own
+# deadline; here the deadline exists to bound a CPU spin, and a spin does not
+# start until the process does.
+SOLVE_QUEUE_TIMEOUT_S = llm_client._env_number(
+    "SOLVE_QUEUE_TIMEOUT", 20.0, float, minimum=0.1)
+
+_solve_slots = threading.BoundedSemaphore(SOLVE_MAX_CONCURRENCY)
+
+
+@contextlib.contextmanager
+def _solve_slot(label):
+    """One concurrency permit, released on every path.
+
+    A context manager rather than an acquire/release pair for the reason
+    `llm_client._generation_waiter` is one: the refusal raises *inside* the
+    guarded region, which is the path most likely to run under load, and a
+    hand-written release is exactly the one that gets skipped. The permit
+    would never come back, and a `BoundedSemaphore` acquired non-blockingly
+    turns that into solving being off for the life of the process.
+    """
+    if not _solve_slots.acquire(timeout=SOLVE_QUEUE_TIMEOUT_S):
+        raise SolverUnavailable(
+            f"no solver slot free within {SOLVE_QUEUE_TIMEOUT_S}s "
+            f"({SOLVE_MAX_CONCURRENCY} concurrent): {label}")
+    try:
+        yield
+    finally:
+        _solve_slots.release()
+
+
 _STARTUP_SAFETY_FACTOR = 3.0
 
 # The probe's own budget, deliberately unrelated to the setting it validates:
@@ -263,24 +323,31 @@ def _run(request: dict, timeout, label: str):
     this.
     """
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
-    try:
-        proc = subprocess.run(
-            [sys.executable, _WORKER],
-            input=json.dumps(request), capture_output=True, text=True,
-            timeout=budget,
-            # Inherit nothing the child does not need.
-            env={"PATH": os.environ.get("PATH", ""),
-                 "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
-        )
-    except subprocess.TimeoutExpired:
-        # subprocess.run kills the child here, which is the whole point: the
-        # in-process equivalent leaves the spin running for the life of the
-        # worker.
-        raise SolverUnavailable(
-            f"the solver exceeded {budget}s and was killed ({label})") from None
-    except Exception as e:                      # pragma: no cover - defensive
-        raise SolverUnavailable(
-            f"the solver could not be started: {type(e).__name__}: {e}") from e
+    # The permit is taken *outside* the try, so a queue refusal is not caught
+    # by the `except Exception` below and re-labelled "could not be started" --
+    # it was never started, and saying so wrongly is what this whole type
+    # exists to stop. It is released before the output is parsed: that part is
+    # a JSON load on a capped string and holding a slot through it would shrink
+    # the effective concurrency for no reason.
+    with _solve_slot(label):
+        try:
+            proc = subprocess.run(
+                [sys.executable, _WORKER],
+                input=json.dumps(request), capture_output=True, text=True,
+                timeout=budget,
+                # Inherit nothing the child does not need.
+                env={"PATH": os.environ.get("PATH", ""),
+                     "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
+            )
+        except subprocess.TimeoutExpired:
+            # subprocess.run kills the child here, which is the whole point:
+            # the in-process equivalent leaves the spin running for the life of
+            # the worker.
+            raise SolverUnavailable(
+                f"the solver exceeded {budget}s and was killed ({label})") from None
+        except Exception as e:                  # pragma: no cover - defensive
+            raise SolverUnavailable(
+                f"the solver could not be started: {type(e).__name__}: {e}") from e
 
     if proc.returncode != 0:
         raise SolverUnavailable(

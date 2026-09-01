@@ -30,8 +30,8 @@ const CHANNEL_LABELS = [
   ['face',      'Camera'],
 ]
 
-const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
-const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+const TOPICS = ['ordering','missing_number','patterns','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
+const ICONS  = { ordering:'🔢', missing_number:'❓', patterns:'📶', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 const SHORT  = { angle_relationships: 'Angle Rel.' }
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 

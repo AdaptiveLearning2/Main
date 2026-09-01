@@ -2996,6 +2996,61 @@ Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squa
 fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
 3.MD.7.
 
+### Grade 1 had two topics, and now has four
+
+`missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
+factor) and `patterns` (1.NBT.1 counting sequences and 2.NBT.2 skip counting, through 5.OA.3). Both
+answer to a single whole number an exact solver produces, which is the constraint that rules out
+most of 1.G and 1.OA — a shape-partitioning question has no number to score. Grade 1 goes 2 → 4,
+grade 2 goes 3 → 5, grade 4 goes 4 → 5.
+
+**Both write the unknown as `?`, never `x`**, and that is the whole distinction from `algebra`
+(6.EE.7, gated to grade 6). `grade_appropriateness` lists both in `FORBIDDEN_BANDS` for exactly that
+reason: the prompt asks, and only the check enforces.
+
+**`TOPIC_MAX_GRADE` is new, and it is the answer to `TOPIC_MIN_GRADE` being a floor with no
+ceiling.** "8 + ? = 11" is 1.OA.8 and does not become a grade-9 question by using bigger numbers —
+the skill is finding an unknown in one arithmetic fact, and past grade 3 that skill is `algebra` with
+proper notation. Without a ceiling `_allowed_topics` would keep offering both to a 15-year-old and
+the difficulty tiers would rank them as somebody's "easy". It is deliberately **not** applied to the
+original ten, which all scale: harder numbers inside the same question shape stay honest work.
+
+It also repeals a property a test used to assert — that topics only ever accumulate with grade. That
+was true of a floor-only gate; `test_each_topic_is_offered_over_exactly_the_grades_it_declares`
+replaces it with what the subset test was really protecting, that availability follows the declared
+tables and is contiguous.
+
+**Neither solver touches sympy, so neither needs the bounded subprocess.** `safe_solve` exists
+because `sympify("9**9**9")` never returns; there is no parser here to feed — the arithmetic is one
+operation on integers matched by `^\d{1,4}$`. Both refuse rather than guess, and
+`solve_pattern` derives the step and then **checks it against every known term**: `2, 4, 6, ?, 9` has
+a first-pair step of 2 and is not an arithmetic sequence, so taking the first pair would answer 8
+confidently for a question with no single right answer.
+
+**Each has its own shown-versus-scored check rather than `question_consistency.dataset_mismatch`**,
+which locates a dataset after the last colon. There is no dataset here, there is an equation — and
+the question *is* the equation, so a text reading "8 + ? = 12" over variables scoring 11 produces a
+question answered correctly and marked wrong. Both also refuse any digit outside the equation, since
+a second number on screen leaves a young reader unable to tell which one is meant.
+
+**A new topic needs five things wired, and the third is the one that fails silently.** `ALL_TOPICS`
+and `TOPIC_MIN_GRADE`; a `case` in `question_generation`'s match (which now raises by name rather
+than falling through to an `UnboundLocalError` on `return response`); **a `math_topics` row, via a
+migration** — `record_topic_attempt` joins `math_topics.topic_name = questions.subject` and
+attributes nothing when that finds none, so a topic without one serves and scores questions while
+crediting the student's work to nothing, which is exactly what `20260907000000` had to repair for
+`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and the frontend's four hardcoded
+topic lists, or the topic has no tile in the student's accuracy panel. `test_young_topics.py` pins
+the first three.
+
+The per-topic history in `get_user_history` is now derived from `ALL_TOPICS` rather than listed
+again: `question_generation` reads `history[topic] if topic in history else []`, which fails *open*,
+so a forgotten topic quietly lost its repeat-avoidance and started serving the same question back.
+
+Verified against `claude-haiku-4-5` on 2026-09-01, 6 of 6 generated, solved and scored — including
+grade 1 on the **hard** tier staying within 20 and addition-only, which is `GRADE_OVERRIDES` holding
+a tier that would otherwise have reached for multiplication (3.OA).
+
 **Grade 1 has no geometry at all**, and that is the end of this thread rather than a gap in it. 1.G
 is defining attributes of shapes and partitioning into halves and fourths: nothing that produces a
 number a solver can score. The tempting fix — *"3 triangles and 4 squares, how many shapes?"* — is

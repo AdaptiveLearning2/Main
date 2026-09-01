@@ -185,3 +185,32 @@ def probability(scenario_name):
                     "scenario": {"type": "string", "enum": ["dice"]},
                     "sides": {"type": "string", "pattern": r"^\d+$"},
                     "target": {"type": "array", "items": {"type": "string"}}})
+
+
+def missing_number():
+    """`variables` is an equation with exactly one `?` in it.
+
+    Neither the length nor the position of the blank is expressible -- the API
+    refuses `minItems` above 1, so "exactly five tokens" cannot be stated here
+    any more than angle arity could. `solve_missing` enforces both, and is the
+    only thing that does.
+
+    The token pattern allows a whole number, the three operators, `=` and `?`,
+    which is narrow enough to keep `x` out. That matters more here than
+    elsewhere: this topic is one notation away from `algebra`, and the `?` is
+    what keeps it at grade 1.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "variables": {"type": "array",
+                                  "items": {"type": "string",
+                                            "pattern": r"^(\d{1,4}|[+\-*]|=|\?)$"}}})
+
+
+def patterns():
+    """A number sequence with the term to find marked `?`."""
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "values": {"type": "array",
+                               "items": {"type": "string",
+                                         "pattern": r"^(\d{1,5}|\?)$"}}})

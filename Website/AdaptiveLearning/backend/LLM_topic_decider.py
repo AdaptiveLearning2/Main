@@ -14,6 +14,7 @@ from collections import deque
 from supabase_auth import datetime
 import LLM_algebra_generation, LLM_ordering_generation, LLM_rationals_generation, LLM_mean_generation, LLM_median_generation
 import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation, LLM_angle_relationship_generation, LLM_expressions_generation
+import LLM_missing_number_generation, LLM_patterns_generation
 # python -m flask --app LLM_topic_decider run
 
 load_dotenv()
@@ -24,6 +25,7 @@ supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 ALL_TOPICS = [
     "geometry", "algebra", "expressions", "ordering", "rationals",
     "mean", "median", "mode", "probability", "angle_relationships",
+    "missing_number", "patterns",
 ]
 
 # Enforces in code the same grade rule the prompts below only state in
@@ -79,6 +81,30 @@ TOPIC_MIN_GRADE = {
     "algebra":             6,   # 6.EE.7, one-variable equations
     "angle_relationships": 7,   # 7.G.5, complementary and supplementary
     "probability":         7,   # 7.SP.5
+    # The two that exist for the youngest students. Grade 1 had `ordering` and
+    # `expressions` and nothing else -- two topics on rotation for a 6-year-old.
+    "missing_number":      1,   # 1.OA.8, the unknown in an equation
+    "patterns":            1,   # 1.NBT.1 counting sequences, 2.NBT.2 skip counting
+}
+
+# The grade past which a topic stops being worth serving. Empty for the ten
+# original topics, which all scale: harder numbers inside the same question
+# shape stay honest work at any grade above their floor.
+#
+# These two do not. "8 + ? = 11" is 1.OA.8 and does not become a grade-9
+# question by using bigger numbers -- the *skill* is finding an unknown in a
+# single arithmetic fact, and past grade 3 that skill is `algebra` with proper
+# notation. Without a ceiling `_allowed_topics` would keep offering both to a
+# 15-year-old, and the difficulty tiers would happily rank them as somebody's
+# "easy".
+#
+# This is the answer to a standing question about `TOPIC_MIN_GRADE` being a
+# floor with no ceiling. It is deliberately *not* applied to the original ten:
+# whether `rectangle_area_by_counting` should reach grade 9 is a question about
+# a scenario inside a topic, which is a different mechanism, and is unchanged.
+TOPIC_MAX_GRADE = {
+    "missing_number":      3,   # 3.OA.4 unknown factor is the last of it
+    "patterns":            5,   # 4.OA.5 and 5.OA.3 still generate patterns
 }
 
 
@@ -90,7 +116,10 @@ def _allowed_topics(grade):
     number = grade_levels.grade_number(grade)
     if number is None:
         number = 1
-    return [t for t in ALL_TOPICS if TOPIC_MIN_GRADE[t] <= number]
+    return [t for t in ALL_TOPICS
+            if TOPIC_MIN_GRADE[t] <= number
+            # Absent means no ceiling, so the original ten are unaffected.
+            and number <= TOPIC_MAX_GRADE.get(t, number)]
 
 
 def _safe_topic(topic, grade):
@@ -279,18 +308,14 @@ user_histories = {}
 
 def get_user_history(user_id):
     if user_id not in user_histories:
+        # Derived from ALL_TOPICS rather than listed again. `question_generation`
+        # reads `history[topic] if topic in history else []`, which fails *open*
+        # -- so a topic added to ALL_TOPICS and forgotten here would quietly
+        # lose its repeat-avoidance and start serving the same question back.
         user_histories[user_id] = {
-            "global": deque(maxlen=40), # last 40 questions regardless of topic, used to avoid repeats
-            "geometry": deque(maxlen=10),
-            "algebra": deque(maxlen=10),
-            "expressions": deque(maxlen=10),
-            "ordering": deque(maxlen=10),
-            "rationals": deque(maxlen=10),
-            "mean": deque(maxlen=10),
-            "median": deque(maxlen=10),
-            "mode": deque(maxlen=10),
-            "probability": deque(maxlen=10),
-            "angle_relationships": deque(maxlen=10)
+            # last 40 questions regardless of topic, used to avoid repeats
+            "global": deque(maxlen=40),
+            **{topic: deque(maxlen=10) for topic in ALL_TOPICS},
         }
     return user_histories[user_id]
 
@@ -492,6 +517,34 @@ def question_generation(topic, difficulty, user_id, grade):
             history["angle_relationships"].append({
                     "text": response["question_text"],
                     "topic": "angle_relationships"})
+
+        case "missing_number":
+            response = LLM_missing_number_generation.generate_missing_number_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "missing_number"})
+            history["missing_number"].append({
+                    "text": response["question_text"],
+                    "topic": "missing_number"})
+
+        case "patterns":
+            response = LLM_patterns_generation.generate_patterns_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "patterns"})
+            history["patterns"].append({
+                    "text": response["question_text"],
+                    "topic": "patterns"})
+
+        case _:
+            # Unreachable while every ALL_TOPICS member has a case above, and
+            # that is exactly what makes the silent version dangerous: without
+            # this, a topic added to ALL_TOPICS and forgotten here falls
+            # through the match and `return response` raises UnboundLocalError
+            # -- a 500 naming a variable rather than the topic nobody wired.
+            raise ValueError(f"no generator wired for topic {topic!r}")
     return response
 
 def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=None, manual_bias=0):

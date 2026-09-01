@@ -9,7 +9,7 @@ import ParentLinkedBanner from '../../components/consent/ParentLinkedBanner'
 import SkeletonList from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
 
-const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
+const TOPICS = ['ordering','missing_number','patterns','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
 const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
 // Below this many attempts, a topic's accuracy is too noisy to call it the

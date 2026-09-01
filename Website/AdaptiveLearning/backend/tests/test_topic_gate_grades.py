@@ -76,25 +76,34 @@ def test_grade_one_has_no_geometry():
 
     The alternative was dressing addition as geometry ("3 triangles and 4
     squares -- how many shapes?"), which keeps a topic count up while teaching
-    1.OA. Grade 1 has two topics, and that is the honest size of what this
-    system can ask a 6-year-old.
+    1.OA. That is still refused: grade 1 has no geometry.
+
+    What changed is the rest of the list. Grade 1 had exactly two topics, which
+    meant a 6-year-old saw `ordering` and `expressions` on rotation;
+    `missing_number` (1.OA.8) and `patterns` (1.NBT.1) are real grade-1
+    standards with exact solvers, so the honest size of the list is four.
     """
-    assert set(decider._allowed_topics("1")) == {"ordering", "expressions"}
+    assert set(decider._allowed_topics("1")) == {"ordering", "expressions", "missing_number", "patterns"}
     assert "geometry" in decider._allowed_topics("2")
 
 
 def test_an_unreadable_grade_gets_grade_ones_topics():
     """It is treated as the youngest, so it narrows with grade 1 rather than
     keeping a list that used to include geometry."""
-    assert set(decider._allowed_topics("no idea")) == {"ordering", "expressions"}
+    assert set(decider._allowed_topics("no idea")) == {"ordering", "expressions", "missing_number", "patterns"}
 
 
 def test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five():
     """Pinned so the narrowing is visible rather than incidental. If a future
-    change widens these grades again, it should be because someone chose to."""
+    change widens these grades again, it should be because someone chose to.
+
+    It has been widened once, deliberately: `patterns` runs to grade 5 (4.OA.5,
+    5.OA.3), so these grades have five topics rather than four. `mean`,
+    `median` and `mode` are still out, which is what the narrowing was about --
+    they are 6.SP.5c and were the 30 above-grade questions that prompted it."""
     for grade in ("4", "5"):
         assert set(decider._allowed_topics(grade)) == {
-            "ordering", "geometry", "expressions", "rationals"}
+            "ordering", "geometry", "expressions", "rationals", "patterns"}
 
 
 @pytest.mark.parametrize("grade", ["", None, "no idea", "2026 cohort"])
@@ -102,16 +111,29 @@ def test_an_unreadable_grade_gets_the_youngest_topics(grade):
     """`profiles.grade_level` is free text. An unreadable one must not fall
     through to a permissive branch -- the failure `_allowed_topics` was
     rewritten for once already."""
-    assert set(decider._allowed_topics(grade)) == {"ordering", "expressions"}
+    assert set(decider._allowed_topics(grade)) == {"ordering", "expressions", "missing_number", "patterns"}
 
 
-def test_a_narrower_grade_is_a_subset_of_a_wider_one():
-    """Topics only ever accumulate with grade. A younger student being offered
-    something an older one is not would mean the gate keys on something other
-    than what has been taught."""
-    sets = [set(decider._allowed_topics(str(g))) for g in range(1, 13)]
-    for younger, older in zip(sets, sets[1:]):
-        assert younger <= older
+def test_each_topic_is_offered_over_exactly_the_grades_it_declares():
+    """This replaces a subset test, and the reason is the point.
+
+    That test asserted topics only ever accumulate with grade -- true while
+    `TOPIC_MIN_GRADE` was a floor with no ceiling, and deliberately repealed by
+    `TOPIC_MAX_GRADE`. "8 + ? = 11" is 1.OA.8 and does not become a grade-9
+    question by using bigger numbers, so `missing_number` leaves the list at
+    grade 4 and a 15-year-old is not offered it.
+
+    The property that survives is the one the subset test was really
+    protecting: availability follows the declared tables and nothing else, so
+    each topic appears over exactly `[min, max]` and is contiguous -- no gap in
+    the middle, which is what a gate keying on something other than the tables
+    would produce."""
+    for topic in decider.ALL_TOPICS:
+        low = decider.TOPIC_MIN_GRADE[topic]
+        high = decider.TOPIC_MAX_GRADE.get(topic, 12)
+        offered = [g for g in range(1, 13)
+                   if topic in decider._allowed_topics(str(g))]
+        assert offered == list(range(low, min(high, 12) + 1)), topic
 
 
 def test_every_grade_has_something_to_ask():

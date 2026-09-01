@@ -2996,6 +2996,45 @@ Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squa
 fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
 3.MD.7.
 
+### A question may carry a figure, and it is a spec the client draws
+
+`questions.figure` (`20260909000000`) holds a specification, built by
+`question_figures.py`; `components/questions/QuestionFigure.jsx` is the only thing that turns one
+into pixels. It exists because grades 1-3 mathematics is largely visual and the standards this system
+could not ask were mostly the visual ones — `rectangle_area_by_counting` (2.G.2) was being asked in
+*words*, "a rectangle split into 3 rows of 4 same-size squares", which is a description of a picture
+rather than the picture.
+
+**The figure is derived from the data the solver uses, and no generator asks a model for one.** That
+is the design, not a preference. `question_consistency` exists because a model free to write the
+question text and the scored data separately eventually disagrees with itself, and the student
+answers the version on screen while being marked against the other. A picture is the same hazard with
+**no text for any check to read** — nothing downstream could compare a model-drawn diagram against
+the numbers it is scored on. Reading `variables`, the same dict `geometry_solvers` indexes, makes
+that disagreement unrepresentable rather than unlikely.
+
+**A spec, not an SVG**, for two reasons. The drawing and the sentence a screen reader is given come
+from one object, so they cannot describe different pictures — the rule `AccessibleChart` exists for,
+after its chart and its `sr-only` table drifted twice as separate literals, and it binds harder here
+because a figure has no text of its own. And a renderer fixed later applies to every question already
+in the bank; stored markup bakes today's renderer into rows that outlive it.
+
+**A figure is an enrichment and never a requirement.** `figure_for` returns `None` for a scenario
+with no figure, values it cannot use, or a size it will not draw, and it never raises — it runs after
+the solve, so an escaping exception would turn a checked, grade-appropriate question into a 500 over
+a decoration. The client matches that: an unrecognised `type` renders nothing rather than throwing,
+which is what an older bundle meets against a newer bank. Both ends bound the grid at 12 a side,
+because a bank row outlives the code that wrote it.
+
+**The column is nullable with no default** — same four-state rule as `sessions.chart_paths`. A
+`'{}'::jsonb` default would claim every question ever generated was considered for a figure and found
+to need none. The generators return the key as `None` rather than omitting it, for the same reason.
+
+**A read path that names its columns has to name this one.** `/api/signals/session/{id}` embeds
+`questions(...)` by name, so the session review would have shown the wording without the picture —
+"3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
+student answered. `/api/questions` uses `select("*")` and needed nothing.
+
 ### Grade 1 had two topics, and now has four
 
 `missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown

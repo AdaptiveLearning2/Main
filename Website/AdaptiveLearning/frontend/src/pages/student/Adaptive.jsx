@@ -13,6 +13,7 @@ import { startPush, stopPush, stopPushOnUnload, pushStatus,
 import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, BatteryLow, Clock } from 'lucide-react'
 import { toast } from 'sonner'
+import QuestionFigure from '../../components/questions/QuestionFigure'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
@@ -1166,6 +1167,7 @@ export default function Adaptive() {
                 </div>
 
                 <p className="text-lg font-semibold text-gray-900 dark:text-white mb-6 leading-relaxed">{data.question_text}</p>
+                <QuestionFigure figure={data.figure} />
 
                 <div className="space-y-3 mb-6">
                   {data.answer_options?.map((opt, i) => {

@@ -6095,8 +6095,13 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
     # deleted still appears, with `questions: null` -- the answer happened and
     # dropping it would change the session's history.
     answers = (supabase.table("session_answers")
+               # `figure` too: a review that shows the wording without the
+               # picture is showing a different question from the one the
+               # student answered -- "3 rows of 4 same-size squares" with
+               # nothing to count. Named columns, so a column added to the
+               # bank has to be added here to be seen at all.
                .select("*, questions(question_text, options, correct_answer, "
-                       "subject, difficulty)")
+                       "subject, difficulty, figure)")
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
     return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}

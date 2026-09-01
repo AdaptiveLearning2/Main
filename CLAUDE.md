@@ -3238,6 +3238,27 @@ the prompt and the retry loop. Anything a bounded worker must run needs the same
 validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
 alongside the angle solvers rather than staying beside its caller.
 
+**A solver that could not *run* is not a bad model reply, and `SolverUnavailable` is the difference.**
+Five things in `_run` returned `None` and only one was the model's fault — a worker that read the
+input and rejected it. A timeout, a failure to spawn, a non-zero exit and unreadable output all say
+nothing about the reply and everything about the machine. Collapsed into one `None`, a load-dependent
+timeout retried three times — **billing a model call each time that could not possibly help** — and
+then raised *"Failed to generate valid JSON after retries"*, a claim about the model for a subprocess
+that never ran. It surfaced as an intermittent failure in an unrelated topic's test, which is exactly
+how much that misdiagnosis costs. It now raises on the first attempt, at one model call instead of
+three, naming the cause.
+
+It subclasses `llm_client.GenerationUnavailable`, so both `main.py` call sites already turn it into
+the **503** that means "this deployment cannot serve right now" rather than a 500. A worker that ran
+and refused the input still returns `None` and still retries, because a different reply genuinely
+might work.
+
+**`_probe_startup` must catch it.** That function runs at import and its own docstring is explicit
+that raising there would take the whole backend down — ingest, dashboards and consent with it — over
+one topic's tuning knob. Making `_run` raise nearly did exactly that; a mechanism that cannot run is
+folded into the existing "probe failed" branch, which leaves the configured budget alone rather than
+guessing one from a failed measurement.
+
 **`SOLVE_TIMEOUT` bounds the subprocess, not the arithmetic, and that is why it self-checks.** The
 budget covers launching Python and importing sympy, which is ~99% of an ordinary solve — measured
 0.64–1.00s wall where the maths is ~10ms. So it is really a bound on *startup plus a little*, and

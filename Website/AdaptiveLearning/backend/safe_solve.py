@@ -120,8 +120,18 @@ def _probe_startup():
     """
     global SOLVE_TIMEOUT_S, STARTUP_COST_S
     started = time.monotonic()
-    probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
-                  "startup probe")
+    try:
+        probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
+                      "startup probe")
+    except SolverUnavailable as e:
+        # `_run` raises this so a solve that could not run stops being reported
+        # as a bad model reply. Here it must NOT propagate: this runs at import,
+        # so letting it out would take the whole backend down -- every
+        # non-generation surface with it -- which is the one thing the docstring
+        # above says this function may not do. A mechanism that cannot run is
+        # exactly the "probe failed" case below, so it is folded into it.
+        print(f"[safe_solve] startup probe could not run: {e}")
+        probed = None
     elapsed = time.monotonic() - started
     if probed is None:
         print(f"[safe_solve] startup probe failed after {elapsed:.1f}s -- the "
@@ -221,12 +231,36 @@ def safe_solve(expression: str, scenario: str, timeout: float | None = None):
                 f"{scenario}:{expression[:80]}")
 
 
-def _run(request: dict, timeout, label: str):
-    """One worker call. The result string, or None if it did not produce one.
+class SolverUnavailable(llm_client.GenerationUnavailable):
+    """The solver could not be *run*. Not the same as a reply it rejected.
 
-    Shared by both entry points so the kill, the exit-code check and the
-    length cap cannot end up applying to one solve path and not the other --
-    which is how the unbounded half of geometry survived a round of this.
+    Five things used to return `None` here and only one of them was the model's
+    fault: a worker that answered "that input is not solvable". The other four
+    -- a timeout, a failure to spawn, a non-zero exit, unreadable output -- say
+    nothing about the reply and everything about this machine.
+
+    Collapsed into one `None`, the generator retried three times, each retry
+    billing another model call that could not help, and then raised "Failed to
+    generate valid JSON after retries" -- a claim about the model, for a
+    subprocess that never ran. That misdiagnosis is the whole reason for this
+    type: an intermittent, load-dependent timeout in the test suite reads as a
+    defect in whichever topic drew the short straw.
+
+    It subclasses `GenerationUnavailable` so it reaches a student as the 503
+    that already means "this deployment cannot serve right now", rather than as
+    a 500. Both `main.py` call sites catch that already.
+    """
+
+
+def _run(request: dict, timeout, label: str):
+    """One worker call. The result string, or None if the worker ran and
+    rejected the input.
+
+    Raises `SolverUnavailable` when the worker could not be run at all --
+    see that class. Shared by both entry points so the kill, the exit-code
+    check and the length cap cannot end up applying to one solve path and not
+    the other, which is how the unbounded half of geometry survived a round of
+    this.
     """
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
     try:
@@ -242,21 +276,24 @@ def _run(request: dict, timeout, label: str):
         # subprocess.run kills the child here, which is the whole point: the
         # in-process equivalent leaves the spin running for the life of the
         # worker.
-        print(f"[safe_solve] exceeded {budget}s and was killed: {label!r}")
-        return None
+        raise SolverUnavailable(
+            f"the solver exceeded {budget}s and was killed ({label})") from None
+    except SolverUnavailable:
+        raise
     except Exception as e:                      # pragma: no cover - defensive
-        print(f"[safe_solve] could not run: {type(e).__name__}: {e}")
-        return None
+        raise SolverUnavailable(
+            f"the solver could not be started: {type(e).__name__}: {e}") from e
 
     if proc.returncode != 0:
-        print(f"[safe_solve] worker exited {proc.returncode}: "
-              f"{(proc.stderr or '').strip()[:200]}")
-        return None
+        raise SolverUnavailable(
+            f"the solver exited {proc.returncode}: "
+            f"{(proc.stderr or '').strip()[:200]}")
     try:
         answer = json.loads(proc.stdout)
     except ValueError:
-        print(f"[safe_solve] unreadable worker output: {proc.stdout[:200]!r}")
-        return None
+        raise SolverUnavailable(
+            f"the solver produced unreadable output: "
+            f"{proc.stdout[:200]!r}") from None
     if not answer.get("ok"):
         print(f"[safe_solve] {answer.get('error')}")
         return None

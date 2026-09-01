@@ -3238,6 +3238,22 @@ the prompt and the retry loop. Anything a bounded worker must run needs the same
 validity check that needs the *parsed* form goes with it, which is why `invalid_reason` moved
 alongside the angle solvers rather than staying beside its caller.
 
+**Every worker branch checks its result is usable, and the `evaluate`/`simplify` one did not.**
+`1/0` came back as the string `zoo` and `0/0` as `nan`. `rationals` served them —
+`correct_answer='zoo'` among the options — and `expressions` raised
+`TypeError: Cannot convert complex to float` building distractors, a 500 rather than a retry. Every
+sibling branch guards this, in `_solve_worker` and in both solver modules; this was the only one that
+did not.
+
+**`is_number` cannot be the test** — `simplify` exists to return `5*x`, so rejecting anything
+non-numeric refuses every question that scenario is for. **And `is_finite is False` cannot be it
+either: `nan.is_finite` is `None`, not `False`**, so that form catches `zoo` and the infinities and
+lets `nan` straight through. The guard tests both, and a mutation to the `is_finite`-only version
+fails on exactly the `nan` cases.
+
+**`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
+a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
+
 **A solver that could not *run* is not a bad model reply, and `SolverUnavailable` is the difference.**
 Five things in `_run` returned `None` and only one was the model's fault — a worker that read the
 input and rejected it. A timeout, a failure to spawn, a non-zero exit and unreadable output all say

@@ -355,3 +355,31 @@ def test_the_startup_probe_never_propagates_it(monkeypatch, capsys):
     assert "could not run" in capsys.readouterr().out
     # And the configured budget is left alone, not guessed at from a failure.
     assert safe_solve.SOLVE_TIMEOUT_S == 3.0
+
+
+@pytest.mark.parametrize("expression", ["1/0", "0/0", "1/0 + 2", "(3-3)/(3-3)"])
+def test_a_division_by_zero_is_not_an_answer(expression):
+    """The `evaluate`/`simplify` branch was the one place in the worker with no
+    usability check, unlike every sibling here and in the two solver modules.
+
+    `1/0` came back as the string "zoo" and `0/0` as "nan". `rationals` served
+    them: `correct_answer='zoo'` among the options. `expressions` raised
+    `TypeError: Cannot convert complex to float` building distractors -- a 500,
+    since it is past the point where a retry is possible.
+    """
+    assert safe_solve.safe_solve(expression, "evaluate") is None
+
+
+@pytest.mark.parametrize("expression,expected", [
+    ("2*x + 3*x", "5*x"),
+    ("x + x + y", "2*x + y"),
+])
+def test_a_symbolic_result_is_still_an_answer(expression, expected):
+    """The teeth, and the reason `is_number` cannot be the check: `simplify`
+    exists to return `5*x`. Rejecting anything non-numeric would refuse every
+    question that scenario is for.
+
+    `is_finite is False` alone is not the check either -- **`nan.is_finite` is
+    None, not False** -- which is why the guard tests for the symbols as well.
+    """
+    assert safe_solve.safe_solve(expression, "simplify") == expected

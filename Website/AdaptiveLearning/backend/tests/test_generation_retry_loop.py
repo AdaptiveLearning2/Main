@@ -17,6 +17,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 
 import importlib  # noqa: E402
 
+import json  # noqa: E402
 import pytest  # noqa: E402
 
 import lesson_plan_context  # noqa: E402
@@ -62,3 +63,28 @@ def test_a_response_with_no_json_is_retried_rather_than_raising(topic, monkeypat
     assert not isinstance(exc.value, AttributeError), \
         f"{topic} crashed on attempt {len(attempts)} instead of retrying: {exc.value}"
     assert len(attempts) == 3, f"{topic} made {len(attempts)} attempts, not 3"
+
+
+@pytest.mark.parametrize("payload,why", [
+    ({"question_text": "Solve 1/0", "question_topic": "rationals",
+      "variables": ["1", "/", "0"]}, "division by zero"),
+    ({"question_text": "Solve x", "question_topic": "rationals",
+      "variables": ["!!"]}, "tokens that will not join"),
+])
+def test_rationals_retries_an_unsolvable_reply_rather_than_raising(payload, why,
+                                                                   monkeypatch):
+    """`rationals` was the last generator solving below its `for/else`.
+
+    Both of these were a 500 on attempt 1: tokens that will not join, and a
+    division by zero -- which the worker used to answer "zoo", so the question
+    was *served* with `correct_answer='zoo'` rather than refused. Neither says
+    the next reply will be bad, so both are worth a retry.
+    """
+    import LLM_rationals_generation as rationals
+
+    monkeypatch.setattr(llm_client, "generate_text",
+                        lambda *a, **k: json.dumps(payload))
+    monkeypatch.setattr(rationals.lesson_plan_context, "append_lesson_context",
+                        lambda prompt, topic, band: prompt)
+    with pytest.raises(ValueError, match="after retries"):
+        rationals.generate_rational_question([], [], "medium", "7th Grade")

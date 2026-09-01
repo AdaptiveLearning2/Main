@@ -278,8 +278,6 @@ def _run(request: dict, timeout, label: str):
         # worker.
         raise SolverUnavailable(
             f"the solver exceeded {budget}s and was killed ({label})") from None
-    except SolverUnavailable:
-        raise
     except Exception as e:                      # pragma: no cover - defensive
         raise SolverUnavailable(
             f"the solver could not be started: {type(e).__name__}: {e}") from e

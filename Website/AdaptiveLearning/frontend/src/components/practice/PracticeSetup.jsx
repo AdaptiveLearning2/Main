@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { apiFetch } from '../../lib/api'
 import LoadError from '../ui/LoadError'
 import PracticeHistory from './PracticeHistory'
+import { TOPIC_ICONS } from '../../lib/topics'
 
 const DIFFICULTIES = ['easy', 'medium', 'hard']
 const GRADES = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
@@ -11,10 +12,7 @@ const GRADES = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
 // Same topic->icon map Adaptive.jsx keeps for its own picker -- read-only
 // here, not a shared import, since that page has no test coverage and this
 // change deliberately doesn't touch it.
-const ICONS = {
-  ordering: '🔢', rationals: '➗', expressions: '📐', algebra: '🔣', geometry: '📏',
-  angle_relationships: '📐', missing_number: '❓', patterns: '📶', graphs: '📊', shape_fractions: '🥧', mean: '〰️', median: '📊', mode: '🔁', probability: '🎲',
-}
+const ICONS = TOPIC_ICONS
 
 /** The Quizlet-style picker: topic(s), difficulty, grade, and Test vs
  * Flashcard mode, then `POST /api/practice-sessions/start`.

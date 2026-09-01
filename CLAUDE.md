@@ -3158,8 +3158,17 @@ than falling through to an `UnboundLocalError` on `return response`); **a `math_
 migration** — `record_topic_attempt` joins `math_topics.topic_name = questions.subject` and
 attributes nothing when that finds none, so a topic without one serves and scores questions while
 crediting the student's work to nothing, which is exactly what `20260907000000` had to repair for
-`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and the frontend's four hardcoded
-topic lists, or the topic has no tile in the student's accuracy panel. `test_young_topics.py` pins
+`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and `frontend/src/lib/topics.js`.
+
+**That last one used to be four hardcoded lists, and was six.** Two teacher surfaces had never been
+updated past the original ten: `Analytics.jsx` counted questions on the newer topics in *nothing* —
+its chart drops empty bars, so they vanished with no hint anything was missing — and `Questions.jsx`
+offered no way to filter the bank to them. Both bite hardest for grades 1-3, whose topics those are.
+Three changes in a row left a list behind, so the list stopped being a thing to remember.
+`lib/topics.js` is now the only place one is written down, and **`topics.test.js` parses
+`ALL_TOPICS` out of `LLM_topic_decider.py` and fails if the two disagree** — a React bundle cannot
+import Python, so the copy is checked rather than trusted. A third test fails on any new file that
+writes a topic list of its own. `test_young_topics.py` pins
 the first three.
 
 The per-topic history in `get_user_history` is now derived from `ALL_TOPICS` rather than listed

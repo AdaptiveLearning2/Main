@@ -14,6 +14,7 @@ import RecordingIndicator from '../../components/signals/RecordingIndicator'
 import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, BatteryLow, Clock } from 'lucide-react'
 import { toast } from 'sonner'
 import QuestionFigure from '../../components/questions/QuestionFigure'
+import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
 
@@ -31,8 +32,8 @@ const CHANNEL_LABELS = [
   ['face',      'Camera'],
 ]
 
-const TOPICS = ['ordering','missing_number','patterns','graphs','shape_fractions','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
-const ICONS  = { ordering:'🔢', missing_number:'❓', patterns:'📶', graphs:'📊', shape_fractions:'🥧', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+const TOPICS = ALL_TOPICS
+const ICONS  = TOPIC_ICONS
 const SHORT  = { angle_relationships: 'Angle Rel.' }
 const GRADES = ['1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','Highschool','College']
 

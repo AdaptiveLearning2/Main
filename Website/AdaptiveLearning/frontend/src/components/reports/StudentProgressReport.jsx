@@ -6,10 +6,11 @@ import { WeeklySignalReport, SignalTrend, LiveSignalSummary, StrategyPanel } fro
 import { apiFetch } from '../../lib/api'
 import FocusAccuracy from '../analytics/FocusAccuracy'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
+import { TOPIC_ICONS as ICONS, topicLabel } from '../../lib/topics'
 // Persisted so the choice survives navigation between students. Shared with
 // the teacher student list, which reads the same facial signals.
 
-const TOPIC_ICONS = { ordering:'🔢', missing_number:'❓', patterns:'📶', graphs:'📊', shape_fractions:'🥧', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+const TOPIC_ICONS = ICONS
 
 /**
  * A single student's full learning report: academic stat cards, the weekly
@@ -290,7 +291,7 @@ export default function StudentProgressReport({
                       <div key={p.topic_id}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                            {TOPIC_ICONS[topicName] || '📘'} <span className="capitalize">{topicName.replace('_', ' ')}</span>
+                            {TOPIC_ICONS[topicName] || '📘'} <span className="capitalize">{topicLabel(topicName)}</span>
                           </span>
                           <span className={`text-xs font-black ${topicAcc >= 70 ? 'text-green-600' : topicAcc >= 40 ? 'text-amber-600' : 'text-rose-600'}`}>{topicAcc}%</span>
                         </div>

@@ -3391,6 +3391,31 @@ together took every solve-backed topic down, and once a solve failure became `So
 did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
 succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
 
+**The semaphore bounds *this process*, and a co-tenant still spends the budget — so a timeout gets
+one more attempt.** The budget is wall-clock over a child dominated by sympy startup, so any other
+load on the machine can exhaust it: reproduced with the frontend suite running alongside the backend
+one, and again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the
+worker, and since a timeout raises rather than returning `None`, every one was a **503 on the first
+attempt**.
+
+Retrying is what separates the two things a timeout can mean. A genuine spin is still spinning on the
+second attempt and is killed again, at a bounded extra wait and no wrong answer; contention is a
+property of the moment, and the moment passes. Nothing in-process can tell them apart, and the retry
+does not need to. The second budget is wider (`SOLVE_RETRY_BUDGET_FACTOR`, 3×) because the first
+timeout is itself evidence that this machine is slower than the budget assumed — the same reasoning
+as `_probe_startup`'s clamp, applied when the measurement arrives late.
+
+**Measured at 18 cores, and the limit is worth knowing.** Eight background hogs: no timeouts at all.
+At **saturation the first attempt failed 6 of 6 and the retry rescued all six**. At 2×
+oversubscription the retry rescues none — a machine that far past its capacity refuses, which is
+honest, but it is not fixed. **The real fix is to stop paying startup inside the budget**: the child
+would signal readiness after importing sympy, and the bound would then cover the arithmetic, which is
+what it is for. That is a rewrite of `_run`'s process handling and has not been done.
+
+The permit is taken **per attempt**, not around both: holding one through a wait that has already
+failed shrinks the effective concurrency exactly when the machine is busiest, which is when the retry
+exists.
+
 **Waiting for a slot deliberately does *not* come out of the solve budget** — the opposite of
 `llm_client`, and for a stated reason. There the wait is the caller's own deadline, so charging the
 model call the remainder is right. Here the deadline exists to bound a CPU spin, and a spin does not

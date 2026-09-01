@@ -439,3 +439,76 @@ def test_a_permit_is_returned_even_when_the_solve_fails(monkeypatch):
     # If permits leaked, this real solve would refuse rather than answer.
     monkeypatch.undo()
     assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+
+
+def test_a_timeout_gets_one_more_attempt_with_a_wider_budget(monkeypatch):
+    """`SOLVE_MAX_CONCURRENCY` bounds *this process's* workers and nothing
+    else. The budget is wall-clock over a child dominated by sympy startup, so
+    any co-tenant on the machine spends it: reproduced with the frontend suite
+    alongside, and again with CPU hogs -- 8 of 8 solves killed at 3.0s. Ten of
+    fourteen topics reach the worker, and since a timeout raises rather than
+    returning None, every one was a 503 on the first attempt.
+
+    Retrying separates the two things a timeout can mean. A genuine spin is
+    still spinning on the second attempt and is killed again; contention is a
+    property of the moment, and the moment passes. Measured at 18 cores: at
+    saturation the first attempt failed 6 of 6 and the retry rescued all 6.
+    """
+    calls = []
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"ok": true, "result": "[1.0]"}'
+        stderr = ""
+
+    def _slow_then_fine(*a, **k):
+        calls.append(k["timeout"])
+        if len(calls) == 1:
+            raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=k["timeout"])
+        return _Proc()
+
+    monkeypatch.setattr(safe_solve.subprocess, "run", _slow_then_fine)
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+    assert len(calls) == 2, "a timeout must cost a second attempt, not a 503"
+    assert calls[1] > calls[0], (
+        "the retry is given room: the first timeout is itself the evidence "
+        "that this machine is slower than the budget assumed")
+
+
+def test_a_spin_that_survives_both_attempts_still_refuses(monkeypatch):
+    """The teeth. Retrying for ever would reinstate the hang this module
+    exists to bound, so the count is two and the refusal still names the
+    cause."""
+    calls = []
+
+    def _always_slow(*a, **k):
+        calls.append(k["timeout"])
+        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=k["timeout"])
+
+    monkeypatch.setattr(safe_solve.subprocess, "run", _always_slow)
+    with pytest.raises(safe_solve.SolverUnavailable, match="after 2 attempts"):
+        safe_solve.safe_sympify_values(["1"])
+    assert len(calls) == 2, "bounded at two attempts"
+
+
+def test_the_retry_does_not_hold_a_concurrency_permit_while_it_waits(monkeypatch):
+    """Taken per attempt rather than around both. Holding one through a wait
+    that has already failed shrinks the effective concurrency exactly when the
+    machine is busiest, which is when the retry exists."""
+    depth = []
+
+    def _timeout_once(*a, **k):
+        # How many permits are outstanding while this attempt runs.
+        free = 0
+        while safe_solve._solve_slots.acquire(blocking=False):
+            free += 1
+        for _ in range(free):
+            safe_solve._solve_slots.release()
+        depth.append(safe_solve.SOLVE_MAX_CONCURRENCY - free)
+        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=1)
+
+    monkeypatch.setattr(safe_solve.subprocess, "run", _timeout_once)
+    with pytest.raises(safe_solve.SolverUnavailable):
+        safe_solve.safe_sympify_values(["1"])
+    assert depth == [1, 1], (
+        f"one permit held per attempt, not accumulated: {depth}")

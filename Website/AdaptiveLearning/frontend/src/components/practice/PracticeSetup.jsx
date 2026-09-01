@@ -13,7 +13,7 @@ const GRADES = ['1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
 // change deliberately doesn't touch it.
 const ICONS = {
   ordering: '🔢', rationals: '➗', expressions: '📐', algebra: '🔣', geometry: '📏',
-  angle_relationships: '📐', missing_number: '❓', patterns: '📶', graphs: '📊', mean: '〰️', median: '📊', mode: '🔁', probability: '🎲',
+  angle_relationships: '📐', missing_number: '❓', patterns: '📶', graphs: '📊', shape_fractions: '🥧', mean: '〰️', median: '📊', mode: '🔁', probability: '🎲',
 }
 
 /** The Quizlet-style picker: topic(s), difficulty, grade, and Test vs

@@ -58,6 +58,7 @@ FORBIDDEN_BANDS = {
     "missing_number":      {"early", "middle"},
     "patterns":            {"early", "middle"},
     "graphs":              {"early", "middle"},
+    "shape_fractions":     {"early", "middle"},
 }
 
 # Each pattern avoids the one false positive that actually occurs here: "x"

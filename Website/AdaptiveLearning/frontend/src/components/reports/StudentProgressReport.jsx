@@ -9,7 +9,7 @@ import { useLatestRequest } from '../../hooks/useLatestRequest'
 // Persisted so the choice survives navigation between students. Shared with
 // the teacher student list, which reads the same facial signals.
 
-const TOPIC_ICONS = { ordering:'🔢', missing_number:'❓', patterns:'📶', graphs:'📊', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+const TOPIC_ICONS = { ordering:'🔢', missing_number:'❓', patterns:'📶', graphs:'📊', shape_fractions:'🥧', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
 /**
  * A single student's full learning report: academic stat cards, the weekly

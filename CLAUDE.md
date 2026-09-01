@@ -3048,6 +3048,33 @@ question, not the question.
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
 student answered. `/api/questions` uses `select("*")` and needed nothing.
 
+### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
+
+1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from
+`rationals`, which is 4.NF.3 onward and is fraction *arithmetic*** — this is recognition, which is
+why it sits at grade 1 while `rationals` starts at 4. Its figure is required, for the same reason
+`graphs`' is.
+
+**Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a
+perfectly good picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and
+whichever the solver picked, a student giving the other is marked wrong for a right answer — the
+failure this codebase treats as the worst available, and worse than a refusal, which costs one retry.
+Reducing the answer instead is the other option and is worse: the student is asked to read the
+picture, and the picture says two of four. `question_figures._part_whole` deliberately does **not**
+check it — a reducible fraction is perfectly drawable, and drawability and answerability are
+different questions.
+
+**The distractor space is checked exhaustively rather than sampled**, because it is 21 fractions.
+Two properties, both violated before: an option of one or more cannot be part of a shape, so `2/1` is
+not a misreading a child could make but an option nobody considers — which quietly makes a three-way
+choice a two-way one. And `1/1` and `2/2` were both offered against `1/2`, two options of equal value
+that go together with a single thought. Halves is what forced neighbouring denominators into the
+candidate list: with only near-misses of 2, the sole proper distractor available was `1/3`.
+
+**The whole is a constant width and the parts divide it**, not the other way round. Fixed-size parts
+drew eighths at twice the width of halves, which says the wrong thing about what a whole is — and is
+exactly the misconception these standards are about. Found by rendering it and looking.
+
 ### `graphs` is the one topic whose figure is required
 
 1.MD.4 ("ask and answer questions about how many more or less"), 2.MD.10 (a bar graph with up to
@@ -3088,7 +3115,7 @@ the reading 1.MD.4 asks for. The component is named `BarGraph` because the obvio
 hand-written `<svg>` is the case that guard states it cannot see, so the match is a false accusation.
 The word cannot appear in that file's comments either; the guard reads the file, not the syntax tree.
 
-### Grade 1 had two topics, and now has five
+### Grade 1 had two topics, and now has six
 
 `missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
 factor) and `patterns` (1.NBT.1 counting sequences and 2.NBT.2 skip counting, through 5.OA.3). Both

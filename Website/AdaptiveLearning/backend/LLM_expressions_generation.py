@@ -178,6 +178,21 @@ The question_text must contain ONLY digits, "+", "-", and "?" -- no "*", no
 # Which operations are available changes by grade, not just how many of them
 # or how big the numbers are -- multiplication, division, and parentheses
 # should only appear once a grade has actually been taught them.
+# Two grades inside the "middle" band have not met a concept the band's
+# tiers use. The band spans 4-6 and its tiers are written for its ceiling,
+# so a 4th grader was offered parentheses on 6 of 10 measured questions --
+# order of operations is 5.OA.1.
+#
+# Appended to the prompt rather than folded into COMPLEXITY_BY_GRADE,
+# because the table is keyed by band and this is keyed by grade; giving
+# the table a thirteenth column to express one rule would make every
+# other topic's table wrong by omission. Prompt-level, so it can leak --
+# `grade_appropriateness` is where a code-level check would go if it does.
+GRADE_OVERRIDES = {
+    4: "This student is in GRADE 4. Do NOT use parentheses of any kind -- order of operations is a grade-5 standard (5.OA.1).",
+}
+
+
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use 2 operations total, ADDITION AND SUBTRACTION ONLY. Do NOT use multiplication, division, or parentheses. Numbers 1-9.",
@@ -194,10 +209,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 3-4 operations total. You may use up to one set of parentheses. Numbers may be up to three digits (1-200).",
         "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses. Numbers may be up to three digits (1-200).",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 2-3 operations total. Do NOT use any parentheses.",
-        "medium": "Use 3-4 operations total. You may use up to one set of parentheses.",
-        "hard":   "Use 5-6 operations total. You may use up to two sets of parentheses.",
+        "easy":   "Use 3-4 operations including at least TWO negative integers (e.g. -15 + 6 - (-8)). No parentheses.",
+        "medium": "Use 4-5 operations with one set of parentheses and at least one integer exponent such as 2**3. For a simplify question instead, use at least three like terms with one negative coefficient.",
+        "hard":   "Use 5-6 operations with TWO levels of nested parentheses and negative integers (e.g. ((8-3)*2 - 7)*2 + 18/3). For a simplify question instead, use four or more like terms including negative coefficients. Do NOT raise a variable to a power.",
     },
 }
 
@@ -231,6 +254,9 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         )
         if grade_band == "early":
             prompt += EARLY_BAND_EXAMPLE
+        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        if override:
+            prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
         response_text = llm_client.generate_text(prompt)
         raw = extract_json(response_text)

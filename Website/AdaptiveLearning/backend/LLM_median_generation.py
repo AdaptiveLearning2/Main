@@ -108,14 +108,22 @@ def generate_incorrect_answers(solution, values):
     n = len(vals)
 
     if n % 2 == 1:
-        while len(incorrect_answers) < 3:
-            index = random.randint(0, n-1) 
-            if vals[index] != solution and vals[index] not in incorrect_answers:
-                incorrect_answers.append(vals[index])
-            else:
-                continue
-    else:
-       incorrect_answers = inc_gen.generate_general_incorrect_answers(float(solution)) if solution is not None else []
+        # Bounded, and with a fallback that can always finish. Whether three
+        # distinct non-median values exist is a property of the dataset, not of
+        # how long you try: `[5, 7, 9]` has a median of 7 and exactly two other
+        # values, so this looped for ever. Reachable by design -- the middle
+        # band's easy tier asks for "3-5 values" in as many words -- and it is
+        # what hung a 650-question audit at 1627 seconds of CPU.
+        others = [v for v in dict.fromkeys(vals) if v != solution]
+        random.shuffle(others)
+        incorrect_answers = others[:3]
+
+    if len(incorrect_answers) < 3:
+        # The even-length branch's generator, reused: it is bounded, always
+        # returns three, and is already what this function produces when the
+        # dataset has no middle value to borrow from.
+        incorrect_answers = (inc_gen.generate_general_incorrect_answers(float(solution))
+                             if solution is not None else [])
 
     return incorrect_answers
 
@@ -147,10 +155,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use an ODD number of values (5-7 total). Whole numbers between 1 and 500; negative numbers may be used.",
         "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values. Whole numbers between 1 and 500; negative numbers may be used.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use an ODD number of values (3-5 total).",
-        "medium": "Use an ODD number of values (5-7 total).",
-        "hard":   "Use an EVEN number of values (6-8 total), so finding the median requires averaging the two middle values.",
+        "easy":   "Use an ODD number of values (5-7 total) including at least two NEGATIVE numbers.",
+        "medium": "Use an ODD number of values (7-9 total) including negatives and at least one value above 100.",
+        "hard":   "Use an EVEN number of values (8-10 total) including negatives, so the median is the average of the two middle values and may be a decimal.",
     },
 }
 

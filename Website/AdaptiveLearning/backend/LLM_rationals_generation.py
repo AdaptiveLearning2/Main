@@ -87,6 +87,14 @@ def _grade_band(grade):
 # *operations* grade-4/5+), so "early" here is defense-in-depth only --
 # kept to same-denominator halves/thirds/fourths framed as parts of a whole,
 # not the denominator/operation-count scaling middle band onward uses.
+# See the note in LLM_expressions_generation.GRADE_OVERRIDES. The same
+# band-ceiling effect gave a 4th grader unlike denominators on 7 of 10
+# measured questions; 4.NF.3 is like denominators, 5.NF.1 is unlike.
+GRADE_OVERRIDES = {
+    4: "This student is in GRADE 4. Every fraction must share the SAME denominator -- adding fractions with unlike denominators is a grade-5 standard (5.NF.1).",
+}
+
+
 COMPLEXITY_BY_GRADE = {
     "early": {
         "easy":   "Use a SINGLE addition between two simple fractions sharing the same denominator (halves, thirds, or fourths only, e.g. 1/4 + 2/4).",
@@ -103,10 +111,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use TWO operations between fractions with different denominators. Negative fractions are allowed.",
         "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators. Negative fractions are allowed.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use a SINGLE operation between two fractions that already share the same denominator.",
-        "medium": "Use TWO operations between fractions with different denominators.",
-        "hard":   "Use up to THREE operations between fractions with different denominators, using larger denominators (e.g. sevenths, ninths, elevenths).",
+        "easy":   "Use TWO fractions with DIFFERENT denominators (e.g. 2/3 + 1/4).",
+        "medium": "Use THREE fractions with different denominators, at least one of them NEGATIVE (e.g. -3/4 + 5/6 - 1/3).",
+        "hard":   "Use THREE or FOUR fractions with different denominators up to 12, including at least TWO negatives and both addition and subtraction (e.g. 7/12 - (-5/8) + 1/3 - 3/4).",
     },
 }
 
@@ -132,6 +148,9 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
             f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
+        override = GRADE_OVERRIDES.get(grade_levels.grade_number(grade))
+        if override:
+            prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "rationals", grade_band)
         response_text = llm_client.generate_text(prompt)
 

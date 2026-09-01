@@ -16,6 +16,7 @@ import lesson_plan_context
 import geometry_solvers
 import safe_solve
 import grade_levels
+import scenario_tiers
 import grade_appropriateness
 
 # Scenarios: perimeter, area, volume, missing_side, pythagorean_theorem.
@@ -95,6 +96,25 @@ IMPORTANT:
 # the difficulty tier and the grade-band restriction by this point.
 
 SCENARIO_BLOCKS = {
+    19: """SCENARIO 19: rectangle_area_by_counting
+Example:
+"A rectangle is split into 3 rows of 4 same-size squares. How many squares is that in total?"
+
+This scenario is for the youngest students. Ask ONLY how many squares fill the
+rectangle -- do NOT use the words "area", "multiply" or "units squared", and do
+NOT ask for a formula. Keep both numbers between 2 and 6.
+
+{
+  "question_text": "A rectangle is split into 3 rows of 4 same-size squares. How many squares is that in total?",
+  "type": "geometry",
+  "scenario": "rectangle_area_by_counting",
+  "variables": {
+    "rows": "3",
+    "columns": "4"
+  }
+}
+""",
+
     1: """SCENARIO 1: rectangle_area
 Example:
 "A rectangle has a length of 5 units and a width of 3 units. What is its area?"
@@ -379,6 +399,7 @@ FINAL RULES:
 # restates the name as a rule, and a second hand-maintained copy of this
 # mapping would be one more pair of lists that can disagree.
 _SCENARIO_NAMES = {
+    19: "rectangle_area_by_counting",
     1: "rectangle_area",
     2: "rectangle_perimeter",
     3: "triangle_area",
@@ -427,8 +448,9 @@ def _geometry_prompt(scenario):
     """Header + the one selected scenario's block + footer.
 
     KeyError rather than a default block on an unknown scenario: every caller
-    gets its number from _pick_scenario, which draws from DIFFICULTY_SCENARIOS,
-    so an unknown one means those two tables have drifted apart -- which should
+    gets its number from _pick_scenario, which draws from the scenarios
+    SCENARIO_MIN_GRADE allows, ranked by SCENARIO_DIFFICULTY, so an unknown one
+    means those tables have drifted apart -- which should
     fail loudly here rather than silently generate a rectangle-area question
     the solver will then score against whatever scenario it was asked for.
     """
@@ -456,28 +478,136 @@ solution = -1
 # asserted against it in tests/test_geometry_scenarios.py -- two lists that
 # can disagree is how the crash this prevents would come back.
 
-# Maps each difficulty tier to the scenario numbers under EASY/MEDIUM/HARD
-# TOPICS in the prompt above. Scenarios 14 and 15 (triangle missing-side
-# area/perimeter) aren't listed there by name but belong to the same
-# "solve for a missing side" family as the other MEDIUM scenarios.
-DIFFICULTY_SCENARIOS = {
-    "easy":   [1, 2, 3, 4, 5, 6],
-    "medium": [10, 11, 12, 13, 14, 15, 16],
-    "hard":   [7, 8, 9, 17, 18],
+# The grade at which each scenario's formula is introduced, by CCSS code.
+#
+# This replaces a single `EARLY_BAND_SCENARIOS` allowlist, and the replacement
+# is the point rather than the values. That allowlist filtered one band and
+# left the other three unfiltered, so fixing `early` did nothing for `middle`
+# -- grades 4-6 -- which was being offered the Pythagorean theorem (8.G.7),
+# circle area (7.G.4), and on the hard tier *only* volumes, two of them
+# 8.G.9. A 4th grader on that tier was always asked a grade-8 question.
+#
+# Keyed per scenario so no band can be forgotten: every band is filtered by
+# the same rule, and a scenario added without a grade here fails
+# `tests/test_early_band_geometry.py` rather than silently defaulting to
+# available everywhere.
+SCENARIO_MIN_GRADE = {
+    "rectangle_area_by_counting":        2,   # 2.G.2 -- count the squares that
+                                              # fill a rectangle. The only
+                                              # numeric geometry standard below
+                                              # grade 3, and so the only thing
+                                              # grades 1-2 can be asked here.
+    "rectangle_area":                    3,   # 3.MD.7
+    "rectangle_perimeter":               3,   # 3.MD.8
+    "triangle_perimeter":                3,   # 3.MD.8
+    "rect_area_missing_side":            4,   # 4.MD.3, unknown side from area
+    "rect_perimeter_missing_side":       4,   # 4.MD.3
+    "triangle_perimeter_missing_side":   4,   # 4.MD.3
+    "rect_volume":                       5,   # 5.MD.5
+    "cube_volume":                       5,   # 5.MD.5
+    "triangle_area":                     6,   # 6.G.1
+    "triangle_area_missing_side":        6,   # 6.G.1 inverted
+    "circle_area":                       7,   # 7.G.4
+    "circle_circumference":              7,   # 7.G.4
+    "circle_area_missing_side":          7,   # 7.G.4 inverted
+    "circle_circumference_missing_side": 7,   # 7.G.4 inverted
+    "pythagorean":                       8,   # 8.G.7
+    "cylinder_volume":                   8,   # 8.G.9
+    "sphere_volume":                     8,   # 8.G.9
+    "pyramid_volume":                    9,   # HS G-GMD.3; not in 8.G.9
 }
 
-# Circle, 3D volume, and pythagorean-theorem scenarios need formulas grades
-# 1-3 haven't reached, so "early" band is restricted to flat rectangle/
-# triangle area and perimeter -- roughly where grade-3 geometry standards
-# land. Grades 1-2 in that band get the ceiling of what this topic can offer
-# them, since bands are coarser than a single grade.
-EARLY_BAND_SCENARIOS = {1, 2, 3, 4}
+# The top grade in each band -- `grade_levels.grade_band` buckets 1-3, 4-6,
+# 7-8, 9+.
+#
+# Gating used to be on the band's *top* grade, which put grade-6 content in
+# front of a 4th grader: the middle band spans 4-6, so a 4th grader was offered
+# rectangular-prism volume (5.MD.5) on 3 of 10 measured questions. There is no
+# reason to round up here -- `SCENARIO_MIN_GRADE` is per scenario and the
+# student's own grade is known, so the ceiling is only a fallback for a grade
+# that could not be read at all.
+_BAND_CEILING = {"early": 3, "middle": 6, "upper": 8, "advanced": 13}
 
-def _pick_scenario(difficulty, grade_band):
-    candidates = DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"])
-    if grade_band == "early":
-        candidates = [s for s in candidates if s in EARLY_BAND_SCENARIOS] or sorted(EARLY_BAND_SCENARIOS)
-    return random.choice(candidates)
+
+def _band_scenarios(grade):
+    """Scenario numbers whose formula this student has actually reached.
+
+    Takes the grade -- a number, a string like "4th Grade", or a band name.
+    A band name resolves to that band's ceiling, which is what an unreadable
+    grade gets: `grade_levels.grade_number` answers None there, and
+    `_grade_band` answers "early", so the youngest content is the fallback in
+    both directions.
+    """
+    if grade in _BAND_CEILING:
+        ceiling = _BAND_CEILING[grade]
+    else:
+        number = grade_levels.grade_number(grade)
+        # An unreadable grade is the youngest, matching
+        # `LLM_topic_decider._allowed_topics` and `_grade_band`. It used to
+        # resolve to the early band's ceiling of 3, which is two grades of
+        # content granted to a student nobody could identify.
+        ceiling = number if number is not None else 1
+    allowed = {number_ for number_, name in _SCENARIO_NAMES.items()
+               if SCENARIO_MIN_GRADE[name] <= ceiling}
+    if allowed:
+        return allowed
+    # Reached only by a grade below the easiest scenario, which is now
+    # `rectangle_area_by_counting` at 2.G.2. Grade 2 is served directly, and
+    # grade 1 has no geometry at all -- `TOPIC_MIN_GRADE["geometry"]` is 2 --
+    # so this is a backstop for a caller that asks anyway rather than a path
+    # the product takes. It returns the easiest scenarios that exist rather
+    # than nothing, because an empty set would make `random.choice` raise.
+    floor = min(SCENARIO_MIN_GRADE.values())
+    return {number_ for number_, name in _SCENARIO_NAMES.items()
+            if SCENARIO_MIN_GRADE[name] <= floor}
+
+
+# How hard each scenario is to *do*, independent of the grade that teaches it.
+# The two are different axes: `algebra_complementary` is 7.G.5 and harder than
+# `triangle_sum` at 8.G.5, and `circle_area_missing_side` is the same standard
+# as `circle_area` while needing a square root on top.
+#
+# Ordered by steps: count -> one operation -> two -> invert a formula -> invert
+# one containing pi or a square.
+SCENARIO_DIFFICULTY = {
+    "rectangle_area_by_counting":        1,   # count the squares
+    "rectangle_area":                    2,   # one multiplication
+    "rectangle_perimeter":               2,
+    "triangle_perimeter":                2,   # add three
+    "triangle_area":                     3,   # multiply then halve
+    "circle_circumference":              3,   # 2 pi r
+    "triangle_perimeter_missing_side":   3,   # invert by subtracting
+    "circle_area":                       4,   # pi r squared
+    "rect_volume":                       4,   # multiply three
+    "cube_volume":                       4,
+    "rect_area_missing_side":            4,   # invert by dividing
+    "rect_perimeter_missing_side":       4,
+    "pyramid_volume":                    5,   # a third of base times height
+    "cylinder_volume":                   5,   # pi r squared h
+    "pythagorean":                       5,   # squares and a root
+    "triangle_area_missing_side":        5,   # invert, with the halving
+    "circle_circumference_missing_side": 5,   # invert, with pi
+    "sphere_volume":                     6,   # four thirds pi r cubed
+    "circle_area_missing_side":          6,   # invert, with pi and a root
+}
+
+
+def _pick_scenario(difficulty, grade):
+    """A scenario for this difficulty, chosen from what this grade can see.
+
+    Ranked and sliced rather than looked up in a fixed per-tier list. A fixed
+    list is right until a grade filter removes part of it -- geometry's hard
+    tier is the volumes, and the hard ones are 8.G.9, so grades 6-7 were left
+    with the two simplest and `hard` became easier than `medium`.
+
+    Not cosmetic: difficulty is what the biosignals move, so a focused student
+    pushed from medium to hard was getting an easier question. The fusion
+    fired correctly and was undone one layer down.
+    """
+    allowed = _band_scenarios(grade)
+    return random.choice(scenario_tiers.pick(
+        difficulty, allowed,
+        lambda number: SCENARIO_DIFFICULTY[_SCENARIO_NAMES[number]]))
 
 # Difficulty governs which scenario gets picked above; grade controls the
 # magnitude of the given measurements (side lengths, radii, etc.) within
@@ -492,7 +622,11 @@ GRADE_COMPLEXITY = {
     "early":    "Keep all given measurements (lengths, radii, etc.) between 1 and 12.",
     "middle":   "Measurements may range from 1 to 30.",
     "upper":    "Measurements may range from 1 to 100.",
-    "advanced": "No additional restriction.",
+    # Grades 9+. "No additional restriction" read to the model as no
+    # requirement and produced the easiest shape that fit -- an audit of 640
+    # questions found 8 of 10 grade-9 geometry questions three or more
+    # grades below grade.
+    "advanced": "Use two-digit measurements, and include one value with a decimal place (e.g. 12.5) so the arithmetic does not stay whole-number.",
 }
 # Kept separate from EARLY_BAND_SCENARIOS above rather than folded into one
 # dict: this scales a number, that gates which formulas are even in play,
@@ -504,7 +638,9 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
         # Scenario first: the prompt is now built around it rather than
         # listing every scenario and naming one at the end.
         grade_band = _grade_band(grade)
-        scenario = _pick_scenario(difficulty, grade_band)
+        # The grade itself, not the band: the band rounds a 4th grader up
+        # to grade-6 content.
+        scenario = _pick_scenario(difficulty, grade)
 
         prompt = _geometry_prompt(scenario)
         if attempt > 0:
@@ -565,6 +701,19 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
                   question_data["scenario"])
             continue
 
+        # And one this grade may actually see. Everything above gates which
+        # *block is sent*; nothing checked what came back, so a reply naming a
+        # different scenario was solved and served. Not hypothetical: Haiku
+        # returned a scenario other than the one asked for twice in this work.
+        # A `sphere_volume` reply to a grade-4 request produced "A sphere has a
+        # radius of 3 units. What is its volume?" -- 8.G.9, the exact defect
+        # the grade gate was written to fix, walking straight past it.
+        if question_data["scenario"] not in {
+                _SCENARIO_NAMES[n] for n in _band_scenarios(grade)}:
+            print(f"[Attempt {attempt+1}] Scenario above this grade:",
+                  question_data["scenario"])
+            continue
+
         # A known scenario with the wrong variables raises KeyError out of the
         # dispatch instead -- also a 500, and the commoner of the two: Haiku
         # answered `pythagorean` without a `b` on 2 of 3 upper-band
@@ -603,7 +752,20 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
 
     solution = format_two_decimals(solution_float)
     incorrect_answers = inc_gen.generate_general_incorrect_answers(solution_float)
-    answers = [round(float(ans), 2) for ans in incorrect_answers] + [solution]
+    # Formatted the same way as the solution, so every option is a string.
+    #
+    # This was `round(float(ans), 2)`, which made geometry the one topic
+    # shipping a mixed list -- `['13.93', 27.86, 5.0, 41.79]`, the correct
+    # answer a string among floats. `Adaptive.jsx` decides correctness with
+    # `JSON.stringify(option) === JSON.stringify(correct_answer)`, which is
+    # type-sensitive: `24` and `"24"` do not match. It happened to work because
+    # `correct_answer` is the same object that goes into the list, so it always
+    # matched itself -- an invariant held by accident rather than by
+    # construction, and one a later edit that re-serialised the options would
+    # break with no visible symptom, since React renders 13.93 and "13.93"
+    # identically.
+    answers = [format_two_decimals(float(ans)) for ans in incorrect_answers] \
+        + [solution]
 
     random.shuffle(answers)
 

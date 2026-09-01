@@ -106,6 +106,7 @@ def circle_circumference_missing_side(circ):
 # carrying the wrong variables is a KeyError out of the dispatch -- a 500, not
 # a retry -- and two hand-maintained lists is how that comes back.
 SCENARIO_VARS = {
+    "rectangle_area_by_counting": ("columns", "rows",),
     "rectangle_area": ("length", "width",),
     "rectangle_perimeter": ("length", "width",),
     "triangle_area": ("base", "height",),
@@ -147,6 +148,12 @@ def solve_scenario(scenario, raw_vars):
     try:
         vars = preprocess_variables(raw_vars)
         match (scenario):
+            case "rectangle_area_by_counting":
+                # 2.G.2 is rows x columns counted, the same arithmetic as
+                # area. It reuses the solver rather than adding one that would
+                # drift from it -- the difference is entirely in how the
+                # question is worded, which is the scenario block's job.
+                solution = solve_rectangle_area(vars["rows"], vars["columns"])
             case "rectangle_area":
                 solution = solve_rectangle_area(vars["length"], vars["width"])
             case "rectangle_perimeter":

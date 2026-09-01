@@ -2712,9 +2712,23 @@ algebra and probability should only appear after grade 6" -- but nothing enforce
 enough to matter -- picked uniformly across all 10 topics with **no grade parameter at all**. That
 was the most direct way a 1st grader landed on "algebra".
 
-`LLM_topic_decider._allowed_topics(grade)` is now the single source of truth for that rule, keyed
-on the grade *number* rather than a `_grade_band()`-style band -- the rule's own line falls
-between grade 5 and grade 6, finer than any four-band split.
+`LLM_topic_decider._allowed_topics(grade)` is the single source of truth for that rule, and it is
+keyed on **`TOPIC_MIN_GRADE`, one entry per topic**, not on grade brackets. Brackets were the
+original shape and they have to be *remembered* for every topic they should exclude — two were not.
+Measured over 640 generated questions, grades 1-9: `angle_relationships` was allowed from grade 4
+against **7.G.5**, and all 30 questions at grades 4, 5 and 6 were above grade; `probability` was
+allowed from grade 6 against **7.SP.5**, 10 of 10. Neither is reachable by prompt tuning or by a band
+table — the topic arrives before the concept, so no version of the question is grade-appropriate.
+Same lesson as `SCENARIO_MIN_GRADE` one file over: a per-bucket allowlist can omit a bucket, a
+per-item minimum cannot, and an item added without one fails a test rather than defaulting to
+available everywhere.
+
+**`mean`/`median`/`mode` sit at 4 against 6.SP.5c and that is a recorded decision, not an
+oversight.** The same audit flagged 10 of 10 at grades 4 and 5 in all six cells. They stay because
+raising them is a question about what grades 4-5 are offered at all — with `angle_relationships`
+gone they would drop to five topics — rather than a defect to fix in passing.
+`test_mean_median_mode_are_knowingly_early` is where that decision lives, so changing it means
+changing a test that says why.
 
 **A grade is read numerically, through `grade_levels`, and an unreadable one counts as the
 youngest.** `profiles.grade_level` is free text; only the frontend dropdown keeps it to "1st grade"
@@ -2772,6 +2786,52 @@ topic itself was already reachable):
 `EARLY_BAND_SCENARIOS` filter on top, since circle/volume/pythagorean-theorem scenarios assume
 formulas grades 1-3 haven't reached regardless of which difficulty tier picked them.
 
+**A per-scenario grade is now the pattern in three places, and the third was found by audit.**
+`angle_relationships` sits at grade 7 in `TOPIC_MIN_GRADE` for 7.G.5 — complementary, supplementary,
+linear pairs — but `triangle_sum` is **8.G.5**, a grade later, and a topic-level minimum cannot say
+so. Measured over 539 questions: **4 of 10 at grade 7 were triangle-sum**, and not by chance — the
+medium difficulty tier is *only* that scenario, so every grade-7 student on that tier got a grade-8
+question. `LLM_angle_relationship_generation.SCENARIO_MIN_GRADE` mirrors geometry's, and grade 7's
+medium tier now falls back to the rest of the topic. Regenerated: 10 of 10 complementary,
+supplementary or linear pair, 0 triangle.
+
+**A grade gate has two halves, and the second is easy to leave out.** `SCENARIO_MIN_GRADE` decides
+which prompt block is *sent*; nothing about that constrains what comes *back*. Both topics shipped
+with only the first half: a `sphere_volume` reply to a grade-4 request was solved and served (8.G.9),
+and a `triangle_sum` reply to a grade-7 one likewise (8.G.5) — each walking straight past the gate
+written to stop it. The reply is now checked against the same allowed set inside the retry loop.
+
+That is not a defensive check. **Haiku returned a scenario other than the one asked for twice in
+this work** — `circle_missing_radius_circumference` for a scenario spelled
+`circle_circumference_missing_side`, and a `rect_perimeter_missing_side` carrying
+`rect_area_missing_side`'s keys. Selecting a block is a prompt-level act; only validating the reply
+is enforcement, which is the same split as `grade_appropriateness` beside it.
+
+**The generalisation, having needed it three times: a per-bucket minimum cannot describe an item that
+arrives after the bucket it belongs to.** Topics inside a grade bracket, scenarios inside a topic,
+scenarios inside a band. Whenever a gate is one number for a group, ask which member of the group
+arrives last.
+
+**That filter was itself too generous, and it filtered one band.** It admitted `triangle_area` —
+½ × base × height, CCSS **6.G.1** — to a band meaning grades 1-3, and a grade-1 session was duly
+generated asking for the area of a triangle. Fixing that band alone then left the *larger* half:
+`middle` (grades 4-6) was unfiltered entirely, offering circle area (7.G.4), the Pythagorean theorem
+(8.G.7), and on the hard tier **only** volumes, two of them 8.G.9 — so a 4th grader on that tier was
+always asked a grade-8 question.
+
+`SCENARIO_MIN_GRADE` now records the grade each formula is introduced at, and `_pick_scenario`
+filters **every** band against `_BAND_CEILING`. That is the structural point: a per-band allowlist
+can omit a band, a per-scenario grade cannot, and a scenario added without one fails the test rather
+than defaulting to available everywhere. Gating on the top of a band means a 4th grader can meet
+grade-6 content — the cost of bands being coarser than grades, and a far smaller one than the
+Pythagorean theorem.
+
+**Nothing else catches this class.** `grade_appropriateness` looks for variable notation, and a
+seeded lesson plan steers what a scenario *asks* rather than which scenarios are offered. Both
+instances were found by reading generated output. **Check a band's scenarios against the standard
+they claim to match, not against whether they look simple**: area of a triangle looks as elementary
+as area of a rectangle and is three grades apart.
+
 **Most of the ten topics are still defense-in-depth for "early" band, not primary content**, since
 `_allowed_topics()` above keeps `algebra`/`probability`/`rationals`/`mean`/`median`/`mode`/
 `angle_relationships` from ever reaching a grade 1-3 session in the first place. Their "early"
@@ -2805,6 +2865,112 @@ instruction: nine distinct rainfall readings, **no mode, answer 0**. And a perce
 Each is now forbidden in the objectives *and* in the row's `notes`, which is where a future editor
 will look. The general rule: **an objective that is pedagogically true can still be an instruction
 the solver cannot score** — check what a cell generates before trusting it, not just what it says.
+
+### A band's tiers are written for its ceiling, so its youngest grade is over-served
+
+`grade_band` buckets 1-3, 4-6, 7-8, 9+, and every `COMPLEXITY_BY_GRADE` tier is written for the top
+of its band. Measured at grade 4, which sits at the bottom of a three-grade band: **66% of questions
+above grade**, from three separate mechanisms —
+
+| cause | measured | standard |
+| --- | --- | --- |
+| geometry gated on the band ceiling (6), not the grade | 3/10 | volume is 5.MD.5 |
+| `expressions` middle tiers allow parentheses | 6/10 | 5.OA.1 |
+| `rationals` middle tiers use unlike denominators | 7/10 | 5.NF.1 |
+| `mean`/`median`/`mode` offered from grade 4 | 30/30 | 6.SP.5c |
+
+The first is fixed by gating on the grade rather than the band — `SCENARIO_MIN_GRADE` is per
+scenario and the student's grade is known, so there was never anything to round up. **Where a
+per-item minimum exists, use the grade; the band ceiling is only a fallback for a grade that cannot
+be read.**
+
+The next two are fixed by `GRADE_OVERRIDES`, a per-grade line appended to the prompt. Not folded
+into `COMPLEXITY_BY_GRADE`: that table is keyed by band, and giving it a thirteenth column to
+express one rule would make every other topic's table wrong by omission. It is prompt-level and can
+leak — `grade_appropriateness` is where a code-level check belongs if it does.
+
+Grade 4 went **66% → 43%** on a regenerated set, and then **43% → 0%** when `mean`/`median`/`mode`
+were raised from 4 to 6 (6.SP.5c). Grade 5 is 0% and grade 6 was already.
+
+**That last step cost breadth, and the cost is the point of recording it**: grades 4-5 now offer four
+topics — `ordering`, `geometry`, `expressions`, `rationals` — where they offered eight before the
+audit. That is grades 1-3's list plus one. It is a deliberate trade of coverage for accuracy, pinned
+by `test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five` so a later widening has
+to be a choice rather than a drift.
+
+Grades 1-2 had the same shape for geometry and were fixed by **adding a scenario rather than
+removing the topic**. The easiest scenario was `rectangle_area` (3.MD.7), so a strict reading left
+those grades no geometry at all — and the alternative, dropping the topic, left them two topics.
+`rectangle_area_by_counting` is **2.G.2**, counting the squares that fill a rectangle: the one
+numeric geometry standard below grade 3, and the only thing those grades can be asked here. It
+reuses `solve_rectangle_area` because rows × columns *is* length × width — the difference is entirely
+in the wording, which is the scenario block's job, and a second solver would be a copy free to drift.
+
+Generated at grade 2: *"A rectangle is separated into 2 rows of 5 same-size squares. How many squares
+fill the rectangle?"* — countable without multiplying, which is why 2.G.2 exists as the bridge to
+3.MD.7.
+
+**Grade 1 has no geometry at all**, and that is the end of this thread rather than a gap in it. 1.G
+is defining attributes of shapes and partitioning into halves and fourths: nothing that produces a
+number a solver can score. The tempting fix — *"3 triangles and 4 squares, how many shapes?"* — is
+addition wearing a geometry label, and counting it would keep the topic list long while teaching
+1.OA. So `TOPIC_MIN_GRADE["geometry"]` is 2, and **grade 1 has two topics, `ordering` and
+`expressions`**. That is the honest size of what this system can ask a 6-year-old.
+
+**An unreadable grade lands there too.** It used to resolve to the early band's ceiling of 3 — two
+grades of content granted to a student nobody could identify — and now matches `_allowed_topics` and
+`_grade_band` in treating an unknown student as the youngest.
+
+### Difficulty tiers are relative to what a grade can see, because the signals move them
+
+A topic used to map a difficulty to a fixed list of scenario numbers. That is right while every
+scenario is available and wrong once a grade filter removes some. Geometry's hard tier is the
+volumes, and the hard ones — cylinder and sphere, with π — are 8.G.9, so gating scenarios on grade
+left grades 6-7 with the two simplest:
+
+    grade 6  medium -> rect_area_missing_side, triangle_area_missing_side, …   (invert a formula)
+    grade 6  hard   -> cube_volume, rect_volume                                (multiply three)
+
+**That is not cosmetic, because difficulty is what the biosignals move.** `signal_fusion` labels a
+student `focused`, `LLM_topic_decider` shifts medium → hard, and at those grades that handed them an
+*easier* question — the fusion firing correctly and being undone one layer down. Anything that
+narrows what a difficulty tier can offer has to be checked against the tier ordering, not just
+against the grade rule it was written for.
+
+`scenario_tiers.pick` ranks the *available* scenarios by `SCENARIO_DIFFICULTY` and slices them into
+thirds, so `hard` is the hardest third of whatever remains and cannot invert however much the grade
+filter removes. Small sets overlap rather than emptying — a grade with one scenario gets it at every
+difficulty, which is honest, and `random.choice` never sees an empty list.
+
+**`SCENARIO_DIFFICULTY` is ordered by steps to solve, deliberately not by the grade that teaches
+it.** The two are different axes and conflating them reads `algebra_complementary` (7.G.5, set up
+and solve an equation) as easier than `triangle_sum` (8.G.5, one subtraction). A CCSS-grade metric
+reported angles as broken when it was correct; check difficulty claims against difficulty.
+
+### Grades 9+ have no content of their own, and prompts cannot give them any
+
+`advanced` was `upper` with the magnitude clause deleted — "No additional restriction", "beyond
+what's typical". **An empty restriction reads to a model as no requirement, not a harder one**, so it
+produced the easiest shape that fit the topic. Measured over 640 generated questions, grades 1-9:
+**83% of grade-9 questions were three or more grades below grade**, including `Simplify 5/9 + 7/11 -
+2/9` (5.NF.1) and `Evaluate 72 / 8 + 5 * (9 - 4) - 3 * 2 + 10` (5.OA.1) on the **hard** tier.
+
+Every `advanced` tier now states a requirement, and the model complies: negatives in `mean` went
+3/10 → 10/10, in `ordering` 0/7 → 10/10, nested parentheses in `expressions` 0/10 → 2/10.
+
+**It barely moved the number — 83% → 81% — and that is the real finding.** The score is by the CCSS
+grade of the *concept*, and every concept these solvers can score tops out at grade 8: `algebra` is
+one linear equation with one solution (a quadratic is correctly refused, so 8.EE.7b is the ceiling),
+`mean`/`median`/`mode` are one statistic over a listed dataset (6.SP.5c), `probability` is a single
+event (7.SP.5), `rationals` is fraction arithmetic (7.NS.1). Harder numbers inside 8.EE.7b are still
+8.EE.7b.
+
+So **`advanced` means "the hardest grade-8 content", and grades 9-12 cannot be served appropriately
+at all.** Closing that needs solvers — quadratics, systems, functions, spread — not prompt text, and
+each new solver has to be able to *score* what it asks, which is the constraint that rules out most
+of high-school mathematics here. Verified before those tiers were written: variables on both sides,
+distribution and fractional coefficients all score correctly; a quadratic and a two-unknown equation
+are both correctly refused.
 
 ### Angle answers are whole numbers through 5th grade, and decimals after
 

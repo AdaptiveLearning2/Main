@@ -144,10 +144,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use up to three operations on the left-hand side. Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
         "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d). Constants and coefficients between 1 and 200. Negative coefficients are allowed.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use a TWO-STEP equation (e.g. ax + b = c). No additional magnitude restriction beyond what's typical for the equation.",
-        "medium": "Use up to three operations on the left-hand side. No additional magnitude restriction beyond what's typical for the equation.",
-        "hard":   "Use up to three operations on the left-hand side, and the variable x may appear on both sides of the equation (e.g. ax + b = cx + d). No additional magnitude restriction beyond what's typical for the equation.",
+        "easy":   "Use a TWO-STEP equation with at least one NEGATIVE constant (e.g. 5x - 12 = 33). Coefficients and constants between 2 and 60.",
+        "medium": "Distribute over one set of parentheses (e.g. 4(x - 3) + 2x = 26) and include at least one negative constant. Coefficients between 2 and 40.",
+        "hard":   "Put x on BOTH sides AND distribute over at least one set of parentheses (e.g. 5(x - 2) + 3x = 2(x + 6) - 4). Use at least one negative or fractional coefficient. The equation must still have EXACTLY ONE solution -- no quadratics.",
     },
 }
 

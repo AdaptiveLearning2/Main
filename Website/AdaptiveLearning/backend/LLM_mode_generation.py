@@ -3,6 +3,7 @@
 from collections import Counter
 import os
 import re
+import itertools
 import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
@@ -12,6 +13,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
 import sympy as sp #pip install sympy
 from sympy import symbols, Eq, solve, sympify, Integer
+import answer_format
 import lesson_plan_context
 import safe_solve
 import grade_levels
@@ -35,11 +37,19 @@ def extract_json(text):
     return None
 
 def serialize_answer(ans):
+    """Through the shared formatter, like the distractors.
+
+    `str()` here rendered the correct answer as `["4.0"]` beside distractors of
+    `["10"]`, `["8"]`, `["2"]` -- the same tell `mean` had, one layer further
+    on. Fixing the distractor pool alone left the answer as the odd one out,
+    which is why the test asserts every option is in canonical form rather
+    than checking any single path.
+    """
     if isinstance(ans, list):
-        return [str(x) for x in ans]
+        return [answer_format.format_value(x) for x in ans]
     if isinstance(ans, sp.Basic):
-        return str(ans)
-    return str(ans)
+        return answer_format.format_value(float(ans))
+    return answer_format.format_value(ans)
 
 mode_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
@@ -92,39 +102,61 @@ def mode(values):
 def generate_incorrect_answers(solution, values):
     generated_answers = []
 
+    # Both branches below drew randomly until they had three distinct answers,
+    # with no bound. Whether three exist is a property of the dataset: a set
+    # with only two non-modal values cannot supply them, and the nested loop in
+    # the multi-mode branch could not even finish one answer when the dataset
+    # held fewer distinct values than the mode has members. Enumerating instead
+    # of sampling is what makes both terminate -- the candidate pool is small
+    # and finite, so there is nothing to search for.
+    # Formatted, not `str()`. The values are floats since the parse moved
+    # into the worker, so `str()` rendered a dataset written "5, 5, 5, 7"
+    # as options of "5.0" and "7.0" -- no tell, but no option matching
+    # how the question reads.
+    distinct = list(dict.fromkeys(answer_format.format_value(v) for v in values))
+
     # CASE 1: SINGLE MODE
     if not isinstance(solution, list):
-        solution = str(solution)
-
-        while len(generated_answers) < 3:
-            incorrect_answer = str(random.choice(values))
-
-            if (
-                incorrect_answer != solution and
-                incorrect_answer not in generated_answers
-            ):
-                generated_answers.append(incorrect_answer)
+        # Formatted through the same function as `distinct`, or the comparison
+        # below never matches and the correct answer is offered as a
+        # distractor. `str(5.0)` is "5.0" and the pool holds "5".
+        solution = answer_format.format_value(solution)
+        others = [v for v in distinct if v != solution]
+        random.shuffle(others)
+        generated_answers = others[:3]
 
     # CASE 2: MULTIPLE MODES
     else:
-        solution_set = set(map(str, solution))
+        # Same reason as CASE 1: `str` here, formatted values there.
+        solution_set = {answer_format.format_value(v) for v in solution}
+        size = len(solution)
+        pool = list(distinct)
+        random.shuffle(pool)
+        # Every same-size subset of the dataset that is not the answer, up to
+        # the three needed. `combinations` is finite by construction.
+        for combo in itertools.combinations(pool, size):
+            if set(combo) != solution_set:
+                generated_answers.append(list(combo))
+            if len(generated_answers) == 3:
+                break
 
-        while len(generated_answers) < 3:
-            generated = []
-            seen = set()
-
-            while len(generated) < len(solution):
-                candidate = str(random.choice(values))
-
-                if candidate not in seen:
-                    seen.add(candidate)
-                    generated.append(candidate)
-
-            if (
-                set(generated) != solution_set and
-                generated not in generated_answers
-            ):
-                generated_answers.append(generated)
+    if len(generated_answers) < 3:
+        # A dataset too small to supply three wrong answers of the right shape.
+        # Offsetting the mode's own values always can, and keeps the option the
+        # same shape as the answer.
+        offset = 1
+        base = solution if isinstance(solution, list) else [solution]
+        while len(generated_answers) < 3 and offset <= 8:
+            values_ = [answer_format.format_value(float(v) + offset) for v in base]
+            # Compared in the shape the list actually holds. It was built as a
+            # list and compared against a list of strings in the single-mode
+            # branch, so the check never matched and the filler produced
+            # `['7.0', '6.0', '7.0']` -- the same Rational-against-strings
+            # mistake `generate_incorrect_rational` had.
+            candidate = values_ if isinstance(solution, list) else values_[0]
+            if candidate not in generated_answers:
+                generated_answers.append(candidate)
+            offset += 1
 
     return generated_answers
 
@@ -159,10 +191,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 7-9 values with a SINGLE mode, requiring careful counting. Whole numbers between 1 and 200; negative numbers may be used.",
         "hard":   "Use 8-10 values. The dataset MAY be bimodal. Whole numbers between 1 and 200; negative numbers may be used.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 5-6 values with a SINGLE clear mode -- the most frequent value should appear at least 2 more times than any other value.",
-        "medium": "Use 7-9 values with a SINGLE mode, but the most frequent value should appear only ONE more time than the next most frequent value, requiring careful counting.",
-        "hard":   "Use 8-10 values. The dataset MAY be bimodal (two values tied for most frequent) in addition to single-mode datasets.",
+        "easy":   "Use 6-7 values with a SINGLE clear mode, including at least one NEGATIVE number.",
+        "medium": "Use 9-10 values with a SINGLE mode appearing only ONE more time than the next most frequent value, including negatives.",
+        "hard":   "Use 10-12 values which MAY be bimodal, including negatives and at least two values above 100.",
     },
 }
 

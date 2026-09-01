@@ -2,6 +2,7 @@
 import os
 import re
 import ast
+import itertools
 import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
@@ -89,19 +90,20 @@ def solve_ordering(values, numbers, direction="least_to_greatest"):
     return [v[0] for v in sorted_vals]
 
 def shuffle_incorrect_answers(solution):
-    incorrect_answers = set()
+    """Three orderings that are not the right one.
 
-    while len(incorrect_answers) < 3:
-        shuffled = solution.copy()
-        random.shuffle(shuffled)
-
-        if shuffled == solution:
-            shuffled = solution.copy()
-            shuffled[0], shuffled[1] = shuffled[1], shuffled[0]
-        
-        incorrect_answers.add(tuple(shuffled))
-
-    return [list(ans) for ans in incorrect_answers]
+    Enumerated rather than sampled. The loop here drew random shuffles until it
+    had three distinct ones, and how many exist is a property of the list: two
+    values have exactly one wrong order, so a two-value dataset span for ever.
+    The retry loop rejects those upstream now -- an "order these" question needs
+    at least three values to be a question at all -- and this is bounded anyway,
+    because a guard in one place is not a reason to leave a loop that cannot
+    finish in another.
+    """
+    wrong = [list(p) for p in itertools.permutations(solution)
+             if list(p) != solution]
+    random.shuffle(wrong)
+    return wrong[:3]
 
 def _grade_band(grade):
     # Delegated so ten copies of this cannot drift apart, and so an
@@ -130,10 +132,18 @@ COMPLEXITY_BY_GRADE = {
         "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions. Magnitude up to 200.",
         "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value. Magnitude up to 200.",
     },
+    # "advanced" is grades 9+. It used to be `upper` with the magnitude
+    # clause deleted -- which reads to the model as no requirement rather
+    # than a harder one, and an audit of 640 questions measured the result:
+    # 83% of grade-9 questions were three or more grades below grade.
+    #
+    # The ceiling here is grade 8, not high school, and that is a solver
+    # limit rather than a prompt one -- see the note above
+    # COMPLEXITY_BY_GRADE in this file's module docstring region.
     "advanced": {
-        "easy":   "Use 3-4 values. Use ONLY whole numbers or simple one-decimal-place values. No fractions.",
-        "medium": "Use 4-5 values. Include a mix of decimals (up to two decimal places) and simple fractions.",
-        "hard":   "Use 5-6 values. Include a mix of decimals (up to two decimal places), fractions, and at least one negative value.",
+        "easy":   "Use 4-5 values mixing whole numbers and decimals, including at least one NEGATIVE value.",
+        "medium": "Use 5-6 values mixing decimals to two places, simple fractions, and at least one negative.",
+        "hard":   "Use 6 values mixing decimals to two places, fractions with UNLIKE denominators, and at least TWO negatives. At least two of the values must be within 0.1 of each other, so they cannot be ordered at a glance.",
     },
 }
 
@@ -199,6 +209,14 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
 
         # Parsed inside the loop, in the worker, so an unparseable or
         # unbounded value is another attempt rather than a hang.
+        # Three values minimum: with two there is exactly one wrong order, so
+        # the question has one distractor and `shuffle_incorrect_answers` had
+        # nothing to find. It is also not much of an ordering question.
+        if len(question_data.get("values") or []) < 3:
+            print(f"[Attempt {attempt+1}] Too few values to order:",
+                  repr(question_data.get("values"))[:60])
+            continue
+
         numbers = safe_solve.safe_sympify_values(question_data["values"])
         if numbers is None:
             print(f"[Attempt {attempt+1}] Unusable values:",

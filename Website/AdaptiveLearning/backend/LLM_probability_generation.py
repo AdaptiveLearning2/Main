@@ -170,7 +170,9 @@ GRADE_COMPLEXITY = {
     "early":    "Keep the total number of items (or dice sides) small, no more than 10 total.",
     "middle":   "Total items may be up to 20.",
     "upper":    "Total items may be up to 50.",
-    "advanced": "No additional restriction.",
+    # Grades 9+. See the note in LLM_geometry_generation: an empty
+    # restriction is not a harder one.
+    "advanced": "Use total item counts between 20 and 60, chosen so the resulting probability does NOT reduce to a simple fraction like 1/2 or 1/3 -- the student should have to reduce it themselves.",
 }
 
 

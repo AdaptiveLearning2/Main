@@ -32,17 +32,65 @@ ALL_TOPICS = [
 # because an 8B model does not reliably follow prose instructions. Keyed on
 # the raw grade string rather than a _grade_band()-style band, since the rule
 # splits between grade 5 and grade 6 -- finer than any four-band split.
+# The grade at which each topic's core concept is introduced, by CCSS code.
+#
+# Per topic rather than three grade brackets, for the reason
+# `SCENARIO_MIN_GRADE` is per scenario: a bracket has to be *remembered* for
+# every topic it should exclude, and two were missed. Measured over 640
+# generated questions, grades 1-9 --
+#
+#   angle_relationships was allowed from grade 4 against 7.G.5. Every one of
+#   30 questions at grades 4, 5 and 6 was above grade: a 4th grader asked
+#   "Two angles form a linear pair. If one measures 65 degrees, find the
+#   other" is being asked a grade-7 question, three years early, every time.
+#
+#   probability was allowed from grade 6 against 7.SP.5. 10 of 10 at grade 6.
+#
+# Neither is fixable by prompt or by band table -- the topic reaches the
+# student before the concept does, so there is no version of the question that
+# is grade-appropriate.
+TOPIC_MIN_GRADE = {
+    "ordering":            1,   # 1.NBT.3, comparing whole numbers
+    "expressions":         1,   # 1.OA, add and subtract within 20
+    # 2.G.2 is the earliest numeric geometry standard -- counting the squares
+    # that fill a rectangle. Grade 1's geometry (1.G) is defining attributes of
+    # shapes and partitioning into halves and fourths: nothing that produces a
+    # number a solver can score, and nothing worth faking. A question like
+    # "3 triangles and 4 squares -- how many shapes?" is addition wearing a
+    # geometry label, and counting it as geometry would keep the topic count up
+    # while teaching 1.OA.
+    #
+    # The cost: grade 1 has two topics, `ordering` and `expressions`. That is
+    # the honest size of what this system can ask a 6-year-old.
+    "geometry":            2,   # 2.G.2; per-scenario floor in
+                                # LLM_geometry_generation.SCENARIO_MIN_GRADE
+    "rationals":           4,   # 4.NF.3, fractions with like denominators
+    # Raised from 4 to 6. 6.SP.5c introduces all three, and the audit flagged
+    # 10 of 10 at grades 4 and 5 in all six cells -- 30 of the 46 questions
+    # grade 4 received above its grade.
+    #
+    # The cost is real and was the reason for leaving it: grades 4-5 now have
+    # four topics rather than seven, which is what grades 1-3 get plus
+    # `rationals`. That is a deliberate trade of breadth for accuracy, taken
+    # knowing the size of it, rather than a standard applied blindly.
+    "mean":                6,   # 6.SP.5c
+    "median":              6,   # 6.SP.5c
+    "mode":                6,   # 6.SP.5c
+    "algebra":             6,   # 6.EE.7, one-variable equations
+    "angle_relationships": 7,   # 7.G.5, complementary and supplementary
+    "probability":         7,   # 7.SP.5
+}
+
+
 def _allowed_topics(grade):
     # Reads the grade number via grade_levels instead of matching dropdown
     # strings exactly, since profiles.grade_level is free text. An unreadable
-    # grade is treated as the youngest, so it can't fall through to the
-    # fully-permissive branch.
+    # grade is treated as the youngest, so it cannot fall through to a
+    # permissive branch.
     number = grade_levels.grade_number(grade)
-    if number is None or number <= 3:
-        return ["ordering", "geometry", "expressions"]
-    if number <= 5:
-        return [t for t in ALL_TOPICS if t not in ("algebra", "probability")]
-    return list(ALL_TOPICS)  # 6th grade and up
+    if number is None:
+        number = 1
+    return [t for t in ALL_TOPICS if TOPIC_MIN_GRADE[t] <= number]
 
 
 def _safe_topic(topic, grade):

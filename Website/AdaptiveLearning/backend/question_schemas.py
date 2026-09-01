@@ -1,0 +1,185 @@
+"""JSON schemas for the generation calls, one per topic.
+
+`extract_json` hunts a JSON object out of prose because `llama3.1:8b` wraps its
+replies in markdown fences and preamble. That is a property of *that model*,
+and it was carried across to Claude untouched -- so the retry loop still
+absorbs malformed JSON on a provider that can be told not to produce any.
+
+A schema closes that: `output_config` constrains the reply server-side, so the
+only malformed-JSON path left on the Claude branch is a reply truncated at
+`max_tokens`. Measured against `claude-haiku-4-5`: a schema'd reply is a single
+text block of bare JSON, no fence, no preamble.
+
+Three things this does NOT do, and the first is the one to hold on to:
+
+  * **It does not replace a single code-level check.** `grade_appropriateness`,
+    `question_consistency`, `SCENARIO_VARS`, the scenario-grade checks and the
+    bounded solvers all still run and all still matter. A schema constrains the
+    *shape* of a reply, never whether the question inside it is solvable, in
+    band, or consistent with the data it will be scored against. It is also
+    enforced by the provider rather than by us, and only on one branch --
+    Ollama sends no schema at all, so every one of those checks is the only
+    thing standing between a dev-mode reply and a student.
+  * **It does not let `extract_json` go.** The Ollama branch still needs it,
+    and a truncated Claude reply still reaches it.
+  * **It does not bound content.** A schema can say `variables` is an array of
+    strings; it cannot say they are numbers a solver can use.
+
+What it *does* buy beyond fewer retries: `scenario` is pinned to an enum of the
+one scenario that was actually selected, and geometry's `variables` to exactly
+the keys that scenario's solver reads. Both are derived from the tables the
+solvers already use -- `geometry_solvers.SCENARIO_VARS` and
+`angle_solvers.SCENARIO_ARITY` -- rather than restated here, because a second
+copy of a scenario's variable keys is how the two drift apart and the model
+gets told to produce something the solver cannot read.
+"""
+
+import angle_solvers
+import geometry_solvers
+
+# Every schema shares these. `question_topic` is in the prompts' JSON examples
+# and every generator returns it, so it is required rather than optional -- a
+# schema that permits a key the code then reads unconditionally is a KeyError
+# waiting for the one reply that omits it.
+_TEXT = {"type": "string"}
+_STRING_LIST = {"type": "array", "items": {"type": "string"}}
+
+
+def _object(properties, required=None):
+    """A closed object. `additionalProperties: False` throughout: an unexpected
+    key is exactly the drift these schemas exist to stop, and nothing here
+    reads a key it did not ask for."""
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required if required is not None else properties),
+        "additionalProperties": False,
+    }
+
+
+def token_list(topic):
+    """algebra, expressions, rationals: an expression as a token list.
+
+    Tokens mix numerals and operators ("36", "/", "(" ), so they are strings
+    with no pattern -- constraining them here would reject the operators.
+    `token_join` and the bounded worker are what validate them.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "variables": _STRING_LIST})
+
+
+def dataset(topic):
+    """mean, median, mode: a list of numeric values, as strings.
+
+    The numerals are pattern-constrained. These three prompts each spend four
+    lines insisting on it ("DO NOT use words like 'red'... If any value is not
+    a number, the response is invalid"), which is a prompt-level rule and so
+    leaks; the schema is where it can actually be enforced.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "variables": {"type": "array",
+                                  "items": {"type": "string",
+                                            "pattern": r"^-?\d+(\.\d+)?$"}}})
+
+
+def ordering():
+    """values plus the direction they are to be sorted in.
+
+    `direction` is an enum of the two the solver dispatches on. It was a free
+    string, and `solve_ordering` treats anything that is not
+    "greatest_to_least" as least-to-greatest -- so a typo'd direction silently
+    sorted the wrong way and scored the student against it.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "direction": {"type": "string",
+                                  "enum": ["least_to_greatest",
+                                           "greatest_to_least"]},
+                    "values": _STRING_LIST})
+
+
+def expressions(scenario_name):
+    """As `token_list`, with `scenario` pinned to the one that was selected."""
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]},
+                    "variables": _STRING_LIST})
+
+
+def geometry(scenario_name):
+    """`variables` is an object, and its required keys are this scenario's.
+
+    Derived from `geometry_solvers.SCENARIO_VARS`, which is what the solver
+    indexes. Measured against Haiku: it returned a
+    `rect_perimeter_missing_side` carrying `rect_area_missing_side`'s keys --
+    two scenarios blended, which was a KeyError before `SCENARIO_VARS` was
+    checked at runtime. A closed object with exactly these keys makes that
+    reply unrepresentable rather than merely rejected.
+    """
+    keys = sorted(geometry_solvers.SCENARIO_VARS[scenario_name])
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]},
+                    "variables": _object({k: _TEXT for k in keys})})
+
+
+def angles(scenario_name):
+    """`variables` is a list of numeric strings, with the scenario pinned.
+
+    The *length* is deliberately not constrained, and not for want of trying:
+    the API rejects `minItems` above 1 outright --
+
+        For 'array' type, 'minItems' values other than 0 or 1 are not
+        supported
+
+    -- so `angle_solvers.SCENARIO_ARITY` cannot be expressed here. It stays a
+    runtime check, which is where it already was; the schema simply does not
+    take that job over. Worth stating rather than leaving as a silent gap: a
+    reader who sees every other shape pinned would reasonably assume this one
+    is too, and stop checking the arity.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]},
+                    "variables": {"type": "array",
+                                  "items": {"type": "string",
+                                            "pattern": r"^-?\d+(\.\d+)?$"}}})
+
+
+def probability(scenario_name):
+    """Two shapes, and which one is decided before the prompt is built.
+
+    `probability_of`/`not_probability_of` carry `items`, a map of category name
+    to count; `dice` carries `sides` and a list `target`. As one schema that is
+    a union, and the prompt says as much ("items" or "sides"). It does not have
+    to be: `_pick_scenario` runs before the call, so the scenario is known and
+    each gets its own schema.
+
+    Only `dice` gets one. `items`' keys are category names the model invents,
+    which needs an open object, and the API refuses those -- so those two
+    scenarios return `None` and keep the `extract_json` path.
+
+    Pinning the enum matters more here than anywhere else: this prompt sends
+    all three scenario blocks and names the wanted one by *number* ("scenario
+    3"), while the reply must carry the matching *name* -- and the solver
+    dispatches on the name it is given, not the one that was asked for.
+    """
+    if scenario_name != "dice":
+        # `items` maps category names the model invents to counts, so the
+        # object has to stay open -- and the API refuses that:
+        #
+        #     For 'object' type, 'additionalProperties: object' is not
+        #     supported. Please set 'additionalProperties' to false
+        #
+        # Closing it would mean fixing the category names in advance, which is
+        # the question. So these two scenarios get no schema at all and keep
+        # the `extract_json` path, and `None` says so rather than a schema that
+        # quietly permits anything.
+        return None
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": ["dice"]},
+                    "sides": {"type": "string", "pattern": r"^\d+$"},
+                    "target": {"type": "array", "items": {"type": "string"}}})

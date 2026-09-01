@@ -2659,6 +2659,52 @@ generated inline.
 and the loop the call sites own is the one worth keeping, since it also rejects a *well-formed*
 response for being bad JSON or the wrong shape, which no transport retry can.
 
+### The Claude branch constrains its replies with a schema; the Ollama branch does not
+
+`extract_json` hunts a JSON object out of prose because `llama3.1:8b` wraps replies in markdown
+fences and preamble. That is a property of *that model*, and it was carried across to Claude
+untouched — so the retry loop went on absorbing malformed JSON from a provider that can simply be
+told not to produce any. `question_schemas.py` is one schema per topic, passed as
+`generate_text(prompt, schema=...)` and sent as `output_config`.
+
+**It replaces no code-level check, and that is the whole caveat.** `grade_appropriateness`,
+`question_consistency`, `SCENARIO_VARS`, the scenario-grade checks and the bounded solvers all still
+run. A schema constrains the *shape* of a reply, never whether the question inside it is solvable,
+in band, or consistent with the data it will be scored against. It is also enforced by the provider
+rather than by us, and **only on one branch** — Ollama sends no schema, so a dev run exercises the
+unschema'd path and every one of those checks is the only thing between its reply and a question.
+`extract_json` stays for the same reason, and because a reply truncated at `max_tokens` is now the
+one malformed-JSON path left on Claude.
+
+What it buys beyond fewer retries: `scenario` is pinned to an enum of the **one** scenario actually
+selected, so the wrong-scenario class — Haiku returning `circle_missing_radius_circumference` for a
+scenario spelled `circle_circumference_missing_side`, or blending two scenarios' variable keys —
+becomes unrepresentable rather than merely rejected. Geometry's `variables` keys and the scenario
+enums are **derived** from `geometry_solvers.SCENARIO_VARS` and the block tables, never restated: a
+second copy of a scenario's keys is how the schema and the solver drift into telling the model to
+produce something the solver cannot read.
+
+**Two JSON Schema keywords are refused by this endpoint, and neither is guessable from the spec.**
+Both were found by sending a request and reading the 400:
+
+    For 'array' type, 'minItems' values other than 0 or 1 are not supported
+    For 'object' type, 'additionalProperties: object' is not supported. Please set it to false
+
+So `angle_solvers.SCENARIO_ARITY` **cannot** be expressed — it stays a runtime check, and that gap is
+pinned by a test because every other shape here is constrained and a reader would reasonably assume
+this one is too. And probability's two bag scenarios return **`None` rather than a schema**: their
+`items` maps category names the model invents to counts, which needs an open object. A schema listing
+every key *except* the one carrying the data would be accepted, constrain nothing that matters, and
+read as covered. `test_no_schema_uses_a_keyword_the_api_refuses` walks every schema for both, because
+a violation is not a degraded question — it is a 400 on the first question of that topic.
+
+**A generator added without a schema keeps the `extract_json` path silently**, which is why
+`test_every_generator_sends_a_schema` is an exhaustiveness check over the `LLM_*_generation.py` files,
+the same shape as `_MODE_AWARE` and the close-site tests.
+
+Verified end to end against `claude-haiku-4-5` on 2026-08-31: all ten topics generated and solved,
+with the answer present among its own options in every one.
+
 **Switching provider does not invalidate the checks below it, but it does invalidate every measured
 rate.** `grade_appropriateness` and `question_consistency` are code and are provider-agnostic — that
 is why those rules were moved out of prompts in the first place. Every "measured on llama3.1:8b"

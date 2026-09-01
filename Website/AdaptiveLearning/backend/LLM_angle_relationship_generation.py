@@ -4,6 +4,7 @@ import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
+import question_schemas
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -308,7 +309,8 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
             )
         prompt = lesson_plan_context.append_lesson_context(prompt, "angle_relationships", grade_band)
 
-        response_text = llm_client.generate_text(prompt)
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.angles(_SCENARIO_NAMES[scenario]))
 
         raw = extract_json(response_text)
 

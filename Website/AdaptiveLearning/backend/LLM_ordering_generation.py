@@ -7,6 +7,7 @@ import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
+import question_schemas
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -171,7 +172,8 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
             f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
         )
         prompt = lesson_plan_context.append_lesson_context(prompt, "ordering", grade_band)
-        response_text = llm_client.generate_text(prompt)
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.ordering())
 
         raw = extract_json(response_text)
 

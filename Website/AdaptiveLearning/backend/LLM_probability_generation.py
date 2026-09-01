@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
+import question_schemas
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -150,6 +151,17 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [2],
 }
 
+# Block number -> the scenario name that block asks for. This prompt sends all
+# three blocks and names the wanted one by number, so this map is the only
+# thing tying "scenario 3" to the "dice" the reply must carry -- and the solver
+# dispatches on the name.
+_SCENARIO_NAMES = {
+    1: "probability_of",
+    2: "not_probability_of",
+    3: "dice",
+}
+
+
 def _pick_scenario(difficulty):
     return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
 
@@ -205,7 +217,10 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
         prompt = lesson_plan_context.append_lesson_context(prompt, "probability", grade_band)
-        response_text = llm_client.generate_text(prompt)
+        # `None` for the two bag scenarios, whose `items` object cannot be
+        # expressed -- see question_schemas.probability.
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.probability(_SCENARIO_NAMES[scenario]))
 
         raw = extract_json(response_text)
 

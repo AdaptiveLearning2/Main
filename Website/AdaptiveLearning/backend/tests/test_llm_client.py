@@ -435,3 +435,48 @@ def test_the_installed_sdk_is_the_pinned_one():
         f"installed anthropic {anthropic.__version__} but requirements.txt "
         f"pins {m.group(1)} -- the signature guard is measuring the wrong SDK"
     )
+
+
+def test_a_schema_reaches_the_request_as_output_config(monkeypatch):
+    """The shape is checked against the installed SDK by `_FakeMessages`, so
+    this pins the nesting rather than the parameter name -- `output_config`
+    takes a `format`, which takes the schema under `type: json_schema`."""
+    fake = _claude(monkeypatch)
+    schema = {"type": "object", "properties": {}, "required": [],
+              "additionalProperties": False}
+    llm_client.generate_text("p", schema=schema)
+    assert fake.calls[0]["output_config"] == {
+        "format": {"type": "json_schema", "schema": schema}}
+
+
+def test_no_schema_sends_no_output_config_at_all(monkeypatch):
+    """An absent key and a permissive schema are different requests.
+
+    Two topics cannot express a schema -- probability's bag scenarios need an
+    open `items` object, which the API refuses -- so they pass `None`. If that
+    became an empty or catch-all `output_config` the reply would be constrained
+    by something nobody wrote, and the call would read as covered.
+    """
+    fake = _claude(monkeypatch)
+    llm_client.generate_text("p")
+    assert "output_config" not in fake.calls[0]
+    llm_client.generate_text("p", schema=None)
+    assert "output_config" not in fake.calls[1]
+
+
+def test_a_schema_is_ignored_on_the_ollama_branch(monkeypatch):
+    """Structured output is Claude-only, and the consequence is the point.
+
+    Dev runs are unschema'd, so `extract_json`, the retry loops and every
+    code-level check downstream stay load-bearing -- and stay the only thing
+    between a malformed dev reply and a question. A schema silently changing
+    what Ollama is asked for would also mean local testing no longer exercises
+    the path production's fallback depends on.
+    """
+    client = _fake_ollama(monkeypatch, response={"response": "hi"})
+    assert llm_client.generate_text("p", schema={"type": "object"}) == "hi"
+    sent = client.last_generate
+    assert "schema" not in sent
+    assert "output_config" not in sent
+    assert "format" not in sent
+    assert sent["options"] == {"temperature": 1.1, "top_p": 0.95, "top_k": 100}

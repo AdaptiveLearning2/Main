@@ -10,7 +10,7 @@ import SkeletonList from '../../components/ui/Skeleton'
 import StatCard from '../../components/ui/StatCard'
 
 const TOPICS = ['ordering','missing_number','patterns','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
-const ICONS  = { ordering:'🔢', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
+const ICONS  = { ordering:'🔢', missing_number:'❓', patterns:'📶', rationals:'➗', expressions:'📐', algebra:'🔣', geometry:'📏', angle_relationships:'📐', mean:'〰️', median:'📊', mode:'🔁', probability:'🎲' }
 
 // Below this many attempts, a topic's accuracy is too noisy to call it the
 // student's "weakest" -- one unlucky question would read as 0%.
@@ -235,7 +235,7 @@ export default function StudentDashboard() {
                     className={`flex flex-col items-center p-3 rounded-xl text-center gap-1 ${
                       measured ? toneFor(row.accuracy) : 'bg-slate-50 dark:bg-gray-800'}`}
                   >
-                    <span className="text-xl">{ICONS[t]}</span>
+                    <span className="text-xl">{ICONS[t] || '📘'}</span>
                     <span className={`text-xs font-semibold capitalize leading-tight ${
                       measured ? '' : 'text-gray-600 dark:text-gray-400'}`}>
                       {prettyTopic(t)}

@@ -139,11 +139,13 @@ def test_a_grade_the_dropdown_did_not_write_is_still_kept_from_algebra(grade):
     allowed = td._allowed_topics(grade)
     assert "algebra" not in allowed
     assert "probability" not in allowed
-    # `geometry` left this set when its floor rose to 2.G.2: grade 1 has no
-    # numeric geometry standard, so an unreadable grade -- treated as the
-    # youngest -- has none either. `missing_number` and `patterns` joined it
-    # later; both are grade-1 standards.
-    assert set(allowed) == {"ordering", "expressions", "missing_number", "patterns"}
+    # Compared against grade 1's own list rather than a copy of it: the claim
+    # is that an unreadable grade is treated as the youngest, and spelling out
+    # the membership made a literal that had to be edited every time grade 1
+    # gained a topic. `geometry` is still absent from both, which is the part
+    # this test is really about.
+    assert set(allowed) == set(td._allowed_topics("1"))
+    assert "geometry" not in allowed
 
 
 @pytest.mark.parametrize("grade", ["Grade 1", "1", "", None, "no idea"])

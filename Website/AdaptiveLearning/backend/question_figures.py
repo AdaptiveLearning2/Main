@@ -22,11 +22,18 @@ a screen reader is given from the same spec. One source for the picture and the
 sentence, for the reason `AccessibleChart` takes one `columns` spec for its
 chart and its table -- as two literals they drifted twice in one PR.
 
-**A figure is an enrichment and never a requirement.** `figure_for` returns
-`None` for a scenario with no figure, values it cannot use, or a size it will
-not draw, and every caller treats that as "no picture" rather than as a reason
-to reject the question. The question was already complete without one: the text
-still says "3 rows of 4 same-size squares".
+**`figure_for` never raises and never refuses a question.** It returns `None`
+for a scenario with no figure, values it cannot use, or a size it will not
+draw, and it runs on the hot generation path after the solve -- so a picture
+that could not be built must cost the picture and nothing else.
+
+Whether that `None` is fatal is the *caller's* decision, and for all but one
+topic it is not: the question was complete without a picture, since the text
+still says "3 rows of 4 same-size squares". `graphs` is the exception and the
+only one. "How many more cats than dogs?" has no answer on screen without the
+graph, so that generator treats an unbuildable figure as an unusable reply and
+retries. The rule lives with the topic that cannot do without it rather than
+here, so a new figure type does not inherit a requirement it does not have.
 """
 
 # Grids larger than this are unreadable at the size a question card gives them,
@@ -65,10 +72,45 @@ def _rect_grid(variables):
     return {"type": "rect_grid", "rows": rows, "columns": columns}
 
 
+# The tallest bar a chart may show. Counts above this are not a reading
+# exercise for these grades -- 1.MD.4 and 2.MD.10 are "up to three/four
+# categories" of small counts -- and a bar drawn at 1:1 stops fitting the card.
+# 3.MD.3's *scaled* graphs, where one square is several units, are a separate
+# thing and are not built here: the scale is part of what the student has to
+# read, so it needs its own figure type rather than a bigger number.
+MAX_BAR = 20
+MAX_CATEGORIES = 5
+
+
+def _bar_chart(variables):
+    """1.MD.4 / 2.MD.10 -- counts by category, read off a graph.
+
+    Takes the same `categories` list the solver sums and subtracts over, in the
+    same order, so the bar a student counts is the number being scored.
+    """
+    categories = variables.get("categories")
+    if not isinstance(categories, list) or not 2 <= len(categories) <= MAX_CATEGORIES:
+        return None
+    bars = []
+    for entry in categories:
+        if not isinstance(entry, dict):
+            return None
+        name = entry.get("name")
+        count = _positive_int(entry.get("count"), MAX_BAR)
+        if not isinstance(name, str) or not name.strip() or count is None:
+            return None
+        bars.append({"label": name.strip(), "value": count})
+    if len({bar["label"].lower() for bar in bars}) != len(bars):
+        return None            # two bars with one name cannot be told apart
+    return {"type": "bar_chart", "bars": bars}
+
+
 # Scenario name -> the builder for its figure. A scenario absent from this map
 # has no figure, which is the ordinary case: most questions here are text.
 BUILDERS = {
     "rectangle_area_by_counting": _rect_grid,
+    "how_many_total": _bar_chart,
+    "how_many_more": _bar_chart,
 }
 
 

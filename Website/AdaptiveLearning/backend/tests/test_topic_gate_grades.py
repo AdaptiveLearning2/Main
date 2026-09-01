@@ -80,17 +80,26 @@ def test_grade_one_has_no_geometry():
 
     What changed is the rest of the list. Grade 1 had exactly two topics, which
     meant a 6-year-old saw `ordering` and `expressions` on rotation;
-    `missing_number` (1.OA.8) and `patterns` (1.NBT.1) are real grade-1
-    standards with exact solvers, so the honest size of the list is four.
+    `missing_number` (1.OA.8), `patterns` (1.NBT.1) and `graphs` (1.MD.4) are
+    real grade-1 standards with exact solvers, so the honest size of the list
+    is five.
+
+    This one pins the set, because its whole point is what a 6-year-old can be
+    asked. The tests below deliberately do not: "an unreadable grade is treated
+    as the youngest" is a property of the *gate*, and restating grade 1's
+    membership to express it made four literals that all had to be edited every
+    time the youngest grade gained a topic -- twice now.
     """
-    assert set(decider._allowed_topics("1")) == {"ordering", "expressions", "missing_number", "patterns"}
+    assert set(decider._allowed_topics("1")) == {
+        "ordering", "expressions", "missing_number", "patterns", "graphs"}
     assert "geometry" in decider._allowed_topics("2")
 
 
 def test_an_unreadable_grade_gets_grade_ones_topics():
     """It is treated as the youngest, so it narrows with grade 1 rather than
     keeping a list that used to include geometry."""
-    assert set(decider._allowed_topics("no idea")) == {"ordering", "expressions", "missing_number", "patterns"}
+    assert set(decider._allowed_topics("no idea")) == set(
+        decider._allowed_topics("1"))
 
 
 def test_the_cost_of_that_decision_is_four_topics_for_grades_four_and_five():
@@ -111,7 +120,8 @@ def test_an_unreadable_grade_gets_the_youngest_topics(grade):
     """`profiles.grade_level` is free text. An unreadable one must not fall
     through to a permissive branch -- the failure `_allowed_topics` was
     rewritten for once already."""
-    assert set(decider._allowed_topics(grade)) == {"ordering", "expressions", "missing_number", "patterns"}
+    assert set(decider._allowed_topics(grade)) == set(
+        decider._allowed_topics("1"))
 
 
 def test_each_topic_is_offered_over_exactly_the_grades_it_declares():

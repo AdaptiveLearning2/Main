@@ -214,3 +214,28 @@ def patterns():
                     "values": {"type": "array",
                                "items": {"type": "string",
                                          "pattern": r"^(\d{1,5}|\?)$"}}})
+
+
+def graphs(scenario_name):
+    """A bar chart's data, as a *list* of named counts.
+
+    A list of closed objects rather than the obvious `{"cats": "7"}` map: the
+    API refuses an open `additionalProperties`, so a map keyed on names the
+    model invents cannot be expressed at all -- the reason probability's bag
+    scenarios get no schema. Choosing the shape that can be schema'd is
+    cheaper than accepting the gap, and costs the generator one indirection.
+
+    Length is not expressible (`minItems` above 1 is refused), so
+    `question_figures._bar_chart` enforces 2..5 categories and it is the only
+    thing that does.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]},
+                    "categories": {
+                        "type": "array",
+                        "items": _object({
+                            "name": _TEXT,
+                            "count": {"type": "string", "pattern": r"^\d{1,2}$"},
+                        })},
+                    "target": _STRING_LIST})

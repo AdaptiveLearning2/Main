@@ -68,6 +68,67 @@ describe('QuestionFigure', () => {
   })
 })
 
+describe('a bar chart', () => {
+  const PETS = { type: 'bar_chart', bars: [
+    { label: 'cats', value: 6 }, { label: 'dogs', value: 4 },
+  ] }
+
+  it('names every bar and its height, not a summary', () => {
+    // The question asks the reader to compare bars, so "a bar graph of two
+    // categories" is not the same information -- a screen-reader user would
+    // have a different question from a sighted one.
+    render(<QuestionFigure figure={PETS} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'A bar graph showing cats: 6, dogs: 4.')
+  })
+
+  it('draws a bar per category, in proportion', () => {
+    const { container } = render(<QuestionFigure figure={PETS} />)
+    const heights = [...container.querySelectorAll('rect')]
+      .map(r => Number(r.getAttribute('height')))
+    expect(heights).toHaveLength(2)
+    expect(heights[0] / heights[1]).toBe(6 / 4)
+  })
+
+  it('rules every unit so the bars can be counted rather than estimated', () => {
+    // Which is the reading 1.MD.4 asks for. Without gridlines a student can
+    // compare two bars but cannot say how many.
+    const { container } = render(<QuestionFigure figure={PETS} />)
+    expect(container.querySelectorAll('line')).toHaveLength(7)  // 0..6
+  })
+
+  it('spaces the columns so long labels cannot collide', () => {
+    // Found by rendering it and looking, not by a test: at a fixed column
+    // width "storybooks" and "picture books" printed on top of each other.
+    // Both labels were present and correct in the DOM, so nothing here could
+    // see it -- on a figure whose entire job is to be read.
+    //
+    // The invariant the fix establishes: a column is at least as wide as its
+    // widest label needs.
+    const bars = [{ label: 'storybooks', value: 5 },
+                  { label: 'picture books', value: 7 }]
+    const { container } = render(<QuestionFigure figure={{ type: 'bar_chart', bars }} />)
+    const xs = [...container.querySelectorAll('text')]
+      .map(t => Number(t.getAttribute('x')))
+    const widest = Math.max(...bars.map(b => b.label.length))
+    const needed = widest * 11 * 0.58        // LABEL_PX * CHAR_W
+    expect(xs[1] - xs[0]).toBeGreaterThanOrEqual(needed)
+  })
+
+  it.each([
+    ['one bar, which is not a comparison', { type: 'bar_chart', bars: [{ label: 'cats', value: 3 }] }],
+    ['more bars than the backend will build', { type: 'bar_chart', bars: Array.from({ length: 6 }, (_, i) => ({ label: `c${i}`, value: 2 })) }],
+    ['a bar taller than the backend allows', { type: 'bar_chart', bars: [{ label: 'a', value: 99 }, { label: 'b', value: 2 }] }],
+    ['a fractional height', { type: 'bar_chart', bars: [{ label: 'a', value: 2.5 }, { label: 'b', value: 2 }] }],
+    ['a nameless bar', { type: 'bar_chart', bars: [{ label: '', value: 2 }, { label: 'b', value: 2 }] }],
+    ['bars that are not a list', { type: 'bar_chart', bars: 'cats: 6' }],
+  ])('renders nothing for %s', (_label, figure) => {
+    // Re-checked client-side because a bank row outlives the code that wrote it.
+    const { container } = render(<QuestionFigure figure={figure} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
 describe('every surface that presents a question', () => {
   // Exhaustiveness, like the backend's close-site and _MODE_AWARE tests, and
   // for the same reason: this shipped wired into two of five surfaces. A

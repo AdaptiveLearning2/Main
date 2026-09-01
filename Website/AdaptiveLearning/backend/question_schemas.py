@@ -37,10 +37,12 @@ gets told to produce something the solver cannot read.
 import angle_solvers
 import geometry_solvers
 
-# Every schema shares these. `question_topic` is in the prompts' JSON examples
-# and every generator returns it, so it is required rather than optional -- a
-# schema that permits a key the code then reads unconditionally is a KeyError
-# waiting for the one reply that omits it.
+# Every schema shares these. `question_topic` is required because the prompts'
+# JSON examples all carry it and a reply omitting it would be off-spec -- not,
+# as this comment used to say, because the code reads it. Nothing does any
+# more: all ten generators return their own topic name as a literal, since the
+# model's value reached `questions.subject` and credited the student's work to
+# whatever it felt like calling the topic.
 _TEXT = {"type": "string"}
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
 

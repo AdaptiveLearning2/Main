@@ -240,6 +240,33 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # The scenario that came back, not the one that was asked for. This
+        # prompt sends all three blocks and names the wanted one by number, so
+        # the reply is free to answer a different one -- the same hole geometry
+        # and angles had, and the solver dispatches on the name it is given.
+        if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
+            print(f"[Attempt {attempt+1}] Wrong scenario:",
+                  question_data["scenario"])
+            continue
+
+        # `sides` and `items` are read below, and `required_keys` covers
+        # neither -- they belong to one scenario each, so neither can be listed
+        # unconditionally. Checked here rather than at the read, because the
+        # read is *below* the `for/else`: a missing key there is a KeyError
+        # escaping the generator on attempt 1 and reaching the student as a
+        # 500, where every other malformed reply costs a retry. Reproduced on
+        # all three shapes -- a dice reply with no `sides`, a bag reply with no
+        # `items`, and a bag question mislabelled `dice`.
+        #
+        # The schema does not make this redundant: it closes the dice half
+        # only, and only on Claude. The two bag scenarios get no schema at all,
+        # and `LLM_PROVIDER` defaults to ollama.
+        needed = "sides" if question_data["scenario"] == "dice" else "items"
+        if needed not in question_data:
+            print(f"[Attempt {attempt+1}] Missing {needed!r} for scenario",
+                  question_data["scenario"])
+            continue
+
         # Backstop on what the model actually produced, not just on what
         # the prompt asked for -- see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),

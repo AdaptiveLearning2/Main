@@ -1343,18 +1343,27 @@ table the adaptive engine reads to choose what to serve next — while `rational
 A subject outside `ALL_TOPICS` is the other half: the join finds no row and the attempt is attributed
 to *nothing*, silently, since the helper never raises.
 
-`20260907000000` repairs what was already written, and the rule is a derivation rather than a guess:
-an algebra question is an **equation** — `_solve_worker` splits on `=`, so one is always present —
-and a rationals question is an expression to evaluate and never has one. Checked against 25 real
-rows: 19 genuine, all carrying `=`, and 6 fraction-arithmetic rows carrying none. **A fractional
-answer is not a usable second signal** — genuine algebra answers are frequently fractions (`7/2`,
-`17/6`) — and neither is "mentions x", since one of the six reads *"Solve for x: 3/4 + 2/5"*: a
-rationals question wearing algebra's phrasing, because the prompt told the model the topic was
-algebra. It moves the `user_math_performance` counters too, guarded so it never decrements algebra
-unless there is a `rationals` topic row to move them **to** — the decrement and the insert are
-separate statements, and without that guard a database missing that row would take the attempts off
-algebra and put them nowhere, destroying the record the migration exists to repair while looking
-like it worked.
+`20260907000000` repairs what was already written, and **its rule is a prose regularity, not a
+structural fact** — an earlier version of this paragraph said otherwise and was wrong. The claim was
+that an algebra question must contain `=` because `_solve_worker` splits on it; it splits
+`variables`, which is **never stored** — `questions` has no such column. What is filtered is
+`question_text`, which the model writes freely. So it is a pattern observed on a sample and applied
+irreversibly, and it is built for that: **three signals must agree** (no `=`, no coefficient-variable
+`\d+[xyn]`, a fraction present), a row where they disagree is left alone, and every change is
+recorded in `question_subject_reclassification` so it can be audited and reversed. That table is why
+a heuristic is acceptable here at all. Over 25 real rows the three partition them completely — 19
+with `=` and a coefficient-variable and no fraction, 6 with a fraction and neither — with nothing in
+between.
+
+**A fractional answer is not a usable signal** — genuine algebra answers are frequently fractions
+(`7/2`, `17/6`) — and neither is "mentions x", since one of the six reads *"Solve for x: 3/4 + 2/5"*:
+a rationals question wearing algebra's phrasing, because the prompt told the model the topic was
+algebra. Only the coefficient form separates them.
+
+It moves the `user_math_performance` counters too, and the repair is **all-or-nothing**: if
+`math_topics` has no `rationals` row, nothing moves — subject included. Guarding only the counters
+would let the subject change while the attempts stayed on algebra, and a re-run would then find
+nothing to correct, making that inconsistency permanent.
 
 Letting the model name the topic is the same hazard as letting the caller name it, one layer up.
 `test_every_generator_stores_its_own_topic_name_not_the_models` pins both halves — the value must be
@@ -3281,6 +3290,19 @@ follow instructions — the same reasoning `grade_appropriateness` is built on. 
 contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geometry` and
 `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
 so there is no comparable multiset.
+
+**A key read *below* the `for/else` must be validated *inside* it.** `probability` reads `sides`,
+`items` and `scenario` after the loop, and `required_keys` can list neither of the first two — they
+belong to one scenario each. So a dice reply with no `sides`, a bag reply with no `items`, and a bag
+question mislabelled `dice` each raised `KeyError` straight out of the generator on attempt 1 and
+reached the student as a **500**, where every other malformed reply costs a retry. All three were
+reproduced. It also never compared the returned `scenario` against the one it asked for — the same
+hole geometry and angles had, and this prompt sends all three blocks and names the wanted one by
+*number*, so the reply is free to answer a different one. The schema does not cover any of this: it
+closes the dice half only, and only on Claude, since the bag scenarios get none and `LLM_PROVIDER`
+defaults to ollama. Same rule as *"if the recovery is a retry, the check belongs above the `break`"*
+— and the question to ask of any generator is which keys the code below the loop reads that the loop
+never checked.
 
 **In every generator's retry loop, the `if not raw:` guard comes before anything that touches
 `raw`.** `extract_json` answers `None` for a response with no JSON in it — prose, a refusal, an

@@ -63,11 +63,17 @@ CASES = [
      {"question_text": "Order from least to greatest: 4, 8, 6, 2, 10.",
       "question_topic": "ordering", "values": _VALUES,
       "direction": "least_to_greatest"}),
+    # A dice reply, because these cases all ask for "medium" and
+    # DIFFICULTY_SCENARIOS maps that to scenario 3. It used to be a bag
+    # question tagged `probability_of` -- a reply answering a scenario other
+    # than the one requested, which the generator accepted because nothing
+    # compared the two. It does now, so the stub has to be a reply that could
+    # really come back.
     ("probability", prob_gen, "generate_probability_question",
-     {"question_text": "A bag holds 6 red, 4 blue and 2 green marbles. "
-                       "What is the probability of drawing a red marble?",
-      "question_topic": "probability", "scenario": "probability_of",
-      "items": {"red": "6", "blue": "4", "green": "2"}, "target": "red"}),
+     {"question_text": "A standard six-sided die is rolled. What is the "
+                       "probability of rolling a number greater than 4?",
+      "question_topic": "probability", "scenario": "dice",
+      "sides": "6", "target": ["5", "6"]}),
     ("algebra", algebra_gen, "generate_algebra_question",
      {"question_text": "Solve for x: 2x + 3 = 11.", "question_topic": "algebra",
       "variables": ["2x", "+", "3", "=", "11"]}),

@@ -1343,6 +1343,19 @@ table the adaptive engine reads to choose what to serve next — while `rational
 A subject outside `ALL_TOPICS` is the other half: the join finds no row and the attempt is attributed
 to *nothing*, silently, since the helper never raises.
 
+`20260907000000` repairs what was already written, and the rule is a derivation rather than a guess:
+an algebra question is an **equation** — `_solve_worker` splits on `=`, so one is always present —
+and a rationals question is an expression to evaluate and never has one. Checked against 25 real
+rows: 19 genuine, all carrying `=`, and 6 fraction-arithmetic rows carrying none. **A fractional
+answer is not a usable second signal** — genuine algebra answers are frequently fractions (`7/2`,
+`17/6`) — and neither is "mentions x", since one of the six reads *"Solve for x: 3/4 + 2/5"*: a
+rationals question wearing algebra's phrasing, because the prompt told the model the topic was
+algebra. It moves the `user_math_performance` counters too, guarded so it never decrements algebra
+unless there is a `rationals` topic row to move them **to** — the decrement and the insert are
+separate statements, and without that guard a database missing that row would take the attempts off
+algebra and put them nowhere, destroying the record the migration exists to repair while looking
+like it worked.
+
 Letting the model name the topic is the same hazard as letting the caller name it, one layer up.
 `test_every_generator_stores_its_own_topic_name_not_the_models` pins both halves — the value must be
 a **literal** (a generator reading the model's value could still pass a membership check on any given

@@ -3035,7 +3035,11 @@ wired into two — the adaptive view and flashcards — leaving the teacher's se
 modal and practice test mode showing the wording with nothing to count, which is a different question
 from the one the student answered. `normalizeQuestion` returns a fixed object, so a key it does not
 name does not exist for any caller downstream; it carries `figure` through. `QuestionFigure.test.jsx`
-walks the source and fails on a file that renders question text without it. The teacher dashboard's
+walks the source and fails on a file that renders question text without it — matching
+`<QuestionFigure`, **not the bare name**, which a dangling import satisfies and which is exactly what
+deleting the element leaves behind. The first version of that check passed against a build with the
+render removed and the import kept; `no-unused-vars` would have flagged it, but lint is non-blocking
+in CI here, so it would have landed. The teacher dashboard's
 "Recent Questions" list is the one stated exception: a `line-clamp-2` row is a *reference* to a
 question, not the question.
 

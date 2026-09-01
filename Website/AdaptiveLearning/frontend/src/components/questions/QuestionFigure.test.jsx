@@ -94,8 +94,13 @@ describe('every surface that presents a question', () => {
       .filter(f => /\{(q|data|question)\.(question_text|text)\}/.test(
         readFileSync(f, 'utf8')))
     expect(presenting.length).toBeGreaterThan(0)
+    // `<QuestionFigure`, not `includes('QuestionFigure')`: the name alone is
+    // satisfied by a dangling import, which is precisely what removing the
+    // element leaves behind. The first version of this check passed against a
+    // build with the render deleted and the import kept. `no-unused-vars`
+    // would catch that, but lint is non-blocking in CI here, so it would land.
     const missing = presenting.filter(
-      f => !readFileSync(f, 'utf8').includes('QuestionFigure'))
+      f => !readFileSync(f, 'utf8').includes('<QuestionFigure'))
     expect(missing).toEqual([])
   })
 })

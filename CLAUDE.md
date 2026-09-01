@@ -1333,6 +1333,46 @@ generated question reached the page with no id and there was nothing to put in
 duplicate** rather than False, because answering a question the generator has produced before is
 exactly as real as answering a novel one.
 
+**And the question row's `subject` is the generator's own name, never the model's.** Each
+`LLM_*_generation.py` returns `question_topic`, which `add_question_to_supabase` stores as
+`questions.subject` — the column that join reads. Nine generators hardcode their own topic;
+`rationals` returned `question_data["question_topic"]`, and its prompt named `"algebra"` in prose and
+`"rations"` in the JSON example. Measured 3 of 3 against Haiku: **every fractions question was stored
+as algebra**, so a student's rationals work was credited to algebra in `user_math_performance` — the
+table the adaptive engine reads to choose what to serve next — while `rationals` accumulated nothing.
+A subject outside `ALL_TOPICS` is the other half: the join finds no row and the attempt is attributed
+to *nothing*, silently, since the helper never raises.
+
+`20260907000000` repairs what was already written, and **its rule is a prose regularity, not a
+structural fact** — an earlier version of this paragraph said otherwise and was wrong. The claim was
+that an algebra question must contain `=` because `_solve_worker` splits on it; it splits
+`variables`, which is **never stored** — `questions` has no such column. What is filtered is
+`question_text`, which the model writes freely. So it is a pattern observed on a sample and applied
+irreversibly, and it is built for that: **three signals must agree** (no `=`, no coefficient-variable
+`\d+[xyn]`, a fraction present), a row where they disagree is left alone, and every change is
+recorded in `question_subject_reclassification` so it can be audited and reversed. That table is why
+a heuristic is acceptable here at all — which is also why its `attempts_moved` counts **only** rows
+that moved something: a `rations` row credited nothing (its subject matched no topic), so recording
+its answer count would tell a reversal to push attempts back onto algebra that were never there. Over 25 real rows the three partition them completely — 19
+with `=` and a coefficient-variable and no fraction, 6 with a fraction and neither — with nothing in
+between.
+
+**A fractional answer is not a usable signal** — genuine algebra answers are frequently fractions
+(`7/2`, `17/6`) — and neither is "mentions x", since one of the six reads *"Solve for x: 3/4 + 2/5"*:
+a rationals question wearing algebra's phrasing, because the prompt told the model the topic was
+algebra. Only the coefficient form separates them.
+
+It moves the `user_math_performance` counters too, and the repair is **all-or-nothing**: if
+`math_topics` has no `rationals` row, nothing moves — subject included. Guarding only the counters
+would let the subject change while the attempts stayed on algebra, and a re-run would then find
+nothing to correct, making that inconsistency permanent.
+
+Letting the model name the topic is the same hazard as letting the caller name it, one layer up.
+`test_every_generator_stores_its_own_topic_name_not_the_models` pins both halves — the value must be
+a **literal** (a generator reading the model's value could still pass a membership check on any given
+run) and must be in `ALL_TOPICS`. Rows written before this fix still carry the wrong subject; nothing
+distinguishes them from genuine algebra rows except the question text.
+
 **`_record_topic_attempt` derives the topic from the question row, never from the caller.** The
 client has to be trusted about correctness; letting it also name the topic would let a page credit
 one subject for work done in another, and `user_math_performance` is what the adaptive engine reads
@@ -2659,6 +2699,52 @@ generated inline.
 and the loop the call sites own is the one worth keeping, since it also rejects a *well-formed*
 response for being bad JSON or the wrong shape, which no transport retry can.
 
+### The Claude branch constrains its replies with a schema; the Ollama branch does not
+
+`extract_json` hunts a JSON object out of prose because `llama3.1:8b` wraps replies in markdown
+fences and preamble. That is a property of *that model*, and it was carried across to Claude
+untouched — so the retry loop went on absorbing malformed JSON from a provider that can simply be
+told not to produce any. `question_schemas.py` is one schema per topic, passed as
+`generate_text(prompt, schema=...)` and sent as `output_config`.
+
+**It replaces no code-level check, and that is the whole caveat.** `grade_appropriateness`,
+`question_consistency`, `SCENARIO_VARS`, the scenario-grade checks and the bounded solvers all still
+run. A schema constrains the *shape* of a reply, never whether the question inside it is solvable,
+in band, or consistent with the data it will be scored against. It is also enforced by the provider
+rather than by us, and **only on one branch** — Ollama sends no schema, so a dev run exercises the
+unschema'd path and every one of those checks is the only thing between its reply and a question.
+`extract_json` stays for the same reason, and because a reply truncated at `max_tokens` is now the
+one malformed-JSON path left on Claude.
+
+What it buys beyond fewer retries: `scenario` is pinned to an enum of the **one** scenario actually
+selected, so the wrong-scenario class — Haiku returning `circle_missing_radius_circumference` for a
+scenario spelled `circle_circumference_missing_side`, or blending two scenarios' variable keys —
+becomes unrepresentable rather than merely rejected. Geometry's `variables` keys and the scenario
+enums are **derived** from `geometry_solvers.SCENARIO_VARS` and the block tables, never restated: a
+second copy of a scenario's keys is how the schema and the solver drift into telling the model to
+produce something the solver cannot read.
+
+**Two JSON Schema keywords are refused by this endpoint, and neither is guessable from the spec.**
+Both were found by sending a request and reading the 400:
+
+    For 'array' type, 'minItems' values other than 0 or 1 are not supported
+    For 'object' type, 'additionalProperties: object' is not supported. Please set it to false
+
+So `angle_solvers.SCENARIO_ARITY` **cannot** be expressed — it stays a runtime check, and that gap is
+pinned by a test because every other shape here is constrained and a reader would reasonably assume
+this one is too. And probability's two bag scenarios return **`None` rather than a schema**: their
+`items` maps category names the model invents to counts, which needs an open object. A schema listing
+every key *except* the one carrying the data would be accepted, constrain nothing that matters, and
+read as covered. `test_no_schema_uses_a_keyword_the_api_refuses` walks every schema for both, because
+a violation is not a degraded question — it is a 400 on the first question of that topic.
+
+**A generator added without a schema keeps the `extract_json` path silently**, which is why
+`test_every_generator_sends_a_schema` is an exhaustiveness check over the `LLM_*_generation.py` files,
+the same shape as `_MODE_AWARE` and the close-site tests.
+
+Verified end to end against `claude-haiku-4-5` on 2026-08-31: all ten topics generated and solved,
+with the answer present among its own options in every one.
+
 **Switching provider does not invalidate the checks below it, but it does invalidate every measured
 rate.** `grade_appropriateness` and `question_consistency` are code and are provider-agnostic — that
 is why those rules were moved out of prompts in the first place. Every "measured on llama3.1:8b"
@@ -3206,6 +3292,19 @@ follow instructions — the same reasoning `grade_appropriateness` is built on. 
 contradiction; they are not a proof of agreement. `algebra`, `expressions`, `geometry` and
 `angle_relationships` are **not** covered: their scored fields mix operators and labels with numbers,
 so there is no comparable multiset.
+
+**A key read *below* the `for/else` must be validated *inside* it.** `probability` reads `sides`,
+`items` and `scenario` after the loop, and `required_keys` can list neither of the first two — they
+belong to one scenario each. So a dice reply with no `sides`, a bag reply with no `items`, and a bag
+question mislabelled `dice` each raised `KeyError` straight out of the generator on attempt 1 and
+reached the student as a **500**, where every other malformed reply costs a retry. All three were
+reproduced. It also never compared the returned `scenario` against the one it asked for — the same
+hole geometry and angles had, and this prompt sends all three blocks and names the wanted one by
+*number*, so the reply is free to answer a different one. The schema does not cover any of this: it
+closes the dice half only, and only on Claude, since the bag scenarios get none and `LLM_PROVIDER`
+defaults to ollama. Same rule as *"if the recovery is a retry, the check belongs above the `break`"*
+— and the question to ask of any generator is which keys the code below the loop reads that the loop
+never checked.
 
 **In every generator's retry loop, the `if not raw:` guard comes before anything that touches
 `raw`.** `extract_json` answers `None` for a response with no JSON in it — prose, a refusal, an

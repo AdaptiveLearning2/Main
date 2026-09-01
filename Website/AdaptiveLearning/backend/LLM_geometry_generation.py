@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
+import question_schemas
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -394,10 +395,13 @@ FINAL RULES:
 """
 
 
-# Block number -> the scenario name that block asks for, read out of the
-# block's own JSON example rather than typed again here. `_geometry_prompt`
-# restates the name as a rule, and a second hand-maintained copy of this
-# mapping would be one more pair of lists that can disagree.
+# Block number -> the scenario name that block asks for.
+#
+# A literal, not derived, despite what this comment used to claim. What makes
+# the claim true in effect is `test_the_names_match_the_blocks_they_send`,
+# which re-derives it from SCENARIO_BLOCKS -- so the two cannot disagree, but
+# the enforcement is the test rather than the code. `_geometry_prompt` restates
+# the name to the model as a rule on top of the block.
 _SCENARIO_NAMES = {
     19: "rectangle_area_by_counting",
     1: "rectangle_area",
@@ -661,7 +665,8 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
         prompt = lesson_plan_context.append_lesson_context(prompt, "geometry", grade_band)
-        response_text = llm_client.generate_text(prompt)
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.geometry(_SCENARIO_NAMES[scenario]))
 
         print(response_text)
 

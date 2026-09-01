@@ -20,6 +20,7 @@ import safe_solve
 import token_join
 import grade_levels
 import grade_appropriateness
+import question_schemas
 
 transformations = (standard_transformations + (implicit_multiplication_application,))
 
@@ -125,6 +126,18 @@ Rules:
 
 Return ONLY valid JSON with no text before or after the JSON object.
 """
+
+
+# Block number -> the scenario name that block asks for. A literal, like
+# geometry's and angles', and cross-checked against the blocks by a test for
+# the same reason: the prompt names the wanted scenario by *number* while the
+# reply must carry the matching *name*, and `safe_solve` dispatches on the name
+# it is given rather than the one that was asked for.
+_SCENARIO_NAMES = {
+    1: "evaluate",
+    2: "order_of_operations",
+    3: "simplify",
+}
 
 
 def _expr_prompt(scenario):
@@ -258,7 +271,8 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
         if override:
             prompt += "\nGRADE-SPECIFIC RULE: " + override + "\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "expressions", grade_band)
-        response_text = llm_client.generate_text(prompt)
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.expressions(_SCENARIO_NAMES[scenario]))
         raw = extract_json(response_text)
 
         if not raw:

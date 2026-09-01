@@ -248,7 +248,7 @@ def _calls_in_window() -> int:
 
 def generate_text(prompt: str, *, temperature: float = 1.1,
                   top_p: float | None = 0.95, top_k: int | None = 100, ollama_model: str = "llama3.1:8b",
-                  claude_temperature: float | None = None,
+                  claude_temperature: float | None = None, schema: dict | None = None,
                   max_tokens: int = 2048, timeout: float | None = None) -> str:
     """One model call, against whichever provider is configured.
 
@@ -263,6 +263,12 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
     One signature rather than two functions is worth the comment: the 13
     generation call sites pass none of these, so the split would buy them
     nothing and cost every one of them a branch.
+
+    `schema` is Claude-only and constrains the reply to a JSON schema, so a
+    malformed reply becomes unrepresentable rather than merely retried -- see
+    `question_schemas`. It is ignored on the Ollama branch, which is the half
+    worth stating: dev runs are unschema'd, so `extract_json` and every
+    code-level check downstream of it stay load-bearing and stay tested.
 
     Raises rather than returning "" when a bound refuses -- see
     `GenerationUnavailable`. Network and API errors are deliberately *not*
@@ -295,11 +301,19 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
             client = _get_anthropic_client().with_options(timeout=remaining)
+            # `output_config` only when there is a schema: an absent key and
+            # a permissive schema are not the same request, and the topics
+            # that cannot express one (see `question_schemas.probability`)
+            # must send no constraint rather than an empty one.
+            structured = ({"output_config":
+                           {"format": {"type": "json_schema", "schema": schema}}}
+                          if schema is not None else {})
             resp = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
                 **_claude_sampling(claude_temperature),
+                **structured,
             )
             return next((b.text for b in resp.content if b.type == "text"), "")
 

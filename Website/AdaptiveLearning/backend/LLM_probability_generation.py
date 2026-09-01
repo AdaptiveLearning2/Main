@@ -6,6 +6,7 @@ import random
 from supabase import create_client, Client #pip install supabase
 from dotenv import load_dotenv   #pip install dotenv
 import llm_client
+import question_schemas
 import json
 from flask import Flask, jsonify
 from flask_cors import CORS #pip install flask-cors
@@ -150,6 +151,17 @@ DIFFICULTY_SCENARIOS = {
     "hard":   [2],
 }
 
+# Block number -> the scenario name that block asks for. This prompt sends all
+# three blocks and names the wanted one by number, so this map is the only
+# thing tying "scenario 3" to the "dice" the reply must carry -- and the solver
+# dispatches on the name.
+_SCENARIO_NAMES = {
+    1: "probability_of",
+    2: "not_probability_of",
+    3: "dice",
+}
+
+
 def _pick_scenario(difficulty):
     return random.choice(DIFFICULTY_SCENARIOS.get(difficulty, DIFFICULTY_SCENARIOS["medium"]))
 
@@ -187,7 +199,6 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
-        print(scenario)
 
         prompt += (
             "\nPreviously generated questions:\n"
@@ -205,7 +216,10 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
             f"{GRADE_COMPLEXITY[grade_band]}\n"
         )
         prompt = lesson_plan_context.append_lesson_context(prompt, "probability", grade_band)
-        response_text = llm_client.generate_text(prompt)
+        # `None` for the two bag scenarios, whose `items` object cannot be
+        # expressed -- see question_schemas.probability.
+        response_text = llm_client.generate_text(
+            prompt, schema=question_schemas.probability(_SCENARIO_NAMES[scenario]))
 
         raw = extract_json(response_text)
 
@@ -224,6 +238,33 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         required_keys = ["scenario", "question_text", "target"]
         if not all(k in question_data for k in required_keys):
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
+            continue
+
+        # The scenario that came back, not the one that was asked for. This
+        # prompt sends all three blocks and names the wanted one by number, so
+        # the reply is free to answer a different one -- the same hole geometry
+        # and angles had, and the solver dispatches on the name it is given.
+        if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
+            print(f"[Attempt {attempt+1}] Wrong scenario:",
+                  question_data["scenario"])
+            continue
+
+        # `sides` and `items` are read below, and `required_keys` covers
+        # neither -- they belong to one scenario each, so neither can be listed
+        # unconditionally. Checked here rather than at the read, because the
+        # read is *below* the `for/else`: a missing key there is a KeyError
+        # escaping the generator on attempt 1 and reaching the student as a
+        # 500, where every other malformed reply costs a retry. Reproduced on
+        # all three shapes -- a dice reply with no `sides`, a bag reply with no
+        # `items`, and a bag question mislabelled `dice`.
+        #
+        # The schema does not make this redundant: it closes the dice half
+        # only, and only on Claude. The two bag scenarios get no schema at all,
+        # and `LLM_PROVIDER` defaults to ollama.
+        needed = "sides" if question_data["scenario"] == "dice" else "items"
+        if needed not in question_data:
+            print(f"[Attempt {attempt+1}] Missing {needed!r} for scenario",
+                  question_data["scenario"])
             continue
 
         # Backstop on what the model actually produced, not just on what

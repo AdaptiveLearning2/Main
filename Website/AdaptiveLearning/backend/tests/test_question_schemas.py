@@ -166,3 +166,65 @@ def test_the_new_name_maps_match_the_blocks_they_send(module):
                        enumerate(re.findall(r'"scenario": "([a-z_]+)"', source), 1)}
     assert from_blocks, "the block regex matched nothing -- this test is inert"
     assert from_blocks == live
+
+
+def test_every_generator_stores_its_own_topic_name_not_the_models():
+    """`question_topic` becomes `questions.subject`, which
+    `record_topic_attempt` joins against `math_topics.topic_name`.
+
+    So a wrong value is not a cosmetic label: it credits the student's answer
+    to a different topic in `user_math_performance`, which is what the adaptive
+    engine reads to choose what to serve next. CLAUDE.md already states the
+    rule one layer down -- the topic is derived from the question row, never
+    from the caller, or a page could credit one subject for work done in
+    another. Letting the model name it is the same hazard one layer up.
+
+    `rationals` returned `question_data["question_topic"]` and its prompt named
+    "algebra" in prose and "rations" in the JSON example. Measured 3 of 3
+    against Haiku: every fractions question was stored as algebra.
+
+    Two halves, and the literal is the load-bearing one -- a generator reading
+    the model's value could still pass a membership check on any given run.
+    """
+    import ast
+
+    import LLM_topic_decider
+
+    checked = []
+    for filename in sorted(os.listdir(BACKEND)):
+        if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
+            continue
+        # utf-8-sig: these files carry a BOM, and `ast.parse` rejects it as an
+        # invalid non-printable character rather than skipping it.
+        tree = ast.parse(
+            open(os.path.join(BACKEND, filename), encoding="utf-8-sig").read())
+        found = [
+            value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Dict)
+            for key, value in zip(node.keys, node.values)
+            if isinstance(key, ast.Constant) and key.value == "question_topic"
+            and not isinstance(value, ast.Constant)  # a literal is fine; this is not
+        ]
+        assert not found, (
+            f"{filename} builds question_topic from an expression rather than a "
+            "literal. It reaches questions.subject, which record_topic_attempt "
+            "joins on -- the model naming it credits the answer elsewhere.")
+
+        returned = [
+            value.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+            for key, value in zip(node.value.keys, node.value.values)
+            if isinstance(key, ast.Constant) and key.value == "question_topic"
+            and isinstance(value, ast.Constant)
+        ]
+        assert returned, f"{filename} returns no question_topic at all"
+        for topic in returned:
+            assert topic in LLM_topic_decider.ALL_TOPICS, (
+                f"{filename} returns subject {topic!r}, which is not one of "
+                f"ALL_TOPICS -- record_topic_attempt's join finds no row and "
+                "the attempt is attributed to nothing, silently.")
+        checked.append(filename)
+
+    assert len(checked) == 10, f"expected ten generators, found {checked}"

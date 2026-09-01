@@ -199,7 +199,6 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
         scenario = _pick_scenario(difficulty)
 
         prompt += f"\nYOU must generate a question for scenario {scenario}."
-        print(scenario)
 
         prompt += (
             "\nPreviously generated questions:\n"

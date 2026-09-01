@@ -1333,6 +1333,22 @@ generated question reached the page with no id and there was nothing to put in
 duplicate** rather than False, because answering a question the generator has produced before is
 exactly as real as answering a novel one.
 
+**And the question row's `subject` is the generator's own name, never the model's.** Each
+`LLM_*_generation.py` returns `question_topic`, which `add_question_to_supabase` stores as
+`questions.subject` — the column that join reads. Nine generators hardcode their own topic;
+`rationals` returned `question_data["question_topic"]`, and its prompt named `"algebra"` in prose and
+`"rations"` in the JSON example. Measured 3 of 3 against Haiku: **every fractions question was stored
+as algebra**, so a student's rationals work was credited to algebra in `user_math_performance` — the
+table the adaptive engine reads to choose what to serve next — while `rationals` accumulated nothing.
+A subject outside `ALL_TOPICS` is the other half: the join finds no row and the attempt is attributed
+to *nothing*, silently, since the helper never raises.
+
+Letting the model name the topic is the same hazard as letting the caller name it, one layer up.
+`test_every_generator_stores_its_own_topic_name_not_the_models` pins both halves — the value must be
+a **literal** (a generator reading the model's value could still pass a membership check on any given
+run) and must be in `ALL_TOPICS`. Rows written before this fix still carry the wrong subject; nothing
+distinguishes them from genuine algebra rows except the question text.
+
 **`_record_topic_attempt` derives the topic from the question row, never from the caller.** The
 client has to be trusted about correctness; letting it also name the topic would let a page credit
 one subject for work done in another, and `user_math_performance` is what the adaptive engine reads

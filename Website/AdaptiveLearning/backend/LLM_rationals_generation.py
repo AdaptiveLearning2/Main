@@ -49,7 +49,7 @@ def serialize_sympy(obj):
 
 rat_prompt = f"""
 You are to provide a Math question suitable for students. The response must be in JSON format. 
-The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "algebra".
+The Question Text, Question Topic, and Variables will be displayed. The Question Topic will be "rationals".
 
 Rationals example: "Solve 4/5 - 1/10" 
 The question should include the rational expression to be solved. Variables must be formatted as strings such as "x", and operations must be 
@@ -64,7 +64,7 @@ The JSON must follow this exact structure:
 
 {{
   "question_text": "Solve 4/5 - 1/10",
-  "question_topic": "rations",
+  "question_topic": "rationals",
   "variables": ["4/5", "-", "1/10"]
 }}
 
@@ -208,7 +208,18 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
 
     return {
         "question_text": question_data["question_text"],
-        "question_topic": question_data["question_topic"],
+        # The topic this generator is, not the label the model chose. It
+        # reaches `questions.subject`, which `record_topic_attempt` joins
+        # against `math_topics.topic_name` -- so a wrong value here is not a
+        # cosmetic label, it credits the student's work to another topic in
+        # `user_math_performance`, which is what the adaptive engine reads to
+        # decide what to serve next.
+        #
+        # Measured 3 of 3 against Haiku: this stored "algebra" every time,
+        # because the prompt said so in two places. The other nine generators
+        # have always hardcoded their own name; this was the only one that
+        # did not.
+        "question_topic": "rationals",
         "answer_options": answers,
         "correct_answer": solution
     }

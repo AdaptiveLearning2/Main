@@ -20,7 +20,9 @@
 -- built accordingly:
 --
 --   * Three signals must AGREE, not one. No '=', no coefficient-variable
---     (`\d+[xyn]`, the pattern `grade_appropriateness` uses), and a fraction
+--     (`grade_appropriateness`'s `\d+[xyn]`, loosened here to allow a space,
+--     since a stored question may read "4 x" where a generated one reads
+--     "4x"), and a fraction
 --     present. A row where they disagree is left alone -- the safe direction
 --     for an irreversible change resting on a sample.
 --   * Every change is recorded in `question_subject_reclassification`, so this
@@ -81,7 +83,6 @@ SELECT "sa"."user_id",
        count(*) FILTER (WHERE "sa"."correct") AS "corrects"
 FROM "public"."session_answers" "sa"
 JOIN "misfiled_rationals" "m" ON "m"."id" = "sa"."question_id"
-JOIN "public"."questions" "q" ON "q"."id" = "m"."id"
 WHERE "m"."from_subject" = 'algebra'   -- only these ever credited a topic
 GROUP BY "sa"."user_id";
 
@@ -125,9 +126,17 @@ BEGIN
 
   INSERT INTO "public"."question_subject_reclassification"
          ("question_id", "from_subject", "to_subject", "attempts_moved")
+  -- Only 'algebra' rows moved anything, so only they may record a count.
+  -- Counting every answer regardless recorded, for a 'rations' question with
+  -- three answers, `attempts_moved = 3` against 0 actually moved -- which
+  -- contradicts the note above and, worse, misleads the reversal this table
+  -- exists to enable: undoing from it would push three attempts back onto
+  -- algebra that were never credited to anything.
   SELECT "m"."id", "m"."from_subject", 'rationals',
-         (SELECT count(*) FROM "public"."session_answers" "sa"
-          WHERE "sa"."question_id" = "m"."id")
+         CASE WHEN "m"."from_subject" = 'algebra'
+              THEN (SELECT count(*) FROM "public"."session_answers" "sa"
+                    WHERE "sa"."question_id" = "m"."id")
+              ELSE 0 END
   FROM "misfiled_rationals" "m";
 
   UPDATE "public"."questions"

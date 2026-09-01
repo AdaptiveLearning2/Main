@@ -1351,7 +1351,9 @@ that an algebra question must contain `=` because `_solve_worker` splits on it; 
 irreversibly, and it is built for that: **three signals must agree** (no `=`, no coefficient-variable
 `\d+[xyn]`, a fraction present), a row where they disagree is left alone, and every change is
 recorded in `question_subject_reclassification` so it can be audited and reversed. That table is why
-a heuristic is acceptable here at all. Over 25 real rows the three partition them completely — 19
+a heuristic is acceptable here at all — which is also why its `attempts_moved` counts **only** rows
+that moved something: a `rations` row credited nothing (its subject matched no topic), so recording
+its answer count would tell a reversal to push attempts back onto algebra that were never there. Over 25 real rows the three partition them completely — 19
 with `=` and a coefficient-variable and no fraction, 6 with a fraction and neither — with nothing in
 between.
 

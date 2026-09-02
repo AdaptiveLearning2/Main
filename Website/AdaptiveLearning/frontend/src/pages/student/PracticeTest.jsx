@@ -62,7 +62,15 @@ export default function PracticeTest({ session, onFinish }) {
   const advancingRef = useRef(false)
   const [advancing, setAdvancing] = useState(false)
 
+  // Which request is the live one. Every load takes a number and only the
+  // latest may write state: two in flight otherwise race, and the loser lands
+  // last, replacing the question on screen with one the student never saw
+  // arrive. That is the visible half of the bug -- the first question
+  // appearing and vanishing before it can be answered.
+  const requestRef = useRef(0)
+
   const loadQuestion = useCallback(async () => {
+    const mine = ++requestRef.current
     setLoading(true)
     setFailed(false)
     setSelected(null)
@@ -72,19 +80,35 @@ export default function PracticeTest({ session, onFinish }) {
     setAdvancing(false)
     try {
       const raw = await apiFetch(`/api/practice-sessions/${session.id}/question`)
+      if (mine !== requestRef.current) return
       const q = normalizeQuestion(raw)
       if (!q) throw new Error('That question could not be shown')
       setRawId(raw.id)
       setQuestion(q)
     } catch (e) {
+      if (mine !== requestRef.current) return
       console.error('Failed to load a practice question:', e)
       setFailed(true)
     } finally {
-      setLoading(false)
+      if (mine === requestRef.current) setLoading(false)
     }
   }, [session.id])
 
-  useEffect(() => { loadQuestion() }, [loadQuestion])
+  // Once per session, not once per effect run. `<React.StrictMode>` invokes
+  // mount effects twice in development, so this fired two `/question` calls --
+  // and a question is not a free read: each one is two billed model calls, a
+  // topic decision and a generation. The guard above stops the second *answer*
+  // from being shown; this stops the second *request* from being made.
+  //
+  // Keyed on the session id rather than a bare "have I run" flag, so starting
+  // a new practice session still loads its first question. The explicit
+  // "next question" and retry calls do not go through here at all.
+  const autoLoadedFor = useRef(null)
+  useEffect(() => {
+    if (autoLoadedFor.current === session.id) return
+    autoLoadedFor.current = session.id
+    loadQuestion()
+  }, [loadQuestion, session.id])
 
   useEffect(() => {
     if (loading || failed || !question) return

@@ -154,9 +154,58 @@ describe('every LoadError call site is classified', () => {
     expect(declared.filter(f => !callSites.includes(f))).toEqual([])
   })
 
+  /**
+   * The `<LoadError ... />` elements in a file, as source text.
+   *
+   * Scanning to the first `>` at brace depth 0, rather than a regex, because
+   * `onRetry={() => retry()}` puts a `>` inside the props and `[^>]*` would
+   * cut the element in half there.
+   */
+  const loadErrorElements = (src) => {
+    const found = []
+    let start = src.indexOf('<LoadError')
+    while (start !== -1) {
+      let depth = 0
+      let i = start + '<LoadError'.length
+      for (; i < src.length; i++) {
+        if (src[i] === '{') depth++
+        else if (src[i] === '}') depth--
+        else if (src[i] === '>' && depth === 0) break
+      }
+      found.push(src.slice(start, i))
+      start = src.indexOf('<LoadError', i)
+    }
+    return found
+  }
+
   it('passes the error everywhere a refusal is reachable', () => {
-    const notPassing = Object.keys(MUST_PASS_ERROR).filter(
-      f => !readFileSync(join(SRC, f), 'utf8').includes('error={'))
+    // On the element, not anywhere in the file -- which is the substitution
+    // the comment above `callSites` warns about, made one test lower. A file
+    // with any other `error={` in it (a catch block, another component's
+    // prop) satisfied a file-wide search, so dropping the prop from the
+    // element itself kept this green and put "make sure the backend is
+    // running" back on a 403.
+    const notPassing = Object.keys(MUST_PASS_ERROR).filter((f) => {
+      const elements = loadErrorElements(readFileSync(join(SRC, f), 'utf8'))
+      return elements.length === 0
+        || !elements.every(el => el.includes('error={'))
+    })
     expect(notPassing).toEqual([])
+  })
+
+  it('reads the element rather than the file', () => {
+    // The extractor is the load-bearing part of the check above, so it is
+    // pinned directly: a props blob containing a `>` inside an arrow function
+    // must not truncate, and a stray `error={` elsewhere in the file must not
+    // count.
+    const src = [
+      'const a = <LoadError onRetry={() => go()} error={err} />',
+      'function b() { try {} catch (error) { report({ error: e }) } }',
+      'const c = <LoadError onRetry={() => go()} />',
+    ].join('\n')
+    const elements = loadErrorElements(src)
+    expect(elements).toHaveLength(2)
+    expect(elements[0]).toContain('error={')
+    expect(elements[1]).not.toContain('error={')
   })
 })

@@ -3581,35 +3581,34 @@ fails on exactly the `nan` cases.
 **`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
 a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
 
-**Concurrent solves are bounded, because the budget collapses for all of them at once rather than
-degrading.** The timeout covers the whole child process and nearly all of it is sympy startup, so
-solves contend for CPU. Measured unbounded: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
+**Concurrent solves are bounded, because the budget collapsed for all of them at once rather than
+degrading.** Solves contend for CPU, and while the timeout covered the whole child process — nearly
+all of it sympy startup — that contention hit the budget directly. Measured unbounded, before the
+phases were split: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
 0 of 48**. Nothing bounded it — `GENERATION_MAX_CONCURRENCY` bounds *model calls*, and a solve is not
 one; prefetch, the inline path and practice reach the worker independently. So a class starting
 together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
 did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
-succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
+succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s). The bound stays after the split for a
+different reason — it is what keeps a class starting together from putting a hundred interpreters
+on one machine, which is a resource question rather than a timeout one.
 
-**The semaphore bounds *this process*, and a co-tenant still spends the budget — so a timeout gets
-one more attempt.** The budget is wall-clock over a child dominated by sympy startup, so any other
-load on the machine can exhaust it: reproduced with the frontend suite running alongside the backend
-one, and again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the
-worker, and since a timeout raises rather than returning `None`, every one was a **503 on the first
-attempt**.
+**The semaphore bounds *this process*, and a co-tenant still spent the budget — so a *startup*
+timeout gets one more attempt.** This was the reason the whole two-phase split happened, and the
+history is worth keeping because the conclusion inverted along the way.
 
-Retrying is what separates the two things a timeout can mean. A genuine spin is still spinning on the
-second attempt and is killed again, at a bounded extra wait and no wrong answer; contention is a
-property of the moment, and the moment passes. Nothing in-process can tell them apart, and the retry
-does not need to. The second budget is wider (`SOLVE_RETRY_BUDGET_FACTOR`, 3×) because the first
-timeout is itself evidence that this machine is slower than the budget assumed — the same reasoning
-as `_probe_startup`'s clamp, applied when the measurement arrives late.
+While the budget was wall-clock over a child dominated by sympy startup, any other load on the
+machine could exhaust it: reproduced with the frontend suite running alongside the backend one, and
+again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the worker,
+and since a timeout raises rather than returning `None`, every one was a **503 on the first
+attempt**. Retrying was then the only thing that separated the two meanings of "timeout", because
+nothing in-process could tell them apart.
 
-**Measured at 18 cores, and the limit is worth knowing.** Eight background hogs: no timeouts at all.
-At **saturation the first attempt failed 6 of 6 and the retry rescued all six**. At 2×
-oversubscription the retry rescues none — a machine that far past its capacity refuses, which is
-honest, but it is not fixed. **The real fix is to stop paying startup inside the budget**: the child
-would signal readiness after importing sympy, and the bound would then cover the arithmetic, which is
-what it is for. That is a rewrite of `_run`'s process handling and has not been done.
+**Splitting the phases made them distinguishable, and then inverted which one is worth retrying.** A
+*startup* timeout is contention, and contention passes. A *solve* timeout is now 3s against ~10ms of
+arithmetic, so it is a genuine spin — and a spin spins again. The retry moved to startup; a spin gets
+one attempt. Full detail, and the corrected saturation figures, under *`SOLVE_TIMEOUT` bounds the
+arithmetic* below.
 
 The permit is taken **per attempt**, not around both: holding one through a wait that has already
 failed shrinks the effective concurrency exactly when the machine is busiest, which is when the retry
@@ -3653,15 +3652,59 @@ one topic's tuning knob. Making `_run` raise nearly did exactly that; a mechanis
 folded into the existing "probe failed" branch, which leaves the configured budget alone rather than
 guessing one from a failed measurement.
 
-**`SOLVE_TIMEOUT` bounds the subprocess, not the arithmetic, and that is why it self-checks.** The
-budget covers launching Python and importing sympy, which is ~99% of an ordinary solve — measured
-0.64–1.00s wall where the maths is ~10ms. So it is really a bound on *startup plus a little*, and
-startup is the part that stretches on a cold or loaded machine. It is also the one setting here whose
-breach fails **every** question at once, and fails it looking like the model cannot write solvable
-maths, so nobody goes looking at a timeout.
+**`SOLVE_TIMEOUT` bounds the arithmetic, and `SOLVE_STARTUP_BUDGET` bounds getting there.** Two
+phases, because for a long time there was one and it was the wrong one: the single budget covered
+launching Python and importing sympy, which is ~99% of an ordinary solve — measured 0.64–1.00s wall
+where the maths is ~10ms — so a nominal 3s was ~3× margin over *startup*, and any co-tenant on the
+machine spent it. Measured with CPU hogs running: **8 of 8 solves killed at 3.0s**, and at 2×
+oversubscription the retry rescued none.
 
-`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the budget for
-that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It
+`_solve_worker` prints a readiness line once sympy is loaded, and `_run` times the two phases
+separately. Re-measured, 8 concurrent solves, hogs given 3-5s to spin up before the run:
+
+| load | before | after |
+| --- | --- | --- |
+| idle | — | **8/8**, slowest 2.2s |
+| saturated (18 hogs / 18 cores) | 0/8 | **7/8**, slowest 30.7s |
+| 2x oversubscribed (36 hogs) | 0/8 | **1/8**, slowest 32.4s |
+
+**2x oversubscription is not fixed, and the first version of this note claimed it was** — measured
+with a 2-second settle, so the hogs had not begun loading the machine. Give them 5s. What the split
+buys is *saturation*, where a solve now nearly always completes instead of never; past that the
+machine cannot start interpreters fast enough and no budget arrangement changes that.
+
+The other half of the trade is the tail: a contended startup that retries holds an anyio slot for
+~30s where the old code failed in 3. Bounded by `SOLVE_MAX_CONCURRENCY` to 8 of the ~40 slots, and
+a slow question beats a 503 — but it is a real change in behaviour under load, not a free win.
+
+Consequences worth holding:
+
+- **The budgets now mean different things and should be tuned differently.** `SOLVE_TIMEOUT` (3s)
+  is the runaway bound and has ~300× margin over the maths, so it can be tightened without risking
+  a loaded machine. Treat any startup multiplier quoted here with suspicion, including the ones
+  above: startup is ~0.8s idle on the machine these were taken on and 1.4–2.2s under ordinary
+  background load, so the margin moves by a factor of three depending on when you look. That is
+  what `_probe_startup` measuring it is for. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
+  *it* reinstates the old failure.
+- **Only a *startup* timeout is retried, and the split is what inverted that.** While the budget was
+  ~99% startup, "timeout" almost always meant contention and retrying was how a moment of it was
+  survived. Now the two are distinguishable and mean opposite things: a solve timeout is 3s against
+  ~10ms, so it is a spin, and a spin spins again — retrying costs a second full startup to reach the
+  same kill, with the student waiting through both. A startup timeout is the machine failing to
+  launch Python in 15s, which passes; observed once under 18 CPU hogs and rescued. The worst-case
+  hold on an anyio slot drops with it: a spin is 18s absolute rather than 42s, ~4s in practice.
+- **`SOLVE_RETRY_BUDGET_FACTOR` is gone.** It widened the solve budget on the second attempt and
+  there is no second attempt at a solve. A knob whose name promises tuning that is not available is
+  worse than its absence — the first version of this change kept it, reading 3.0 and controlling
+  nothing.
+- **The probe must escape the budget it validates.** It runs a solve, so once startup had its own
+  budget the probe was bounded by the very setting it exists to check — a too-small value made it
+  time out reporting the problem it should have measured, and the clamp never ran. `_run` takes a
+  `startup_timeout` override for that one caller.
+
+`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the **startup**
+budget for that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the
+measurement. It
 **clamps up and logs; it never refuses to start** — raising there would take the whole backend down
 over one topic's tuning knob, and every non-generation surface with it, which is the failure
 `_env_number`'s floor exists to prevent. A probe that cannot run keeps the configured value and says

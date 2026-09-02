@@ -6133,9 +6133,19 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
         # What the database wrote, not what was sent: `len(rows)` would report
         # a replay as having inserted a batch it inserted none of, which is
         # the number `push_client` counts delivery from.
+        #
+        # Relies on PostgREST returning a representation (postgrest-py's
+        # default), exactly as the heart endpoint below does. Under
+        # `return=minimal` this would misreport every successful write as
+        # `inserted: 0`.
         inserted = len(resp.data or [])
+    # `duplicates` reported rather than left derivable. It was arithmetic the
+    # caller could do -- samples minus dropped minus inserted -- and that is
+    # not the same as saying it: three states share the value 0 here, and a
+    # reader with two numbers has to know which subtraction means which.
     return {"ok": True, "inserted": inserted,
-            "dropped": len(payload.samples) - len(rows)}
+            "dropped": len(payload.samples) - len(rows),
+            "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
@@ -6179,9 +6189,18 @@ def ingest_face(payload: FaceBatch, request: Request):
             rows, on_conflict="session_id,ts", ignore_duplicates=True
         ).execute()
         # What the database wrote, not what was sent -- see the cognitive
-        # endpoint above.
+        # endpoint above, including the `return=minimal` caveat.
         inserted = len(resp.data or [])
-    return {"ok": True, "inserted": inserted}
+    # Three numbers, because with one `inserted: 0` means three different
+    # things and this endpoint just gained the third. It used to mean only
+    # "nothing here was mappable" -- every window refused by FER+ and the
+    # landmarker; adding the dedupe key made it also mean "every sample was
+    # already recorded", which is a replayed batch and entirely healthy.
+    # `push_client` reads these to keep a quiet camera apart from a retry, and
+    # `ingest_heart` has reported them separately since it gained its own key.
+    return {"ok": True, "inserted": inserted,
+            "dropped": len(payload.samples) - len(rows),
+            "duplicates": len(rows) - inserted}
 
 
 @app.post("/api/signals/heart")

@@ -1042,7 +1042,7 @@ export default function Adaptive() {
                   className="text-6xl mb-4 text-center">🚀</motion.div>
                 <h2 className="text-xl font-black text-gray-900 dark:text-white mb-2 text-center">Ready to practice?</h2>
                 <p className="text-gray-500 dark:text-gray-400 text-sm mb-6 max-w-sm mx-auto text-center">
-                  The AI analyses your performance across 10 topics and picks the one you need most.
+                  The AI analyses your performance across {TOPICS.length} topics and picks the one you need most.
                 </p>
 
                 {/* Mode toggle */}

@@ -241,6 +241,52 @@ def graphs(scenario_name):
                     "target": _STRING_LIST})
 
 
+def quadratics():
+    """The three coefficients of `ax^2 + bx + c = 0`, each a whole number.
+
+    An object with fixed keys, unlike `algebra`'s token list, and that is the
+    point rather than a style difference: the equation the student sees is
+    *rendered* from these by `hs_solvers.render_quadratic` and required to
+    appear verbatim in the text, so there is no token stream to validate and
+    no way for the shown equation to drift from the scored one.
+
+    `target` is deliberately absent -- which root is asked for is chosen by
+    the generator before the call and written into the prompt, so a reply
+    cannot disagree about it. Putting it here would make it the model's to
+    pick, and a reply naming the root it did not ask about in the text is the
+    one failure this topic cannot detect from the coefficients alone.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "coefficients": _object(
+                        {k: {"type": "string", "pattern": r"^-?\d{1,4}$"}
+                         for k in ("a", "b", "c")})})
+
+
+def functions(scenario_name):
+    """Coefficient lists in descending powers, with the scenario pinned.
+
+    `g` is present only for `compose`, and the object is closed, so an
+    `evaluate` reply cannot carry a second function for the solver to ignore
+    -- which would render one function on screen and score another.
+
+    Length is not expressible: the API refuses `minItems` above 1, the same
+    limit that leaves angle arity and `missing_number`'s five tokens to
+    runtime. `hs_solvers.parse_int_list` bounds it at `MAX_DEGREE + 1` and is
+    the only thing that does.
+    """
+    coefficients = {"type": "array",
+                    "items": {"type": "string", "pattern": r"^-?\d{1,4}$"}}
+    properties = {"question_text": _TEXT,
+                  "question_topic": _TEXT,
+                  "scenario": {"type": "string", "enum": [scenario_name]},
+                  "f": coefficients,
+                  "input": {"type": "string", "pattern": r"^-?\d{1,2}$"}}
+    if scenario_name == "compose":
+        properties["g"] = coefficients
+    return _object(properties)
+
+
 def shape_fractions():
     """A shape's part count and how many of them are shaded.
 

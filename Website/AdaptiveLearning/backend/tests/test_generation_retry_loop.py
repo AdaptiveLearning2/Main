@@ -23,10 +23,29 @@ import pytest  # noqa: E402
 import lesson_plan_context  # noqa: E402
 import llm_client  # noqa: E402
 
-TOPICS = [
-    "algebra", "angle_relationship", "expressions", "geometry", "mean",
-    "median", "mode", "ordering", "probability", "rationals",
-]
+BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Derived from the generator files rather than written out. It was a hand-kept
+# list of the original ten, so the four topics added for grades 1-3 and the two
+# for grades 9-12 were never covered by it -- the same shape as the endpoint
+# list in `test_ingest_mode.py` before it was parametrised, where the test
+# listed only what someone had already remembered.
+#
+# Keyed on the *filename* rather than on `ALL_TOPICS`, because the two do not
+# always match: the `angle_relationships` topic lives in
+# `LLM_angle_relationship_generation.py`, singular. The filename is what the
+# import needs.
+TOPICS = sorted(
+    name[len("LLM_"):-len("_generation.py")]
+    for name in os.listdir(BACKEND)
+    if name.startswith("LLM_") and name.endswith("_generation.py")
+)
+
+
+def test_the_topic_list_is_not_empty():
+    """A glob that matches nothing turns every test below into zero tests, and
+    a parametrised suite with no parameters passes silently."""
+    assert len(TOPICS) >= 16, TOPICS
 
 
 @pytest.mark.parametrize("topic", TOPICS)

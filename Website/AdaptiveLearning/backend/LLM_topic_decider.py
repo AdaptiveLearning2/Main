@@ -16,6 +16,7 @@ import LLM_algebra_generation, LLM_ordering_generation, LLM_rationals_generation
 import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation, LLM_angle_relationship_generation, LLM_expressions_generation
 import LLM_missing_number_generation, LLM_patterns_generation, LLM_graphs_generation
 import LLM_shape_fractions_generation
+import LLM_quadratics_generation, LLM_functions_generation
 # python -m flask --app LLM_topic_decider run
 
 load_dotenv()
@@ -27,6 +28,7 @@ ALL_TOPICS = [
     "geometry", "algebra", "expressions", "ordering", "rationals",
     "mean", "median", "mode", "probability", "angle_relationships",
     "missing_number", "patterns", "graphs", "shape_fractions",
+    "quadratics", "functions",
 ]
 
 # Enforces in code the same grade rule the prompts below only state in
@@ -90,7 +92,27 @@ TOPIC_MIN_GRADE = {
     # 1.G.3 halves and fourths; NOT `rationals`, which is 4.NF.3 arithmetic.
     # This is recognising a fraction in a picture, not computing with one.
     "shape_fractions":     1,
+    # The two that exist for the oldest students, and the first content here
+    # whose concept is above grade 8 at all. Every other topic tops out there:
+    # 81% of grade-9 questions measured three or more grades below grade, and
+    # no prompt could fix it, because harder numbers inside 8.EE.7b are still
+    # 8.EE.7b. See `hs_solvers`.
+    "quadratics":          9,   # A-REI.4b, solving a quadratic by factoring
+    # F-IF.2 (function notation) and F-BF.1c (composition). Grade 8 evaluates
+    # a rule at a value (8.F.2) and explicitly does not require the notation,
+    # which is the whole of the distinction -- so `compose`, which has no
+    # grade-8 equivalent, is the medium and hard tier rather than a flourish.
+    "functions":           9,
 }
+
+# A note on what this does NOT do, since the audit that prompted it is easy to
+# read as closed. Adding two grade-9 topics does not take the "below grade"
+# figure to zero: the other fourteen carry no ceiling, so a grade-9 student is
+# still offered them and still draws grade-8 content most of the time. Whether
+# the topics that top out at grade 8 should get a `TOPIC_MAX_GRADE` is a
+# separate and larger decision -- the comment below explains why the original
+# ten were deliberately left uncapped -- and reversing it would drop a grade-9
+# student to two topics. That trade has not been made here.
 
 # The grade past which a topic stops being worth serving. Empty for the ten
 # original topics, which all scale: harder numbers inside the same question
@@ -571,6 +593,26 @@ def question_generation(topic, difficulty, user_id, grade):
             history["shape_fractions"].append({
                     "text": response["question_text"],
                     "topic": "shape_fractions"})
+
+        case "quadratics":
+            response = LLM_quadratics_generation.generate_quadratics_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "quadratics"})
+            history["quadratics"].append({
+                    "text": response["question_text"],
+                    "topic": "quadratics"})
+
+        case "functions":
+            response = LLM_functions_generation.generate_functions_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "functions"})
+            history["functions"].append({
+                    "text": response["question_text"],
+                    "topic": "functions"})
 
         case _:
             # Unreachable while every ALL_TOPICS member has a case above, and

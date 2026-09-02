@@ -186,15 +186,30 @@ def test_topics_marks_which_are_allowed_at_a_young_grade():
     assert by_name["probability"] is False
 
 
-def test_topics_allows_everything_from_sixth_grade_up():
-    """Everything that has no ceiling. `missing_number` and `patterns` are
-    capped at grades 3 and 5, so an 8th grader is correctly not offered them --
-    this surface would otherwise let one pick "8 + ? = 11" as practice."""
+def test_topics_at_eighth_grade_are_those_inside_both_bounds():
+    """Allowed is the grade sitting between a topic's floor and its ceiling.
+
+    This used to read "allowed iff it has no ceiling", which was true only
+    while a ceiling was the *only* way a topic could be withheld from an 8th
+    grader. `quadratics` and `functions` have a floor of 9, so they are
+    correctly not offered here while appearing in no `TOPIC_MAX_GRADE` --
+    which broke the old equivalence rather than the behaviour.
+
+    `missing_number` and `patterns` are still the ceiling half of it: capped
+    at grades 3 and 5, so this surface does not let an 8th grader pick
+    "8 + ? = 11" as practice.
+    """
     import LLM_topic_decider as decider
     topics = main.list_topics(grade="8th Grade")
     for topic in topics:
-        capped = topic["name"] in decider.TOPIC_MAX_GRADE
-        assert topic["allowed"] is not capped, topic["name"]
+        name = topic["name"]
+        in_range = (decider.TOPIC_MIN_GRADE[name] <= 8
+                    <= decider.TOPIC_MAX_GRADE.get(name, 8))
+        assert topic["allowed"] is in_range, name
+    by_name = {t["name"]: t["allowed"] for t in topics}
+    assert by_name["missing_number"] is False, "capped at grade 3"
+    assert by_name["quadratics"] is False, "floored at grade 9"
+    assert by_name["algebra"] is True
 
 
 # ─── POST /api/practice-sessions/start ──────────────────────────────────

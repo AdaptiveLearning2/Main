@@ -32,22 +32,36 @@
 INSERT INTO "public"."lesson_plans" ("topic_name", "grade_band", "objectives", "notes")
 VALUES
   -- quadratics -----------------------------------------------------------
-  -- Emits one equation ax^2 + bx + c = 0 and asks for ONE named root. The
-  -- solver requires two DIFFERENT roots, both whole numbers -- so a repeated
-  -- root, an irrational one and a fractional one are each refused rather than
-  -- rounded. Asking students to "find the solutions" (plural) is impossible
-  -- here: the answer is one option among four, so the question has to name
-  -- which root it wants, and the generator writes that instruction itself.
+  -- THE MODEL DOES NOT WRITE THE EQUATION FOR THIS TOPIC, and that is the one
+  -- thing to know before editing these two fields. `_choose_coefficients`
+  -- builds it from two integer roots, `quadratic_prompt` hands it over under
+  -- EQUATION and WHICH SOLUTION and forbids changing either, and
+  -- `shown_matches_scored` refuses any reply whose text does not carry that
+  -- exact equation. The model's whole job is the sentence around it.
   --
-  -- Deliberately out of reach, and not worth inviting: the quadratic formula
-  -- applied to a non-factorable equation (the answer would be irrational),
-  -- completing the square as a *stated method* (nothing scores the method,
-  -- only the root), complex roots, and anything asking for the vertex, axis of
-  -- symmetry or discriminant -- those are different questions with different
-  -- answers and this solver returns a root.
+  -- So this text must not instruct the model to author an equation or to pick
+  -- a root. The first version of this row did both -- "every equation must
+  -- have exactly two different whole-number solutions", "ask for one named
+  -- solution, the larger or the smaller" -- and carried a worked example
+  -- (x^2 - 5x + 6) in its objectives. `append_lesson_context` appends LAST, so
+  -- that was the final instruction in the prompt, contradicting the one above
+  -- it. A model that obeyed it would write its own equation, fail
+  -- `shown_matches_scored` on all three attempts, and the generator would
+  -- raise -- turning a working topic into a hard failure the moment this file
+  -- was seeded, on a path no test covers because an unseeded cell fails open.
+  --
+  -- It is written as a description of what the STUDENT does, plus constraints
+  -- on the WORDING. Anything that reads as an instruction to produce the
+  -- mathematics belongs in COMPLEXITY_BY_GRADE's replacement (`_TIERS` and
+  -- `_ROOT_RANGE` in the generator), not here.
+  --
+  -- Still worth stating in the notes, because they are constraints on the
+  -- sentence rather than on the equation: no revealing a solution, no naming
+  -- a method, and none of the questions this solver cannot score -- the
+  -- solution set, the vertex, the axis of symmetry, the discriminant.
   ('quadratics', 'advanced',
-   'Solve a quadratic equation that factors over the integers, and identify a particular solution rather than the solution set. Students recognise that a quadratic normally has two solutions, so a question must say which one it wants, and that "the larger solution" is a different answer from "the smaller" -- reading the question is part of the work. Factoring is the expected route (A-REI.4b): a student who can write x^2 - 5x + 6 as (x - 2)(x - 3) reads both solutions off it directly. The quadratic formula reaches the same pair and is worth recognising as the general case, and for these equations it always produces whole numbers because the discriminant is a perfect square. Students check a solution by substituting it back into the original equation.',
-   'Every equation must have exactly two different whole-number solutions. Do not write an equation whose solutions are fractions, decimals or square roots, and do not write one with a repeated solution or with no real solution. Ask for one named solution -- the larger or the smaller -- and never for both, for the solution set, or for the number of solutions. Do not ask for the vertex, the axis of symmetry, the discriminant or a graph. Do not ask the student to name or use a particular method.'),
+   'Students solve a quadratic that factors over the integers and identify a particular solution rather than the solution set. A quadratic normally has two solutions, so the question says which one it wants, and "the larger solution" is a different answer from "the smaller" -- reading the question is part of the work. Factoring is the expected route (A-REI.4b), and the quadratic formula reaches the same pair as the general case; for these equations it always gives whole numbers, because the discriminant is a perfect square. Students check a solution by substituting it back into the equation.',
+   'Word the question so it is unambiguous which of the two solutions is wanted. Do not reveal or hint at either solution. Do not tell the student which method to use. Do not ask for both solutions, the solution set, the number of solutions, the vertex, the axis of symmetry, the discriminant or a graph.'),
 
   -- functions -------------------------------------------------------------
   -- Two scenarios: evaluate f at a value, and evaluate a composition f(g(x)).

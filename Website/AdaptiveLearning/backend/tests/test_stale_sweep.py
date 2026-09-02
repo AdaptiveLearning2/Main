@@ -360,30 +360,53 @@ def _columns_after_every_migration():
     root = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
     migrations = os.path.join(root, "..", "..", "supabase", "migrations")
+    return _replay_columns(
+        open(os.path.join(migrations, name), encoding="utf-8").read()
+        for name in sorted(os.listdir(migrations)) if name.endswith(".sql"))
+
+
+def _replay_columns(statements):
+    """The parser itself, over SQL texts in order.
+
+    Split from the reader so a shape with no example in the tree can still be
+    pinned -- a multi-clause `DROP COLUMN` is the one this file's history says
+    to worry about, and there is none to point at.
+    """
     columns: dict[str, set] = {}
     create = re.compile(
         r'CREATE TABLE (?:IF NOT EXISTS )?"public"\."(\w+)"\s*\((.*?)\n\);',
         re.S | re.I)
+    # Two stages, because one ALTER TABLE carries any number of clauses and a
+    # single pattern matches each statement once. `20260820000000` is exactly
+    # that shape -- three `ADD COLUMN`s under one ALTER -- and a
+    # statement-at-a-time regex saw `head_yaw` and neither of the others.
+    #
+    # It passed only because `_ACTIVITY_SOURCES` happens to name the first of
+    # the three. Adding `head_pitch` would have failed this guard with a
+    # message insisting the column does not exist, and a future multi-clause
+    # `DROP COLUMN` would have restored exactly the drop-blindness the replay
+    # was written to remove.
     alter = re.compile(
-        r'ALTER TABLE (?:ONLY )?"?public"?\."?(\w+)"?\s+'
-        r'(ADD|DROP) COLUMN (?:IF (?:NOT )?EXISTS )?"?(\w+)"?', re.I)
+        r'ALTER TABLE (?:ONLY )?"?public"?\."?(\w+)"?(.*?);', re.S | re.I)
+    clause = re.compile(
+        r'\b(ADD|DROP) COLUMN (?:IF (?:NOT )?EXISTS )?"?(\w+)"?', re.I)
 
-    for name in sorted(os.listdir(migrations)):
-        if not name.endswith(".sql"):
-            continue
-        sql = open(os.path.join(migrations, name), encoding="utf-8").read()
+    for sql in statements:
         for table, body in create.findall(sql):
             found = columns.setdefault(table, set())
             for line in body.splitlines():
                 match = re.match(r'\s*"(\w+)"\s+\S', line)
                 if match:
                     found.add(match.group(1))
-        for table, action, column in alter.findall(sql):
+        for table, body in alter.findall(sql):
             found = columns.setdefault(table, set())
-            if action.upper() == "ADD":
-                found.add(column)
-            else:
-                found.discard(column)
+            # In clause order: one statement may drop and add, and the last
+            # word about a column has to win.
+            for action, column in clause.findall(body):
+                if action.upper() == "ADD":
+                    found.add(column)
+                else:
+                    found.discard(column)
     return columns
 
 
@@ -406,6 +429,53 @@ def test_every_filtered_column_exists():
                 "would reject the request, the endpoint would swallow it, and "
                 "every session would report activity unknown -- a quiet "
                 "session reads LIVE again.")
+
+
+def test_the_column_replay_reads_every_clause_of_a_multi_clause_alter():
+    """One `ALTER TABLE` can carry any number of clauses, and a regex over
+    whole statements matches each one once.
+
+    `20260820000000` adds `head_yaw`, `head_pitch` and `head_roll` under a
+    single ALTER, and the first version of the replay saw only `head_yaw`.
+    Nothing failed, because `_ACTIVITY_SOURCES` names exactly that one -- so
+    the guard was wrong and green, and would have started accusing a real
+    column of not existing the moment anyone filtered on `head_pitch`.
+
+    Pinned on all three rather than on the parser's shape: what matters is
+    that a clause is not skipped, not how the skipping was avoided.
+    """
+    face = _columns_after_every_migration()["face_signals"]
+    for column in ("head_yaw", "head_pitch", "head_roll"):
+        assert column in face, (
+            f"{column} was added by a multi-clause ALTER and the replay "
+            "missed it -- every clause after the first is being dropped")
+
+
+def test_the_replay_handles_a_multi_clause_drop():
+    """The shape with no example in the tree, and the one the multi-clause
+    ADD bug says to expect: a statement dropping several columns at once must
+    drop all of them, not just the first.
+
+    Synthetic because there is nothing to point at yet -- which is exactly
+    why it is worth pinning now rather than after a migration relies on it.
+    """
+    columns = _replay_columns([
+        'CREATE TABLE IF NOT EXISTS "public"."t" (\n'
+        '    "a" integer,\n    "b" integer,\n    "c" integer\n);',
+        'ALTER TABLE "public"."t"\n'
+        '    DROP COLUMN IF EXISTS "a",\n    DROP COLUMN IF EXISTS "b";',
+    ])
+    assert columns["t"] == {"c"}
+
+
+def test_the_replay_takes_the_last_word_about_a_column():
+    """One statement may drop and re-add, so clause order decides."""
+    columns = _replay_columns([
+        'CREATE TABLE IF NOT EXISTS "public"."t" (\n    "a" integer\n);',
+        'ALTER TABLE "public"."t"\n'
+        '    DROP COLUMN IF EXISTS "a",\n    ADD COLUMN IF NOT EXISTS "a" text;',
+    ])
+    assert columns["t"] == {"a"}
 
 
 def test_the_column_replay_notices_a_drop():

@@ -43,13 +43,33 @@ class _FakeDB:
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
 
+    # Both forms are recorded, not swallowed. The measured-row filter is what
+    # keeps a headband on a desk from advancing the activity clock, and it is
+    # applied server-side -- so a test that only looked at the returned rows
+    # could not tell it was there at all.
+    #
+    # Recording alone is not enough, and it is worth being clear about the
+    # limit: nothing here *executes* these. A renamed column or a mis-spelled
+    # operator would satisfy every assertion below and throw against a real
+    # database. `test_the_filters_are_valid_postgrest` builds them with the
+    # real client, and `test_every_filtered_column_exists` checks the names
+    # against the migrations.
+
     def or_(self, expression):
-        # Recorded, not just swallowed. The measured-row filter is what keeps
-        # a headband on a desk from advancing the activity clock, and it is
-        # applied server-side -- so a test that only looked at the returned
-        # rows could not tell it was there at all.
         self.filters.append((self._t, expression))
         return self
+
+    def filter(self, column, operator, value):
+        self.filters.append((self._t, f"{column}.{operator}.{value}"))
+        return self
+
+    def measured_columns(self, table):
+        """Which columns this table's rows were required to have, whichever
+        filter form said so -- the semantic the endpoint is asserting, not the
+        spelling it happened to use."""
+        return {term.split(".")[0]
+                for recorded, expression in self.filters if recorded == table
+                for term in expression.split(",")}
 
     def execute(self):
         if self._boom and self._t == self._boom_table:
@@ -240,12 +260,9 @@ def test_a_headband_on_a_desk_does_not_keep_a_session_alive(monkeypatch):
     out = main.student_sessions("u1", request=None)
     assert out[0]["idle"] is True, "nothing measured anything; the student left"
 
-    applied = dict(db.filters)
-    assert set(applied) == {"cognitive_signals", "face_signals",
-                            "heart_signals"}, applied
-    assert applied["cognitive_signals"] == "focus.not.is.null"
-    assert applied["heart_signals"] == "heart_rate_bpm.not.is.null"
-    assert "session_answers" not in applied, (
+    assert db.measured_columns("cognitive_signals") == {"focus"}
+    assert db.measured_columns("heart_signals") == {"heart_rate_bpm"}
+    assert db.measured_columns("session_answers") == set(), (
         "an answer is activity whatever the sensors were doing")
 
 
@@ -265,10 +282,10 @@ def test_a_gaze_only_face_row_counts_as_a_measurement(monkeypatch):
     _as_teacher(monkeypatch, db)
     main.student_sessions("u1", request=None)
 
-    face = dict(db.filters)["face_signals"]
-    assert "emotion.not.is.null" in face
-    assert "gaze_x.not.is.null" in face, "a gaze-only deployment measures too"
-    assert "head_yaw.not.is.null" in face
+    face = db.measured_columns("face_signals")
+    assert "emotion" in face
+    assert "gaze_x" in face, "a gaze-only deployment measures too"
+    assert "head_yaw" in face, "pose refuses independently of gaze"
 
 
 def test_a_measured_signal_row_still_counts(monkeypatch):
@@ -285,6 +302,63 @@ def test_a_measured_signal_row_still_counts(monkeypatch):
     _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
 
     assert main.student_sessions("u1", request=None)[0]["idle"] is False
+
+
+def test_the_filters_are_valid_postgrest():
+    """Built with the real client, not the fake, and asserted on the wire.
+
+    Everything else in this file records the filter and hands it back, which
+    proves a string was passed and nothing more. A renamed column, a
+    mis-spelled `not.is`, or a query shape the library refuses would satisfy
+    all of it and throw inside the request against a real database -- and
+    that throw is caught, so `activity_known` would go False for every
+    session, `idle` with it, and the pulsing LIVE badge would come back with
+    a green suite.
+
+    Also pins the single-column form. `or=(focus.not.is.null)` is a
+    one-branch or-tree, which is a shape nothing else here emits; the plain
+    `focus=not.is.null` is what the single-column sources use.
+    """
+    from urllib.parse import unquote
+    from postgrest import SyncPostgrestClient
+
+    client = SyncPostgrestClient("http://localhost:54321/rest/v1")
+    emitted = {}
+    for table, column, measured in main._ACTIVITY_SOURCES:
+        query = (client.table(table).select(f"session_id, {column}")
+                 .in_("session_id", ["11111111-1111-1111-1111-111111111111"]))
+        if measured:
+            query = main._measured_only(query, measured)
+        emitted[table] = unquote(str(query.order(column, desc=True)
+                                     .limit(500).request.params))
+
+    assert "focus=not.is.null" in emitted["cognitive_signals"]
+    assert "heart_rate_bpm=not.is.null" in emitted["heart_signals"]
+    assert ("or=(emotion.not.is.null,gaze_x.not.is.null,head_yaw.not.is.null)"
+            in emitted["face_signals"])
+    assert "not.is.null" not in emitted["session_answers"], (
+        "an answer is activity whatever the sensors were doing")
+    for table, params in emitted.items():
+        assert "order=" in params and "limit=500" in params, (table, params)
+
+
+def test_every_filtered_column_exists():
+    """The other half a recorded string cannot check: that the columns are
+    real. `gaze_x` and `head_yaw` arrived in later migrations than the table,
+    so "it is on face_signals" is not something to take on trust."""
+    migrations = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "..", "..",
+        "supabase", "migrations")
+    sql = ""
+    for name in sorted(os.listdir(migrations)):
+        if name.endswith(".sql"):
+            sql += open(os.path.join(migrations, name), encoding="utf-8").read()
+
+    for table, column, measured in main._ACTIVITY_SOURCES:
+        for name in (column, *measured):
+            assert f'"{name}"' in sql, (
+                f"{table}.{name} appears in no migration -- the filter would "
+                "throw, and every session would report activity unknown")
 
 
 def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):

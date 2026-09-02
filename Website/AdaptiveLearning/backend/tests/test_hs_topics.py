@@ -448,6 +448,44 @@ def test_compose_is_still_allowed_to_name_g(reply, fixed_functions):
     assert question["correct_answer"] == "134"
 
 
+@pytest.mark.parametrize("band", ["early", "middle", "upper", "advanced"])
+@pytest.mark.parametrize("scenario", ["evaluate", "compose"])
+def test_the_identity_is_never_built(band, scenario):
+    """`f(x) = x` renders fine, evaluates fine and asks nothing -- the
+    constant's twin, and newly reachable once the generator started picking
+    the coefficients itself. A non-zero leading coefficient rules out the
+    constant and lets `[1, 0]` through, measured at about 1 draw in 300.
+
+    Worse on compose: `f(g(x))` is then identically `g(x)`, and the swapped
+    distractor disappears silently, because `g(f(x))` equals the answer and
+    the near-miss list drops any candidate equal to it. The question loses
+    the one distractor that tests whether the order was read.
+
+    Many draws, because the failure was probabilistic -- a single sample
+    would have missed it, which is how it shipped.
+    """
+    for _ in range(2000):
+        f, g, _x = funcs._choose_functions(scenario, band)
+        for name, poly in (("f", f), ("g", g)):
+            if poly is None:
+                continue
+            assert not (len(poly) == 2 and abs(poly[0]) == 1
+                        and poly[1] == 0), f"{name} = {poly} is the identity"
+
+
+def test_a_composition_still_composes_something():
+    """The consequence, stated as the property rather than the mechanism: an
+    identity outer function makes f(g(x)) equal g(x) for every input."""
+    for _ in range(500):
+        f, g, x = funcs._choose_functions(funcs.COMPOSE, "advanced")
+        composed, _r = hs_solvers.solve_composition(f, g, x)
+        inner, _r2 = hs_solvers.evaluate_polynomial(g, x)
+        outer_of_inner_alone = inner
+        if composed == outer_of_inner_alone:
+            # Possible by coincidence, but not because f does nothing.
+            assert not (len(f) == 2 and abs(f[0]) == 1 and f[1] == 0), f
+
+
 def test_a_constant_function_is_never_built():
     """"If f(x) = 7, what is f(4)" asks nothing about function notation.
 

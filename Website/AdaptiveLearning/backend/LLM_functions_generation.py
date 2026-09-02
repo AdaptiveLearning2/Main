@@ -159,7 +159,22 @@ _COMPOSE_INPUT = 5
 
 
 def _polynomial(degree, limit, negatives):
-    """Coefficients in descending powers, leading one non-zero."""
+    """Coefficients in descending powers, leading one non-zero, never `±x`.
+
+    A non-zero leading coefficient rules out the constant, which is what the
+    redesign made unrepresentable -- but it lets `[1, 0]` through, and that is
+    `f(x) = x`. Measured at roughly 1 draw in 300.
+
+    The identity is the constant's twin and is worse on the compose tiers:
+    `f(g(x))` is then identically `g(x)`, a composition question composing
+    nothing, and it *also* removes the swapped distractor without saying so,
+    because `g(f(x))` equals the answer and the near-miss list drops any
+    candidate equal to it. So the question loses the one distractor that tests
+    whether the student read the order.
+
+    Forced rather than redrawn: a loop would be unbounded on a limit of 1, and
+    the constant term is free to be anything non-zero here.
+    """
     leading = random.randint(1, limit)
     coefficients = [-leading if negatives and random.random() < 0.5 else leading]
     for _ in range(degree):
@@ -167,6 +182,10 @@ def _polynomial(degree, limit, negatives):
         if negatives and value and random.random() < 0.5:
             value = -value
         coefficients.append(value)
+    if degree == 1 and abs(coefficients[0]) == 1 and coefficients[1] == 0:
+        coefficients[1] = random.randint(1, limit)
+        if negatives and random.random() < 0.5:
+            coefficients[1] = -coefficients[1]
     return coefficients
 
 

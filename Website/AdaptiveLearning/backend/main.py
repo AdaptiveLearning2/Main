@@ -3308,6 +3308,56 @@ def student_stats(student_id: str, request: Request):
     _verify_can_view_student(get_user(request), student_id)
     return _stats_including_open_session(student_id)
 
+# What counts as a session still being worked on, and which columns say so.
+#
+# The four sources `class_live` has always derived its own staleness from.
+# `student_sessions` read answers alone against the same window, so a student
+# streaming EEG through a long question was active there and idle here.
+#
+# Each signal source names every column that would carry a *measurement*,
+# because a row existing is not evidence of anything:
+#
+#   * A `contact_poor` row is a real row with a real `ts` and its measurement
+#     columns nulled -- "recording but unable to measure", which the mapper
+#     keeps deliberately. A headband on a desk writes one every poller tick,
+#     for ever, so counting them puts the pulsing LIVE badge back for the
+#     sessions most likely to be left open.
+#   * `face_signals` has two producers and either may succeed alone --
+#     `20260819000000` says a row is enqueued when *either* measurement does.
+#     `-Gaze -NoEmotion` is a supported and cheaper camera deployment where
+#     every row has `emotion` NULL, so naming emotion alone would make the
+#     camera contribute nothing there. Head pose refuses independently of gaze
+#     (near profile the fit refuses while the eyes read fine, a closed eye the
+#     reverse), so a pose-only row counts too.
+#
+# A tuple rather than inline, so `test_stale_sweep` can build the real
+# PostgREST query from the same data and assert what goes on the wire. A fake
+# that records the filter and hands it back proves only that a string was
+# passed: a renamed column or a mis-spelled operator would throw inside the
+# request, take `activity_known` to False for every session, and leave the
+# suite green.
+_ACTIVITY_SOURCES = (
+    ("session_answers",   "answered_at", ()),
+    ("cognitive_signals", "ts", ("focus",)),
+    ("face_signals",      "ts", ("emotion", "gaze_x", "head_yaw")),
+    ("heart_signals",     "ts", ("heart_rate_bpm",)),
+)
+
+
+def _measured_only(query, columns):
+    """Narrow to rows where at least one of `columns` is not null.
+
+    One column takes the plain `col=not.is.null` form rather than a
+    single-branch `or=(...)`. Both are accepted, but an or-tree of one is a
+    shape nothing else here emits, and this is a filter whose failure mode is
+    silent -- it throws inside the request, and every session then reports
+    activity unknown.
+    """
+    if len(columns) == 1:
+        return query.filter(columns[0], "not.is", "null")
+    return query.or_(",".join(f"{c}.not.is.null" for c in columns))
+
+
 @app.get("/api/sessions/student/{student_id}")
 def student_sessions(student_id: str, request: Request):
     """A student's recent sessions, with abandoned ones marked as such.
@@ -3386,34 +3436,14 @@ def student_sessions(student_id: str, request: Request):
         # and a nulled row is evidence of nothing. The columns are the ones
         # `rollup_signal_day` already counts per channel for the same reason
         # -- `focus` for cognitive, `emotion` for face.
-        # An OR across every measurement the table can carry, not a single
-        # column. `face_signals` has two producers and either may succeed
-        # alone: `-Gaze -NoEmotion` is a supported and deliberately cheaper
-        # camera deployment (gaze needs no 35 MB FER+ model), and in it every
-        # row has `emotion` NULL. Filtering on emotion alone would make the
-        # camera contribute no activity at all there, so a student it was
-        # measuring through a long question would still read idle -- the same
-        # failure as the `contact_poor` one this filter exists to stop, from
-        # the other direction. `20260819000000` puts it plainly: a row is
-        # enqueued when *either* measurement succeeds.
-        #
-        # Head pose refuses independently of gaze -- near profile the fit
-        # refuses while the eyes are readable, a closed eye the reverse -- so
-        # a pose-only row is real too and counts the same.
         newest: dict[str, tuple] = {}
-        for table, column, measured in (
-                ("session_answers",   "answered_at", None),
-                ("cognitive_signals", "ts", "focus.not.is.null"),
-                ("face_signals",      "ts", "emotion.not.is.null,"
-                                            "gaze_x.not.is.null,"
-                                            "head_yaw.not.is.null"),
-                ("heart_signals",     "ts", "heart_rate_bpm.not.is.null")):
+        for table, column, measured in _ACTIVITY_SOURCES:
             try:
                 query = (supabase.table(table)
                          .select(f"session_id, {column}")
                          .in_("session_id", ids))
                 if measured:
-                    query = query.or_(measured)
+                    query = _measured_only(query, measured)
                 recent = (query.order(column, desc=True)
                           .limit(500).execute().data or [])
             except Exception as e:                              # noqa: BLE001

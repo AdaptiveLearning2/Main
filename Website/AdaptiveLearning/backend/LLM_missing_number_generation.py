@@ -130,6 +130,17 @@ GRADE_OVERRIDES = {
     2: "This student is in GRADE 2. Use ADDITION or SUBTRACTION only, and every number must be 100 or below (2.OA.1, 2.NBT.5). Do NOT use multiplication.",
 }
 
+# Both entries above forbid multiplication, and nothing enforced it: a reply
+# of `3 * ? = 12` cleared solve_missing (it accepts "*"), shown_matches_scored
+# and grade_appropriateness (which only looks for variable notation) just as
+# happily as an addition equation, and was served two years above 1.OA.8. Keyed
+# off GRADE_OVERRIDES rather than restated so the prompt-level rule and the
+# code-level one cannot drift apart -- the same trap the `expressions`
+# parenthesis leak was, per CLAUDE.md. `None` is included because an
+# unreadable grade is treated as the youngest (see grade_levels), not as
+# unrestricted.
+_NO_MULTIPLICATION_GRADES = set(GRADE_OVERRIDES) | {None}
+
 
 def solve_missing(tokens):
     """The number that makes the equation true, or None if it cannot be one.
@@ -177,6 +188,20 @@ def solve_missing(tokens):
             return None                      # the blank must be a whole number
         value = int(value)
     return value
+
+
+def _forbidden_operator(tokens, grade):
+    """Multiplication where a grade-1/2 (or unreadable) student must not see
+    it, or None. Reads the operator straight off the structured token list
+    rather than pattern-matching text -- unlike the `expressions` early-band
+    check, there's no ambiguity here between an operator and a stray
+    character to guess at.
+    """
+    if not isinstance(tokens, list) or len(tokens) != 5:
+        return None
+    if tokens[1] == "*" and grade_levels.grade_number(grade) in _NO_MULTIPLICATION_GRADES:
+        return "multiplication"
+    return None
 
 
 def _equation_text(tokens):
@@ -286,6 +311,11 @@ def generate_missing_number_question(global_questions, prev_questions,
         if grade_appropriateness.refuse(question_data.get("question_text"),
                                         "missing_number", grade_band, difficulty,
                                         attempt + 1):
+            continue
+
+        forbidden = _forbidden_operator(question_data.get("variables"), grade)
+        if forbidden:
+            print(f"[Attempt {attempt+1}] {forbidden} not allowed at this grade")
             continue
 
         # Solved inside the loop, so an unsolvable equation is another attempt

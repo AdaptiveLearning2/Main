@@ -63,11 +63,13 @@ VALUES
   -- not to the text below.
   --
   -- The sharper form of the same gap is at grades 1-2, where GRADE_OVERRIDES
-  -- says "Do NOT use multiplication" and nothing enforces it: a "*" there
-  -- would be scored and served, and would be genuinely above grade. Unlike
-  -- the parenthesis leak in `expressions`, which was found by reading real
-  -- output and is now checked in code, this one has not been observed --
-  -- so it is recorded here rather than acted on.
+  -- says "Do NOT use multiplication" and nothing enforced it: a reply of
+  -- "3 * ? = 12" cleared every gate (solve_missing accepts "*",
+  -- grade_appropriateness only looks for variable notation) and was served
+  -- two years above 1.OA.8. Reproduced and fixed the same way as the
+  -- `expressions` parenthesis leak: `_forbidden_operator` in
+  -- LLM_missing_number_generation.py checks the structured token list
+  -- itself, keyed off GRADE_OVERRIDES so the two cannot drift apart.
   ('missing_number', 'early',
    'Find the unknown number that makes an equation true, where the equation has three numbers and one operation. The unknown may sit in any of the three positions, including the first, so that students read an equation as a statement of balance rather than as a left-to-right instruction to compute. Grade 1 works with addition and subtraction within 20 (1.OA.8), grade 2 within 100 (2.OA.1, 2.NBT.5), and grade 3 extends to an unknown factor in a multiplication (3.OA.4). Students find the unknown by using the inverse operation, and check the answer by putting it back into the equation.',
    'One operation per question and exactly one unknown, written "?" and never a letter. No division. No negative results, fractions or decimals. Do not set the question in a story or mention any number that is not part of the equation.'),

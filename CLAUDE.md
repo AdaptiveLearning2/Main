@@ -3006,10 +3006,15 @@ tables exist only to fail safely if that gate is ever bypassed -- write real cur
 `ordering`, `geometry`, and `expressions` first if extending this further, since those three are
 what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
 three across all four bands, and `lesson_plans_remaining_topics.sql` seeds the other seven at
-`upper`/`advanced` only — 26 rows in total, with `early`/`middle` left unseeded for those seven
+`upper`/`advanced` only, with `early`/`middle` left unseeded for those seven
 because `_allowed_topics` already keeps them out of grade 1-5 and an unseeded cell fails open to the
-heuristics. Both are dashboard-run scripts rather than migrations, because a migration would
-re-apply their text over any later dashboard edit on every rebuild.
+heuristics. `lesson_plans_young_topics.sql` is the third, covering the four topics added for grades
+1-3 — **five rows, not sixteen**, because `TOPIC_MAX_GRADE` makes most of that grid unreachable:
+`missing_number`, `graphs` and `shape_fractions` stop at grade 3 and exist only in `early`, and
+`patterns` stops at 5, so its `middle` row is written for grades 4-5 rather than for the band
+ceiling of 6 the other seed files' `middle` rows target. **A capped topic's band text is not the
+band's text.** 31 rows in total. All three are dashboard-run scripts rather than migrations, because
+a migration would re-apply their text over any later dashboard edit on every rebuild.
 
 **A lesson plan must describe question shapes the generator can actually emit, and the limits are
 tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will
@@ -3029,9 +3034,16 @@ condition" produced *"either blue or yellow"* — a compound event — scored **
 "Recognise that a dataset may have no mode at all" is true of the subject and wrong as an
 instruction: nine distinct rainfall readings, **no mode, answer 0**. And a percentage framing
 ("80% of 15 brands") also scored **1**, because percentages give the solver no counts to divide.
-Each is now forbidden in the objectives *and* in the row's `notes`, which is where a future editor
-will look. The general rule: **an objective that is pedagogically true can still be an instruction
-the solver cannot score** — check what a cell generates before trusting it, not just what it says.
+Each is now forbidden in the objectives *and* in the row's `notes`. The general rule: **an objective
+that is pedagogically true can still be an instruction the solver cannot score** — check what a cell
+generates before trusting it, not just what it says.
+
+**`notes` is prompt text, not a margin note.** `_lookup` appends it to `objectives` and sends the
+pair, and the 2000-char clamp covers both together — so a `notes` field written as documentation for
+the next editor is documentation the model reads, and repo-internal references (a module name, what
+would have to change to lift a limit) are noise inside a prompt. Keep it to constraints on the
+question; the reasoning aimed at a person goes in the seed file's `--` comments, which are sent
+nowhere.
 
 ### A band's tiers are written for its ceiling, so its youngest grade is over-served
 
@@ -3144,6 +3156,17 @@ Reducing the answer instead is the other option and is worse: the student is ask
 picture, and the picture says two of four. `question_figures._part_whole` deliberately does **not**
 check it — a reducible fraction is perfectly drawable, and drawability and answerability are
 different questions.
+
+**Grade 1 has exactly three legal pictures, and the model reaches for a fourth.** 1.G.3 holds it to
+2 or 4 parts, and lowest terms then leaves only `1/2`, `1/4` and `3/4` — while half-of-four is the
+shading a model produces first. Measured on llama3.1:8b at grade 1 / easy: `2/4` on all three
+attempts, so the request **failed outright** rather than degrading. That is the cost of a refusal
+landing on a cell with almost no legal answers left, and it is not visible from either the standard
+or the refusal rule alone. The fix is in the lesson plan, which names the three fractions for grade
+1 (`supabase/seeds/lesson_plans_young_topics.sql`): 4 of 4 generate afterwards, 2 of them still
+spending one retry on `2/4` first. **Check a narrow cell's retry rate, not just that it can
+succeed** — a tier whose legal answers you can count on one hand is where an exhausted retry budget
+stops being theoretical.
 
 **The distractor space is checked exhaustively rather than sampled**, because it is 21 fractions.
 Two properties, both violated before: an option of one or more cannot be part of a shape, so `2/1` is

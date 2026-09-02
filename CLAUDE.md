@@ -3581,33 +3581,34 @@ fails on exactly the `nan` cases.
 **`rationals` was the last generator solving below its `for/else`**, so tokens that would not join and
 a division by zero were both a 500 on attempt 1. Moved inside the loop with the rest.
 
-**Concurrent solves are bounded, because the budget collapses for all of them at once rather than
-degrading.** The timeout covers the whole child process and nearly all of it is sympy startup, so
-solves contend for CPU. Measured unbounded: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
+**Concurrent solves are bounded, because the budget collapsed for all of them at once rather than
+degrading.** Solves contend for CPU, and while the timeout covered the whole child process — nearly
+all of it sympy startup — that contention hit the budget directly. Measured unbounded, before the
+phases were split: 16 concurrent all succeeded, **32 gave 7 of 32, 48 gave
 0 of 48**. Nothing bounded it — `GENERATION_MAX_CONCURRENCY` bounds *model calls*, and a solve is not
 one; prefetch, the inline path and practice reach the worker independently. So a class starting
 together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
 did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
-succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
+succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s). The bound stays after the split for a
+different reason — it is what keeps a class starting together from putting a hundred interpreters
+on one machine, which is a resource question rather than a timeout one.
 
-**The semaphore bounds *this process*, and a co-tenant still spends the budget — so a timeout gets
-one more attempt.** The budget is wall-clock over a child dominated by sympy startup, so any other
-load on the machine can exhaust it: reproduced with the frontend suite running alongside the backend
-one, and again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the
-worker, and since a timeout raises rather than returning `None`, every one was a **503 on the first
-attempt**.
+**The semaphore bounds *this process*, and a co-tenant still spent the budget — so a *startup*
+timeout gets one more attempt.** This was the reason the whole two-phase split happened, and the
+history is worth keeping because the conclusion inverted along the way.
 
-Retrying used to be what separated the two things a timeout could mean, because nothing in-process
-could tell them apart. **Splitting the phases made them distinguishable, and then inverted which one
-is worth retrying** — see below. A *startup* timeout is contention and passes; a *solve* timeout is
-now a genuine spin, and a spin spins again.
+While the budget was wall-clock over a child dominated by sympy startup, any other load on the
+machine could exhaust it: reproduced with the frontend suite running alongside the backend one, and
+again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the worker,
+and since a timeout raises rather than returning `None`, every one was a **503 on the first
+attempt**. Retrying was then the only thing that separated the two meanings of "timeout", because
+nothing in-process could tell them apart.
 
-**Measured at 18 cores, and the limit is worth knowing.** Eight background hogs: no timeouts at all.
-At **saturation the first attempt failed 6 of 6 and the retry rescued all six**. At 2×
-oversubscription the retry rescues none — a machine that far past its capacity refuses, which is
-honest, but it is not fixed. **The real fix is to stop paying startup inside the budget**: the child
-would signal readiness after importing sympy, and the bound would then cover the arithmetic, which is
-what it is for. That is a rewrite of `_run`'s process handling and has not been done.
+**Splitting the phases made them distinguishable, and then inverted which one is worth retrying.** A
+*startup* timeout is contention, and contention passes. A *solve* timeout is now 3s against ~10ms of
+arithmetic, so it is a genuine spin — and a spin spins again. The retry moved to startup; a spin gets
+one attempt. Full detail, and the corrected saturation figures, under *`SOLVE_TIMEOUT` bounds the
+arithmetic* below.
 
 The permit is taken **per attempt**, not around both: holding one through a wait that has already
 failed shrinks the effective concurrency exactly when the machine is busiest, which is when the retry

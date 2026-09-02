@@ -164,11 +164,29 @@ Beyond `CLAUDE.md`, which covers most of it:
 
 ## 6. Left open by the grade 9-12 work
 
-1. **The measurement was never redone.** The 81% figure is what motivated this
-   and nothing has re-run the audit since the two topics landed — so there is
-   no number saying how much it moved. Expect it to move by *proportion* only:
-   the other fourteen topics carry no `TOPIC_MAX_GRADE`, so a grade-9 student
-   is still offered them and still draws grade-8 content most of the time.
+1. **The audit was re-run for grades 9-12** (2026-09-02, Claude Haiku 4.5, 64
+   questions, `scripts/audit_grade_appropriateness.py`). Grade 9 went from
+   **81% to 56%** three-or-more grades below grade. The rest is the finding:
+
+   | grade | ≥3 below | at grade |
+   | --- | --- | --- |
+   | 9 | 56% | 2 of 16 |
+   | 10 | 69% | 3 of 16 |
+   | 11 | 81% | 3 of 16 |
+   | 12 | **100%** | 0 of 16 |
+
+   **Grade 12 is not a sampling result, it is arithmetic.** The highest
+   concept anything here can *score* is grade 9, so every question this
+   system can ask a 12th grader is three or more grades below by
+   construction — the two new topics included. The rate climbs one grade at a
+   time and reaches 100% at grade 12 whatever else is added beneath that
+   ceiling. Adding topics at grade 9 cannot move grades 11-12; only a solver
+   for content above grade 9 can.
+
+   Caveats worth carrying: 16 questions per grade against the original's ~71,
+   topics drawn uniformly from `_allowed_topics` (what `randomize_selection`
+   does) rather than by the live weighted path, and the classification is a
+   judgement about which CCSS standard each question exercises.
 2. **Whether the grade-8-ceiling topics should be capped is undecided**, and
    it is the larger half of the original finding. Capping them would take a
    grade-9 student to two topics — the same trade that took grades 4-5 from
@@ -190,9 +208,9 @@ Beyond `CLAUDE.md`, which covers most of it:
    that matches only to the precision the formatter chose is the failure this
    codebase least tolerates. IQR and range are exactly scoreable but are
    6.SP, so they would not help grade 9.
-5. **Neither lesson plan is seeded on production.**
-   `supabase/seeds/lesson_plans_hs_topics.sql` has to be pasted into the
-   dashboard SQL editor, exactly like its three siblings.
+5. ~~**Neither lesson plan is seeded on production.**~~ Done 2026-09-02 —
+   `supabase/seeds/lesson_plans_hs_topics.sql` was pasted into the dashboard
+   SQL editor. Not a migration, so a rebuilt production needs it again.
 
 A long planning document from an earlier session lives at
 `C:\Users\akash\.claude\plans\create-the-plan-to-delegated-prism.md`. Most of

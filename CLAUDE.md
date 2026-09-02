@@ -3418,9 +3418,20 @@ or to a prompt these topics send.
 `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
 either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
 
-**This does not take the "below grade" figure to zero, and nothing here claims it does.** The other
-fourteen topics carry no ceiling, so a grade-9 student is still offered them and still draws
-grade-8 content most of the time. Whether the topics that top out at grade 8 should gain a
+**This does not take the "below grade" figure to zero.** Re-measured after the two topics landed
+(2026-09-02, Claude Haiku 4.5, 64 questions, `scripts/audit_grade_appropriateness.py` — which
+exists because the original audit left no script and therefore could not be repeated): grade 9 went
+**81% → 56%** three-or-more grades below grade, then **69%** at grade 10, **81%** at grade 11 and
+**100%** at grade 12.
+
+**The grade-12 figure is arithmetic, not a sample.** The highest concept anything here can *score*
+is grade 9, so every question this system can ask a 12th grader is ≥3 grades below by construction —
+the two new topics included. So **adding topics at grade 9 cannot move grades 11-12**; only a solver
+for content above grade 9 can, which is the wall `spread` runs into as well. Read a grade-9
+improvement as exactly that, and do not expect the upper grades to follow.
+
+The other fourteen topics carry no ceiling, so a grade-9 student is still offered them and still
+draws grade-8 content most of the time. Whether the topics that top out at grade 8 should gain a
 `TOPIC_MAX_GRADE` is a separate and larger decision — capping them would drop a grade-9 student to
 two topics, which is the same trade that took grades 4-5 from eight topics to four. It has not been
 made.

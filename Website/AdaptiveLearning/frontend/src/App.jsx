@@ -1,7 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { MotionConfig } from 'framer-motion'
-import { Toaster } from 'sonner'
 import { ThemeProvider }  from './context/ThemeContext'
 import { AuthProvider }   from './context/AuthContext'
 import AuthLayout         from './layout/AuthLayout'
@@ -90,7 +89,6 @@ export default function App() {
     <MotionConfig reducedMotion="user">
     <ThemeProvider>
       <AuthProvider>
-        <Toaster position="top-right" richColors closeButton />
         <BrowserRouter>
           <ScrollToTop />
           <RouteTitle />

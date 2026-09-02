@@ -3374,6 +3374,17 @@ perfect square. Of the successes, two silently dropped the constraint they were 
 the worked example verbatim, so the tier was *also* not producing the content it named. No wording
 fixed it, because it is not a wording problem.
 
+**`functions` hands its coefficients over too, and needed it more.** Its `_FOOTER` told the model
+the text must contain each function exactly as given under `FUNCTIONS AS THEY MUST APPEAR` — and
+that section was never emitted, because the footer was written for a design only `quadratics`
+implemented. So the model was pointed at instructions that did not exist and had to reproduce
+`render_polynomial`'s spacing and sign conventions from nothing. With the lesson plan injected,
+`compose` failed **3 of 3** on llama3.1:8b, every one `text does not contain 'g(x) = x + 2'` — two
+of the topic's three tiers, since `compose` is medium *and* hard. **A prompt that references a
+section it never emits is worth grepping for whenever a generator retries on formatting.** The
+inner function of a composition is always degree 1, which is what bounds the answer by construction
+rather than by drawing until something fits.
+
 `_choose_coefficients` builds from two distinct integer roots, so the equation is factorable by
 construction and the whole refusal class is gone. Three things follow, and the second is the one to
 generalise: **every retry that class caused was a billed model call that could not have succeeded**;
@@ -3396,6 +3407,12 @@ is the medium *and* hard tier — a version of this topic whose every tier was `
 8.F.2 wearing an `f(x)`. `MAX_ABS_RESULT` bounds it because composition squares its input: two
 quadratics with reasonable-looking coefficients reach 10^16, and a question answered 48,271,009
 tests calculator ownership rather than composition.
+
+**Measured on both providers with the seeds injected, which is the path no test covers** — an
+unseeded cell fails open to the heuristics, so every validation that does not deliberately inject
+the lesson text exercises the wrong path. Claude Haiku 4.5: **6 of 6 in 6 calls**, no retries, all
+answers correct by hand. Ollama llama3.1:8b: 3 of 3 per topic. Redo it after any edit to a seed row
+or to a prompt these topics send.
 
 **Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
 `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question

@@ -320,29 +320,75 @@ def test_easy_keeps_both_roots_positive_and_medium_does_not():
     assert any(min(roots("medium")) < 0 for _ in range(50))
 
 
-def test_a_valid_function_question_is_served_with_its_answer(reply):
-    reply({"question_text": "If f(x) = 3x^2 - 2x + 1, what is f(4)?",
+@pytest.fixture
+def fixed_functions(monkeypatch):
+    """Pin the functions and the input, which the generator now chooses.
+
+    `f(x) = 3x^2 - 2x + 1` and `g(x) = 2x + 1`, evaluated at 3 -- so
+    `evaluate` scores f(3) = 22 and `compose` scores f(g(3)) = f(7) = 134.
+    """
+    monkeypatch.setattr(
+        funcs, "_choose_functions",
+        lambda scenario, band: ([3, -2, 1],
+                                [2, 1] if scenario == funcs.COMPOSE else None,
+                                3))
+
+
+def test_a_valid_function_question_is_served_with_its_answer(reply,
+                                                             fixed_functions):
+    reply({"question_text": "If f(x) = 3x^2 - 2x + 1, what is f(3)?",
            "question_topic": "functions",
-           "scenario": "evaluate",
-           "f": ["3", "-2", "1"],
-           "input": "4"})
+           "scenario": "evaluate"})
     question = funcs.generate_functions_question([], [], "easy", "9th Grade")
-    assert question["correct_answer"] == "41"
+    assert question["correct_answer"] == "22"
     assert question["correct_answer"] in question["answer_options"]
     assert len(set(question["answer_options"])) == 4
 
 
-def test_a_composition_is_served_with_its_answer(reply):
-    reply({"question_text": "If f(x) = x^2 and g(x) = 2x + 1, what is f(g(3))?",
+def test_a_composition_is_served_with_its_answer(reply, fixed_functions):
+    reply({"question_text":
+           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x + 1, what is f(g(3))?",
            "question_topic": "functions",
-           "scenario": "compose",
-           "f": ["1", "0", "0"],
-           "g": ["2", "1"],
-           "input": "3"})
+           "scenario": "compose"})
     question = funcs.generate_functions_question([], [], "medium", "9th Grade")
-    assert question["correct_answer"] == "49"
-    assert "19" in question["answer_options"], (
-        "composing the other way round is the mistake this scenario invites")
+    assert question["correct_answer"] == "134"
+    # g(f(3)) = g(22) = 45 -- composing the other way round, which is the
+    # mistake this scenario invites.
+    assert "45" in question["answer_options"]
+
+
+def test_a_composition_text_that_swaps_the_order_retries(reply,
+                                                         fixed_functions):
+    """"f(g(3))" and "g(f(3))" differ by one character and by 89 here."""
+    reply({"question_text":
+           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x + 1, what is g(f(3))?",
+           "question_topic": "functions",
+           "scenario": "compose"})
+    with pytest.raises(ValueError):
+        funcs.generate_functions_question([], [], "medium", "9th Grade")
+
+
+@pytest.mark.parametrize("scenario,band", [
+    (funcs.EVALUATE, "advanced"), (funcs.COMPOSE, "advanced"),
+    (funcs.EVALUATE, "early"), (funcs.COMPOSE, "upper"),
+])
+def test_every_built_function_question_is_answerable(scenario, band):
+    """The property the hand-over rests on, and the reason the inner function
+    of a composition is always degree 1: composition squares its input, so an
+    unbounded pair reaches 10^16 from coefficients that each look reasonable
+    and `MAX_ABS_RESULT` refuses them. Bounded by construction, not by drawing
+    until something fits."""
+    for _ in range(200):
+        f, g, x = funcs._choose_functions(scenario, band)
+        assert x != 0, "f(0) is the constant term and asks nothing"
+        assert not hs_solvers.is_constant_polynomial(f)
+        if scenario == funcs.COMPOSE:
+            assert len(g) == 2, "the inner function is what bounds the result"
+            value, reason = hs_solvers.solve_composition(f, g, x)
+        else:
+            assert g is None
+            value, reason = hs_solvers.evaluate_polynomial(f, x)
+        assert value is not None, (f, g, x, reason)
 
 
 def test_a_reply_naming_the_wrong_scenario_retries(reply):
@@ -355,6 +401,52 @@ def test_a_reply_naming_the_wrong_scenario_retries(reply):
            "input": "4"})
     with pytest.raises(ValueError):
         funcs.generate_functions_question([], [], "medium", "9th Grade")
+
+
+@pytest.mark.parametrize("text,flagged", [
+    ("If f(x) = x^2 and g(x) = 2x - 3, what is f(4)?", True),
+    ("If f(x) = x^2, what is g(4)?", True),
+    ("If f(x) = x^2, what is f(4)?", False),
+    # The false positive worth avoiding: an ordinary word ending in "g"
+    # immediately before a bracket.
+    ("Solving (x + 1) first, if f(x) = x^2, what is f(4)?", False),
+    ("Using (the) rule f(x) = 2x, what is f(3)?", False),
+])
+def test_a_second_function_is_recognised_without_catching_ordinary_words(
+        text, flagged):
+    assert funcs._mentions_second_function(text) is flagged
+
+
+def test_an_evaluate_question_naming_a_second_function_retries(reply):
+    """`_EVALUATE_BLOCK` says `Do NOT include "g"`, which is prompt text --
+    and the lesson plan is appended after it and cannot know which scenario
+    was chosen, so it can only be written to name no function the block did
+    not. This is what makes that hold.
+
+    `shown_matches_scored` cannot: it checks every scored function *appears*,
+    never that nothing else does, so a text defining both f and g passes it
+    while the solver reads f alone and the student is shown a function that
+    plays no part in the answer.
+    """
+    reply({"question_text":
+           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x - 3, what is f(4)?",
+           "question_topic": "functions",
+           "scenario": "evaluate",
+           "f": ["3", "-2", "1"],
+           "input": "4"})
+    with pytest.raises(ValueError):
+        funcs.generate_functions_question([], [], "easy", "9th Grade")
+
+
+def test_compose_is_still_allowed_to_name_g(reply, fixed_functions):
+    """The teeth. Applying the check to both scenarios would refuse every
+    composition, which is the topic's whole grade-9 claim."""
+    reply({"question_text":
+           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x + 1, what is f(g(3))?",
+           "question_topic": "functions",
+           "scenario": "compose"})
+    question = funcs.generate_functions_question([], [], "medium", "9th Grade")
+    assert question["correct_answer"] == "134"
 
 
 def test_a_constant_function_retries(reply):
@@ -405,12 +497,17 @@ def test_the_high_school_topics_are_absent_from_forbidden_bands(topic):
 
 # --- schemas --------------------------------------------------------------
 
-def test_the_compose_schema_carries_g_and_the_evaluate_one_does_not():
-    """A closed object, so an `evaluate` reply cannot smuggle a second
-    function past the solver -- which would render one function on screen and
-    score another."""
-    assert "g" in question_schemas.functions("compose")["properties"]
-    assert "g" not in question_schemas.functions("evaluate")["properties"]
+@pytest.mark.parametrize("scenario", ["evaluate", "compose"])
+def test_the_functions_schema_asks_for_the_sentence_and_the_scenario(scenario):
+    """The coefficients and the input are handed over, not requested. Asked
+    for its own, the model also had to reproduce `render_polynomial`'s exact
+    spacing and signs, since the text must contain that string verbatim --
+    and `compose` failed 3 of 3 on llama3.1:8b doing precisely that.
+
+    `scenario` stays, unlike quadratics' `target`: it is a cheap cross-check
+    that the model read the block it was handed."""
+    assert set(question_schemas.functions(scenario)["properties"]) == {
+        "question_text", "question_topic", "scenario"}
 
 
 def test_the_quadratics_schema_asks_for_nothing_but_the_sentence():

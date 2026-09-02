@@ -3366,16 +3366,39 @@ def student_sessions(student_id: str, request: Request):
         # and `idle` here. The *window* was already shared (`_STALE_AFTER_SEC`);
         # the inputs were not, and sharing one without the other is what made
         # the disagreement look like a bug in one of the two pages.
+        # Each signal source is filtered to rows that carry a *measurement*,
+        # and that filter is the whole difference between this reading
+        # activity and reading the poller's heartbeat.
+        #
+        # A `contact_poor` row is a real row with a real `ts` and its eight
+        # measurement columns nulled -- "recording but unable to measure",
+        # which `signal_mapping` keeps deliberately, because a session that
+        # cannot measure is not the same as no session. A headband sitting on
+        # a desk writes one every poller tick, indefinitely. Counting those
+        # would advance this clock for ever, so `idle` would never fire and
+        # the session would show a pulsing LIVE with a ticking duration for
+        # the full six hours -- which is the exact bug `idle` was added to
+        # remove, reintroduced for the sessions most likely to be left open.
+        #
+        # The measured/unmeasured split is the right discriminator rather
+        # than a convenient one: good electrode contact needs skin, so a row
+        # carrying a focus score is evidence somebody is wearing the thing,
+        # and a nulled row is evidence of nothing. The columns are the ones
+        # `rollup_signal_day` already counts per channel for the same reason
+        # -- `focus` for cognitive, `emotion` for face.
         newest: dict[str, tuple] = {}
-        for table, column in (("session_answers", "answered_at"),
-                              ("cognitive_signals", "ts"),
-                              ("face_signals", "ts"),
-                              ("heart_signals", "ts")):
+        for table, column, measured in (
+                ("session_answers",   "answered_at", None),
+                ("cognitive_signals", "ts",          "focus"),
+                ("face_signals",      "ts",          "emotion"),
+                ("heart_signals",     "ts",          "heart_rate_bpm")):
             try:
-                recent = (supabase.table(table)
-                          .select(f"session_id, {column}")
-                          .in_("session_id", ids)
-                          .order(column, desc=True)
+                query = (supabase.table(table)
+                         .select(f"session_id, {column}")
+                         .in_("session_id", ids))
+                if measured:
+                    query = query.filter(measured, "not.is", "null")
+                recent = (query.order(column, desc=True)
                           .limit(500).execute().data or [])
             except Exception as e:                              # noqa: BLE001
                 # Three states, not two. A failed read must not be reported as

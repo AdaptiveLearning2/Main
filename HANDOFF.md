@@ -173,14 +173,17 @@ Beyond `CLAUDE.md`, which covers most of it:
    it is the larger half of the original finding. Capping them would take a
    grade-9 student to two topics — the same trade that took grades 4-5 from
    eight topics to four, which was made deliberately and hurt. Not attempted.
-3. **`functions` still lets the model choose its own coefficients, and
-   `quadratics` no longer does.** The quadratics generator was measured
-   producing a usable equation 0 of 3, 2 of 3 and 1 of 4 times across three
-   promptings before the coefficients were moved into code; it is now built
-   from two integer roots and cannot fail that way. `functions` has not shown
-   the same problem — every generated question was solvable, because almost
-   any coefficients are — so it was left alone, but it is the same shape and
-   the same fix applies if it ever starts burning retries.
+3. **Both topics now hand the mathematics to the model rather than asking for
+   it, and both needed to.** `quadratics` was measured producing a usable
+   equation 0 of 3, 2 of 3 and 1 of 4 times across three promptings.
+   `functions` looked fine until the lesson plan was injected, and then
+   `compose` failed **3 of 3** on llama3.1:8b — every one `text does not
+   contain 'g(x) = x + 2'`, the model returning coefficients and writing them
+   differently in the prose. That is two of three tiers, since `compose` is
+   medium *and* hard. Its root cause was a dangling prompt reference: `_FOOTER`
+   told the model its text must match a `FUNCTIONS AS THEY MUST APPEAR`
+   section that was never emitted. Both are now measured 3/3 on Ollama and
+   6/6 on Claude with the seeds injected, zero retries.
 4. **`spread` (S-ID.2) is the obvious third topic and is not built.** Standard
    deviation is the genuinely-HS statistic, and its answers are irrational,
    so it needs a decision about rounding before a solver: a correct option

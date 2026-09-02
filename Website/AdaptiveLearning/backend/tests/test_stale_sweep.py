@@ -31,6 +31,7 @@ class _FakeDB:
         self._sessions, self._answers, self._boom = sessions, answers, boom
         self._signals = signals or {}
         self._boom_table = boom_table
+        self.filters = []
 
     def table(self, name):
         self._t = name
@@ -41,6 +42,14 @@ class _FakeDB:
     def in_(self, *a, **k): return self
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
+
+    def filter(self, column, operator, value):
+        # Recorded, not just swallowed. The measured-row filter is what keeps
+        # a headband on a desk from advancing the activity clock, and it is
+        # applied server-side -- so a test that only looked at the returned
+        # rows could not tell it was there at all.
+        self.filters.append((self._t, column, operator, value))
+        return self
 
     def execute(self):
         if self._boom and self._t == self._boom_table:
@@ -204,6 +213,56 @@ def test_a_failed_signal_read_is_unknown_too(monkeypatch):
     out = main.student_sessions("u1", request=None)
     assert out[0]["activity_known"] is False
     assert out[0]["idle"] is False
+
+
+def test_a_headband_on_a_desk_does_not_keep_a_session_alive(monkeypatch):
+    """The regression that folding in the signal tables introduced.
+
+    A `contact_poor` row is a real row with a real `ts` and its measurement
+    columns nulled -- "recording but unable to measure", which the mapper
+    keeps on purpose. A headband left on a desk writes one every poller tick,
+    for ever, so counting them advanced this clock indefinitely: `idle` never
+    fired and the session showed a pulsing LIVE with a ticking duration for
+    the full six hours. That is precisely the bug `idle` exists to remove,
+    back for the sessions most likely to be left open.
+
+    Asserted on the *filter*, not on the returned rows: it is applied
+    server-side, so a fake that simply returned nothing would pass against an
+    endpoint with no filter at all.
+    """
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-desk", started_min_ago=30)]
+    answers = [{"session_id": "s-desk", "answered_at": old}]
+    db = _FakeDB(rows, answers)
+    _as_teacher(monkeypatch, db)
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["idle"] is True, "nothing measured anything; the student left"
+
+    applied = {(table, column) for table, column, op, value in db.filters
+               if op == "not.is" and value == "null"}
+    assert applied == {("cognitive_signals", "focus"),
+                       ("face_signals", "emotion"),
+                       ("heart_signals", "heart_rate_bpm")}, applied
+    assert not any(t == "session_answers" for t, _c, _o, _v in db.filters), (
+        "an answer is activity whatever the sensors were doing")
+
+
+def test_a_measured_signal_row_still_counts(monkeypatch):
+    """The teeth for the test above. Filtering every signal row out would
+    also make a headband on a desk look idle, and would undo the fix that
+    reads signals at all."""
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-worn", started_min_ago=30)]
+    answers = [{"session_id": "s-worn", "answered_at": old}]
+    # The fake applies no filter, so this stands for a row that passed it.
+    signals = {"cognitive_signals": [
+        {"session_id": "s-worn", "ts": main._utc_now().isoformat()}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    assert main.student_sessions("u1", request=None)[0]["idle"] is False
 
 
 def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):

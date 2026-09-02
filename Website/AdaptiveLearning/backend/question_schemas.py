@@ -266,27 +266,24 @@ def quadratics():
 
 
 def functions(scenario_name):
-    """Coefficient lists in descending powers, with the scenario pinned.
+    """The sentence, plus the scenario it was written for.
 
-    `g` is present only for `compose`, and the object is closed, so an
-    `evaluate` reply cannot carry a second function for the solver to ignore
-    -- which would render one function on screen and score another.
+    The functions and the value to evaluate at are not the model's to choose,
+    for the reason `quadratics` above documents -- and this topic had the
+    sharper version of it. Asked for its own coefficients, the model also had
+    to reproduce `hs_solvers.render_polynomial`'s exact spacing and sign
+    conventions, because the text is required to contain that string verbatim.
+    Measured on llama3.1:8b with the lesson plan injected, `compose` failed 3
+    of 3 exactly there -- coefficients returned, prose written differently --
+    which is two of the topic's three tiers.
 
-    Length is not expressible: the API refuses `minItems` above 1, the same
-    limit that leaves angle arity and `missing_number`'s five tokens to
-    runtime. `hs_solvers.parse_int_list` bounds it at `MAX_DEGREE + 1` and is
-    the only thing that does.
+    `scenario` stays, unlike quadratics' absent `target`: it is a cheap
+    cross-check that the model read the block it was handed, and the generator
+    refuses a reply naming the other one.
     """
-    coefficients = {"type": "array",
-                    "items": {"type": "string", "pattern": r"^-?\d{1,4}$"}}
-    properties = {"question_text": _TEXT,
-                  "question_topic": _TEXT,
-                  "scenario": {"type": "string", "enum": [scenario_name]},
-                  "f": coefficients,
-                  "input": {"type": "string", "pattern": r"^-?\d{1,2}$"}}
-    if scenario_name == "compose":
-        properties["g"] = coefficients
-    return _object(properties)
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]}})
 
 
 def shape_fractions():

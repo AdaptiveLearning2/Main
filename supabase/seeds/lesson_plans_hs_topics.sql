@@ -75,9 +75,25 @@ VALUES
   -- explicitly does not require function notation. What is high school is the
   -- notation (F-IF.2) and composition (F-BF.1c). So the objectives are written
   -- about notation and composition, not about substitution.
+  --
+  -- ONE ROW, TWO SCENARIOS -- which is the constraint that shapes the notes.
+  -- `append_lesson_context` is keyed on (topic, grade_band) and knows nothing
+  -- about which scenario was selected, while `_EVALUATE_BLOCK` says `Do NOT
+  -- include "g"` and `_COMPOSE_BLOCK` requires it. The lesson text is appended
+  -- LAST, so anything here naming `g` unconditionally is the final word and
+  -- contradicts the block above it. The first version of this row did exactly
+  -- that -- 'written "f(x) = ..." and "g(x) = ..."', plus "one evaluation, or
+  -- one composition", which also hands the model a choice the scenario had
+  -- already made. On the Ollama branch, where no schema is sent, an obeying
+  -- reply would show an unused g(x) in a question scored on f alone.
+  --
+  -- So the notes must be true of BOTH scenarios: name no function the block
+  -- did not, and offer no choice between them. `_mentions_second_function` in
+  -- the generator is the enforcement, because this is prompt text and prompt
+  -- text is asked, not guaranteed.
   ('functions', 'advanced',
    'Use function notation fluently: read f(x) as the output of the function f for the input x, evaluate a function at a given value including a negative one, and evaluate a composition f(g(x)) by working from the inside out (F-IF.2, F-BF.1c). Composition is the step with no earlier equivalent -- students who substitute confidently still commonly read f(g(4)) from left to right, so the order in which the two functions apply is the thing to make explicit. Students distinguish f(g(x)) from g(f(x)) and recognise that the two are usually different functions.',
-   'Define each function with explicit function notation, written "f(x) = ..." and "g(x) = ...", using polynomials of degree 1 or 2 with whole-number coefficients. Write a squared term as "x^2". Ask for a single numeric value: one evaluation, or one composition in the order f(g(x)). Do not ask for g(f(x)). Do not ask for a formula, a simplified expression, an inverse, a domain or range, a graph, a table, or where the function is increasing. Do not use piecewise, rational, exponential, trigonometric or absolute-value functions. Keep the answer small enough to work out by hand.')
+   'Define every function the question uses with explicit function notation, written "f(x) = ...", using polynomials of degree 1 or 2 with whole-number coefficients, and do not introduce a function the scenario above did not ask for. Write a squared term as "x^2". Ask for a single numeric value, and never for a formula, a simplified expression, an inverse, a domain or range, a graph, a table, or where the function is increasing. Do not use piecewise, rational, exponential, trigonometric or absolute-value functions.')
 
 ON CONFLICT ("topic_name", "grade_band") DO UPDATE
 SET "objectives" = EXCLUDED."objectives",

@@ -109,7 +109,15 @@ describe('the question-bank cache shared with Analytics', () => {
 
 describe('the student filter', () => {
   const CLASSES = [{ id: 'c-1', name: 'Period 1' }]
-  const ROSTER  = [{ id: 's-1', display_name: 'Ada' }]
+  // The shape `/api/classes/{id}/students` really returns. It carries
+  // `user_id` and `name`; it has no `id` and no `display_name`. This fixture
+  // said otherwise for as long as the picker read those keys, so the code and
+  // the test shared one misreading of the backend and the suite stayed green
+  // over a filter that answered 403 on every pick. `email` is here because it
+  // is what the broken version actually sent -- an `<option>` with an
+  // undefined `value` falls back to its text content -- so without it the
+  // failure is not even representable.
+  const ROSTER  = [{ user_id: 's-1', name: 'Ada', email: 'ada@example.com' }]
   const ASKED = {
     student_id: 's-1',
     questions: [{
@@ -148,6 +156,25 @@ describe('the student filter', () => {
     expect(screen.getByText(/1 question asked/)).toBeInTheDocument()
   })
 
+  it('asks for the student by id, never by the name on the option', async () => {
+    // `/api/students/{id}/questions` resolves a relationship through
+    // `_verify_can_view_student`, so an identifier that is merely
+    // recognisable -- an email, a display name -- is refused with a 403 by a
+    // backend that is working correctly. The page then reports that the
+    // backend is down, which is the wrong thing to go and check.
+    //
+    // Asserting on the *path* rather than on the rendered rows is the point:
+    // both halves of the option (`key`/`value` and the label) come from the
+    // same row, so a wrong key still names the right student on screen.
+    mockFilterApi()
+    await pickStudent()
+
+    const asked = apiFetch.mock.calls.map(c => c[0])
+      .filter(p => p.startsWith('/api/students/'))
+    expect(asked).toEqual(['/api/students/s-1/questions?limit=200'])
+    expect(asked.join()).not.toContain('ada@example.com')
+  })
+
   it('says when a question has aged out rather than just showing fewer', async () => {
     // The three-state rule: "answered nothing" and "their questions expired"
     // both render as a short list otherwise.
@@ -182,8 +209,8 @@ describe('the student filter', () => {
 describe('a superseded read cannot paint under the wrong name', () => {
   const CLASSES = [{ id: 'c-1', name: 'Period 1' }]
   const ROSTER  = [
-    { id: 's-1', display_name: 'Ada' },
-    { id: 's-2', display_name: 'Grace' },
+    { user_id: 's-1', name: 'Ada', email: 'ada@example.com' },
+    { user_id: 's-2', name: 'Grace', email: 'grace@example.com' },
   ]
   const asked = (text) => ({
     student_id: 'x',

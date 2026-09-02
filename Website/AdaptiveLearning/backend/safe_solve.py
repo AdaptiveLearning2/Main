@@ -23,6 +23,7 @@ this question".
 import contextlib
 import json
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -51,33 +52,31 @@ import llm_client
 # three times, so a reply that hangs cost ~30s of a request thread and now
 # costs ~9s.
 #
-# The headroom is smaller than it looks, and the reason is worth knowing before
-# lowering it further. The budget covers the whole child process, and nearly
-# all of that is importing sympy, not solving: measured 2026-08-31 across all
-# five request shapes, a legitimate solve takes **0.64-1.00s wall**, of which
-# the arithmetic is ~10ms. So 3s is ~3x margin over startup, not 300x over the
-# maths. A slower or loaded machine can push startup past 2s, and if it ever
-# exceeds this the symptom is every question failing to generate -- which reads
-# as the model being unable to write solvable questions rather than as a
-# misconfigured timeout.
+# This now bounds **the arithmetic alone**, which is what it always claimed to
+# and never did. It used to cover the whole child process, and nearly all of
+# that is importing sympy: measured 2026-08-31 across all five request shapes,
+# a legitimate solve takes 0.64-1.00s wall, of which the arithmetic is ~10ms.
+# So 3s was ~3x margin over *startup*, and any co-tenant on the machine spent
+# it -- 8 of 8 solves killed at 3.0s with CPU hogs running.
 #
-# That instruction is not enough on its own, which is why `_probe_startup`
-# below exists: a comment saying "raise it" only helps someone who reads it
-# *after* every question has started failing, and the symptom points at the
-# model rather than at this line. The floor is measured instead of trusted.
+# The worker prints a readiness line once sympy is loaded and the two phases
+# are timed separately, so 3s is now ~300x margin over the maths it bounds.
+# Re-measured under the same saturation afterwards: 8 of 8 succeeded.
+#
+# The consequence to know before lowering it: this is the number that stops a
+# runaway, and `SOLVE_STARTUP_BUDGET` is the one that absorbs a slow machine.
+# They are no longer the same knob, so tightening this no longer risks failing
+# every question on a loaded box -- and loosening it no longer buys any
+# tolerance for one.
 _CONFIGURED_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float,
                                                minimum=1.0)
 
-# How much of the budget must remain for the arithmetic after the child has
-# finished starting up. 3x is generous against a solve that measures ~10ms, and
-# the point is not the arithmetic -- it is that a budget below this is not
-# separating a runaway from an ordinary question, it is cutting off both.
 # How many worker processes may run at once.
 #
-# The budget covers the whole child process and nearly all of it is sympy
-# startup, so concurrent solves contend for CPU and the budget collapses for
-# *all* of them together rather than degrading. Measured on this machine
-# against an unbounded pool:
+# Concurrent solves contend for CPU, and while startup was inside the solve
+# budget that collapsed for *all* of them together rather than degrading.
+# Measured on this machine against an unbounded pool, before the phases were
+# split:
 #
 #     8 concurrent   8/8 ok, slowest 1.12s
 #    16 concurrent  16/16 ok, slowest 1.91s
@@ -93,6 +92,12 @@ _CONFIGURED_TIMEOUT_S = llm_client._env_number("SOLVE_TIMEOUT", 3.0, float,
 # Queueing is strictly better than refusing here: the work is ~1s and the
 # caller wants an answer. 8 is the comfortable rung above, not the last one
 # that worked.
+#
+# Splitting the phases has since made the cliff far less sharp -- contention
+# now stretches startup, which has its own generous budget, rather than eating
+# the solve's. The bound stays: it is what keeps a class starting together
+# from putting a hundred interpreters on one machine, which is a resource
+# question rather than a timeout one.
 SOLVE_MAX_CONCURRENCY = llm_client._env_number(
     "SOLVE_MAX_CONCURRENCY", 8, int, minimum=1)
 
@@ -130,12 +135,40 @@ def _solve_slot(label):
         _solve_slots.release()
 
 
-# How much wider the retry's budget is. The first timeout is evidence that
-# this machine is slower right now than the budget assumed, so the second
-# attempt is given room rather than the same wall to hit again. Worst case for
-# a genuine spin is `budget * (1 + this)`, killed at both ends.
+# How much wider the retry's *solve* budget is. Startup is not widened -- see
+# the attempts list in `_run`.
+#
+# Its original justification has largely gone: the retry existed because
+# contention spent a budget dominated by startup, and startup is no longer in
+# it. What is left is the narrow case of the arithmetic itself being starved,
+# which 3s of margin over ~10ms makes rare. Kept because it is cheap and the
+# failure it covers is a 503 in front of a student, but do not read it as
+# load-bearing any more. Worst case for a genuine spin is
+# `budget * (1 + this)`, killed at both ends.
 SOLVE_RETRY_BUDGET_FACTOR = llm_client._env_number(
     "SOLVE_RETRY_BUDGET_FACTOR", 3.0, float, minimum=1.0)
+
+# Launching Python and importing sympy, which is ~99% of an ordinary solve and
+# is now budgeted separately from it. Generous on purpose: this is not the
+# bound that catches a runaway -- `SOLVE_TIMEOUT` is -- it is the one that
+# stops a spawn that will never come back from wedging a request thread. The
+# measured cost is 0.32s on CI and 0.64-1.00s here, so 15s is ~15x the slowest
+# figure and still bounded.
+_CONFIGURED_STARTUP_BUDGET_S = llm_client._env_number(
+    "SOLVE_STARTUP_BUDGET", 15.0, float, minimum=1.0)
+SOLVE_STARTUP_BUDGET_S = _CONFIGURED_STARTUP_BUDGET_S
+
+# The readiness marker the worker prints once sympy is loaded. Shared with
+# `_solve_worker.READY`, and a rename on one side has to move the other -- the
+# parent would otherwise read the marker as a final answer and report
+# "unreadable output" for every solve.
+_READY = "ready"
+
+# How long the worker may take to exit after printing its answer. Flushing and
+# interpreter teardown, nothing more -- but it is not instant, and treating a
+# child that is merely still exiting as one that has to be killed turns every
+# successful solve into a non-zero exit code.
+_EXIT_GRACE_S = 5.0
 
 _STARTUP_SAFETY_FACTOR = 3.0
 
@@ -160,13 +193,17 @@ MAX_RESULT_CHARS = 200
 
 
 def _probe_startup():
-    """Measure what a trivial solve costs, and raise the budget if it is tight.
+    """Measure what starting a worker costs, and raise the budget if it is tight.
 
-    The whole subprocess -- launching Python and importing sympy -- is inside
-    the timeout, and that startup is ~99% of what an ordinary solve spends.
-    So `SOLVE_TIMEOUT` is not really a bound on the arithmetic; it is a bound
-    on startup plus a little, and startup is the part that stretches on a cold
-    or loaded machine.
+    Launching Python and importing sympy is ~99% of what an ordinary solve
+    spends, and it is the part that stretches on a cold or loaded machine.
+    `SOLVE_STARTUP_BUDGET` is what covers it.
+
+    This used to clamp `SOLVE_TIMEOUT`, because startup sat inside that budget
+    and a slow machine therefore broke it. The two phases are timed separately
+    now, so clamping the solve budget would raise a number that no longer has
+    anything to do with the measurement -- generously, and while leaving the
+    budget that *does* cover startup to fail on its own.
 
     That makes this the one setting here whose breach fails *every* question at
     once, and fails it in a way that reads as the model being unable to write
@@ -185,11 +222,11 @@ def _probe_startup():
     guessing a budget from a failed measurement would be worse than keeping the
     one someone chose.
     """
-    global SOLVE_TIMEOUT_S, STARTUP_COST_S
+    global SOLVE_STARTUP_BUDGET_S, STARTUP_COST_S
     started = time.monotonic()
     try:
         probed = _run({"scenario": "values", "values": ["1"]}, _PROBE_TIMEOUT_S,
-                      "startup probe")
+                      "startup probe", startup_timeout=_PROBE_TIMEOUT_S)
     except SolverUnavailable as e:
         # `_run` raises this so a solve that could not run stops being reported
         # as a bad model reply. Here it must NOT propagate: this runs at import,
@@ -209,16 +246,21 @@ def _probe_startup():
         return
 
     STARTUP_COST_S = elapsed
+    # Clamps SOLVE_STARTUP_BUDGET now, not SOLVE_TIMEOUT. Startup used to sit
+    # inside the solve budget, so a slow machine broke the solve budget and
+    # this raised that; it no longer does, and clamping it would be protecting
+    # the wrong number -- generously, and while leaving the budget that
+    # actually covers startup to fail on its own.
     floor = elapsed * _STARTUP_SAFETY_FACTOR
-    if _CONFIGURED_TIMEOUT_S < floor:
-        SOLVE_TIMEOUT_S = floor
-        print(f"[safe_solve] SOLVE_TIMEOUT={_CONFIGURED_TIMEOUT_S}s is below "
-              f"{_STARTUP_SAFETY_FACTOR:g}x the measured subprocess startup of "
-              f"{elapsed:.2f}s on this machine. Raised to {floor:.2f}s for this "
-              f"process. Left alone it would have failed every question that "
-              f"needs a solve, which reads as a model problem rather than a "
-              f"configuration one. Set SOLVE_TIMEOUT to at least {floor:.1f} "
-              f"to silence this.")
+    if SOLVE_STARTUP_BUDGET_S < floor:
+        SOLVE_STARTUP_BUDGET_S = floor
+        print(f"[safe_solve] SOLVE_STARTUP_BUDGET={_CONFIGURED_STARTUP_BUDGET_S}s "
+              f"is below {_STARTUP_SAFETY_FACTOR:g}x the measured subprocess "
+              f"startup of {elapsed:.2f}s on this machine. Raised to "
+              f"{floor:.2f}s for this process. Left alone it would have failed "
+              f"every question that needs a solve, which reads as a model "
+              f"problem rather than a configuration one. Set "
+              f"SOLVE_STARTUP_BUDGET to at least {floor:.1f} to silence this.")
 
 
 def safe_sympify_values(values, timeout=None):
@@ -319,7 +361,117 @@ class SolverUnavailable(llm_client.GenerationUnavailable):
     """
 
 
-def _run(request: dict, timeout, label: str):
+class _Timeout(Exception):
+    """A phase ran out of budget. Carries which one, for the message."""
+
+    def __init__(self, phase, budget):
+        super().__init__(phase)
+        self.phase, self.budget = phase, budget
+
+
+class _Pipe:
+    """A child stream drained by a thread, so it can be read with a deadline.
+
+    A thread rather than `select`: this runs on Windows, where `select` takes
+    sockets only. Draining continuously also keeps the child from blocking on
+    a full pipe while the parent is waiting on a clock -- which is the classic
+    way a two-phase protocol deadlocks instead of timing out.
+    """
+
+    def __init__(self, stream):
+        self._lines: queue.Queue = queue.Queue()
+        self._collected = []
+        self._stream = stream
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def _drain(self):
+        try:
+            for line in self._stream:
+                self._collected.append(line)
+                self._lines.put(line)
+        except Exception:                       # pragma: no cover - defensive
+            pass
+        finally:
+            self._lines.put(None)               # EOF
+
+    def line(self, deadline):
+        """The next line, or None at EOF. Raises `queue.Empty` past `deadline`."""
+        return self._lines.get(timeout=max(0.0, deadline - time.monotonic()))
+
+    def text(self):
+        self._thread.join(timeout=0.5)
+        return "".join(self._collected)
+
+
+def _spawn(request: dict):
+    """Start the worker with the request already on its stdin."""
+    proc = subprocess.Popen(
+        [sys.executable, _WORKER],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+        # Inherit nothing the child does not need.
+        env={"PATH": os.environ.get("PATH", ""),
+             "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
+    )
+    stdout, stderr = _Pipe(proc.stdout), _Pipe(proc.stderr)
+    try:
+        proc.stdin.write(json.dumps(request))
+        proc.stdin.close()
+    except OSError:                             # pragma: no cover - defensive
+        # The child died before reading. Its exit code is the real diagnosis,
+        # and the caller checks that.
+        pass
+    return proc, stdout, stderr
+
+
+def _await_answer(proc, stdout, startup_budget, solve_budget):
+    """`(answer_line, phase)` -- the worker's result, timed in two phases.
+
+    This is the whole point of the change. The old bound covered launching
+    Python and importing sympy as well as the arithmetic, and startup is ~99%
+    of an ordinary solve -- so `SOLVE_TIMEOUT` was a bound on *startup plus a
+    little*, and any co-tenant on the machine spent it. Measured: 8 of 8
+    solves killed at 3.0s with CPU hogs running, on arithmetic that takes
+    ~10ms.
+
+    The worker now prints a readiness line once sympy is loaded. Startup gets
+    its own generous budget, and the solve budget starts from readiness, which
+    is what it was always meant to bound.
+
+    The malformed-request path prints its answer *before* importing anything,
+    so a first line that is not the readiness marker is a final answer.
+    """
+    deadline = time.monotonic() + startup_budget
+    try:
+        first = stdout.line(deadline)
+    except queue.Empty:
+        raise _Timeout("startup", startup_budget) from None
+    if first is None:
+        return None, "startup"                  # exited without a word
+    try:
+        if not json.loads(first).get(_READY):
+            return first, "startup"             # refused before loading sympy
+    except ValueError:
+        return first, "startup"                 # unreadable; the caller says so
+
+    deadline = time.monotonic() + solve_budget
+    try:
+        answer = stdout.line(deadline)
+    except queue.Empty:
+        raise _Timeout("the solve", solve_budget) from None
+    return answer, "the solve"
+
+
+def _kill(proc):
+    proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:           # pragma: no cover - defensive
+        pass
+
+
+def _run(request: dict, timeout, label: str, startup_timeout=None):
     """One worker call. The result string, or None if the worker ran and
     rejected the input.
 
@@ -351,8 +503,21 @@ def _run(request: dict, timeout, label: str):
     # evidence that this machine is slower than the budget assumed -- the same
     # reasoning as `_probe_startup`'s clamp, applied when the measurement
     # arrives late.
-    attempts = [budget, budget * SOLVE_RETRY_BUDGET_FACTOR]
-    for index, attempt_budget in enumerate(attempts):
+    # Only the *solve* budget widens. Startup is already ~15x its measured
+    # cost, so a second, longer wait there buys nothing a machine in that much
+    # trouble can use -- and the two are widened independently because a
+    # message naming a widened solve budget after a *startup* timeout describes
+    # a number that was never applied. Which is what the first version of this
+    # printed, under saturation, where it is hardest to check.
+    # `startup_timeout` exists for `_probe_startup` alone. Its budget is
+    # deliberately unrelated to the setting it validates -- bounded by the one
+    # it is measuring, a too-small `SOLVE_STARTUP_BUDGET` makes the probe time
+    # out reporting the very problem it exists to detect, and the clamp that
+    # would have fixed it never runs.
+    startup = SOLVE_STARTUP_BUDGET_S if startup_timeout is None         else startup_timeout
+    attempts = [(startup, budget),
+                (startup, budget * SOLVE_RETRY_BUDGET_FACTOR)]
+    for index, (startup_budget, attempt_budget) in enumerate(attempts):
         last = index == len(attempts) - 1
         # The permit is taken *outside* the try, so a queue refusal is not
         # caught by the `except Exception` below and re-labelled "could not be
@@ -364,42 +529,56 @@ def _run(request: dict, timeout, label: str):
         # the effective concurrency for no reason.
         with _solve_slot(label):
             try:
-                proc = subprocess.run(
-                    [sys.executable, _WORKER],
-                    input=json.dumps(request), capture_output=True, text=True,
-                    timeout=attempt_budget,
-                    # Inherit nothing the child does not need.
-                    env={"PATH": os.environ.get("PATH", ""),
-                         "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
-                )
-                break
-            except subprocess.TimeoutExpired:
-                # subprocess.run kills the child here, which is the whole
-                # point: the in-process equivalent leaves the spin running for
-                # the life of the worker.
-                if not last:
-                    print(f"[safe_solve] exceeded {attempt_budget}s ({label}); "
-                          f"retrying once at "
-                          f"{budget * SOLVE_RETRY_BUDGET_FACTOR}s")
-                    continue
-                raise SolverUnavailable(
-                    f"the solver exceeded {attempt_budget}s and was killed "
-                    f"({label}), after {len(attempts)} attempts") from None
+                proc, stdout, stderr = _spawn(request)
             except Exception as e:              # pragma: no cover - defensive
                 raise SolverUnavailable(
                     f"the solver could not be started: "
                     f"{type(e).__name__}: {e}") from e
+            try:
+                raw, phase = _await_answer(proc, stdout, startup_budget,
+                                           attempt_budget)
+            except _Timeout as t:
+                # Killed here, which is the whole point: the in-process
+                # equivalent leaves the spin running for the life of the
+                # worker.
+                _kill(proc)
+                if not last:
+                    nxt = attempts[index + 1]
+                    print(f"[safe_solve] exceeded {t.budget:g}s in {t.phase} "
+                          f"({label}); retrying once at startup {nxt[0]:g}s / "
+                          f"solve {nxt[1]:g}s")
+                    continue
+                raise SolverUnavailable(
+                    f"the solver exceeded {t.budget:g}s in {t.phase} and was "
+                    f"killed ({label}), after {len(attempts)} attempts"
+                ) from None
+            # The answer is out but the child has not necessarily exited yet:
+            # it still has to flush and tear down the interpreter. Killing it
+            # here -- which a bare `poll() is None` check does -- makes every
+            # successful solve look like a non-zero exit.
+            try:
+                proc.wait(timeout=_EXIT_GRACE_S)
+            except subprocess.TimeoutExpired:
+                # It answered and then would not leave. The answer is already
+                # in hand and is good; this is only about not leaking a
+                # process.
+                _kill(proc)
+            break
 
-    if proc.returncode != 0:
+    returncode = proc.returncode
+    if returncode != 0:
         raise SolverUnavailable(
-            f"the solver exited {proc.returncode}: "
-            f"{(proc.stderr or '').strip()[:200]}")
+            f"the solver exited {returncode}: "
+            f"{(stderr.text() or '').strip()[:200]}")
+    if raw is None:
+        raise SolverUnavailable(
+            f"the solver produced no answer after {phase} ({label})")
     try:
-        answer = json.loads(proc.stdout)
+        answer = json.loads(raw)
     except ValueError:
         raise SolverUnavailable(
             f"the solver produced unreadable output: "
-            f"{proc.stdout[:200]!r}") from None
+            f"{raw[:200]!r}") from None
     if not answer.get("ok"):
         print(f"[safe_solve] {answer.get('error')}")
         return None

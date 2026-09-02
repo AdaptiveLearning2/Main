@@ -217,11 +217,14 @@ def test_the_probe_measures_and_leaves_a_sufficient_budget_alone(monkeypatch, ca
 def test_a_budget_under_the_measured_floor_is_raised_and_announced(monkeypatch, capsys):
     """The case this exists for.
 
-    `SOLVE_TIMEOUT` bounds the whole child process, and ~99% of an ordinary
-    solve is starting it. A machine slower than the one the default was
+    `SOLVE_STARTUP_BUDGET` bounds launching Python and importing sympy, which
+    is ~99% of an ordinary solve. A machine slower than the one the default was
     measured on would fail *every* question that needs a solve -- and the
     symptom reads as the model being unable to write solvable maths, so nobody
     looks at this setting.
+
+    It used to clamp `SOLVE_TIMEOUT`, because startup was inside that budget.
+    It no longer is, so clamping it would protect the wrong number.
 
     Clamped up rather than refused: raising here would take the whole backend
     down over one topic's tuning knob, and every non-generation surface with
@@ -234,8 +237,8 @@ def test_a_budget_under_the_measured_floor_is_raised_and_announced(monkeypatch, 
     # So the clamp correctly did not fire and the test failed for asserting it
     # had. A threshold that depends on how fast the machine is has to be
     # derived from that machine, not written down.
-    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 3600.0)
-    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 3600.0)
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_STARTUP_BUDGET_S", 3600.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", 3600.0)
     safe_solve._probe_startup()
     assert safe_solve.STARTUP_COST_S is not None, "the probe could not measure"
     capsys.readouterr()
@@ -244,15 +247,15 @@ def test_a_budget_under_the_measured_floor_is_raised_and_announced(monkeypatch, 
     # probes on a noisy runner differ. A tenth cannot be crossed by variance.
     too_small = (safe_solve.STARTUP_COST_S
                  * safe_solve._STARTUP_SAFETY_FACTOR / 10)
-    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", too_small)
-    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", too_small)
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_STARTUP_BUDGET_S", too_small)
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", too_small)
     safe_solve._probe_startup()
 
     # Against the second probe's own measurement, since that is the one the
     # clamp used.
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
-    assert safe_solve.SOLVE_TIMEOUT_S == pytest.approx(floor)
-    assert safe_solve.SOLVE_TIMEOUT_S > too_small
+    assert safe_solve.SOLVE_STARTUP_BUDGET_S == pytest.approx(floor)
+    assert safe_solve.SOLVE_STARTUP_BUDGET_S > too_small
     out = capsys.readouterr().out
     assert "is below" in out
     assert "Raised to" in out
@@ -262,13 +265,13 @@ def test_a_probe_that_cannot_run_keeps_the_configured_value(monkeypatch, capsys)
     """A failed measurement is not a reason to invent a budget -- it means the
     subprocess mechanism is broken, which is a different problem and gets its
     own line."""
-    monkeypatch.setattr(safe_solve, "_CONFIGURED_TIMEOUT_S", 3.0)
-    monkeypatch.setattr(safe_solve, "SOLVE_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(safe_solve, "_CONFIGURED_STARTUP_BUDGET_S", 3.0)
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", 3.0)
     monkeypatch.setattr(safe_solve, "STARTUP_COST_S", None)
     monkeypatch.setattr(safe_solve, "_WORKER", "no_such_worker.py")
     safe_solve._probe_startup()
 
-    assert safe_solve.SOLVE_TIMEOUT_S == 3.0
+    assert safe_solve.SOLVE_STARTUP_BUDGET_S == 3.0
     assert safe_solve.STARTUP_COST_S is None
     assert "startup probe failed" in capsys.readouterr().out
 
@@ -282,11 +285,11 @@ def test_the_probe_runs_at_import_and_leaves_the_budget_above_the_floor():
     silently loses its floor.
 
     Second, the post-condition, with no escape clause. The version this
-    replaces read `SOLVE_TIMEOUT_S >= floor or SOLVE_TIMEOUT_S ==
-    _CONFIGURED_TIMEOUT_S`, which cannot fail: the clamp sets the budget to
-    exactly `floor`, so the first disjunct holds whenever it fired and the
-    second holds whenever it did not. It asserted the disjunction of "clamped"
-    and "not clamped". Dropping the second half is what makes it able to fail
+    replaces read `budget >= floor or budget == configured`, which cannot
+    fail: the clamp sets the budget to exactly `floor`, so the first disjunct
+    holds whenever it fired and the second holds whenever it did not. It
+    asserted the disjunction of "clamped" and "not clamped". Dropping the
+    second half is what makes it able to fail
     -- a clamp that computed the wrong value, or forgot to assign, now shows
     up here.
 
@@ -299,7 +302,10 @@ def test_the_probe_runs_at_import_and_leaves_the_budget_above_the_floor():
     assert safe_solve.STARTUP_COST_S is not None, (
         "the import-time probe did not run, so nothing measured the floor")
     floor = safe_solve.STARTUP_COST_S * safe_solve._STARTUP_SAFETY_FACTOR
-    assert safe_solve.SOLVE_TIMEOUT_S >= floor
+    # The *startup* budget, since that is what now covers the import the floor
+    # is measured from. `SOLVE_TIMEOUT` deliberately no longer has to clear it
+    # -- severing that is the whole point of the two-phase protocol.
+    assert safe_solve.SOLVE_STARTUP_BUDGET_S >= floor
 
 
 def test_with_the_probe_off_the_configured_value_stands_unchecked():
@@ -423,15 +429,130 @@ def test_a_caller_blocks_when_every_worker_slot_is_taken(monkeypatch):
     assert safe_solve.safe_sympify_values(["1"]) == [1.0]
 
 
+# The seam the timeout tests fake.
+#
+# They used to patch `subprocess.run`, which `_run` no longer calls: the
+# two-phase protocol needs `Popen` plus a reader, so the timeout is raised by
+# `_await_answer` instead. Faking `_spawn` too keeps these tests from starting
+# a real interpreter apiece.
+class _FakeProc:
+    returncode = 0
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        pass
+
+
+class _FakePipe:
+    def text(self):
+        return ""
+
+
+def _fake_worker(monkeypatch, on_await):
+    monkeypatch.setattr(safe_solve, "_spawn",
+                        lambda request: (_FakeProc(), _FakePipe(), _FakePipe()))
+    monkeypatch.setattr(safe_solve, "_await_answer", on_await)
+
+
+def test_the_solve_budget_no_longer_pays_for_starting_the_worker():
+    """The point of the whole two-phase protocol.
+
+    `SOLVE_TIMEOUT` used to cover launching Python and importing sympy as well
+    as the arithmetic, and startup is ~99% of an ordinary solve -- so it was a
+    bound on *startup plus a little*, and any co-tenant on the machine spent
+    it. Measured before: 8 of 8 solves killed at 3.0s under CPU hogs, on
+    arithmetic that takes ~10ms. After: 8 of 8 succeeded.
+
+    Asserted as the invariant rather than by timing, which would be an
+    elapsed-time threshold on a loaded runner -- the thing this file already
+    learned not to write. A solve budget far below the measured startup cost
+    must still solve, which is impossible unless startup is outside it.
+    """
+    assert safe_solve.STARTUP_COST_S is not None, "the probe could not measure"
+    tight = safe_solve.STARTUP_COST_S / 4
+    assert safe_solve.safe_solve("2+3", "evaluate", timeout=tight) == "5"
+
+
+def test_the_readiness_marker_is_the_same_word_on_both_sides():
+    """The parent reads the worker's first line and decides whether it is a
+    readiness marker or a final answer. A rename on one side turns every solve
+    into "unreadable output", so the two constants are pinned together rather
+    than trusted to stay in step."""
+    import _solve_worker
+    assert safe_solve._READY == _solve_worker.READY
+
+
+def test_a_worker_that_answers_and_lingers_is_not_treated_as_a_failure(monkeypatch):
+    """A child that has printed its answer has not necessarily exited: it
+    still has to flush and tear the interpreter down. The first version killed
+    it on a bare `poll() is None`, which made *every* successful solve report
+    a non-zero exit code -- caught only because the smoke test ran before the
+    unit tests did.
+    """
+    class _Lingering(_FakeProc):
+        def __init__(self):
+            self.waits, self.killed = [], False
+
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            return 0
+
+        def kill(self):
+            self.killed = True
+
+    proc = _Lingering()
+    monkeypatch.setattr(safe_solve, "_spawn",
+                        lambda request: (proc, _FakePipe(), _FakePipe()))
+    monkeypatch.setattr(
+        safe_solve, "_await_answer",
+        lambda *a: ('{"ok": true, "result": "[1.0]"}', "the solve"))
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
+    # On `killed`, not on the recorded wait. `_kill` waits too, and with the
+    # same 5s -- so `waits == [_EXIT_GRACE_S]` held whether the child was given
+    # its grace period or shot immediately, and the test passed against its own
+    # mutation. Two code paths that agree on a number cannot be told apart by
+    # that number.
+    assert not proc.killed, (
+        "the child is given a grace period to exit, not killed on the spot")
+    assert proc.waits == [safe_solve._EXIT_GRACE_S]
+
+
+def test_the_probe_is_not_bounded_by_the_budget_it_measures(monkeypatch):
+    """Circular, and it bit: the probe runs a solve, and once startup had its
+    own budget that solve was bounded by the very setting the probe exists to
+    validate. A too-small `SOLVE_STARTUP_BUDGET` therefore made the probe time
+    out reporting the problem it should have measured, and the clamp that
+    would have fixed it never ran.
+
+    `_PROBE_TIMEOUT_S` is documented as deliberately unrelated to the setting
+    it validates; this is what makes that true of both phases.
+    """
+    seen = {}
+
+    def _record(request, timeout, label, startup_timeout=None):
+        seen["startup"] = startup_timeout
+        return None
+
+    monkeypatch.setattr(safe_solve, "_run", _record)
+    monkeypatch.setattr(safe_solve, "SOLVE_STARTUP_BUDGET_S", 0.001)
+    safe_solve._probe_startup()
+    assert seen["startup"] == safe_solve._PROBE_TIMEOUT_S
+
+
 def test_a_permit_is_returned_even_when_the_solve_fails(monkeypatch):
     """A `BoundedSemaphore` acquired with a timeout turns a leaked permit into
     solving being off for the life of the process, and the leaking path is the
     one most likely to run under load. The context manager releases in a
     `finally` for the reason `llm_client._generation_waiter` does."""
-    def _always_times_out(*a, **k):
-        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=1)
+    def _always_times_out(proc, stdout, startup_budget, solve_budget):
+        raise safe_solve._Timeout("the solve", solve_budget)
 
-    monkeypatch.setattr(safe_solve.subprocess, "run", _always_times_out)
+    _fake_worker(monkeypatch, _always_times_out)
     for _ in range(safe_solve.SOLVE_MAX_CONCURRENCY * 2):
         with pytest.raises(safe_solve.SolverUnavailable):
             safe_solve.safe_sympify_values(["1"])
@@ -456,18 +577,13 @@ def test_a_timeout_gets_one_more_attempt_with_a_wider_budget(monkeypatch):
     """
     calls = []
 
-    class _Proc:
-        returncode = 0
-        stdout = '{"ok": true, "result": "[1.0]"}'
-        stderr = ""
-
-    def _slow_then_fine(*a, **k):
-        calls.append(k["timeout"])
+    def _slow_then_fine(proc, stdout, startup_budget, solve_budget):
+        calls.append(solve_budget)
         if len(calls) == 1:
-            raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=k["timeout"])
-        return _Proc()
+            raise safe_solve._Timeout("the solve", solve_budget)
+        return '{"ok": true, "result": "[1.0]"}', "the solve"
 
-    monkeypatch.setattr(safe_solve.subprocess, "run", _slow_then_fine)
+    _fake_worker(monkeypatch, _slow_then_fine)
     assert safe_solve.safe_sympify_values(["1"]) == [1.0]
     assert len(calls) == 2, "a timeout must cost a second attempt, not a 503"
     assert calls[1] > calls[0], (
@@ -481,11 +597,11 @@ def test_a_spin_that_survives_both_attempts_still_refuses(monkeypatch):
     cause."""
     calls = []
 
-    def _always_slow(*a, **k):
-        calls.append(k["timeout"])
-        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=k["timeout"])
+    def _always_slow(proc, stdout, startup_budget, solve_budget):
+        calls.append(solve_budget)
+        raise safe_solve._Timeout("the solve", solve_budget)
 
-    monkeypatch.setattr(safe_solve.subprocess, "run", _always_slow)
+    _fake_worker(monkeypatch, _always_slow)
     with pytest.raises(safe_solve.SolverUnavailable, match="after 2 attempts"):
         safe_solve.safe_sympify_values(["1"])
     assert len(calls) == 2, "bounded at two attempts"
@@ -497,7 +613,7 @@ def test_the_retry_does_not_hold_a_concurrency_permit_while_it_waits(monkeypatch
     machine is busiest, which is when the retry exists."""
     depth = []
 
-    def _timeout_once(*a, **k):
+    def _timeout_once(proc, stdout, startup_budget, solve_budget):
         # How many permits are outstanding while this attempt runs.
         free = 0
         while safe_solve._solve_slots.acquire(blocking=False):
@@ -505,9 +621,9 @@ def test_the_retry_does_not_hold_a_concurrency_permit_while_it_waits(monkeypatch
         for _ in range(free):
             safe_solve._solve_slots.release()
         depth.append(safe_solve.SOLVE_MAX_CONCURRENCY - free)
-        raise safe_solve.subprocess.TimeoutExpired(cmd="x", timeout=1)
+        raise safe_solve._Timeout("the solve", solve_budget)
 
-    monkeypatch.setattr(safe_solve.subprocess, "run", _timeout_once)
+    _fake_worker(monkeypatch, _timeout_once)
     with pytest.raises(safe_solve.SolverUnavailable):
         safe_solve.safe_sympify_values(["1"])
     assert depth == [1, 1], (

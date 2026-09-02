@@ -3,10 +3,27 @@
 Runs as a child of `safe_solve`; never imported by the app. Everything it
 returns is a string -- pickling a sympy object across the boundary would mean
 unpickling data the model influenced, and the parent re-parses anyway.
+
+**Two lines out, not one.** Once sympy is imported this prints a readiness
+line, and only then does the arithmetic. The parent times the two phases
+separately, so `SOLVE_TIMEOUT` bounds the solve rather than the import -- see
+`safe_solve._run`. A worker that prints only the answer is indistinguishable
+from one still loading, which is what made the old budget ~99% startup.
+
+The malformed-request path still prints one line and exits before importing
+anything, so the parent has to accept a final answer where it expects
+readiness.
 """
 import json
 import math
 import sys
+
+# Line buffering, so the readiness marker actually leaves the process when it
+# is printed. Block-buffered, it sits in the pipe until the child exits and
+# the parent waits out the startup budget for a line already written.
+sys.stdout.reconfigure(line_buffering=True)
+
+READY = "ready"
 
 
 def main():
@@ -22,6 +39,9 @@ def main():
         implicit_multiplication_application)
     transformations = standard_transformations + (
         implicit_multiplication_application,)
+    # Everything expensive is loaded. The parent starts the solve clock here,
+    # so nothing above this line is charged to `SOLVE_TIMEOUT`.
+    print(json.dumps({READY: True}))
     try:
         scenario = req.get("scenario")
         # Angles: the whole solve, like geometry. Four of the five scenarios

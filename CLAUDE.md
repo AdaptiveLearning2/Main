@@ -3653,15 +3653,35 @@ one topic's tuning knob. Making `_run` raise nearly did exactly that; a mechanis
 folded into the existing "probe failed" branch, which leaves the configured budget alone rather than
 guessing one from a failed measurement.
 
-**`SOLVE_TIMEOUT` bounds the subprocess, not the arithmetic, and that is why it self-checks.** The
-budget covers launching Python and importing sympy, which is ~99% of an ordinary solve — measured
-0.64–1.00s wall where the maths is ~10ms. So it is really a bound on *startup plus a little*, and
-startup is the part that stretches on a cold or loaded machine. It is also the one setting here whose
-breach fails **every** question at once, and fails it looking like the model cannot write solvable
-maths, so nobody goes looking at a timeout.
+**`SOLVE_TIMEOUT` bounds the arithmetic, and `SOLVE_STARTUP_BUDGET` bounds getting there.** Two
+phases, because for a long time there was one and it was the wrong one: the single budget covered
+launching Python and importing sympy, which is ~99% of an ordinary solve — measured 0.64–1.00s wall
+where the maths is ~10ms — so a nominal 3s was ~3× margin over *startup*, and any co-tenant on the
+machine spent it. Measured with CPU hogs running: **8 of 8 solves killed at 3.0s**, and at 2×
+oversubscription the retry rescued none.
 
-`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the budget for
-that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the measurement. It
+`_solve_worker` prints a readiness line once sympy is loaded, and `_run` times the two phases
+separately. Re-measured under the same saturation: **8 of 8 succeed**, and 8 of 8 at 2×
+oversubscription with the slowest at 2.1s. Consequences worth holding:
+
+- **The budgets now mean different things and should be tuned differently.** `SOLVE_TIMEOUT` (3s)
+  is the runaway bound and has ~300× margin over the maths, so it can be tightened without risking
+  a loaded machine. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
+  *it* reinstates the old failure.
+- **Only the solve budget widens on retry.** Startup is already ~15× its measured cost, so a second
+  longer wait buys nothing — and a message naming a widened solve budget after a *startup* timeout
+  describes a number that was never applied, which is what the first version printed.
+- **`SOLVE_RETRY_BUDGET_FACTOR` is close to vestigial now.** The retry existed because contention
+  spent a budget dominated by startup. Kept because it is cheap and the failure is a 503 in front
+  of a student, but do not reason from it as though it were load-bearing.
+- **The probe must escape the budget it validates.** It runs a solve, so once startup had its own
+  budget the probe was bounded by the very setting it exists to check — a too-small value made it
+  time out reporting the problem it should have measured, and the clamp never ran. `_run` takes a
+  `startup_timeout` override for that one caller.
+
+`safe_solve._probe_startup()` runs at import: it times one trivial solve and raises the **startup**
+budget for that process if the configured value is under `_STARTUP_SAFETY_FACTOR` (3×) of the
+measurement. It
 **clamps up and logs; it never refuses to start** — raising there would take the whole backend down
 over one topic's tuning knob, and every non-generation surface with it, which is the failure
 `_env_number`'s floor exists to prevent. A probe that cannot run keeps the configured value and says

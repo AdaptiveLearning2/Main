@@ -52,10 +52,22 @@ VALUES
   -- rather than discouraged -- any digit outside the equation is refused --
   -- so there is no point asking for a story context.
   --
-  -- Worth knowing before editing: the early band's tiers offer addition and
-  -- subtraction only, so 3.OA.4 unknown-factor questions are not actually
-  -- reached at this band. Lifting that is a change to COMPLEXITY_BY_GRADE in
-  -- LLM_missing_number_generation.py, not to the text below.
+  -- Worth knowing before editing: the early band's tiers ASK for addition and
+  -- subtraction only, so 3.OA.4 unknown-factor questions are not offered at
+  -- this band. They are not prevented either -- `OPERATORS` accepts "*" at
+  -- every grade, and solve_missing scores a multiplication happily -- so a
+  -- grade-3 reply that reaches for one is served rather than retried. That is
+  -- the right outcome by the standard, since 3.OA.4 is grade-3 content, and
+  -- it is why this is a note rather than a defect. Offering it deliberately
+  -- is a change to COMPLEXITY_BY_GRADE in LLM_missing_number_generation.py,
+  -- not to the text below.
+  --
+  -- The sharper form of the same gap is at grades 1-2, where GRADE_OVERRIDES
+  -- says "Do NOT use multiplication" and nothing enforces it: a "*" there
+  -- would be scored and served, and would be genuinely above grade. Unlike
+  -- the parenthesis leak in `expressions`, which was found by reading real
+  -- output and is now checked in code, this one has not been observed --
+  -- so it is recorded here rather than acted on.
   ('missing_number', 'early',
    'Find the unknown number that makes an equation true, where the equation has three numbers and one operation. The unknown may sit in any of the three positions, including the first, so that students read an equation as a statement of balance rather than as a left-to-right instruction to compute. Grade 1 works with addition and subtraction within 20 (1.OA.8), grade 2 within 100 (2.OA.1, 2.NBT.5), and grade 3 extends to an unknown factor in a multiplication (3.OA.4). Students find the unknown by using the inverse operation, and check the answer by putting it back into the equation.',
    'One operation per question and exactly one unknown, written "?" and never a letter. No division. No negative results, fractions or decimals. Do not set the question in a story or mention any number that is not part of the equation.'),

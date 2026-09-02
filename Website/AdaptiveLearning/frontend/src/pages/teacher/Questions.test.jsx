@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
 
-import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
+import { apiFetch, mockApi, resetApi, apiError } from '../../test/mocks/apiFetch'
 import { _resetForTests } from '../../lib/questionsCache'
 import Questions from './Questions'
 import Analytics from './Analytics'
@@ -212,7 +212,7 @@ describe('the student filter', () => {
     // the message.
     mockFilterApi({
       '/api/students/s-1/questions?limit=200': () => {
-        throw Object.assign(new Error('Forbidden'), { status: 403 })
+        throw apiError(403, 'Forbidden')
       },
     })
     await pickStudent()

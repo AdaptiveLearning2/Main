@@ -16,12 +16,27 @@ function fmtTime(s) {
  * one nobody has touched since June produced "83132m 45s", which is not a
  * measurement of anything — the student left within the hour and the clock
  * kept running. A dash says the honest thing: we do not know when it ended.
+ *
+ * An **idle** session is the same error at a smaller scale, and it was left
+ * behind when `idle` was added as a fourth badge: the badge stopped claiming
+ * the session was live while this cell went on ticking to now for up to the
+ * six hours before `abandoned` takes over. Here we are not guessing, though —
+ * `last_activity_at` is the newest answer, which is when the student actually
+ * stopped — so it measures to that rather than dashing. A dash would throw
+ * away a figure the backend already sends.
+ *
+ * Falling back to a dash when that timestamp is missing matters for the same
+ * reason `activity_known` gates the badge: an unknown last activity must not
+ * become a measurement, and it must not silently resume ticking either.
  */
-function duration(start, end, abandoned) {
+function duration(start, end, { abandoned = false, idle = false, lastActivity = null } = {}) {
   if (!start) return '—'
   if (!end && abandoned) return '—'
+  if (!end && idle && !lastActivity) return '—'
   const a = new Date(start).getTime()
-  const b = end ? new Date(end).getTime() : Date.now()
+  const b = end ? new Date(end).getTime()
+    : idle ? new Date(lastActivity).getTime()
+    : Date.now()
   const sec = Math.max(0, Math.round((b - a) / 1000))
   const m = Math.floor(sec / 60); const s = sec % 60
   return `${m}m ${s}s`
@@ -221,7 +236,7 @@ export default function Sessions() {
                   <span className="text-sm font-bold text-gray-900 dark:text-white truncate">{s._student?.name || 'Student'}</span>
                 </div>
                 <div className="col-span-3 text-sm text-gray-500 dark:text-gray-400">{fmtTime(s.started_at)}</div>
-                <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">{duration(s.started_at, s.ended_at, abandoned)}</div>
+                <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">{duration(s.started_at, s.ended_at, { abandoned, idle, lastActivity: s.last_activity_at })}</div>
                 <div className="col-span-2 text-sm text-gray-700 dark:text-gray-300 flex items-center gap-2">
                   <Activity size={13} className="text-emerald-500" />
                   {s.questions_answered || 0} q

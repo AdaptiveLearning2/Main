@@ -233,6 +233,47 @@ it('an abandoned session is not reported as done either', async () => {
   expect(screen.queryByText(/done/i)).not.toBeInTheDocument()
 })
 
+// ─── idle sessions ─────────────────────────────────────────────────────────
+//
+// `idle` was added as a fourth badge and the Duration cell was left behind, so
+// the badge stopped claiming the session was live while the clock beside it
+// went on counting to `Date.now()` for the up-to-six-hours before `abandoned`
+// takes over. Unlike an abandoned session we are not guessing here:
+// `last_activity_at` is the newest answer, which is when the student stopped.
+
+const OPEN_IDLE = {
+  id: 's-idle', started_at: '2026-08-15T10:00:00Z', ended_at: null,
+  questions_answered: 4, correct_answers: 3, abandoned: false,
+  idle: true, activity_known: true,
+  last_activity_at: '2026-08-15T10:23:00Z',
+}
+
+it('measures an idle session to its last activity, not to now', async () => {
+  wire({ students: { a: [OPEN_IDLE], b: [] } })
+  draw()
+  await screen.findByText(/idle/i)
+  // 10:00 -> 10:23 is a fixed 23 minutes however long ago the fixture's day
+  // was; counting to now would grow without bound and never equal this.
+  expect(screen.getByText('23m 0s')).toBeInTheDocument()
+})
+
+it('shows no duration for an idle session whose last activity is unknown', async () => {
+  // Same rule as `activity_known` gating the badge: an unknown last activity
+  // must not become a measurement, and must not silently resume ticking.
+  wire({ students: { a: [{ ...OPEN_IDLE, last_activity_at: null }], b: [] } })
+  draw()
+  await screen.findByText(/idle/i)
+  expect(screen.queryByText(/\d+m \d+s/)).not.toBeInTheDocument()
+})
+
+it('still counts a live session to now', async () => {
+  // The negatives above pass against a page that shows no duration at all.
+  wire({ students: { a: [OPEN_RECENT], b: [] } })
+  draw()
+  await screen.findByText(/LIVE/)
+  expect(screen.getByText(/\d+m \d+s/)).toBeInTheDocument()
+})
+
 it('treats a payload with no abandoned flag as live, not abandoned', async () => {
   // An older backend does not send the field. Absent must not silently
   // relabel every open session.

@@ -2686,6 +2686,29 @@ reason: `_ensure_queue` runs *after* the response is assembled, so letting a fai
 a served question into a 500. The daily ceiling is **Claude-only** on purpose: Ollama is local and
 free, so a call ceiling there would refuse a child a question to protect nothing.
 
+**An API that cannot be *reached* is a 503, not a 500, and the message names the base URL.**
+`generate_text` catches `anthropic.APIConnectionError` (which `APITimeoutError` subclasses) and
+re-raises it as `GenerationUnavailable`, so both `main.py` call sites already turn it into the 503
+that means "this deployment cannot serve right now". Unclassified it was a 500 with a 200-line
+traceback, and the student's page said *"make sure the backend is running"* while the backend was
+running and the unreachable thing was the API.
+
+**`AuthenticationError` is deliberately excluded** — it is an `APIStatusError`, a different branch,
+and a bad key is a misconfiguration that must stay loud rather than read as a passing outage. That is
+the line between classifying and swallowing: a connection failure still fails the call and still
+serves no question.
+
+The URL is in the message because it is the whole diagnosis when it is wrong. A stale
+`ANTHROPIC_BASE_URL` in the *user's Windows environment* — pointing at a local proxy that is not
+listening — gives exactly `WinError 10061`, and took three rounds to find because "Connection error."
+names nothing. It is inherited at process start, so clearing it needs a new terminal, not a reload.
+
+**`start.ps1` skips Ollama when `backend/.env` says `LLM_PROVIDER=claude`.** It ran unconditionally,
+so a Claude deployment still started `ollama serve` in its own window and would `ollama pull
+llama3.1:8b` if that model was missing — a multi-gigabyte download for a model nothing calls, and a
+window saying the opposite of what is configured. Guarded with `Test-Path` and a match check, per the
+rule above.
+
 **On breach the answer is to refuse — `GenerationUnavailable`, surfaced as 503, never a fallback.**
 Serving a question from the bank or from a cheaper model instead would change what a child is asked
 with nothing on any surface saying so, which is the same class of failure as a dashboard that cannot

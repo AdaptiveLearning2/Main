@@ -11,6 +11,7 @@ question, at every topic, the moment `LLM_PROVIDER=claude`.
 import sys
 import threading
 
+import httpx2 as httpx
 import pytest
 
 import llm_client
@@ -73,6 +74,12 @@ class _FakeAnthropic:
         self.calls: list[dict] = []
         self.options: list[dict] = []
         self.messages = _FakeMessages(self)
+        # The real client exposes this and the unreachable-API message reads
+        # it. Carried on the double deliberately: a double that is *missing*
+        # something the real object has fails a correct implementation, which
+        # is the mirror of the `**kwargs` trap this file already documents --
+        # there the double was more permissive and hid a broken request.
+        self.base_url = "https://api.anthropic.com"
 
     def with_options(self, **kwargs):
         self.options.append(kwargs)
@@ -480,3 +487,49 @@ def test_a_schema_is_ignored_on_the_ollama_branch(monkeypatch):
     assert "output_config" not in sent
     assert "format" not in sent
     assert sent["options"] == {"temperature": 1.1, "top_p": 0.95, "top_k": 100}
+
+
+def test_an_unreachable_api_is_a_503_naming_the_url(monkeypatch):
+    """Being unable to *reach* the API is the same kind of fact as a bound
+    refusing: this deployment cannot serve right now, and it says nothing about
+    the model or the reply.
+
+    Unclassified it surfaced as a 500 with a 200-line traceback, and the page
+    told the student to "make sure the backend is running" -- while the backend
+    was running and the unreachable thing was the API. It took three rounds to
+    diagnose a stale `ANTHROPIC_BASE_URL` pointing at a local proxy that was
+    not listening, because "Connection error." names nothing.
+
+    The URL is in the message for that reason. It is not a secret; the key is,
+    and is not logged.
+    """
+    import anthropic
+
+    fake = _claude(monkeypatch)
+
+    def _refuse(**kwargs):
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "/v1/messages"))
+
+    monkeypatch.setattr(fake.messages, "create", _refuse)
+    with pytest.raises(llm_client.GenerationUnavailable, match="cannot reach the model API"):
+        llm_client.generate_text("p")
+
+
+def test_a_bad_api_key_stays_loud(monkeypatch):
+    """The teeth. `AuthenticationError` is an `APIStatusError`, a different
+    branch, and must NOT become a 503 -- a misconfigured key is not a passing
+    outage, and reporting it as one turns "this key is wrong" into "try again
+    later", which is the swallow the docstring warns about."""
+    import anthropic
+
+    fake = _claude(monkeypatch)
+
+    def _reject(**kwargs):
+        raise anthropic.AuthenticationError(
+            "invalid x-api-key",
+            response=httpx.Response(401, request=httpx.Request("POST", "/v1/messages")),
+            body=None)
+
+    monkeypatch.setattr(fake.messages, "create", _reject)
+    with pytest.raises(anthropic.AuthenticationError):
+        llm_client.generate_text("p")

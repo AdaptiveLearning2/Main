@@ -190,7 +190,19 @@ export default function Sessions() {
             // backend decides which are abandoned so the threshold has one
             // definition -- see `student_sessions`.
             const abandoned = !s.ended_at && s.abandoned === true
-            const live = !s.ended_at && !abandoned
+            // Four states now. `abandoned` is an *age* (6h) and only stops the
+            // list claiming a session from June is in progress; `idle` is real
+            // quiet, computed by the backend from the newest answer against
+            // the same window `class_live` uses. Without it a student who
+            // answered three questions and closed the laptop read LIVE, with
+            // the duration ticking up, for six hours.
+            //
+            // `=== true` on both, and `activity_known` gates idle: a failed
+            // read of last activity must not relabel a live session as quiet,
+            // which is the same error as reporting a failed count as a quiet
+            // week.
+            const idle = !s.ended_at && !abandoned && s.idle === true
+            const live = !s.ended_at && !abandoned && !idle
             const acc  = (s.questions_answered || 0) > 0
               ? Math.round(((s.correct_answers || 0) / s.questions_answered) * 100) : null
             return (
@@ -223,7 +235,12 @@ export default function Sessions() {
                       <AlertTriangle size={10} /> never ended
                     </span>
                   )}
-                  {!live && !abandoned && <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
+                  {idle && (
+                    <span className="text-[10px] font-bold px-2 py-1 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">
+                      idle
+                    </span>
+                  )}
+                  {!live && !abandoned && !idle && <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> done</span>}
                   <ChevronRight size={14} className="text-gray-600 group-hover:text-violet-500 transition dark:text-gray-400" />
                 </div>
               </Link>

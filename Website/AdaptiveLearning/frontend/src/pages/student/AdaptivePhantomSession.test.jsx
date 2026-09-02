@@ -74,11 +74,12 @@ it('does not end a session that was never created', () => {
 })
 
 
-it('ends a session that recorded nothing when the student leaves', async () => {
-  // The phantom: a session exists (created to fetch a question or to reserve
-  // the headband) but no answer was ever given. Ending it hands it to
-  // `_discard_if_nothing_recorded`, which deletes it -- so it never appears
-  // in History as a session the student did not start.
+it('ends the session when the student leaves, recorded or not', async () => {
+  // Two cases, one call. A session that recorded nothing is *deleted* by
+  // `_discard_if_nothing_recorded`, so a bare headband pairing leaves no
+  // trace. One with answers is *closed* properly -- crediting totals, writing
+  // the rollup, archiving charts -- rather than sitting open for six hours
+  // reading `LIVE` on the teacher's screen.
   const { unmount } = render(<Adaptive />)
   await userEvent.click(await screen.findByRole('button', { name: /generate question/i }))
   await screen.findByText('What is 2 + 2?')

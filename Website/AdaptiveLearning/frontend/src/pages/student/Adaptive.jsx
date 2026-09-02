@@ -197,37 +197,36 @@ export default function Adaptive() {
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
-  // Read from a ref, because the cleanup below runs from a closure captured
-  // once and would otherwise always see 0.
-  const sessionCountRef = useRef(0)
-  useEffect(() => { sessionCountRef.current = sessionCount }, [sessionCount])
-
-  // A session created only to reserve the headband is not a session the
-  // student started.
+  // Leaving the page ends the session, whatever it holds.
   //
-  // `toggleHeadband` has to create one -- under `INGEST_MODE=pull` the EEG
-  // reservation is scoped by `session_id`, so connecting needs a session to
-  // hang off. But a student who connects a headband and then walks away has
-  // not practised, and the row sat in History as a 0-question "Adaptive
-  // Session" until the 6h sweep collected it. That is what "it recorded a
-  // session I never started" looks like from the outside.
+  // Two problems, one call, and the two cases end differently because they
+  // should. `toggleHeadband` has to create a session -- under
+  // `INGEST_MODE=pull` the EEG reservation is scoped by `session_id`, so
+  // connecting needs one to hang off -- and a student who paired a headband
+  // and walked away left a 0-question "Adaptive Session" in History until the
+  // 6h sweep collected it. That is what "it recorded a session I never
+  // started" looks like from the outside. Ending it hands it to
+  // `_discard_if_nothing_recorded`, which *deletes* a session that recorded
+  // nothing, so the phantom disappears rather than gaining an end stamp.
   //
-  // Ending it hands it to `_discard_if_nothing_recorded`, which deletes a
-  // session that recorded nothing rather than closing it -- so the phantom
-  // disappears instead of merely gaining an end stamp.
+  // A session with answers is *closed* instead -- crediting lifetime totals,
+  // writing the daily rollup, archiving the charts -- at the moment the
+  // student leaves. Left open, it read `LIVE` on the teacher's screen with
+  // its duration ticking up for up to six hours, telling a teacher a child
+  // was working who had gone home.
   //
-  // Guarded on the count, so a session with real answers in it is never
-  // ended by navigation: that is `finishSession`'s job, and closing one here
-  // would end a lesson the student was part way through.
+  // The cost, taken deliberately: navigating to History mid-lesson and coming
+  // back starts a new session rather than resuming. Leaving the page is a
+  // clear enough signal of being done, and a LIVE badge for a student who
+  // left is the worse claim.
   //
   // Only covers leaving the page. A tab close still falls to the sweep --
   // `endSession` uses `apiFetch`, which does not outlive the document, and
   // the keepalive dance `stopPushOnUnload` does is not worth repeating for a
-  // row the sweep already collects.
+  // row the sweep already collects. That is the other half of why the teacher
+  // badge is now activity-based rather than trusting `ended_at` alone.
   useEffect(() => () => {
-    if (sessionIdRef.current && sessionCountRef.current === 0) {
-      endSession(sessionIdRef.current)
-    }
+    if (sessionIdRef.current) endSession(sessionIdRef.current)
   }, [])
 
   // Cleans up on unmount: `phaseTimer` is a 30s safety net that resets the

@@ -3336,6 +3336,49 @@ def student_sessions(student_id: str, request: Request):
         # session nobody has looked at.
         r["abandoned"] = bool(
             not r.get("ended_at") and started is not None and started < cutoff)
+
+    # Real last activity, so the badge stops asserting LIVE for a student who
+    # walked away. `abandoned` above is an *age* and deliberately long (6h):
+    # it exists to stop the list claiming a session from June is in progress,
+    # not to notice someone leaving. A student who answered three questions
+    # and closed the laptop was LIVE, with the duration ticking up, until that
+    # 6h mark -- telling a teacher a child was working who had gone home.
+    #
+    # Ordered and capped rather than aggregated per session: this is a bounded
+    # read over at most 20 sessions, and the newest row per session is the
+    # only one that matters.
+    ids = [r["id"] for r in rows if not r.get("ended_at")]
+    last_answer: dict[str, str] = {}
+    activity_known = False
+    if ids:
+        try:
+            recent = (supabase.table("session_answers")
+                      .select("session_id, answered_at")
+                      .in_("session_id", ids)
+                      .order("answered_at", desc=True)
+                      .limit(500).execute().data or [])
+            for a in recent:
+                last_answer.setdefault(a["session_id"], a["answered_at"])
+            activity_known = True
+        except Exception as e:                                  # noqa: BLE001
+            # Three states, not two. A failed read must not be reported as
+            # "no activity" -- that would relabel a live session idle on a
+            # database blip, which is the same class of error as reporting a
+            # failed count as a quiet week.
+            print(f"[sessions] could not read last activity: {e}")
+
+    quiet_before = _utc_now() - timedelta(seconds=_STALE_AFTER_SEC)
+    for r in rows:
+        r["activity_known"] = activity_known
+        r["last_activity_at"] = last_answer.get(r["id"])
+        if r.get("ended_at") or not activity_known:
+            r["idle"] = False
+            continue
+        # No answer yet falls back to the start: a session opened ten minutes
+        # ago with nothing in it is as quiet as one whose last answer was then.
+        seen = _parse_ts(r["last_activity_at"]) or _parse_ts(r.get("started_at"))
+        r["idle"] = bool(seen is not None and seen < quiet_before
+                         and not r["abandoned"])
     return rows
 
 @app.get("/api/performance/student/{student_id}")

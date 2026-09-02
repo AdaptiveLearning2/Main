@@ -56,8 +56,10 @@ import llm_client
 # and never did. It used to cover the whole child process, and nearly all of
 # that is importing sympy: measured 2026-08-31 across all five request shapes,
 # a legitimate solve takes 0.64-1.00s wall, of which the arithmetic is ~10ms.
-# So 3s was ~3x margin over *startup*, and any co-tenant on the machine spent
-# it -- 8 of 8 solves killed at 3.0s with CPU hogs running.
+# So 3s was margin over *startup*, and thinner than a single multiplier makes
+# it sound: 0.64-1.00s is the idle figure, and ordinary background load on the
+# same machine pushed a solve to 1.4-2.2s -- 1.4-2.3x, not 3x. Any co-tenant
+# spent the rest: 8 of 8 solves killed at 3.0s with CPU hogs running.
 #
 # The worker prints a readiness line once sympy is loaded and the two phases
 # are timed separately, so 3s is now ~300x margin over the maths it bounds.
@@ -147,8 +149,12 @@ def _solve_slot(label):
 # is now budgeted separately from it. Generous on purpose: this is not the
 # bound that catches a runaway -- `SOLVE_TIMEOUT` is -- it is the one that
 # stops a spawn that will never come back from wedging a request thread. The
-# measured cost is 0.32s on CI and 0.64-1.00s here, so 15s is ~15x the slowest
-# figure and still bounded.
+# measured cost is 0.32s on CI and 0.64-1.00s here *idle*, which is the number
+# worth distrusting: the same machine under ordinary background load measured
+# 1.4-2.2s. So 15s is ~7-11x the loaded figure rather than ~15x the idle one.
+# Quoting a multiplier at all is the trap this file warns about elsewhere -- it
+# depends on how fast the machine is at that moment, and `_probe_startup`
+# measuring it is what makes the bound reliable, not the number written here.
 _CONFIGURED_STARTUP_BUDGET_S = llm_client._env_number(
     "SOLVE_STARTUP_BUDGET", 15.0, float, minimum=1.0)
 SOLVE_STARTUP_BUDGET_S = _CONFIGURED_STARTUP_BUDGET_S

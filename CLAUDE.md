@@ -3681,7 +3681,10 @@ Consequences worth holding:
 
 - **The budgets now mean different things and should be tuned differently.** `SOLVE_TIMEOUT` (3s)
   is the runaway bound and has ~300× margin over the maths, so it can be tightened without risking
-  a loaded machine. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
+  a loaded machine. Treat any startup multiplier quoted here with suspicion, including the ones
+  above: startup is ~0.8s idle on the machine these were taken on and 1.4–2.2s under ordinary
+  background load, so the margin moves by a factor of three depending on when you look. That is
+  what `_probe_startup` measuring it is for. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
   *it* reinstates the old failure.
 - **Only a *startup* timeout is retried, and the split is what inverted that.** While the budget was
   ~99% startup, "timeout" almost always meant contention and retrying was how a moment of it was

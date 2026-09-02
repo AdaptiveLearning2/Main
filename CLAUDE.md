@@ -3338,12 +3338,60 @@ one linear equation with one solution (a quadratic is correctly refused, so 8.EE
 event (7.SP.5), `rationals` is fraction arithmetic (7.NS.1). Harder numbers inside 8.EE.7b are still
 8.EE.7b.
 
-So **`advanced` means "the hardest grade-8 content", and grades 9-12 cannot be served appropriately
-at all.** Closing that needs solvers — quadratics, systems, functions, spread — not prompt text, and
-each new solver has to be able to *score* what it asks, which is the constraint that rules out most
-of high-school mathematics here. Verified before those tiers were written: variables on both sides,
-distribution and fractional coefficients all score correctly; a quadratic and a two-unknown equation
-are both correctly refused.
+So **`advanced` meant "the hardest grade-8 content"** until `quadratics` and `functions` were added.
+Closing it needed solvers, not prompt text, and each new solver has to be able to *score* what it
+asks — the constraint that rules out most of high-school mathematics here. Verified before those
+tiers were written: variables on both sides, distribution and fractional coefficients all score
+correctly; a quadratic and a two-unknown equation are both correctly refused.
+
+### `quadratics` and `functions` are the grade 9+ content, and `hs_solvers` is why
+
+Both sit at `TOPIC_MIN_GRADE` 9 and are the first topics here whose concept is above grade 8 at all.
+`hs_solvers.py` holds the arithmetic for both — **pure bounded-integer, no sympy, so no bounded
+subprocess**, the same call `missing_number` and `patterns` make. There is no parser to hand a
+`9**9**9` to: every value goes through `parse_int`, which matches `^-?\d{1,4}$` *before* `int()`
+sees it. Reach for `safe_solve` only when something downstream needs a sympy object.
+
+**The equation shown is rendered from the coefficients being scored, never parsed out of the text.**
+`render_quadratic`/`render_polynomial` are the only things that write an equation, and each
+generator requires its output verbatim in `question_text`. Same direction as `question_figures`:
+derive the presentation from the scored data and a disagreement stops being representable. Sign
+handling is the load-bearing part — naive formatting gives `x^2 + -5x + 6 = 0`, which nobody writes,
+so the model "corrects" it and every negative-middle-coefficient question costs a retry.
+
+**A two-root equation is only scoreable because the question names which root**, and that choice is
+made *before* the call and pinned in the prompt, not left to the model — `target` is deliberately
+absent from the schema. `shown_matches_scored` therefore checks two things, and the second is the
+one no equation check can see: a text asking for "the smaller solution" scored against the larger is
+a well-formed question, correctly solved, marked wrong. It also refuses a text naming *neither*.
+
+Four quadratics are refused rather than served: no real roots, a **repeated** root (where "the
+larger" names nothing and every distractor would simply not be a root), irrational roots, and
+roots that are not whole numbers. That restricts the topic to equations factorable over the
+integers, which is A-REI.4b's core rather than a limitation worked around.
+
+**`functions` is grade 9 on a narrower claim than its name suggests.** Evaluating a rule at a value
+is 8.F.2, and grade 8 explicitly does not require function notation; what is high school is the
+notation (F-IF.2) and composition (F-BF.1c), which has no grade-8 equivalent. That is why `compose`
+is the medium *and* hard tier — a version of this topic whose every tier was `evaluate` would be
+8.F.2 wearing an `f(x)`. `MAX_ABS_RESULT` bounds it because composition squares its input: two
+quadratics with reasonable-looking coefficients reach 10^16, and a question answered 48,271,009
+tests calculator ownership rather than composition.
+
+**Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
+`algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
+either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
+
+**This does not take the "below grade" figure to zero, and nothing here claims it does.** The other
+fourteen topics carry no ceiling, so a grade-9 student is still offered them and still draws
+grade-8 content most of the time. Whether the topics that top out at grade 8 should gain a
+`TOPIC_MAX_GRADE` is a separate and larger decision — capping them would drop a grade-9 student to
+two topics, which is the same trade that took grades 4-5 from eight topics to four. It has not been
+made.
+
+**A test that reads "allowed iff it has no ceiling" was true only until a topic had a floor above
+8.** `test_topics_at_eighth_grade_are_those_inside_both_bounds` was that test; these two topics
+broke its equivalence rather than its behaviour. Assert the range, not the absence of a cap.
 
 ### Angle answers are whole numbers through 5th grade, and decimals after
 

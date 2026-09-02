@@ -64,7 +64,7 @@ if production is ever rebuilt from scratch, both need running again.
 
 | # | item | why it is not done |
 | --- | --- | --- |
-| 1 | **Grades 9-12 have no content of their own.** 81% of grade-9 questions measured ≥3 grades below grade. | Needs *solvers* — quadratics, systems, functions, spread — not prompt text. Each must be able to **score** what it asks, which rules out most of high-school maths here. See CLAUDE.md, "Grades 9+ have no content of their own". |
+| 1 | ~~**Grades 9-12 have no content of their own.**~~ **Started.** `quadratics` (A-REI.4b) and `functions` (F-IF.2, F-BF.1c) added, with exact integer solvers in `hs_solvers.py`. Two things remain — see §6. | `systems` was on this list and **does not qualify**: a 2×2 linear system is 8.EE.8, so it would be another grade-8-ceiling topic wearing a grade-9 label. `spread` (S-ID.2) is still open and needs a decision about irrational answers. |
 | 2 | **The spend posture has never been exercised end to end.** `GENERATION_MAX_WAITERS`, the daily ceiling, the concurrency cap. | Needs a class of ~30 starting together. Everything is unit-tested; nothing has met real simultaneous load. |
 | 3 | **`attention` still has no producer** (Phase 11 step 3). | Blocked on a *labelled reference*, not on code. Every surface that rendered it was removed in #86; put the UI back in the same change that fills the column, not before. |
 | 4 | **Camera rPPG accuracy.** The ONNX export works and the cost objection is gone (22 MB, 1.5 s load vs ~34 s). | Still needs the video + ECG capture. `scripts/capture_face_video_ecg.py` is that capture. The POS rejection stands. |
@@ -161,6 +161,35 @@ Beyond `CLAUDE.md`, which covers most of it:
 - **`supabase/seed.sql` is gitignored** and per-developer. Local currently has
   27 sessions where production has ~215; that divergence was seen and
   deliberately left.
+
+## 6. Left open by the grade 9-12 work
+
+1. **The measurement was never redone.** The 81% figure is what motivated this
+   and nothing has re-run the audit since the two topics landed — so there is
+   no number saying how much it moved. Expect it to move by *proportion* only:
+   the other fourteen topics carry no `TOPIC_MAX_GRADE`, so a grade-9 student
+   is still offered them and still draws grade-8 content most of the time.
+2. **Whether the grade-8-ceiling topics should be capped is undecided**, and
+   it is the larger half of the original finding. Capping them would take a
+   grade-9 student to two topics — the same trade that took grades 4-5 from
+   eight topics to four, which was made deliberately and hurt. Not attempted.
+3. **The `quadratics` hard tier is a rung below where it should be.** A
+   leading coefficient of 2-4 is what turns factoring into the AC method and
+   is the standard Algebra I step; it is *measured not to work* on
+   llama3.1:8b, which failed 1 of 3 outright and silently dropped the
+   constraint on the other 2, returning `a = 1` with both roots positive. The
+   shipped tier is two negative roots instead. Production runs Claude and may
+   well construct it — re-measure there before enabling, and note that means
+   billing the API.
+4. **`spread` (S-ID.2) is the obvious third topic and is not built.** Standard
+   deviation is the genuinely-HS statistic, and its answers are irrational,
+   so it needs a decision about rounding before a solver: a correct option
+   that matches only to the precision the formatter chose is the failure this
+   codebase least tolerates. IQR and range are exactly scoreable but are
+   6.SP, so they would not help grade 9.
+5. **Neither lesson plan is seeded on production.**
+   `supabase/seeds/lesson_plans_hs_topics.sql` has to be pasted into the
+   dashboard SQL editor, exactly like its three siblings.
 
 A long planning document from an earlier session lives at
 `C:\Users\akash\.claude\plans\create-the-plan-to-delegated-prism.md`. Most of

@@ -652,8 +652,23 @@ BEGIN
     INSERT INTO public.retention_window (starts_on, ends_on, timezone)
     VALUES ('2025-09-01', '2026-06-30', 'America/Los_Angeles');
 
+    -- Distinct stamps, which `cog_session_ts_key` (20260914000000) now
+    -- requires: five rows sharing one `(session_id, ts)` was legal when this
+    -- fixture was written and is a `unique_violation` since. Unhandled in an
+    -- anonymous code block under `ON_ERROR_STOP=1`, that fails the whole job
+    -- and takes every assertion below it with it.
+    --
+    -- (Written without the dollar-quote marker on purpose: naming it inside
+    -- one of these blocks closes the block, which is a syntax error two
+    -- hundred lines later. This comment cost exactly that once.)
+    --
+    -- Seconds apart, not minutes: all five stay on one school day in
+    -- America/Los_Angeles, so the day bucketing these assertions rest on is
+    -- unchanged and only the batching is being measured. Same shape the
+    -- heart_signals fixtures have used since that table got its own key.
     INSERT INTO public.cognitive_signals (session_id, user_id, ts)
-    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval
+      FROM generate_series(1, 5) g;
     INSERT INTO public.signal_daily_rollup
         (user_id, day, channel, sample_count, trusted_sample_count)
     VALUES (uid, DATE '2026-03-10', 'cognitive', 5, 5);
@@ -670,7 +685,8 @@ BEGIN
     -- And the cap stops it, visibly. Without `hit_batch_cap` this state is
     -- indistinguishable from "nothing was eligible".
     INSERT INTO public.cognitive_signals (session_id, user_id, ts)
-    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval
+      FROM generate_series(1, 5) g;
     result := public.expire_signal_rows(p_batch_size => 1, p_max_batches => 2);
     SELECT count(*) INTO remaining FROM public.cognitive_signals WHERE user_id = uid;
     IF remaining <> 3 THEN

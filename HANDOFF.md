@@ -52,18 +52,13 @@ cell, which found a real failure — see §3.
 
 ## 2. Do these next
 
-### 2a. Two things must be run by hand on **production**
+### 2a. Done (2026-09-02)
 
-Neither is a migration, so nothing applies them automatically, and CI does not
-run them.
-
-1. **Seed the new lesson plans.** Paste
-   `supabase/seeds/lesson_plans_young_topics.sql` into the Supabase dashboard
-   SQL editor. It is applied to the **local** stack only right now. Idempotent.
-2. **Clean up the empty sessions.** Production holds ~215 sessions of which
-   ~192 are empty. **The SQL must be run on the production dashboard, not local
-   Supabase Studio** — a previous attempt returned a count of 0 because it was
-   run against local, which had already been swept.
+Both one-off production tasks from this section have been run by hand in the
+Supabase dashboard SQL editor: the lesson-plan seed
+(`supabase/seeds/lesson_plans_young_topics.sql`) and the empty-session
+cleanup. Neither is a migration, so nothing re-applies them automatically —
+if production is ever rebuilt from scratch, both need running again.
 
 ### 2b. Open work, roughly in order of value
 
@@ -113,15 +108,13 @@ CPU contention. It does not reproduce in 17 unloaded runs and never in CI
 (Linux); it reproduced on the 5th run with 12 CPU hogs running. The one-line
 fix if it becomes annoying is `userEvent.setup({ delay: null })` in that file.
 
-**`missing_number`'s operator gate is prompt-level only.** `OPERATORS` accepts
-`*` at every grade and `solve_missing` scores a multiplication happily. At
-grade 3 that is fine (3.OA.4 is grade-3 content). At grades 1-2,
-`GRADE_OVERRIDES` says "Do NOT use multiplication" and **nothing enforces it** —
-a `*` there would be served and would be above grade. Unlike the parenthesis
-leak in `expressions`, which was found in real output and is now checked in
-code, this has not been observed, so it is recorded in the seed file rather
-than acted on. If you see one, the fix is a code-level operator check, and
-`expressions` is the worked example.
+**`missing_number`'s operator gate was prompt-level only — now fixed.** A
+review reproduced it: `3 * ? = 12` served to a grade-1 request, cleared every
+existing gate (`solve_missing` accepts `*`, `grade_appropriateness` only looks
+for variable notation). `_forbidden_operator` in
+`LLM_missing_number_generation.py` now checks the operator on the structured
+token list directly, keyed off `GRADE_OVERRIDES` so the two cannot drift
+apart — the same class of fix as the `expressions` parenthesis leak.
 
 **`git checkout --` discards uncommitted work.** Used it to revert a mutation
 test and lost an uncommitted guard with it. Restore from a `cp` backup or

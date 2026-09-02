@@ -29,14 +29,26 @@ describe('the notification container', () => {
     const mounts = walk(SRC)
       .filter(f => /<Toaster[\s/>]/.test(readFileSync(f, 'utf8')))
       .map(f => f.slice(SRC.length + 1).split(sep).join('/'))
-    expect(mounts).toEqual(['main.jsx'])
+    expect(mounts).toEqual(['components/ui/ThemedToaster.jsx'])
   })
 
-  it('follows the app theme, which the removed one did not', () => {
-    // The two mounts had different props; keeping either wholesale would have
-    // lost something. This one carries the union.
-    const src = readFileSync(resolve(SRC, 'main.jsx'), 'utf8')
-    expect(src).toMatch(/theme="system"/)
+  it('follows the app theme rather than the operating system', () => {
+    // This previously asserted `theme="system"` under the name "follows the
+    // app theme", which is the opposite of what that prop does. `system`
+    // resolves from `prefers-color-scheme`; this app's theme is a manual
+    // toggle stored in `al_theme` and applied as a `dark` class by
+    // `ThemeContext`. The two agree only when the OS happens to match the
+    // toggle, so a student who chose dark on a light laptop got light toasts
+    // over a dark page -- and this test named the bug as the fix.
+    //
+    // The absence of `system` is asserted as well as the presence of the
+    // derived value: leaving a stray `theme="system"` behind would satisfy
+    // the positive check on its own.
+    const src = readFileSync(
+      resolve(SRC, 'components/ui/ThemedToaster.jsx'), 'utf8')
+    expect(src).not.toMatch(/theme="system"/)
+    expect(src).toMatch(/theme=\{dark \? 'dark' : 'light'\}/)
+    expect(src).toMatch(/useTheme\(\)/)
     expect(src).toMatch(/richColors/)
     expect(src).toMatch(/closeButton/)
   })

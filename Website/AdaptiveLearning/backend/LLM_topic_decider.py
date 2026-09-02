@@ -14,7 +14,7 @@ from collections import deque
 from supabase_auth import datetime
 import LLM_algebra_generation, LLM_ordering_generation, LLM_rationals_generation, LLM_mean_generation, LLM_median_generation
 import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation, LLM_angle_relationship_generation, LLM_expressions_generation
-import LLM_missing_number_generation, LLM_patterns_generation
+import LLM_missing_number_generation, LLM_patterns_generation, LLM_graphs_generation
 # python -m flask --app LLM_topic_decider run
 
 load_dotenv()
@@ -25,7 +25,7 @@ supabase = create_client(SUPABASE_URL, SERVICE_ROLE_KEY)
 ALL_TOPICS = [
     "geometry", "algebra", "expressions", "ordering", "rationals",
     "mean", "median", "mode", "probability", "angle_relationships",
-    "missing_number", "patterns",
+    "missing_number", "patterns", "graphs",
 ]
 
 # Enforces in code the same grade rule the prompts below only state in
@@ -85,6 +85,7 @@ TOPIC_MIN_GRADE = {
     # `expressions` and nothing else -- two topics on rotation for a 6-year-old.
     "missing_number":      1,   # 1.OA.8, the unknown in an equation
     "patterns":            1,   # 1.NBT.1 counting sequences, 2.NBT.2 skip counting
+    "graphs":              1,   # 1.MD.4 read a graph, 2.MD.10 compare bars
 }
 
 # The grade past which a topic stops being worth serving. Empty for the ten
@@ -105,6 +106,9 @@ TOPIC_MIN_GRADE = {
 TOPIC_MAX_GRADE = {
     "missing_number":      3,   # 3.OA.4 unknown factor is the last of it
     "patterns":            5,   # 4.OA.5 and 5.OA.3 still generate patterns
+    # 3.MD.3 is the last bar-graph standard; grades 4-5 move to line plots
+    # (4.MD.4, 5.MD.2), which is a different figure and a different reading.
+    "graphs":              3,
 }
 
 
@@ -541,6 +545,16 @@ def question_generation(topic, difficulty, user_id, grade):
             history["patterns"].append({
                     "text": response["question_text"],
                     "topic": "patterns"})
+
+        case "graphs":
+            response = LLM_graphs_generation.generate_graphs_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "graphs"})
+            history["graphs"].append({
+                    "text": response["question_text"],
+                    "topic": "graphs"})
 
         case _:
             # Unreachable while every ALL_TOPICS member has a case above, and

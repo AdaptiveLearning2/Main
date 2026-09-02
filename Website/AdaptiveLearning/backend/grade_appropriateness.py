@@ -57,6 +57,7 @@ FORBIDDEN_BANDS = {
     # (6.EE.7), so a reply that reaches for `2x` has left the topic.
     "missing_number":      {"early", "middle"},
     "patterns":            {"early", "middle"},
+    "graphs":              {"early", "middle"},
 }
 
 # Each pattern avoids the one false positive that actually occurs here: "x"

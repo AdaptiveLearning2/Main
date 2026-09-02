@@ -3048,7 +3048,47 @@ question, not the question.
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
 student answered. `/api/questions` uses `select("*")` and needed nothing.
 
-### Grade 1 had two topics, and now has four
+### `graphs` is the one topic whose figure is required
+
+1.MD.4 ("ask and answer questions about how many more or less"), 2.MD.10 (a bar graph with up to
+four categories), through 3.MD.3. Two scenarios: `how_many_total` is one addition, `how_many_more` a
+reading *and* a subtraction. It is the visual precursor to `mean`/`median`/`mode` — counts read off a
+graph at grade 1-2, statistics over a listed dataset at grade 6.
+
+**Everywhere else a figure that cannot be built costs the picture and nothing else**, because the
+question text stands alone: "a rectangle split into 3 rows of 4 same-size squares" is answerable read
+aloud. "How many more cats than dogs?" is not — the counts live *only* in the graph. So this
+generator treats an unbuildable figure as an unusable reply and retries. `figure_for` keeps its own
+fail-open contract and still returns `None` rather than raising; **the decision that `None` is fatal
+belongs to the topic that cannot do without it**, so a new figure type does not inherit a requirement
+it does not have.
+
+**A digit in the question text is refused.** Writing the counts out hands the student the reading the
+question exists to ask for — it stops being a graph question and becomes arithmetic. Checked, not
+merely requested, like every other prompt rule here that leaked at least once.
+
+**`categories` is a list of `{name, count}`, not a map.** The obvious `{"cats": "7"}` cannot be
+schema'd at all — the API refuses an open `additionalProperties`, which is why probability's bag
+scenarios get no schema. Choosing a shape that *can* be schema'd costs the generator one indirection
+and is cheaper than accepting the gap.
+
+**Asking how many more of the *smaller* bar is refused, not answered with an absolute value.** The
+question on screen asks for something with no answer; scoring the difference would mark a student
+right for answering a question nobody asked.
+
+Capped at grade 3: 3.MD.3 is the last bar-graph standard, and grades 4-5 move to line plots (4.MD.4,
+5.MD.2), which is a different figure and a different reading.
+
+**Two things about the renderer were found by looking at it, not by a test.** Column width is
+derived from the widest label — at a fixed width "storybooks" and "picture books" printed on top of
+each other, with both labels present and correct in the DOM, on a figure whose entire job is to be
+read. And gridlines are ruled at every unit, so bars can be *counted* rather than compared, which is
+the reading 1.MD.4 asks for. The component is named `BarGraph` because the obvious name is one
+`AccessibleChart.test.jsx` matches as a bare word to find Recharts charts rendered outside it — a
+hand-written `<svg>` is the case that guard states it cannot see, so the match is a false accusation.
+The word cannot appear in that file's comments either; the guard reads the file, not the syntax tree.
+
+### Grade 1 had two topics, and now has five
 
 `missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
 factor) and `patterns` (1.NBT.1 counting sequences and 2.NBT.2 skip counting, through 5.OA.3). Both

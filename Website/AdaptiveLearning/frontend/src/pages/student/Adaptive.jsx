@@ -69,6 +69,12 @@ export default function Adaptive() {
   // off a question mid-answer. Null until the profile loads, so nothing is
   // timed against a guess.
   const [durationMin, setDurationMin]         = useState(null)
+  // How many questions the student said they wanted this sitting, or null for
+  // no limit. Per session rather than a saved preference: how long someone
+  // wants to work varies by the afternoon, and `session_duration_minutes`
+  // already covers the standing answer.
+  const [questionGoal, setQuestionGoal]       = useState(null)
+  const [goalDismissed, setGoalDismissed]     = useState(false)
   const [sessionStartedAt, setSessionStartedAt] = useState(null)
   const [elapsedMin, setElapsedMin]           = useState(0)
   const [timeUpDismissed, setTimeUpDismissed] = useState(false)
@@ -257,6 +263,11 @@ export default function Adaptive() {
   }, [sessionStartedAt, durationMin])
 
   const timeUp = !!durationMin && !timeUpDismissed && elapsedMin >= durationMin
+
+  // Reached, not exceeded: the count only moves when an answer is recorded, so
+  // this can never fire part way through a question. Same asked-not-enforced
+  // rule as `timeUp` -- see the banner below.
+  const goalReached = !!questionGoal && !goalDismissed && sessionCount >= questionGoal
 
   // load profile default grade + classes
   useEffect(() => {
@@ -1045,6 +1056,28 @@ export default function Adaptive() {
         </motion.div>
       )}
 
+      {/* The same shape as the duration reminder above, and for the same
+          reason: a banner rather than a modal, so it never blocks a question
+          in progress, and "Keep going" clears the reminder without clearing
+          the goal. */}
+      {goalReached && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className="mb-6 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
+          <Sparkles size={18} className="text-emerald-600 dark:text-emerald-400" />
+          <p className="text-sm font-bold text-emerald-800 dark:text-emerald-200 flex-1 min-w-[14rem]">
+            That is {questionGoal} questions answered. Nice work — finish up, or carry on if you are enjoying it.
+          </p>
+          <button onClick={() => setGoalDismissed(true)}
+            className="px-4 py-2 rounded-xl text-sm font-bold border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition">
+            Keep going
+          </button>
+          <button onClick={finishSession} disabled={finishing}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow transition disabled:opacity-60">
+            {finishing ? 'Finishing…' : 'Finish session'}
+          </button>
+        </motion.div>
+      )}
+
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {sessionCount > 0 && (
@@ -1142,6 +1175,27 @@ export default function Adaptive() {
                   </div>
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
                     Generating <strong>{biasLabel}</strong> questions for <strong>{effectiveGrade}</strong>
+                  </p>
+                </div>
+
+                {/* How many questions this sitting. A goal, not a cap: the
+                    banner it raises can be dismissed, for the same reason the
+                    duration one can -- ending a session on a threshold would
+                    throw away a question the student is part way through. */}
+                <div className="max-w-md mx-auto mb-6">
+                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">How many questions?</label>
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    {[5, 10, 15, 20, null].map(n => (
+                      <button key={n ?? 'none'} onClick={() => { setQuestionGoal(n); setGoalDismissed(false) }}
+                        className={`px-4 py-2 rounded-xl text-sm font-bold transition border ${questionGoal === n ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-400'}`}>
+                        {n ?? 'No limit'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
+                    {questionGoal
+                      ? <>We will check in after <strong>{questionGoal}</strong> — you can always keep going.</>
+                      : <>Practise for as long as you like.</>}
                   </p>
                 </div>
 

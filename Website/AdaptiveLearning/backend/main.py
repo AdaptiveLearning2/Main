@@ -3349,23 +3349,62 @@ def student_sessions(student_id: str, request: Request):
     # only one that matters.
     ids = [r["id"] for r in rows if not r.get("ended_at")]
     last_answer: dict[str, str] = {}
-    activity_known = False
+    # True when there is nothing to find out, which is the ordinary case: a
+    # student with no open session has no session whose activity is unknown.
+    # `False` is reserved for a read that actually failed -- it is the flag a
+    # consumer reads to tell "quiet" from "we could not tell", so publishing
+    # it for "nothing to look up" would be a third meaning on a two-valued
+    # field. Nothing renders it today, which is the only reason this was
+    # invisible rather than wrong on screen.
+    activity_known = True
     if ids:
-        try:
-            recent = (supabase.table("session_answers")
-                      .select("session_id, answered_at")
-                      .in_("session_id", ids)
-                      .order("answered_at", desc=True)
-                      .limit(500).execute().data or [])
-            for a in recent:
-                last_answer.setdefault(a["session_id"], a["answered_at"])
-            activity_known = True
-        except Exception as e:                                  # noqa: BLE001
-            # Three states, not two. A failed read must not be reported as
-            # "no activity" -- that would relabel a live session idle on a
-            # database blip, which is the same class of error as reporting a
-            # failed count as a quiet week.
-            print(f"[sessions] could not read last activity: {e}")
+        # The same four inputs `class_live` derives its own staleness from --
+        # answers AND the three signal tables. Answers alone made the two
+        # teacher surfaces disagree about the same student: someone streaming
+        # EEG through a long question, or spending ten minutes pairing a
+        # headband before answering anything, was active on Live Monitoring
+        # and `idle` here. The *window* was already shared (`_STALE_AFTER_SEC`);
+        # the inputs were not, and sharing one without the other is what made
+        # the disagreement look like a bug in one of the two pages.
+        newest: dict[str, tuple] = {}
+        for table, column in (("session_answers", "answered_at"),
+                              ("cognitive_signals", "ts"),
+                              ("face_signals", "ts"),
+                              ("heart_signals", "ts")):
+            try:
+                recent = (supabase.table(table)
+                          .select(f"session_id, {column}")
+                          .in_("session_id", ids)
+                          .order(column, desc=True)
+                          .limit(500).execute().data or [])
+            except Exception as e:                              # noqa: BLE001
+                # Three states, not two. A failed read must not be reported as
+                # "no activity" -- that would relabel a live session idle on a
+                # database blip, which is the same class of error as reporting
+                # a failed count as a quiet week.
+                #
+                # Any *one* of the four failing is enough, and the partial
+                # result is discarded rather than used: missing a source can
+                # only under-report activity, and under-reported activity is
+                # exactly what calls a working session quiet.
+                print(f"[sessions] could not read last activity from {table}: {e}")
+                activity_known = False
+                newest = {}
+                break
+            for row in recent:
+                stamp = row.get(column)
+                when = _parse_ts(stamp) if stamp else None
+                if when is None:
+                    continue
+                sid = row.get("session_id")
+                if sid not in newest or when > newest[sid][0]:
+                    newest[sid] = (when, stamp)
+        # Parsed for the comparison, published as the original string. The
+        # four tables are all timestamptz through PostgREST, but comparing the
+        # rendered forms across tables would rest on them agreeing about
+        # offset spelling ("+00:00" sorts before "Z"), which is not a property
+        # worth depending on to decide whether a child is still working.
+        last_answer = {sid: stamp for sid, (_, stamp) in newest.items()}
 
     quiet_before = _utc_now() - timedelta(seconds=_STALE_AFTER_SEC)
     for r in rows:

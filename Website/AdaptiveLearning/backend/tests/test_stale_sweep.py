@@ -15,11 +15,22 @@ import main  # noqa: E402
 
 
 class _FakeDB:
-    """Just enough of the supabase client for `student_sessions`: a sessions
-    read and a session_answers read that can be made to fail."""
+    """Just enough of the supabase client for `student_sessions`: the sessions
+    read, plus the four activity sources, any one of which can be made to fail.
 
-    def __init__(self, sessions, answers, boom=False):
+    The three signal tables are modelled rather than left to fall through to
+    the sessions rows. They used to, harmlessly and by accident -- a session
+    row has no `ts`, so every one was skipped -- which meant a test could not
+    tell a page that reads them from one that does not.
+    """
+
+    SIGNALS = ("cognitive_signals", "face_signals", "heart_signals")
+
+    def __init__(self, sessions, answers, boom=False, signals=None,
+                 boom_table="session_answers"):
         self._sessions, self._answers, self._boom = sessions, answers, boom
+        self._signals = signals or {}
+        self._boom_table = boom_table
 
     def table(self, name):
         self._t = name
@@ -32,10 +43,12 @@ class _FakeDB:
     def limit(self, *a, **k): return self
 
     def execute(self):
+        if self._boom and self._t == self._boom_table:
+            raise RuntimeError(f"{self._t} unavailable")
         if self._t == "session_answers":
-            if self._boom:
-                raise RuntimeError("session_answers unavailable")
             return type("R", (), {"data": self._answers})
+        if self._t in self.SIGNALS:
+            return type("R", (), {"data": self._signals.get(self._t, [])})
         return type("R", (), {"data": self._sessions})
 
 
@@ -135,3 +148,74 @@ def test_a_failed_activity_read_never_claims_idle(monkeypatch):
     out = main.student_sessions("u1", request=None)
     assert out[0]["activity_known"] is False
     assert out[0]["idle"] is False, "unknown is not idle"
+
+
+def _as_teacher(monkeypatch, db):
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *a, **k: None)
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "t1"})
+    monkeypatch.setattr(main, "supabase", db)
+
+
+def test_a_session_streaming_signals_is_not_idle(monkeypatch):
+    """`class_live` derives staleness from the three signal tables AND
+    answers; this endpoint read answers alone, against the same window. So a
+    student streaming EEG through a long question -- or spending ten minutes
+    pairing a headband before answering anything -- was active on Live
+    Monitoring and `idle` here, about the same session at the same moment.
+
+    Sharing the window without the inputs is what made that disagreement look
+    like a bug in one of the two pages.
+    """
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-eeg", started_min_ago=30)]
+    answers = [{"session_id": "s-eeg", "answered_at": old}]
+    signals = {"cognitive_signals": [
+        {"session_id": "s-eeg", "ts": main._utc_now().isoformat()}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["idle"] is False, "the headband has been streaming throughout"
+    assert out[0]["last_activity_at"] == signals["cognitive_signals"][0]["ts"]
+
+
+def test_the_newest_source_wins_whichever_table_it_came_from(monkeypatch):
+    """The negative control for the test above: with every signal stale as
+    well, the session really is quiet. Without this, that test would pass
+    against an endpoint that had simply stopped reporting anything idle."""
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-quiet-all", started_min_ago=30)]
+    answers = [{"session_id": "s-quiet-all", "answered_at": old}]
+    signals = {"heart_signals": [{"session_id": "s-quiet-all", "ts": old}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    assert main.student_sessions("u1", request=None)[0]["idle"] is True
+
+
+def test_a_failed_signal_read_is_unknown_too(monkeypatch):
+    """Any one of the four sources failing can only *under*-report activity,
+    and under-reported activity is exactly what calls a working session quiet.
+    So the flag goes unknown rather than the read being quietly skipped."""
+    rows = [_session("s-partial", started_min_ago=30)]
+    _as_teacher(monkeypatch, _FakeDB(rows, answers=[], boom=True,
+                                     boom_table="heart_signals"))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["activity_known"] is False
+    assert out[0]["idle"] is False
+
+
+def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
+    """`activity_known` separates "quiet" from "we could not tell", so it has
+    to mean the second and only the second. It was initialised `False` and
+    raised only inside `if ids:`, so a student whose sessions are all closed
+    -- the ordinary case for anyone not mid-lesson -- published the flag that
+    means the database read failed. Nothing renders it today, which is the
+    only reason this was invisible rather than wrong on screen."""
+    rows = [_session("s-done", ended=main._utc_now().isoformat())]
+    _as_teacher(monkeypatch, _FakeDB(rows, answers=[]))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["activity_known"] is True
+    assert out[0]["idle"] is False

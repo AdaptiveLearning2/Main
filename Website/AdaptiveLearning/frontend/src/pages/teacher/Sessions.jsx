@@ -211,10 +211,15 @@ export default function Sessions() {
             const abandoned = !s.ended_at && s.abandoned === true
             // Four states now. `abandoned` is an *age* (6h) and only stops the
             // list claiming a session from June is in progress; `idle` is real
-            // quiet, computed by the backend from the newest answer against
-            // the same window `class_live` uses. Without it a student who
-            // answered three questions and closed the laptop read LIVE, with
-            // the duration ticking up, for six hours.
+            // quiet, computed by the backend from the newest answer *and* the
+            // three signal tables, against the same window `class_live` uses.
+            // Without it a student who answered three questions and closed the
+            // laptop read LIVE, with the duration ticking up, for six hours.
+            //
+            // Both halves of that are load-bearing and only one of them used
+            // to be true: sharing the window while reading fewer sources let
+            // this page call a student idle who was streaming EEG through a
+            // long question, while Live Monitoring showed them active.
             //
             // `=== true` on both, and `activity_known` gates idle: a failed
             // read of last activity must not relabel a live session as quiet,

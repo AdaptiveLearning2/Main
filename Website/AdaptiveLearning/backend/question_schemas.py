@@ -242,25 +242,27 @@ def graphs(scenario_name):
 
 
 def quadratics():
-    """The three coefficients of `ax^2 + bx + c = 0`, each a whole number.
+    """Just the sentence. The equation is not the model's to write.
 
-    An object with fixed keys, unlike `algebra`'s token list, and that is the
-    point rather than a style difference: the equation the student sees is
-    *rendered* from these by `hs_solvers.render_quadratic` and required to
-    appear verbatim in the text, so there is no token stream to validate and
-    no way for the shown equation to drift from the scored one.
+    The narrowest schema here, and deliberately: `_choose_coefficients` builds
+    the equation, the generator renders it into the prompt, and the reply is
+    required to contain that string verbatim. So there is nothing for the
+    model to return but the wording around it.
 
-    `target` is deliberately absent -- which root is asked for is chosen by
-    the generator before the call and written into the prompt, so a reply
-    cannot disagree about it. Putting it here would make it the model's to
-    pick, and a reply naming the root it did not ask about in the text is the
-    one failure this topic cannot detect from the coefficients alone.
+    It did carry `coefficients`, and the measurement is why it does not.
+    Across three promptings llama3.1:8b produced a factorable quadratic 0 of
+    3, 2 of 3 and 1 of 4 times -- almost every failure `irrational roots`,
+    because a freely chosen b and c almost never leave b^2 - 4ac a perfect
+    square. Every one of those retries was a billed call that could not have
+    succeeded.
+
+    `target` is absent for the older version of the same reason: which root is
+    asked for is settled before the call, so a reply cannot disagree about it.
+    A reply naming one root in the text and another in a field is the one
+    failure the coefficients could never have revealed.
     """
     return _object({"question_text": _TEXT,
-                    "question_topic": _TEXT,
-                    "coefficients": _object(
-                        {k: {"type": "string", "pattern": r"^-?\d{1,4}$"}
-                         for k in ("a", "b", "c")})})
+                    "question_topic": _TEXT})
 
 
 def functions(scenario_name):

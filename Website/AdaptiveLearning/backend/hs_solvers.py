@@ -38,6 +38,7 @@ them and must not pull in supabase and flask with them; nothing here runs in a
 subprocess, and the two topics share every helper below this line.
 """
 
+import math
 import re
 
 # Bounded by inspection, which is what lets `int()` run on model output with no

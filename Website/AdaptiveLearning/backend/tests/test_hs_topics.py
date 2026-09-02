@@ -217,18 +217,26 @@ def reply(monkeypatch):
     return _use
 
 
+@pytest.fixture
+def fixed_quadratic(monkeypatch):
+    """Pin the equation and the root, both of which are chosen randomly.
+
+    The generator settles them before it calls the model, so a test that did
+    not pin them would assert against whichever equation today's shuffle
+    produced.
+    """
+    monkeypatch.setattr(quad, "_choose_coefficients", lambda *_a: (1, -5, 6))
+    monkeypatch.setattr(quad.random, "choice", lambda seq: "larger")
+
+
 def _quadratic_reply(target):
     return {"question_text":
             f"Solve x^2 - 5x + 6 = 0. What is the {target} solution?",
-            "question_topic": "quadratics",
-            "coefficients": {"a": "1", "b": "-5", "c": "6"}}
+            "question_topic": "quadratics"}
 
 
-def test_a_valid_quadratic_is_served_with_its_answer_among_options(reply,
-                                                                   monkeypatch):
-    # The target is chosen randomly per question, so pin it: otherwise this
-    # asserts on whichever root today's shuffle asked for.
-    monkeypatch.setattr(quad.random, "choice", lambda seq: "larger")
+def test_a_valid_quadratic_is_served_with_its_answer_among_options(
+        reply, fixed_quadratic):
     reply(_quadratic_reply("larger"))
     question = quad.generate_quadratics_question([], [], "easy", "9th Grade")
     assert question["correct_answer"] == "3"
@@ -237,33 +245,79 @@ def test_a_valid_quadratic_is_served_with_its_answer_among_options(reply,
     assert question["question_topic"] == "quadratics"
 
 
-def test_the_other_root_is_offered_as_a_distractor(reply, monkeypatch):
+def test_the_other_root_is_offered_as_a_distractor(reply, fixed_quadratic):
     """The mistake worth putting in front of a student: solved correctly, read
     "larger" as "smaller"."""
-    monkeypatch.setattr(quad.random, "choice", lambda seq: "larger")
     reply(_quadratic_reply("larger"))
     question = quad.generate_quadratics_question([], [], "easy", "9th Grade")
     assert "2" in question["answer_options"]
 
 
-def test_a_quadratic_whose_text_asks_for_the_other_root_retries(reply,
-                                                                monkeypatch):
-    monkeypatch.setattr(quad.random, "choice", lambda seq: "larger")
+def test_a_quadratic_whose_text_asks_for_the_other_root_retries(
+        reply, fixed_quadratic):
     reply(_quadratic_reply("smaller"))
     with pytest.raises(ValueError):
         quad.generate_quadratics_question([], [], "easy", "9th Grade")
 
 
-def test_an_unscoreable_quadratic_retries_rather_than_raising(reply,
-                                                              monkeypatch):
-    """`x^2 + 1 = 0` has no real roots. Not a raise out of the generator -- a
-    retry, which is what `_prefetch_worker` already handles."""
-    monkeypatch.setattr(quad.random, "choice", lambda seq: "larger")
-    reply({"question_text": "Solve x^2 + 1 = 0. What is the larger solution?",
-           "question_topic": "quadratics",
-           "coefficients": {"a": "1", "b": "0", "c": "1"}})
+def test_a_text_that_drops_the_equation_it_was_handed_retries(
+        reply, fixed_quadratic):
+    """The only thing the model can still get wrong. It is given the equation
+    and asked to write the sentence around it, so a text carrying a different
+    one is not a harder question -- it is a question about an equation nobody
+    is scoring."""
+    reply({"question_text": "Solve x^2 - 7x + 12 = 0. What is the larger solution?",
+           "question_topic": "quadratics"})
     with pytest.raises(ValueError):
         quad.generate_quadratics_question([], [], "easy", "9th Grade")
+
+
+# --- the coefficients are chosen here, not asked for ----------------------
+
+@pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
+@pytest.mark.parametrize("band", ["early", "middle", "upper", "advanced"])
+def test_every_built_equation_is_solvable(difficulty, band):
+    """The property the whole redesign rests on. Measured across three
+    promptings, llama3.1:8b produced a factorable quadratic 0 of 3, 2 of 3 and
+    1 of 4 times -- nearly every failure `irrational roots`, since a freely
+    chosen b and c almost never leave a perfect-square discriminant. Built
+    from two distinct integer roots it cannot fail, and every one of those
+    retries was a billed call that could not have succeeded.
+
+    Run over many draws rather than one: the failure this replaces was
+    probabilistic, so a single sample would not have caught it either.
+    """
+    for _ in range(200):
+        a, b, c = quad._choose_coefficients(difficulty, band)
+        for target in ("larger", "smaller"):
+            value, reason = hs_solvers.solve_quadratic(a, b, c, target)
+            assert value is not None, (a, b, c, target, reason)
+
+
+@pytest.mark.parametrize("difficulty,expected_scales", [
+    ("easy", {1}), ("medium", {1}), ("hard", {2, 3, 4}),
+])
+def test_the_hard_tier_is_the_one_with_a_leading_coefficient(difficulty,
+                                                             expected_scales):
+    """A leading coefficient above 1 is what turns factoring into the AC
+    method, and is the rung the model was *least* able to produce -- it is
+    reachable only because the equation is built here."""
+    seen = {quad._choose_coefficients(difficulty, "advanced")[0]
+            for _ in range(200)}
+    assert seen == expected_scales
+
+
+def test_easy_keeps_both_roots_positive_and_medium_does_not():
+    """Difficulty has to mean something, and before this it meant whatever the
+    model reached for -- two of its `hard` replies were `a = 1` with both
+    roots positive, which is the easy tier wearing a hard label."""
+    def roots(difficulty):
+        a, b, c = quad._choose_coefficients(difficulty, "advanced")
+        return {hs_solvers.solve_quadratic(a, b, c, t)[0]
+                for t in ("larger", "smaller")}
+
+    assert all(min(roots("easy")) > 0 for _ in range(50))
+    assert any(min(roots("medium")) < 0 for _ in range(50))
 
 
 def test_a_valid_function_question_is_served_with_its_answer(reply):
@@ -359,9 +413,11 @@ def test_the_compose_schema_carries_g_and_the_evaluate_one_does_not():
     assert "g" not in question_schemas.functions("evaluate")["properties"]
 
 
-def test_the_quadratics_schema_does_not_let_the_model_pick_the_root():
-    """Which root is asked for is decided before the call and written into the
-    prompt. In the schema it would be the model's to choose, and a reply
-    naming one root in the text and the other in a field is the one failure
-    the coefficients cannot reveal."""
-    assert "target" not in question_schemas.quadratics()["properties"]
+def test_the_quadratics_schema_asks_for_nothing_but_the_sentence():
+    """Both the equation and the root are decided before the call, so neither
+    is the model's to return. `coefficients` was in this schema and is what
+    the measurement removed; `target` was never in it, because a reply naming
+    one root in the text and another in a field is the one disagreement the
+    coefficients could not have revealed."""
+    assert set(question_schemas.quadratics()["properties"]) == {
+        "question_text", "question_topic"}

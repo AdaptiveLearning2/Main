@@ -65,23 +65,16 @@ The Question Topic will be "quadratics".
 
 The question asks the student to solve a quadratic equation and give ONE of its two solutions.
 
-Example: "Solve x^2 - 5x + 6 = 0. What is the larger solution?"
-
-Rules for "coefficients":
-- It is an object with the keys "a", "b" and "c", each a whole number written as a string.
-- They are the coefficients of a*x^2 + b*x + c = 0, so "a" must NOT be "0".
-- The equation MUST have two DIFFERENT solutions and BOTH must be whole numbers.
-  Choose two different whole numbers p and q first, then use
-  a = 1, b = -(p + q), c = p * q. You may multiply all three by the same whole
-  number if you want a leading coefficient other than 1.
-- Do NOT write an equation whose solutions are fractions, decimals, or square roots.
+You are given the equation and which solution to ask for. Your ONLY job is to
+write the sentence around them. Do NOT change the equation, do NOT solve it,
+and do NOT mention either solution.
 
 Rules for "question_text":
-- It must contain the equation written EXACTLY as given below under EQUATION AS
-  IT MUST APPEAR, character for character.
-- It must ask for the solution named below under WHICH SOLUTION TO ASK FOR, and
-  must NOT use a word meaning the other one.
-- Write the squared term as "x^2". Do NOT use "x²", "x**2" or "x2".
+- It must contain the equation written EXACTLY as given below under EQUATION,
+  character for character, including every sign and space.
+- It must ask for the solution named below under WHICH SOLUTION, and must NOT
+  use a word meaning the other one.
+- Vary the wording between questions. Do not write any other number anywhere.
 
 Return ONLY valid JSON with no text before or after the JSON object.
 
@@ -89,8 +82,7 @@ The JSON must follow this exact structure:
 
 {
   "question_text": "Solve x^2 - 5x + 6 = 0. What is the larger solution?",
-  "question_topic": "quadratics",
-  "coefficients": {"a": "1", "b": "-5", "c": "6"}
+  "question_topic": "quadratics"
 }
 
 Rules:
@@ -98,89 +90,73 @@ Rules:
 - Do NOT include any characters outside the JSON object.
 """
 
+# How big the roots get, per band. The band scales magnitude only; which
+# *shape* of equation each difficulty gets is `_TIERS` below, exactly as in
+# geometry and probability, where difficulty selects the scenario and the band
+# scales the numbers. Stating the difficulty rule in both places is what a
+# single table avoids.
+_ROOT_RANGE = {
+    "early":    (1, 5),
+    "middle":   (1, 8),
+    "upper":    (1, 10),
+    "advanced": (2, 12),
+}
+
+# `signs` decides whether a root may be negative; `scales` is the leading
+# coefficient. `hard` multiplying through by 2-4 is the step that turns
+# factoring into the AC method, and is the standard Algebra I progression.
+_TIERS = {
+    "easy":   {"signs": "positive", "scales": (1,)},
+    "medium": {"signs": "mixed",    "scales": (1,)},
+    "hard":   {"signs": "mixed",    "scales": (2, 3, 4)},
+}
+
+
+def _choose_coefficients(difficulty, grade_band):
+    """`(a, b, c)` for an equation that is factorable over the integers.
+
+    Built here rather than asked for, which is the whole reason this topic is
+    reliable. Measured on llama3.1:8b across three promptings -- a description
+    of the constraint, a construction recipe, and a construction recipe with a
+    worked example -- the model produced a usable equation 0 of 3, 2 of 3 and
+    1 of 4 times. Almost every refusal was `irrational roots`: it picks b and c
+    freely, and a random pair almost never leaves b^2 - 4ac a perfect square.
+    Of the successes, two silently dropped the constraint they were given and
+    one copied the worked example verbatim, so the tier was also not producing
+    the content it named.
+
+    None of that is a wording problem, so no wording fixed it. Choosing p and q
+    here makes the equation factorable by construction, which:
+
+      * removes the refusal class entirely -- every retry that class caused was
+        a billed model call that could not have succeeded;
+      * makes the `hard` tier possible at all. A leading coefficient of 2-4 is
+        the AC method and the right rung, and it was measured as the *least*
+        achievable thing to ask for;
+      * gives the difficulty tiers a uniform meaning rather than whatever the
+        model happened to reach for.
+
+    It is the same move already made for `target` here, and for the scenario in
+    geometry and probability: the part with a right answer is decided in code,
+    and the model writes the sentence.
+    """
+    low, high = _ROOT_RANGE.get(grade_band, _ROOT_RANGE["advanced"])
+    tier = _TIERS.get(difficulty, _TIERS["medium"])
+    p, q = random.sample(range(low, high + 1), 2)
+    if tier["signs"] == "mixed":
+        # One of the two, not both: "both negative" is a narrower question and
+        # `-p` on the larger keeps the pair straddling zero more often.
+        p = -p
+    scale = random.choice(tier["scales"])
+    # x^2 - (p + q)x + pq, multiplied through. The roots stay p and q, so they
+    # are whole by construction and the discriminant is a perfect square.
+    return scale, -scale * (p + q), scale * p * q
+
 
 def _grade_band(grade):
     # Delegated so the copies cannot drift apart, and so an unreadable grade
     # ("Grade 1") lands in "early" rather than "advanced". See grade_levels.
     return grade_levels.grade_band(grade)
-
-
-# Only "advanced" is reachable: LLM_topic_decider.TOPIC_MIN_GRADE puts this
-# topic at grade 9. The other three bands are defense-in-depth in the same
-# spirit as the "early" tables on the topics gated to grade 6+ -- if that floor
-# is ever removed or bypassed, the content must still be something rather than
-# whatever the model reaches for. They are deliberately not *easier* versions
-# of a quadratic: there is no grade-3 quadratic, so what they scale is the
-# arithmetic, and the gate above is what actually keeps the topic away.
-COMPLEXITY_BY_GRADE = {
-    "early": {
-        "easy":   "Use a = 1 and solutions between 1 and 5.",
-        "medium": "Use a = 1 and solutions between 1 and 6.",
-        "hard":   "Use a = 1 and solutions between 1 and 8.",
-    },
-    "middle": {
-        "easy":   "Use a = 1 and solutions between 1 and 6.",
-        "medium": "Use a = 1 and solutions between 1 and 9.",
-        "hard":   "Use a = 1 and solutions between 1 and 10.",
-    },
-    "upper": {
-        "easy":   "Use a = 1 and solutions between 1 and 9.",
-        "medium": "Use a = 1, and make ONE of the two solutions negative.",
-        "hard":   "Use a = 1, and make BOTH solutions negative.",
-    },
-    "advanced": {
-        "easy":   "Use a = 1 and two positive solutions between 2 and 12.",
-        "medium": "Use a = 1 and make at least ONE solution negative, with both between -12 and 12.",
-        # BOTH solutions negative, and deliberately NOT a leading coefficient
-        # above 1 -- which is the rung this tier should eventually be, and is
-        # measured as not working on llama3.1:8b.
-        #
-        # A leading coefficient of 2-4 is the natural step up: it is what turns
-        # factoring into the AC method, and it is the standard Algebra I
-        # progression. Asked for as a description ("use a leading coefficient
-        # of 2, 3 or 4 and make at least one solution negative") it failed all
-        # three attempts with "no real roots". Rewritten as an explicit
-        # construction from p and q, with a worked example, it got to 2 of 3 --
-        # and both successes silently dropped the constraint, returning
-        # `x^2 - 9x + 20 = 0` and `x^2 - 17x + 60 = 0`: a = 1, both roots
-        # positive, which is the medium tier wearing a hard label. So the cell
-        # was failing a third of the time *and* not producing hard content the
-        # rest of it.
-        #
-        # Production runs Claude, and CLAUDE.md is explicit that a rate
-        # measured on llama3.1:8b describes only the Ollama path -- Haiku may
-        # well construct these. But a tier that raises for one student in three
-        # on the development provider is not something to leave in on the
-        # assumption that the other provider is better, and re-measuring means
-        # billing the API. Two roots of the same sign and larger magnitudes is
-        # a real step above medium, is reliably constructible, and leaves the
-        # AC-method rung to be enabled by whoever measures it.
-        "hard":   "First choose two different whole numbers p and q, BOTH negative and both between -2 and -14. Then use a = 1, b = -(p + q), c = p * q -- so b and c are both positive. Example: p = -3 and q = -8 give x^2 + 11x + 24 = 0, whose solutions are -3 and -8.",
-    },
-}
-
-
-def _coefficients(question_data, attempt):
-    """The three coefficients as ints, or None to retry.
-
-    Every value goes through `hs_solvers.parse_int`, which bounds the magnitude
-    before `int()` sees it. That is what lets this topic skip the bounded
-    subprocess the sympy-backed topics need: there is no parser here to hand a
-    `9**9**9` to.
-    """
-    raw = question_data.get("coefficients")
-    if not isinstance(raw, dict):
-        print(f"[Attempt {attempt}] coefficients is not an object: {raw!r:.60}")
-        return None
-    values = []
-    for key in ("a", "b", "c"):
-        value = hs_solvers.parse_int(raw.get(key))
-        if value is None:
-            print(f"[Attempt {attempt}] coefficient {key!r} is unusable: "
-                  f"{raw.get(key)!r:.40}")
-            return None
-        values.append(value)
-    return values
 
 
 def shown_matches_scored(question_text, a, b, c, target):
@@ -242,6 +218,19 @@ def generate_quadratics_question(global_questions, prev_questions,
                                  difficulty, grade, max_retries=3):
     grade_band = _grade_band(grade)
     target = random.choice(TARGETS)
+    # Both decided before the loop, so every attempt asks for the same
+    # question and a retry is only ever the model failing to write the
+    # sentence -- not a fresh roll of the dice that might land on something
+    # unsolvable. The equation is factorable by construction.
+    a, b, c = _choose_coefficients(difficulty, grade_band)
+    equation = hs_solvers.render_quadratic(a, b, c)
+    solution, reason = hs_solvers.solve_quadratic(a, b, c, target)
+    if solution is None:
+        # Unreachable: `_choose_coefficients` builds from two distinct integer
+        # roots. Raising rather than retrying because a retry cannot help --
+        # nothing about the next model call changes these coefficients -- and
+        # this is a bug in the construction, not a bad reply.
+        raise ValueError(f"built an unsolvable quadratic {equation!r}: {reason}")
     for attempt in range(max_retries):
         if attempt > 0:
             prompt = quadratic_prompt + "\nREMEMBER: ONLY RETURN VALID JSON. NO EXTRA TEXT."
@@ -258,11 +247,8 @@ def generate_quadratics_question(global_questions, prev_questions,
         prompt += (
             f"\nGenerate a question of this topic that a {grade} student would consider to be of {difficulty} difficulty.\n"
         )
-        prompt += (
-            f"\nCOMPLEXITY FOR THIS GRADE AND DIFFICULTY: "
-            f"{COMPLEXITY_BY_GRADE[grade_band].get(difficulty, COMPLEXITY_BY_GRADE[grade_band]['medium'])}\n"
-        )
-        prompt += f"\nWHICH SOLUTION TO ASK FOR: the {target} solution.\n"
+        prompt += f"\nEQUATION: {equation}\n"
+        prompt += f"\nWHICH SOLUTION: the {target} solution.\n"
         prompt = lesson_plan_context.append_lesson_context(prompt, "quadratics", grade_band)
 
         response_text = llm_client.generate_text(
@@ -286,24 +272,10 @@ def generate_quadratics_question(global_questions, prev_questions,
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
-        coefficients = _coefficients(question_data, attempt + 1)
-        if coefficients is None:
-            continue
-        a, b, c = coefficients
-
-        # Solved inside the loop, so an equation this topic cannot score is
-        # another attempt rather than an exception below the `for/else`. Four
-        # of the refusals here are quadratics a student could be asked about
-        # by a teacher and not by this solver -- irrational roots, a repeated
-        # root -- so a retry is the honest response to all of them.
-        solution, reason = hs_solvers.solve_quadratic(a, b, c, target)
-        if solution is None:
-            print(f"[Attempt {attempt+1}] Unusable quadratic: {reason}")
-            continue
-
-        # After the solve: the equation it renders is the one that has just
-        # been scored, so a mismatch here is the model's text disagreeing with
-        # the model's own coefficients.
+        # The only thing left to get wrong: the sentence. The equation and the
+        # root were settled before the loop, so this is the model dropping or
+        # altering what it was handed rather than inventing something
+        # unsolvable.
         mismatch = shown_matches_scored(question_data["question_text"],
                                         a, b, c, target)
         if mismatch:

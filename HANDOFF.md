@@ -173,14 +173,14 @@ Beyond `CLAUDE.md`, which covers most of it:
    it is the larger half of the original finding. Capping them would take a
    grade-9 student to two topics — the same trade that took grades 4-5 from
    eight topics to four, which was made deliberately and hurt. Not attempted.
-3. **The `quadratics` hard tier is a rung below where it should be.** A
-   leading coefficient of 2-4 is what turns factoring into the AC method and
-   is the standard Algebra I step; it is *measured not to work* on
-   llama3.1:8b, which failed 1 of 3 outright and silently dropped the
-   constraint on the other 2, returning `a = 1` with both roots positive. The
-   shipped tier is two negative roots instead. Production runs Claude and may
-   well construct it — re-measure there before enabling, and note that means
-   billing the API.
+3. **`functions` still lets the model choose its own coefficients, and
+   `quadratics` no longer does.** The quadratics generator was measured
+   producing a usable equation 0 of 3, 2 of 3 and 1 of 4 times across three
+   promptings before the coefficients were moved into code; it is now built
+   from two integer roots and cannot fail that way. `functions` has not shown
+   the same problem — every generated question was solvable, because almost
+   any coefficients are — so it was left alone, but it is the same shape and
+   the same fix applies if it ever starts burning retries.
 4. **`spread` (S-ID.2) is the obvious third topic and is not built.** Standard
    deviation is the genuinely-HS statistic, and its answers are irrational,
    so it needs a decision about rounding before a solver: a correct option

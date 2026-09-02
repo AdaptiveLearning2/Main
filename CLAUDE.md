@@ -3365,6 +3365,25 @@ absent from the schema. `shown_matches_scored` therefore checks two things, and 
 one no equation check can see: a text asking for "the smaller solution" scored against the larger is
 a well-formed question, correctly solved, marked wrong. It also refuses a text naming *neither*.
 
+**The coefficients are chosen in code too, and `quadratics` is the worked example for why.** The
+schema asks for nothing but the sentence. Measured on llama3.1:8b across three promptings — the
+constraint as a description, as a construction recipe, and as a recipe with a worked example — the
+model produced a factorable quadratic **0 of 3, 2 of 3 and 1 of 4** times. Nearly every failure was
+`irrational roots`: it picks `b` and `c` freely and a random pair almost never leaves `b² − 4ac` a
+perfect square. Of the successes, two silently dropped the constraint they were given and one copied
+the worked example verbatim, so the tier was *also* not producing the content it named. No wording
+fixed it, because it is not a wording problem.
+
+`_choose_coefficients` builds from two distinct integer roots, so the equation is factorable by
+construction and the whole refusal class is gone. Three things follow, and the second is the one to
+generalise: **every retry that class caused was a billed model call that could not have succeeded**;
+the `hard` tier can be the AC method (a leading coefficient of 2–4), which is the right Algebra I
+rung and was measured as the *least* achievable thing to ask for; and difficulty tiers get a uniform
+meaning rather than whatever the model reached for. It is the same move already made for `target`
+here and for the scenario in geometry and probability — **decide the part with a right answer in
+code, and let the model write the sentence.** Reach for it whenever a generator is retrying against
+a constraint the model keeps missing rather than against a malformed reply.
+
 Four quadratics are refused rather than served: no real roots, a **repeated** root (where "the
 larger" names nothing and every distractor would simply not be a root), irrational roots, and
 roots that are not whole numbers. That restricts the topic to equations factorable over the

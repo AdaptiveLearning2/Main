@@ -61,7 +61,9 @@ import llm_client
 #
 # The worker prints a readiness line once sympy is loaded and the two phases
 # are timed separately, so 3s is now ~300x margin over the maths it bounds.
-# Re-measured under the same saturation afterwards: 8 of 8 succeeded.
+# Re-measured under the same saturation: 7 of 8 succeed. At 2x
+# oversubscription it is 1 of 8 and the split does not rescue that -- the
+# machine cannot start interpreters fast enough, whatever the budgets say.
 #
 # The consequence to know before lowering it: this is the number that stops a
 # runaway, and `SOLVE_STARTUP_BUDGET` is the one that absorbs a slow machine.
@@ -475,27 +477,6 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     this.
     """
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
-    # A timeout gets one more go, with a wider budget.
-    #
-    # `SOLVE_MAX_CONCURRENCY` bounds *this process's* workers and nothing else.
-    # The budget is wall-clock over a child dominated by sympy startup, so any
-    # co-tenant on the machine spends it -- reproduced with the frontend suite
-    # running alongside, and again with CPU hogs: 8 of 8 solves killed at 3.0s.
-    # Ten of the fourteen topics reach the worker, and since a timeout raises
-    # rather than returning None, every one of those was a 503 on the first
-    # attempt.
-    #
-    # Retrying is what separates the two things a timeout can mean. A genuine
-    # spin -- `parse_expr("9**9**9")` -- is still spinning on the second
-    # attempt and is killed again, so it costs a bounded extra wait and no
-    # wrong answer. Contention is not: it is a property of the moment, and the
-    # moment passes. Nothing in-process can tell them apart, and the retry does
-    # not need to.
-    #
-    # The second budget is wider because the first timeout is itself the
-    # evidence that this machine is slower than the budget assumed -- the same
-    # reasoning as `_probe_startup`'s clamp, applied when the measurement
-    # arrives late.
     # `startup_timeout` exists for `_probe_startup` alone. Its budget is
     # deliberately unrelated to the setting it validates -- bounded by the one
     # it is measuring, a too-small `SOLVE_STARTUP_BUDGET` makes the probe time
@@ -523,6 +504,11 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     # So the retry moved to where the evidence puts it. The worst-case hold on
     # an anyio threadpool slot drops with it: a spin is 18s absolute rather
     # than 42s, and ~4s in practice, on the hottest path in the product.
+    #
+    # Why any of this is worth the words: ten of the fourteen topics reach the
+    # worker, and a timeout *raises* rather than returning None -- so whatever
+    # this branch decides is the difference between a retry and a 503 in front
+    # of a student, across most of the question bank at once.
     #
     # `SOLVE_RETRY_BUDGET_FACTOR` went with the old shape. It widened the solve
     # budget on the second attempt, and there is no second attempt at a solve

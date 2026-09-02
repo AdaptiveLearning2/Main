@@ -2380,6 +2380,42 @@ manufactures a reason: a channel off for consent reasons still reads "not record
 `_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
 They default to True and are not a privacy boundary; don't build one on them.
 
+### A refusal is not an outage, and `LoadError` is where the two stop being one sentence
+
+`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure.
+That names a layer, and naming a layer sends someone to inspect it — so a teacher whose Question
+Bank filter was refused went and checked a server that had answered perfectly well. It now picks
+the sentence from `error.status`, which `apiFetch` attaches: **403** is "you don't have access to
+X" and gets **no Try again button**, since retrying a refusal cannot work and offering the button
+is part of the false claim; **401** says the session expired and keeps it; **anything else,
+including an error carrying no `status` at all**, keeps the original wording, because a dropped
+connection genuinely is an unreachable backend and relabelling it as a permissions problem is the
+same mistake pointing the other way. Callers pass nothing and are unchanged; a page wires it by
+holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
+truthiness check).
+
+**Name what was actually refused, not what the page is about.** `questions` is public-read, so a
+403 on the Question Bank can only ever concern the student filter — *"you don't have access to the
+question bank"* would deny access to something the teacher can see behind the message.
+
+### A roster row has `user_id` and `name` — not `id`, not `display_name`
+
+`/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is
+the exception that proves the rule: it reads `profiles` straight through Supabase, so its rows
+really do have `id`.
+
+Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an
+undefined `value` falls back to its own text content**, so `value={s.id}` over a label of
+`{s.display_name || s.email}` sent the student's *email* to `/api/students/{id}/questions`, which
+resolves a uuid through `_verify_can_view_student` — 403 on every pick, from a picker that looked
+right and named the right student.
+
+**A fixture written from the same misreading as the code cannot fail against it.** Five tests
+passed over that filter because `ROSTER` in the test file also said `id`/`display_name`. Build a
+roster fixture from what the endpoint returns, `email` included — without that field the failure is
+not even representable — and assert on the **request path**, since both the option's value and its
+label come from one row and a wrong key still displays the right name.
+
 ### Every chart goes through `AccessibleChart`, and a test enforces it
 
 Recharts emits bare `<svg>` with no accessible name and nothing a screen reader

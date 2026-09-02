@@ -204,6 +204,34 @@ describe('the student filter', () => {
     await pickStudent()
     await waitFor(() => expect(screen.queryByText('What is 7 x 8?')).not.toBeInTheDocument())
   })
+
+  it('names the student, not the bank, when the refusal is about one student', async () => {
+    // The bank is public-read; a 403 here can only ever be about the student.
+    // Saying "you don't have access to the question bank" would deny access to
+    // something this teacher demonstrably has -- it is on the screen behind
+    // the message.
+    mockFilterApi({
+      '/api/students/s-1/questions?limit=200': () => {
+        throw Object.assign(new Error('Forbidden'), { status: 403 })
+      },
+    })
+    await pickStudent()
+    const box = await screen.findByRole('status')
+    expect(box).toHaveTextContent("You don't have access to this student's questions.")
+    expect(box).not.toHaveTextContent(/backend/i)
+  })
+
+  it('still blames the backend when the bank itself is unreachable', async () => {
+    // The other direction, and the reason the wording is chosen per read
+    // rather than per page: nothing about the student filter is involved here.
+    mockApi({
+      '/api/questions?limit=1000': () => { throw new Error('network down') },
+      '/api/classes': () => CLASSES,
+    })
+    render(<Questions />, { wrapper: MemoryRouter })
+    expect(await screen.findByRole('status'))
+      .toHaveTextContent("Couldn't load the question bank. Make sure the backend is running.")
+  })
 })
 
 describe('a superseded read cannot paint under the wrong name', () => {

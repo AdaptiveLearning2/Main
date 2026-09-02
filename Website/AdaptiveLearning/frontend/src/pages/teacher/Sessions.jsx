@@ -61,7 +61,7 @@ export default function Sessions() {
       }
     }).catch(e => {
       console.error('Failed to load classes:', e)
-      setFailed(true); setLoading(false)
+      setFailed(e); setLoading(false)
     })
   }, [])
 
@@ -103,7 +103,7 @@ export default function Sessions() {
     }).catch(e => {
       if (!current()) return
       console.error('Failed to load the class roster:', e)
-      setFailed(true); setLoading(false)
+      setFailed(e); setLoading(false)
     })
   }, [classId, beginRosterRead])
 
@@ -163,7 +163,11 @@ export default function Sessions() {
       {loading ? (
         <SkeletonList count={4} height="h-16" gap="space-y-2" />
       ) : failed || allFailed ? (
-        <LoadError what="this class's sessions" onRetry={retry} />
+        // `failed` holds the error, `allFailed` is derived from per-student
+        // reads that each failed separately -- there is no one error to blame
+        // for that, so it falls through to the generic sentence.
+        <LoadError what="this class's sessions" onRetry={retry}
+          error={failed || undefined} />
       ) : allRows.length === 0 ? (
         <div className="text-center py-16 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
           <div className="text-6xl mb-3">📭</div>

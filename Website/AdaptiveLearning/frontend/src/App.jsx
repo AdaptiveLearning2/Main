@@ -1,8 +1,8 @@
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { MotionConfig } from 'framer-motion'
-import { Toaster } from 'sonner'
 import { ThemeProvider }  from './context/ThemeContext'
+import ThemedToaster    from './components/ui/ThemedToaster'
 import { AuthProvider }   from './context/AuthContext'
 import AuthLayout         from './layout/AuthLayout'
 import StudentLayout      from './layout/StudentLayout'
@@ -89,8 +89,8 @@ export default function App() {
     // has explicitly asked not to be shown.
     <MotionConfig reducedMotion="user">
     <ThemeProvider>
+      <ThemedToaster />
       <AuthProvider>
-        <Toaster position="top-right" richColors closeButton />
         <BrowserRouter>
           <ScrollToTop />
           <RouteTitle />

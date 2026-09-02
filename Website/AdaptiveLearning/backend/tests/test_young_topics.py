@@ -76,6 +76,47 @@ def test_the_equation_on_screen_must_be_the_one_being_scored():
     assert missing.shown_matches_scored("Question 2: 8 + ? = 11", tokens)
 
 
+@pytest.mark.parametrize("grade,expected", [
+    ("1st Grade", "multiplication"),
+    ("2nd Grade", "multiplication"),
+    ("3rd Grade", None),
+    ("Grade 1", "multiplication"),   # grade_levels reads the digit either way
+])
+def test_multiplication_is_forbidden_at_grades_1_and_2_only(grade, expected):
+    """Reproduced in review: `3 * ? = 12` cleared solve_missing (which accepts
+    "*"), grade_appropriateness (which only looks for variable notation) and
+    shown_matches_scored, and was served two years above 1.OA.8. Grade 3 is
+    fine -- 3.OA.4 unknown-factor multiplication is grade-3 content.
+    """
+    tokens = ["3", "*", "?", "=", "12"]
+    assert missing._forbidden_operator(tokens, grade) == expected
+
+
+def test_an_unreadable_grade_is_treated_as_the_youngest_for_multiplication():
+    """`profiles.grade_level` is free text, so a value carrying no readable
+    grade at all is a real state. `grade_number` answers None there, and None
+    is the signal to treat the student as the youngest rather than to guess --
+    so it must forbid multiplication, not fall through to unrestricted."""
+    tokens = ["3", "*", "?", "=", "12"]
+    assert missing._forbidden_operator(tokens, "not a grade at all") == "multiplication"
+
+
+def test_multiplication_is_refused_end_to_end_at_grade_1(reply):
+    reply({"question_text": "What number goes in the blank? 3 * ? = 12",
+           "question_topic": "missing_number",
+           "variables": ["3", "*", "?", "=", "12"]})
+    with pytest.raises(ValueError):
+        missing.generate_missing_number_question([], [], "hard", "1st Grade")
+
+
+def test_multiplication_is_still_served_at_grade_3(reply):
+    reply({"question_text": "What number goes in the blank? 3 * ? = 12",
+           "question_topic": "missing_number",
+           "variables": ["3", "*", "?", "=", "12"]})
+    question = missing.generate_missing_number_question([], [], "hard", "3rd Grade")
+    assert question["correct_answer"] == "4"
+
+
 # --- patterns -------------------------------------------------------------
 
 @pytest.mark.parametrize("values,expected", [

@@ -82,6 +82,9 @@ export default function Questions() {
   const [topicFilter, setTopicFilter] = useState('all')
   const [diffFilter, setDiffFilter]   = useState('all')
   const [selected, setSelected]   = useState(null)
+  // Holds the error itself, not a flag. Every read of it is a truthiness
+  // check, and keeping the error is what lets `LoadError` tell a refusal
+  // apart from an unreachable backend.
   const [failed, setFailed]       = useState(false)
   const [page, setPage]           = useState(1)
   // Class then student, mirroring Sessions.jsx: there is no "all my students"
@@ -123,7 +126,7 @@ export default function Questions() {
       // state over a read that has since succeeded.
       .catch(e => {
         if (!isCurrent()) return
-        console.error('Failed to load questions:', e); setFailed(true); setLoading(false)
+        console.error('Failed to load questions:', e); setFailed(e); setLoading(false)
       })
   }
 
@@ -145,7 +148,7 @@ export default function Questions() {
       })
       .catch(e => {
         if (!isCurrent()) return
-        console.error('Failed to load student questions:', e); setFailed(true); setLoading(false)
+        console.error('Failed to load student questions:', e); setFailed(e); setLoading(false)
       })
   }
 
@@ -253,8 +256,16 @@ export default function Questions() {
               onChange={e => { setStudentId(e.target.value); setPage(1); setLoading(true) }}
               className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 cursor-pointer">
               <option value="">Whole bank</option>
+              {/* `user_id` and `name`, which is what the roster carries -- `id`
+                  and `display_name` are what it looks like it should carry, and
+                  reading those sent the student's *email* to an endpoint that
+                  takes a uuid, so every pick answered 403. The wrong key does
+                  not render as a blank option: an `<option>` with no `value`
+                  falls back to its own text content, which here is the email.
+                  So the picker looked right, named the right student, and the
+                  page reported that the backend was down. */}
               {visibleRoster.map(s => (
-                <option key={s.id} value={s.id}>{s.display_name || s.email || s.id}</option>
+                <option key={s.user_id} value={s.user_id}>{s.name || s.email || s.user_id}</option>
               ))}
             </select>
             <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none dark:text-gray-400" />
@@ -273,7 +284,11 @@ export default function Questions() {
         <SkeletonList count={5} height="h-14" gap="space-y-2" />
       ) : failed ? (
         // Distinct from "No questions found" so a failed load doesn't look like a filter problem.
-        <LoadError what="the question bank" onRetry={retry} />
+        // Named for whichever read failed: the bank is public, so a refusal
+        // here is always about the student, and saying "the question bank"
+        // would deny access to something the teacher plainly has.
+        <LoadError error={failed} onRetry={retry}
+          what={studentId ? "this student's questions" : 'the question bank'} />
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-4">🔍</div>

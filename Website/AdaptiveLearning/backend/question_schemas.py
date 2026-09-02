@@ -241,6 +241,51 @@ def graphs(scenario_name):
                     "target": _STRING_LIST})
 
 
+def quadratics():
+    """Just the sentence. The equation is not the model's to write.
+
+    The narrowest schema here, and deliberately: `_choose_coefficients` builds
+    the equation, the generator renders it into the prompt, and the reply is
+    required to contain that string verbatim. So there is nothing for the
+    model to return but the wording around it.
+
+    It did carry `coefficients`, and the measurement is why it does not.
+    Across three promptings llama3.1:8b produced a factorable quadratic 0 of
+    3, 2 of 3 and 1 of 4 times -- almost every failure `irrational roots`,
+    because a freely chosen b and c almost never leave b^2 - 4ac a perfect
+    square. Every one of those retries was a billed call that could not have
+    succeeded.
+
+    `target` is absent for the older version of the same reason: which root is
+    asked for is settled before the call, so a reply cannot disagree about it.
+    A reply naming one root in the text and another in a field is the one
+    failure the coefficients could never have revealed.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT})
+
+
+def functions(scenario_name):
+    """The sentence, plus the scenario it was written for.
+
+    The functions and the value to evaluate at are not the model's to choose,
+    for the reason `quadratics` above documents -- and this topic had the
+    sharper version of it. Asked for its own coefficients, the model also had
+    to reproduce `hs_solvers.render_polynomial`'s exact spacing and sign
+    conventions, because the text is required to contain that string verbatim.
+    Measured on llama3.1:8b with the lesson plan injected, `compose` failed 3
+    of 3 exactly there -- coefficients returned, prose written differently --
+    which is two of the topic's three tiers.
+
+    `scenario` stays, unlike quadratics' absent `target`: it is a cheap
+    cross-check that the model read the block it was handed, and the generator
+    refuses a reply naming the other one.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]}})
+
+
 def shape_fractions():
     """A shape's part count and how many of them are shaded.
 

@@ -14,6 +14,73 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 import main  # noqa: E402
 
 
+class _FakeDB:
+    """Just enough of the supabase client for `student_sessions`: the sessions
+    read, plus the four activity sources, any one of which can be made to fail.
+
+    The three signal tables are modelled rather than left to fall through to
+    the sessions rows. They used to, harmlessly and by accident -- a session
+    row has no `ts`, so every one was skipped -- which meant a test could not
+    tell a page that reads them from one that does not.
+    """
+
+    SIGNALS = ("cognitive_signals", "face_signals", "heart_signals")
+
+    def __init__(self, sessions, answers, boom=False, signals=None,
+                 boom_table="session_answers"):
+        self._sessions, self._answers, self._boom = sessions, answers, boom
+        self._signals = signals or {}
+        self._boom_table = boom_table
+        self.filters = []
+
+    def table(self, name):
+        self._t = name
+        return self
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def in_(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+
+    # Both forms are recorded, not swallowed. The measured-row filter is what
+    # keeps a headband on a desk from advancing the activity clock, and it is
+    # applied server-side -- so a test that only looked at the returned rows
+    # could not tell it was there at all.
+    #
+    # Recording alone is not enough, and it is worth being clear about the
+    # limit: nothing here *executes* these. A renamed column or a mis-spelled
+    # operator would satisfy every assertion below and throw against a real
+    # database. `test_the_filters_are_valid_postgrest` builds them with the
+    # real client, and `scripts/assert_signal_rls.sql` checks the columns
+    # exist against `information_schema` in CI.
+
+    def or_(self, expression):
+        self.filters.append((self._t, expression))
+        return self
+
+    def filter(self, column, operator, value):
+        self.filters.append((self._t, f"{column}.{operator}.{value}"))
+        return self
+
+    def measured_columns(self, table):
+        """Which columns this table's rows were required to have, whichever
+        filter form said so -- the semantic the endpoint is asserting, not the
+        spelling it happened to use."""
+        return {term.split(".")[0]
+                for recorded, expression in self.filters if recorded == table
+                for term in expression.split(",")}
+
+    def execute(self):
+        if self._boom and self._t == self._boom_table:
+            raise RuntimeError(f"{self._t} unavailable")
+        if self._t == "session_answers":
+            return type("R", (), {"data": self._answers})
+        if self._t in self.SIGNALS:
+            return type("R", (), {"data": self._signals.get(self._t, [])})
+        return type("R", (), {"data": self._sessions})
+
+
 def test_the_first_sweep_does_not_wait_a_whole_interval(monkeypatch):
     """A process that does not outlive one interval never swept at all.
 
@@ -54,3 +121,255 @@ def test_a_stop_during_the_first_sweep_is_not_made_to_wait(monkeypatch):
     finally:
         main._stale_sweep_stop.clear()
     assert time.monotonic() - started < 30, "it waited on the interval anyway"
+
+
+def _session(sid, *, ended=None, started_min_ago=1):
+    from datetime import timedelta
+    return {"id": sid, "user_id": "u1", "ended_at": ended,
+            "started_at": (main._utc_now()
+                           - timedelta(minutes=started_min_ago)).isoformat()}
+
+
+def test_a_quiet_open_session_is_reported_idle_not_live(monkeypatch):
+    """`abandoned` is an age (6h) and only stops the list claiming a session
+    from June is in progress. A student who answered three questions and shut
+    the laptop stayed `LIVE` on the teacher's screen, duration ticking up,
+    until that mark -- telling a teacher a child was working who had gone.
+
+    `idle` is real quiet, against the same window `class_live` uses.
+    """
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+
+    rows = [_session("s-quiet", started_min_ago=30)]
+    answers = [{"session_id": "s-quiet", "answered_at": old}]
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *a, **k: None)
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "t1"})
+    monkeypatch.setattr(main, "supabase", _FakeDB(rows, answers))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["idle"] is True
+    assert out[0]["abandoned"] is False, "30 minutes is nowhere near the 6h age"
+    assert out[0]["activity_known"] is True
+
+
+def test_a_session_answered_just_now_is_still_live(monkeypatch):
+    """The teeth. Marking everything idle would be as wrong as marking
+    everything live."""
+    rows = [_session("s-busy", started_min_ago=30)]
+    answers = [{"session_id": "s-busy", "answered_at": main._utc_now().isoformat()}]
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *a, **k: None)
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "t1"})
+    monkeypatch.setattr(main, "supabase", _FakeDB(rows, answers))
+
+    assert main.student_sessions("u1", request=None)[0]["idle"] is False
+
+
+def test_a_failed_activity_read_never_claims_idle(monkeypatch):
+    """Three states, not two. A database blip must not relabel a live session
+    as quiet -- the same error as reporting a failed count as a quiet week. The
+    client gates on `activity_known` for exactly this."""
+    rows = [_session("s-unknown", started_min_ago=30)]
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *a, **k: None)
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "t1"})
+    monkeypatch.setattr(main, "supabase", _FakeDB(rows, answers=None, boom=True))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["activity_known"] is False
+    assert out[0]["idle"] is False, "unknown is not idle"
+
+
+def _as_teacher(monkeypatch, db):
+    monkeypatch.setattr(main, "_verify_can_view_student", lambda *a, **k: None)
+    monkeypatch.setattr(main, "get_user", lambda r: {"id": "t1"})
+    monkeypatch.setattr(main, "supabase", db)
+
+
+def test_a_session_streaming_signals_is_not_idle(monkeypatch):
+    """`class_live` derives staleness from the three signal tables AND
+    answers; this endpoint read answers alone, against the same window. So a
+    student streaming EEG through a long question -- or spending ten minutes
+    pairing a headband before answering anything -- was active on Live
+    Monitoring and `idle` here, about the same session at the same moment.
+
+    Sharing the window without the inputs is what made that disagreement look
+    like a bug in one of the two pages.
+    """
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-eeg", started_min_ago=30)]
+    answers = [{"session_id": "s-eeg", "answered_at": old}]
+    signals = {"cognitive_signals": [
+        {"session_id": "s-eeg", "ts": main._utc_now().isoformat()}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["idle"] is False, "the headband has been streaming throughout"
+    assert out[0]["last_activity_at"] == signals["cognitive_signals"][0]["ts"]
+
+
+def test_the_newest_source_wins_whichever_table_it_came_from(monkeypatch):
+    """The negative control for the test above: with every signal stale as
+    well, the session really is quiet. Without this, that test would pass
+    against an endpoint that had simply stopped reporting anything idle."""
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-quiet-all", started_min_ago=30)]
+    answers = [{"session_id": "s-quiet-all", "answered_at": old}]
+    signals = {"heart_signals": [{"session_id": "s-quiet-all", "ts": old}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    assert main.student_sessions("u1", request=None)[0]["idle"] is True
+
+
+def test_a_failed_signal_read_is_unknown_too(monkeypatch):
+    """Any one of the four sources failing can only *under*-report activity,
+    and under-reported activity is exactly what calls a working session quiet.
+    So the flag goes unknown rather than the read being quietly skipped."""
+    rows = [_session("s-partial", started_min_ago=30)]
+    _as_teacher(monkeypatch, _FakeDB(rows, answers=[], boom=True,
+                                     boom_table="heart_signals"))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["activity_known"] is False
+    assert out[0]["idle"] is False
+
+
+def test_a_headband_on_a_desk_does_not_keep_a_session_alive(monkeypatch):
+    """The regression that folding in the signal tables introduced.
+
+    A `contact_poor` row is a real row with a real `ts` and its measurement
+    columns nulled -- "recording but unable to measure", which the mapper
+    keeps on purpose. A headband left on a desk writes one every poller tick,
+    for ever, so counting them advanced this clock indefinitely: `idle` never
+    fired and the session showed a pulsing LIVE with a ticking duration for
+    the full six hours. That is precisely the bug `idle` exists to remove,
+    back for the sessions most likely to be left open.
+
+    Asserted on the *filter*, not on the returned rows: it is applied
+    server-side, so a fake that simply returned nothing would pass against an
+    endpoint with no filter at all.
+    """
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-desk", started_min_ago=30)]
+    answers = [{"session_id": "s-desk", "answered_at": old}]
+    db = _FakeDB(rows, answers)
+    _as_teacher(monkeypatch, db)
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["idle"] is True, "nothing measured anything; the student left"
+
+    assert db.measured_columns("cognitive_signals") == {"focus"}
+    assert db.measured_columns("heart_signals") == {"heart_rate_bpm"}
+    assert db.measured_columns("session_answers") == set(), (
+        "an answer is activity whatever the sensors were doing")
+
+
+def test_a_gaze_only_face_row_counts_as_a_measurement(monkeypatch):
+    """`face_signals` has two producers and either may succeed alone --
+    `20260819000000` says a row is enqueued when *either* does.
+
+    `-Gaze -NoEmotion` is a supported and deliberately cheaper camera
+    deployment, and in it every face row has `emotion` NULL. Filtering on
+    emotion alone would make the camera contribute no activity at all there,
+    so a student it was measuring through a long question would still read
+    idle -- the `contact_poor` failure from the other direction. Head pose
+    refuses independently of gaze, so a pose-only row counts too.
+    """
+    rows = [_session("s-cam", started_min_ago=30)]
+    db = _FakeDB(rows, answers=[])
+    _as_teacher(monkeypatch, db)
+    main.student_sessions("u1", request=None)
+
+    face = db.measured_columns("face_signals")
+    assert "emotion" in face
+    assert "gaze_x" in face, "a gaze-only deployment measures too"
+    assert "head_yaw" in face, "pose refuses independently of gaze"
+
+
+def test_a_measured_signal_row_still_counts(monkeypatch):
+    """The teeth for the test above. Filtering every signal row out would
+    also make a headband on a desk look idle, and would undo the fix that
+    reads signals at all."""
+    from datetime import timedelta
+    old = (main._utc_now() - timedelta(seconds=main._STALE_AFTER_SEC + 120)).isoformat()
+    rows = [_session("s-worn", started_min_ago=30)]
+    answers = [{"session_id": "s-worn", "answered_at": old}]
+    # The fake applies no filter, so this stands for a row that passed it.
+    signals = {"cognitive_signals": [
+        {"session_id": "s-worn", "ts": main._utc_now().isoformat()}]}
+    _as_teacher(monkeypatch, _FakeDB(rows, answers, signals=signals))
+
+    assert main.student_sessions("u1", request=None)[0]["idle"] is False
+
+
+def test_the_filters_are_valid_postgrest():
+    """Built with the real client, not the fake, and asserted on the wire.
+
+    Everything else in this file records the filter and hands it back, which
+    proves a string was passed and nothing more. A renamed column, a
+    mis-spelled `not.is`, or a query shape the library refuses would satisfy
+    all of it and throw inside the request against a real database -- and
+    that throw is caught, so `activity_known` would go False for every
+    session, `idle` with it, and the pulsing LIVE badge would come back with
+    a green suite.
+
+    Also pins the single-column form. `or=(focus.not.is.null)` is a
+    one-branch or-tree, which is a shape nothing else here emits; the plain
+    `focus=not.is.null` is what the single-column sources use.
+    """
+    from urllib.parse import unquote
+    from postgrest import SyncPostgrestClient
+
+    client = SyncPostgrestClient("http://localhost:54321/rest/v1")
+    emitted = {}
+    for table, column, measured in main._ACTIVITY_SOURCES:
+        query = (client.table(table).select(f"session_id, {column}")
+                 .in_("session_id", ["11111111-1111-1111-1111-111111111111"]))
+        if measured:
+            query = main._measured_only(query, measured)
+        emitted[table] = unquote(str(query.order(column, desc=True)
+                                     .limit(500).request.params))
+
+    assert "focus=not.is.null" in emitted["cognitive_signals"]
+    assert "heart_rate_bpm=not.is.null" in emitted["heart_signals"]
+    assert ("or=(emotion.not.is.null,gaze_x.not.is.null,head_yaw.not.is.null)"
+            in emitted["face_signals"])
+    assert "not.is.null" not in emitted["session_answers"], (
+        "an answer is activity whatever the sensors were doing")
+    for table, params in emitted.items():
+        assert "order=" in params and "limit=500" in params, (table, params)
+
+
+# The column-existence half of this used to live here as a replay of the
+# migrations -- CREATE TABLE, ADD COLUMN and DROP COLUMN applied in order --
+# and it is gone deliberately.
+#
+# It was a regex over SQL text, and it was wrong twice in consecutive commits:
+# first matching a name anywhere in the concatenated files, so a column
+# occurring only in a `DROP COLUMN` counted as present; then matching one
+# clause per `ALTER TABLE`, so two of the three columns in `20260820000000`
+# went unseen. Both were green, and both were green for the same reason --
+# `_ACTIVITY_SOURCES` happens to name the column that survived each bug.
+#
+# `scripts/assert_signal_rls.sql` asks `information_schema` instead, runs
+# against a real stack in the `Database migrations` CI job under
+# `ON_ERROR_STOP=1`, and would have caught both. A parser with a demonstrated
+# error rate sitting next to an exact check is not defence in depth; it is a
+# second thing to be wrong, and the one more likely to be believed because it
+# runs on every local pytest.
+
+def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
+    """`activity_known` separates "quiet" from "we could not tell", so it has
+    to mean the second and only the second. It was initialised `False` and
+    raised only inside `if ids:`, so a student whose sessions are all closed
+    -- the ordinary case for anyone not mid-lesson -- published the flag that
+    means the database read failed. Nothing renders it today, which is the
+    only reason this was invisible rather than wrong on screen."""
+    rows = [_session("s-done", ended=main._utc_now().isoformat())]
+    _as_teacher(monkeypatch, _FakeDB(rows, answers=[]))
+
+    out = main.student_sessions("u1", request=None)
+    assert out[0]["activity_known"] is True
+    assert out[0]["idle"] is False

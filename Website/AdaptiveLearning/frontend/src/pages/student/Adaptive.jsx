@@ -69,6 +69,12 @@ export default function Adaptive() {
   // off a question mid-answer. Null until the profile loads, so nothing is
   // timed against a guess.
   const [durationMin, setDurationMin]         = useState(null)
+  // How many questions the student said they wanted this sitting, or null for
+  // no limit. Per session rather than a saved preference: how long someone
+  // wants to work varies by the afternoon, and `session_duration_minutes`
+  // already covers the standing answer.
+  const [questionGoal, setQuestionGoal]       = useState(null)
+  const [goalDismissed, setGoalDismissed]     = useState(false)
   const [sessionStartedAt, setSessionStartedAt] = useState(null)
   const [elapsedMin, setElapsedMin]           = useState(0)
   const [timeUpDismissed, setTimeUpDismissed] = useState(false)
@@ -191,37 +197,36 @@ export default function Adaptive() {
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
-  // Read from a ref, because the cleanup below runs from a closure captured
-  // once and would otherwise always see 0.
-  const sessionCountRef = useRef(0)
-  useEffect(() => { sessionCountRef.current = sessionCount }, [sessionCount])
-
-  // A session created only to reserve the headband is not a session the
-  // student started.
+  // Leaving the page ends the session, whatever it holds.
   //
-  // `toggleHeadband` has to create one -- under `INGEST_MODE=pull` the EEG
-  // reservation is scoped by `session_id`, so connecting needs a session to
-  // hang off. But a student who connects a headband and then walks away has
-  // not practised, and the row sat in History as a 0-question "Adaptive
-  // Session" until the 6h sweep collected it. That is what "it recorded a
-  // session I never started" looks like from the outside.
+  // Two problems, one call, and the two cases end differently because they
+  // should. `toggleHeadband` has to create a session -- under
+  // `INGEST_MODE=pull` the EEG reservation is scoped by `session_id`, so
+  // connecting needs one to hang off -- and a student who paired a headband
+  // and walked away left a 0-question "Adaptive Session" in History until the
+  // 6h sweep collected it. That is what "it recorded a session I never
+  // started" looks like from the outside. Ending it hands it to
+  // `_discard_if_nothing_recorded`, which *deletes* a session that recorded
+  // nothing, so the phantom disappears rather than gaining an end stamp.
   //
-  // Ending it hands it to `_discard_if_nothing_recorded`, which deletes a
-  // session that recorded nothing rather than closing it -- so the phantom
-  // disappears instead of merely gaining an end stamp.
+  // A session with answers is *closed* instead -- crediting lifetime totals,
+  // writing the daily rollup, archiving the charts -- at the moment the
+  // student leaves. Left open, it read `LIVE` on the teacher's screen with
+  // its duration ticking up for up to six hours, telling a teacher a child
+  // was working who had gone home.
   //
-  // Guarded on the count, so a session with real answers in it is never
-  // ended by navigation: that is `finishSession`'s job, and closing one here
-  // would end a lesson the student was part way through.
+  // The cost, taken deliberately: navigating to History mid-lesson and coming
+  // back starts a new session rather than resuming. Leaving the page is a
+  // clear enough signal of being done, and a LIVE badge for a student who
+  // left is the worse claim.
   //
   // Only covers leaving the page. A tab close still falls to the sweep --
   // `endSession` uses `apiFetch`, which does not outlive the document, and
   // the keepalive dance `stopPushOnUnload` does is not worth repeating for a
-  // row the sweep already collects.
+  // row the sweep already collects. That is the other half of why the teacher
+  // badge is now activity-based rather than trusting `ended_at` alone.
   useEffect(() => () => {
-    if (sessionIdRef.current && sessionCountRef.current === 0) {
-      endSession(sessionIdRef.current)
-    }
+    if (sessionIdRef.current) endSession(sessionIdRef.current)
   }, [])
 
   // Cleans up on unmount: `phaseTimer` is a 30s safety net that resets the
@@ -241,6 +246,17 @@ export default function Adaptive() {
       setSessionStartedAt(null)
       setElapsedMin(0)
       setTimeUpDismissed(false)
+      // Cleared here with the rest of the per-session state, not in
+      // `finishSession`: this effect is what every path to "no session" goes
+      // through. Left standing, one "Keep going" silenced the check-in for
+      // every later session in the sitting -- and the picker still showed the
+      // number selected, so a student had no reason to re-click it and no way
+      // to tell the reminder had been switched off.
+      //
+      // `questionGoal` itself is deliberately kept, like `durationMin`: the
+      // number they chose is their answer for the sitting, not for one
+      // session.
+      setGoalDismissed(false)
       return
     }
     setSessionStartedAt(prev => prev ?? Date.now())
@@ -257,6 +273,11 @@ export default function Adaptive() {
   }, [sessionStartedAt, durationMin])
 
   const timeUp = !!durationMin && !timeUpDismissed && elapsedMin >= durationMin
+
+  // Reached, not exceeded: the count only moves when an answer is recorded, so
+  // this can never fire part way through a question. Same asked-not-enforced
+  // rule as `timeUp` -- see the banner below.
+  const goalReached = !!questionGoal && !goalDismissed && sessionCount >= questionGoal
 
   // load profile default grade + classes
   useEffect(() => {
@@ -830,7 +851,6 @@ export default function Adaptive() {
   const handleSubmit = async () => {
     const isCorrect = JSON.stringify(data.answer_options[selectedAnswer]) === JSON.stringify(data.correct_answer)
     setCorrect(isCorrect)
-    setSessionCount(n => n + 1)
     setPhase('result')
 
     // The POST, missing-id guard, and failure toast live in `lib/session.js`,
@@ -844,6 +864,18 @@ export default function Adaptive() {
       correct: isCorrect,
     })
     if (res) {
+      // Counted here rather than beside `setPhase('result')`, so the figure
+      // only moves for an answer that reached the database. `recordAnswer`
+      // returns null on every failure path -- a missing session or question
+      // id, or a failed POST -- and toasts as it goes, so an uncounted answer
+      // has already been reported to the student.
+      //
+      // This is what `goalReached` claims: "the count only moves when an
+      // answer is recorded". It was incremented optimistically before the
+      // await and never rolled back, so a session whose writes were all
+      // failing still announced "you have answered 10 questions" over a
+      // database that held none of them.
+      setSessionCount(n => n + 1)
       // Uses the topic the backend attributed the answer to -- not a local
       // guess, which is what caused these figures to disagree before.
       applyAttempt(res?.topic, isCorrect)
@@ -1045,6 +1077,28 @@ export default function Adaptive() {
         </motion.div>
       )}
 
+      {/* The same shape as the duration reminder above, and for the same
+          reason: a banner rather than a modal, so it never blocks a question
+          in progress, and "Keep going" clears the reminder without clearing
+          the goal. */}
+      {goalReached && (
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
+          className="mb-6 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl px-5 py-4 flex flex-wrap items-center gap-3">
+          <Sparkles size={18} className="text-emerald-600 dark:text-emerald-400" />
+          <p className="text-sm font-bold text-emerald-800 dark:text-emerald-200 flex-1 min-w-[14rem]">
+            That is {questionGoal} questions answered. Nice work — finish up, or carry on if you are enjoying it.
+          </p>
+          <button onClick={() => setGoalDismissed(true)}
+            className="px-4 py-2 rounded-xl text-sm font-bold border border-emerald-300 dark:border-emerald-700 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition">
+            Keep going
+          </button>
+          <button onClick={finishSession} disabled={finishing}
+            className="px-4 py-2 rounded-xl text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow transition disabled:opacity-60">
+            {finishing ? 'Finishing…' : 'Finish session'}
+          </button>
+        </motion.div>
+      )}
+
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {sessionCount > 0 && (
@@ -1142,6 +1196,27 @@ export default function Adaptive() {
                   </div>
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
                     Generating <strong>{biasLabel}</strong> questions for <strong>{effectiveGrade}</strong>
+                  </p>
+                </div>
+
+                {/* How many questions this sitting. A goal, not a cap: the
+                    banner it raises can be dismissed, for the same reason the
+                    duration one can -- ending a session on a threshold would
+                    throw away a question the student is part way through. */}
+                <div className="max-w-md mx-auto mb-6">
+                  <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 text-center">How many questions?</label>
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    {[5, 10, 15, 20, null].map(n => (
+                      <button key={n ?? 'none'} onClick={() => { setQuestionGoal(n); setGoalDismissed(false) }}
+                        className={`px-4 py-2 rounded-xl text-sm font-bold transition border ${questionGoal === n ? 'bg-indigo-600 text-white border-indigo-600 shadow' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-400'}`}>
+                        {n ?? 'No limit'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
+                    {questionGoal
+                      ? <>We will check in after <strong>{questionGoal}</strong> — you can always keep going.</>
+                      : <>Practise for as long as you like.</>}
                   </p>
                 </div>
 

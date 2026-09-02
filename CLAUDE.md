@@ -2380,6 +2380,42 @@ manufactures a reason: a channel off for consent reasons still reads "not record
 `_reportable_channels`' `want_heart`/`want_emotion` parameters survive but no client sends them.
 They default to True and are not a privacy boundary; don't build one on them.
 
+### A refusal is not an outage, and `LoadError` is where the two stop being one sentence
+
+`components/ui/LoadError.jsx` used to say *"make sure the backend is running"* for every failure.
+That names a layer, and naming a layer sends someone to inspect it — so a teacher whose Question
+Bank filter was refused went and checked a server that had answered perfectly well. It now picks
+the sentence from `error.status`, which `apiFetch` attaches: **403** is "you don't have access to
+X" and gets **no Try again button**, since retrying a refusal cannot work and offering the button
+is part of the false claim; **401** says the session expired and keeps it; **anything else,
+including an error carrying no `status` at all**, keeps the original wording, because a dropped
+connection genuinely is an unreachable backend and relabelling it as a permissions problem is the
+same mistake pointing the other way. Callers pass nothing and are unchanged; a page wires it by
+holding the error in the state it already had (`setFailed(e)` — every read of that flag was a
+truthiness check).
+
+**Name what was actually refused, not what the page is about.** `questions` is public-read, so a
+403 on the Question Bank can only ever concern the student filter — *"you don't have access to the
+question bank"* would deny access to something the teacher can see behind the message.
+
+### A roster row has `user_id` and `name` — not `id`, not `display_name`
+
+`/api/classes/{id}/students` returns `{user_id, name, email, joined_at, ...}`. `Students.jsx` is
+the exception that proves the rule: it reads `profiles` straight through Supabase, so its rows
+really do have `id`.
+
+Getting this wrong in a `<select>` does **not** render a blank option. **An `<option>` with an
+undefined `value` falls back to its own text content**, so `value={s.id}` over a label of
+`{s.display_name || s.email}` sent the student's *email* to `/api/students/{id}/questions`, which
+resolves a uuid through `_verify_can_view_student` — 403 on every pick, from a picker that looked
+right and named the right student.
+
+**A fixture written from the same misreading as the code cannot fail against it.** Five tests
+passed over that filter because `ROSTER` in the test file also said `id`/`display_name`. Build a
+roster fixture from what the endpoint returns, `email` included — without that field the failure is
+not even representable — and assert on the **request path**, since both the option's value and its
+label come from one row and a wrong key still displays the right name.
+
 ### Every chart goes through `AccessibleChart`, and a test enforces it
 
 Recharts emits bare `<svg>` with no accessible name and nothing a screen reader
@@ -2970,10 +3006,15 @@ tables exist only to fail safely if that gate is ever bypassed -- write real cur
 `ordering`, `geometry`, and `expressions` first if extending this further, since those three are
 what grades 1-3 actually see. `supabase/seeds/lesson_plans_priority_topics.sql` seeds exactly those
 three across all four bands, and `lesson_plans_remaining_topics.sql` seeds the other seven at
-`upper`/`advanced` only — 26 rows in total, with `early`/`middle` left unseeded for those seven
+`upper`/`advanced` only, with `early`/`middle` left unseeded for those seven
 because `_allowed_topics` already keeps them out of grade 1-5 and an unseeded cell fails open to the
-heuristics. Both are dashboard-run scripts rather than migrations, because a migration would
-re-apply their text over any later dashboard edit on every rebuild.
+heuristics. `lesson_plans_young_topics.sql` is the third, covering the four topics added for grades
+1-3 — **five rows, not sixteen**, because `TOPIC_MAX_GRADE` makes most of that grid unreachable:
+`missing_number`, `graphs` and `shape_fractions` stop at grade 3 and exist only in `early`, and
+`patterns` stops at 5, so its `middle` row is written for grades 4-5 rather than for the band
+ceiling of 6 the other seed files' `middle` rows target. **A capped topic's band text is not the
+band's text.** 31 rows in total. All three are dashboard-run scripts rather than migrations, because
+a migration would re-apply their text over any later dashboard edit on every rebuild.
 
 **A lesson plan must describe question shapes the generator can actually emit, and the limits are
 tighter than the grade band.** Objectives are prompt text, so anything they invite, the model will
@@ -2993,9 +3034,16 @@ condition" produced *"either blue or yellow"* — a compound event — scored **
 "Recognise that a dataset may have no mode at all" is true of the subject and wrong as an
 instruction: nine distinct rainfall readings, **no mode, answer 0**. And a percentage framing
 ("80% of 15 brands") also scored **1**, because percentages give the solver no counts to divide.
-Each is now forbidden in the objectives *and* in the row's `notes`, which is where a future editor
-will look. The general rule: **an objective that is pedagogically true can still be an instruction
-the solver cannot score** — check what a cell generates before trusting it, not just what it says.
+Each is now forbidden in the objectives *and* in the row's `notes`. The general rule: **an objective
+that is pedagogically true can still be an instruction the solver cannot score** — check what a cell
+generates before trusting it, not just what it says.
+
+**`notes` is prompt text, not a margin note.** `_lookup` appends it to `objectives` and sends the
+pair, and the 2000-char clamp covers both together — so a `notes` field written as documentation for
+the next editor is documentation the model reads, and repo-internal references (a module name, what
+would have to change to lift a limit) are noise inside a prompt. Keep it to constraints on the
+question; the reasoning aimed at a person goes in the seed file's `--` comments, which are sent
+nowhere.
 
 ### A band's tiers are written for its ceiling, so its youngest grade is over-served
 
@@ -3108,6 +3156,17 @@ Reducing the answer instead is the other option and is worse: the student is ask
 picture, and the picture says two of four. `question_figures._part_whole` deliberately does **not**
 check it — a reducible fraction is perfectly drawable, and drawability and answerability are
 different questions.
+
+**Grade 1 has exactly three legal pictures, and the model reaches for a fourth.** 1.G.3 holds it to
+2 or 4 parts, and lowest terms then leaves only `1/2`, `1/4` and `3/4` — while half-of-four is the
+shading a model produces first. Measured on llama3.1:8b at grade 1 / easy: `2/4` on all three
+attempts, so the request **failed outright** rather than degrading. That is the cost of a refusal
+landing on a cell with almost no legal answers left, and it is not visible from either the standard
+or the refusal rule alone. The fix is in the lesson plan, which names the three fractions for grade
+1 (`supabase/seeds/lesson_plans_young_topics.sql`): 4 of 4 generate afterwards, 2 of them still
+spending one retry on `2/4` first. **Check a narrow cell's retry rate, not just that it can
+succeed** — a tier whose legal answers you can count on one hand is where an exhausted retry budget
+stops being theoretical.
 
 **The distractor space is checked exhaustively rather than sampled**, because it is 21 fractions.
 Two properties, both violated before: an option of one or more cannot be part of a shape, so `2/1` is
@@ -3279,12 +3338,96 @@ one linear equation with one solution (a quadratic is correctly refused, so 8.EE
 event (7.SP.5), `rationals` is fraction arithmetic (7.NS.1). Harder numbers inside 8.EE.7b are still
 8.EE.7b.
 
-So **`advanced` means "the hardest grade-8 content", and grades 9-12 cannot be served appropriately
-at all.** Closing that needs solvers — quadratics, systems, functions, spread — not prompt text, and
-each new solver has to be able to *score* what it asks, which is the constraint that rules out most
-of high-school mathematics here. Verified before those tiers were written: variables on both sides,
-distribution and fractional coefficients all score correctly; a quadratic and a two-unknown equation
-are both correctly refused.
+So **`advanced` meant "the hardest grade-8 content"** until `quadratics` and `functions` were added.
+Closing it needed solvers, not prompt text, and each new solver has to be able to *score* what it
+asks — the constraint that rules out most of high-school mathematics here. Verified before those
+tiers were written: variables on both sides, distribution and fractional coefficients all score
+correctly; a quadratic and a two-unknown equation are both correctly refused.
+
+### `quadratics` and `functions` are the grade 9+ content, and `hs_solvers` is why
+
+Both sit at `TOPIC_MIN_GRADE` 9 and are the first topics here whose concept is above grade 8 at all.
+`hs_solvers.py` holds the arithmetic for both — **pure bounded-integer, no sympy, so no bounded
+subprocess**, the same call `missing_number` and `patterns` make. There is no parser to hand a
+`9**9**9` to: every value goes through `parse_int`, which matches `^-?\d{1,4}$` *before* `int()`
+sees it. Reach for `safe_solve` only when something downstream needs a sympy object.
+
+**The equation shown is rendered from the coefficients being scored, never parsed out of the text.**
+`render_quadratic`/`render_polynomial` are the only things that write an equation, and each
+generator requires its output verbatim in `question_text`. Same direction as `question_figures`:
+derive the presentation from the scored data and a disagreement stops being representable. Sign
+handling is the load-bearing part — naive formatting gives `x^2 + -5x + 6 = 0`, which nobody writes,
+so the model "corrects" it and every negative-middle-coefficient question costs a retry.
+
+**A two-root equation is only scoreable because the question names which root**, and that choice is
+made *before* the call and pinned in the prompt, not left to the model — `target` is deliberately
+absent from the schema. `shown_matches_scored` therefore checks two things, and the second is the
+one no equation check can see: a text asking for "the smaller solution" scored against the larger is
+a well-formed question, correctly solved, marked wrong. It also refuses a text naming *neither*.
+
+**The coefficients are chosen in code too, and `quadratics` is the worked example for why.** The
+schema asks for nothing but the sentence. Measured on llama3.1:8b across three promptings — the
+constraint as a description, as a construction recipe, and as a recipe with a worked example — the
+model produced a factorable quadratic **0 of 3, 2 of 3 and 1 of 4** times. Nearly every failure was
+`irrational roots`: it picks `b` and `c` freely and a random pair almost never leaves `b² − 4ac` a
+perfect square. Of the successes, two silently dropped the constraint they were given and one copied
+the worked example verbatim, so the tier was *also* not producing the content it named. No wording
+fixed it, because it is not a wording problem.
+
+**`functions` hands its coefficients over too, and needed it more.** Its `_FOOTER` told the model
+the text must contain each function exactly as given under `FUNCTIONS AS THEY MUST APPEAR` — and
+that section was never emitted, because the footer was written for a design only `quadratics`
+implemented. So the model was pointed at instructions that did not exist and had to reproduce
+`render_polynomial`'s spacing and sign conventions from nothing. With the lesson plan injected,
+`compose` failed **3 of 3** on llama3.1:8b, every one `text does not contain 'g(x) = x + 2'` — two
+of the topic's three tiers, since `compose` is medium *and* hard. **A prompt that references a
+section it never emits is worth grepping for whenever a generator retries on formatting.** The
+inner function of a composition is always degree 1, which is what bounds the answer by construction
+rather than by drawing until something fits.
+
+`_choose_coefficients` builds from two distinct integer roots, so the equation is factorable by
+construction and the whole refusal class is gone. Three things follow, and the second is the one to
+generalise: **every retry that class caused was a billed model call that could not have succeeded**;
+the `hard` tier can be the AC method (a leading coefficient of 2–4), which is the right Algebra I
+rung and was measured as the *least* achievable thing to ask for; and difficulty tiers get a uniform
+meaning rather than whatever the model reached for. It is the same move already made for `target`
+here and for the scenario in geometry and probability — **decide the part with a right answer in
+code, and let the model write the sentence.** Reach for it whenever a generator is retrying against
+a constraint the model keeps missing rather than against a malformed reply.
+
+Four quadratics are refused rather than served: no real roots, a **repeated** root (where "the
+larger" names nothing and every distractor would simply not be a root), irrational roots, and
+roots that are not whole numbers. That restricts the topic to equations factorable over the
+integers, which is A-REI.4b's core rather than a limitation worked around.
+
+**`functions` is grade 9 on a narrower claim than its name suggests.** Evaluating a rule at a value
+is 8.F.2, and grade 8 explicitly does not require function notation; what is high school is the
+notation (F-IF.2) and composition (F-BF.1c), which has no grade-8 equivalent. That is why `compose`
+is the medium *and* hard tier — a version of this topic whose every tier was `evaluate` would be
+8.F.2 wearing an `f(x)`. `MAX_ABS_RESULT` bounds it because composition squares its input: two
+quadratics with reasonable-looking coefficients reach 10^16, and a question answered 48,271,009
+tests calculator ownership rather than composition.
+
+**Measured on both providers with the seeds injected, which is the path no test covers** — an
+unseeded cell fails open to the heuristics, so every validation that does not deliberately inject
+the lesson text exercises the wrong path. Claude Haiku 4.5: **6 of 6 in 6 calls**, no retries, all
+answers correct by hand. Ollama llama3.1:8b: 3 of 3 per topic. Redo it after any edit to a seed row
+or to a prompt these topics send.
+
+**Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
+`algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
+either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
+
+**This does not take the "below grade" figure to zero, and nothing here claims it does.** The other
+fourteen topics carry no ceiling, so a grade-9 student is still offered them and still draws
+grade-8 content most of the time. Whether the topics that top out at grade 8 should gain a
+`TOPIC_MAX_GRADE` is a separate and larger decision — capping them would drop a grade-9 student to
+two topics, which is the same trade that took grades 4-5 from eight topics to four. It has not been
+made.
+
+**A test that reads "allowed iff it has no ceiling" was true only until a topic had a floor above
+8.** `test_topics_at_eighth_grade_are_those_inside_both_bounds` was that test; these two topics
+broke its equivalence rather than its behaviour. Assert the range, not the absence of a cap.
 
 ### Angle answers are whole numbers through 5th grade, and decimals after
 

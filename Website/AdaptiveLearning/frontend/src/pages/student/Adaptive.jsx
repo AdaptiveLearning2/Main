@@ -246,6 +246,17 @@ export default function Adaptive() {
       setSessionStartedAt(null)
       setElapsedMin(0)
       setTimeUpDismissed(false)
+      // Cleared here with the rest of the per-session state, not in
+      // `finishSession`: this effect is what every path to "no session" goes
+      // through. Left standing, one "Keep going" silenced the check-in for
+      // every later session in the sitting -- and the picker still showed the
+      // number selected, so a student had no reason to re-click it and no way
+      // to tell the reminder had been switched off.
+      //
+      // `questionGoal` itself is deliberately kept, like `durationMin`: the
+      // number they chose is their answer for the sitting, not for one
+      // session.
+      setGoalDismissed(false)
       return
     }
     setSessionStartedAt(prev => prev ?? Date.now())

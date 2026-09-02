@@ -9,6 +9,8 @@
  * So the load-bearing assertions here are the negative ones. Reaching the
  * goal must not end the session, and must not stop questions being served.
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -75,4 +77,22 @@ it('never ends the session just because a goal was picked', async () => {
   await screen.findByText(/how many questions/i)
   await userEvent.click(screen.getByRole('button', { name: '5' }))
   expect(endSession).not.toHaveBeenCalled()
+})
+
+it('re-arms the check-in for the next session in the sitting', async () => {
+  // `goalDismissed` is per-session state and has to clear with the session,
+  // exactly like `timeUpDismissed` beside it. Left standing, one "Keep going"
+  // silenced the reminder for every later session -- and the picker still
+  // showed the number selected, so nothing told the student it was off.
+  //
+  // Asserted on the reset path rather than by driving a whole second session:
+  // the flag is cleared by the effect that every route to "no session" goes
+  // through, so that is the behaviour worth pinning.
+  const src = readFileSync(
+    resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
+  const reset = src.slice(src.indexOf('setSessionStartedAt(null)'))
+  const block = reset.slice(0, reset.indexOf('return'))
+  for (const call of ['setElapsedMin(0)', 'setTimeUpDismissed(false)', 'setGoalDismissed(false)']) {
+    expect(block).toContain(call)
+  }
 })

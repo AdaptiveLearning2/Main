@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { join, resolve, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import LoadError from './LoadError'
 
 /**
@@ -61,5 +64,99 @@ describe('LoadError', () => {
   it('still shows no button when the caller offered no retry', () => {
     render(<LoadError what="your classes" error={err(500)} />)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * Exhaustiveness, like the backend's `_MODE_AWARE` and close-site tests.
+ *
+ * `error` is optional, so a call site that never passes one is silently back
+ * to blaming the backend for a refusal -- and unlike the other guards in this
+ * repo, "every call site must pass one" is the wrong rule here. Most of these
+ * pages read the caller's own data and cannot 403 on a relationship, and one
+ * of them has no error object to pass at all. So this is a classification
+ * list, not a requirement: a new file rendering `<LoadError` fails until
+ * someone says which kind it is, which is the decision that would otherwise
+ * be skipped.
+ */
+describe('every LoadError call site is classified', () => {
+  const SRC = resolve(fileURLToPath(import.meta.url), '..', '..', '..')
+  const rel = f => relative(SRC, f).replaceAll('\\', '/')
+
+  const walk = (dir) => readdirSync(dir).flatMap(name => {
+    const full = join(dir, name)
+    return statSync(full).isDirectory() ? walk(full)
+      : full.endsWith('.jsx') && !full.includes('.test.') ? [full] : []
+  })
+
+  // Reads data belonging to somebody else, through a relationship check that
+  // answers 403 when it does not hold. The value is the endpoint, so the
+  // claim can be re-checked against the backend rather than taken on trust.
+  const MUST_PASS_ERROR = {
+    'pages/teacher/Questions.jsx':
+      'GET /api/students/{id}/questions -- _verify_can_view_student',
+    'pages/teacher/Sessions.jsx':
+      'GET /api/classes/{id}/students -- _verify_class_owner',
+  }
+
+  // Exempt, and the reason is the point: two different reasons hide here, and
+  // only the second is about the data.
+  const NO_REFUSAL_TO_REPORT = {
+    // No error object exists to pass. `Panel`'s `failed` is the payload's
+    // `retrieved` flag, because these aggregates answer 200 with a default
+    // payload when they fail server-side, and the pages fold a rejected fetch
+    // into that same flag on the way in. The status is discarded at that
+    // conversion, so wiring this means seven callers keeping the error beside
+    // the flag -- a real change, not a prop.
+    'components/analytics/Panel.jsx': 'failed is a retrieved flag, not an error',
+
+    // The rest read the caller's own data, so no relationship check stands
+    // between them and it and 403 is not reachable. Passing the error would
+    // be harmless and would say nothing. Note the endpoint, not the page: two
+    // of these files DO call a relationship-checked endpoint elsewhere --
+    // Classes.jsx PUTs /api/classes/{id}, Settings.jsx reads a single child --
+    // and both send those failures to a toast rather than here.
+    'pages/parent/Settings.jsx':            'GET /api/parent/children -- own children',
+    'pages/student/Achievements.jsx':       'GET /api/stats/me -- own',
+    'pages/student/History.jsx':            'GET /api/sessions -- own',
+    'pages/student/JoinClass.jsx':          'GET /api/classes -- own',
+    'pages/student/PracticeFlashcards.jsx': 'own practice session',
+    'pages/student/PracticeTest.jsx':       'own practice session',
+    'pages/teacher/Analytics.jsx':          'the question bank, which is public-read',
+    'pages/teacher/Classes.jsx':            'GET /api/classes -- own classes',
+    'components/practice/PracticeSetup.jsx': 'own profile and the topic list',
+  }
+
+  // `<LoadError`, not the bare name: a dangling import satisfies the name,
+  // which is exactly what deleting the element leaves behind. That mistake
+  // has already been made once here, in QuestionFigure.test.jsx.
+  const callSites = walk(SRC)
+    .filter(f => readFileSync(f, 'utf8').includes('<LoadError'))
+    .map(rel)
+
+  it('finds the call sites at all', () => {
+    // Without this the checks below pass vacuously against a walk that
+    // matched nothing -- a renamed directory would read as a clean sweep.
+    expect(callSites.length).toBeGreaterThan(5)
+  })
+
+  it('leaves no call site unclassified', () => {
+    const unclassified = callSites.filter(
+      f => !(f in MUST_PASS_ERROR) && !(f in NO_REFUSAL_TO_REPORT))
+    expect(unclassified).toEqual([])
+  })
+
+  it('has no stale entry naming a file that no longer renders one', () => {
+    // A list that outlives its subject is how an exemption granted for one
+    // reason gets inherited by whatever takes the file's place.
+    const declared = [...Object.keys(MUST_PASS_ERROR),
+                      ...Object.keys(NO_REFUSAL_TO_REPORT)]
+    expect(declared.filter(f => !callSites.includes(f))).toEqual([])
+  })
+
+  it('passes the error everywhere a refusal is reachable', () => {
+    const notPassing = Object.keys(MUST_PASS_ERROR).filter(
+      f => !readFileSync(join(SRC, f), 'utf8').includes('error={'))
+    expect(notPassing).toEqual([])
   })
 })

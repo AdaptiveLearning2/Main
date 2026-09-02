@@ -3597,12 +3597,10 @@ one, and again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fo
 worker, and since a timeout raises rather than returning `None`, every one was a **503 on the first
 attempt**.
 
-Retrying is what separates the two things a timeout can mean. A genuine spin is still spinning on the
-second attempt and is killed again, at a bounded extra wait and no wrong answer; contention is a
-property of the moment, and the moment passes. Nothing in-process can tell them apart, and the retry
-does not need to. The second budget is wider (`SOLVE_RETRY_BUDGET_FACTOR`, 3×) because the first
-timeout is itself evidence that this machine is slower than the budget assumed — the same reasoning
-as `_probe_startup`'s clamp, applied when the measurement arrives late.
+Retrying used to be what separated the two things a timeout could mean, because nothing in-process
+could tell them apart. **Splitting the phases made them distinguishable, and then inverted which one
+is worth retrying** — see below. A *startup* timeout is contention and passes; a *solve* timeout is
+now a genuine spin, and a spin spins again.
 
 **Measured at 18 cores, and the limit is worth knowing.** Eight background hogs: no timeouts at all.
 At **saturation the first attempt failed 6 of 6 and the retry rescued all six**. At 2×
@@ -3661,19 +3659,40 @@ machine spent it. Measured with CPU hogs running: **8 of 8 solves killed at 3.0s
 oversubscription the retry rescued none.
 
 `_solve_worker` prints a readiness line once sympy is loaded, and `_run` times the two phases
-separately. Re-measured under the same saturation: **8 of 8 succeed**, and 8 of 8 at 2×
-oversubscription with the slowest at 2.1s. Consequences worth holding:
+separately. Re-measured, 8 concurrent solves, hogs given 3-5s to spin up before the run:
+
+| load | before | after |
+| --- | --- | --- |
+| idle | — | **8/8**, slowest 2.2s |
+| saturated (18 hogs / 18 cores) | 0/8 | **7/8**, slowest 30.7s |
+| 2x oversubscribed (36 hogs) | 0/8 | **1/8**, slowest 32.4s |
+
+**2x oversubscription is not fixed, and the first version of this note claimed it was** — measured
+with a 2-second settle, so the hogs had not begun loading the machine. Give them 5s. What the split
+buys is *saturation*, where a solve now nearly always completes instead of never; past that the
+machine cannot start interpreters fast enough and no budget arrangement changes that.
+
+The other half of the trade is the tail: a contended startup that retries holds an anyio slot for
+~30s where the old code failed in 3. Bounded by `SOLVE_MAX_CONCURRENCY` to 8 of the ~40 slots, and
+a slow question beats a 503 — but it is a real change in behaviour under load, not a free win.
+
+Consequences worth holding:
 
 - **The budgets now mean different things and should be tuned differently.** `SOLVE_TIMEOUT` (3s)
   is the runaway bound and has ~300× margin over the maths, so it can be tightened without risking
   a loaded machine. `SOLVE_STARTUP_BUDGET` (15s) is the one that absorbs contention, and tightening
   *it* reinstates the old failure.
-- **Only the solve budget widens on retry.** Startup is already ~15× its measured cost, so a second
-  longer wait buys nothing — and a message naming a widened solve budget after a *startup* timeout
-  describes a number that was never applied, which is what the first version printed.
-- **`SOLVE_RETRY_BUDGET_FACTOR` is close to vestigial now.** The retry existed because contention
-  spent a budget dominated by startup. Kept because it is cheap and the failure is a 503 in front
-  of a student, but do not reason from it as though it were load-bearing.
+- **Only a *startup* timeout is retried, and the split is what inverted that.** While the budget was
+  ~99% startup, "timeout" almost always meant contention and retrying was how a moment of it was
+  survived. Now the two are distinguishable and mean opposite things: a solve timeout is 3s against
+  ~10ms, so it is a spin, and a spin spins again — retrying costs a second full startup to reach the
+  same kill, with the student waiting through both. A startup timeout is the machine failing to
+  launch Python in 15s, which passes; observed once under 18 CPU hogs and rescued. The worst-case
+  hold on an anyio slot drops with it: a spin is 18s absolute rather than 42s, ~4s in practice.
+- **`SOLVE_RETRY_BUDGET_FACTOR` is gone.** It widened the solve budget on the second attempt and
+  there is no second attempt at a solve. A knob whose name promises tuning that is not available is
+  worse than its absence — the first version of this change kept it, reading 3.0 and controlling
+  nothing.
 - **The probe must escape the budget it validates.** It runs a solve, so once startup had its own
   budget the probe was bounded by the very setting it exists to check — a too-small value made it
   time out reporting the problem it should have measured, and the clamp never ran. `_run` takes a

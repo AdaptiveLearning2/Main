@@ -522,6 +522,95 @@ def test_a_worker_that_answers_and_lingers_is_not_treated_as_a_failure(monkeypat
     assert proc.waits == [safe_solve._EXIT_GRACE_S]
 
 
+def test_an_answer_survives_having_to_kill_the_worker_that_gave_it(monkeypatch):
+    """The other half of the lingering-child case, and the one that was wrong.
+
+    When the grace wait expires the child is killed -- and the kill sets a
+    non-zero exit code, which the check below the loop then read as the solve
+    having failed. A correct answer already in hand came back as `the solver
+    exited -9`, and the student got a 503 for it. The branch's own comment
+    said the answer "is good" while the next branch threw it away.
+
+    The test above only covers the path where `wait` succeeds, which is why
+    this went unnoticed.
+    """
+    class _Stuck(_FakeProc):
+        returncode = -9                 # what killing it leaves behind
+
+        def __init__(self):
+            self.killed = False
+
+        def wait(self, timeout=None):
+            if timeout == safe_solve._EXIT_GRACE_S:
+                raise safe_solve.subprocess.TimeoutExpired(cmd="x",
+                                                           timeout=timeout)
+            return -9
+
+        def kill(self):
+            self.killed = True
+
+    proc = _Stuck()
+    monkeypatch.setattr(safe_solve, "_spawn",
+                        lambda request: (proc, _FakePipe(), _FakePipe()))
+    monkeypatch.setattr(
+        safe_solve, "_await_answer",
+        lambda *a: ('{"ok": true, "result": "[1.0]"}', "the solve"))
+
+    assert safe_solve.safe_sympify_values(["1"]) == [1.0], (
+        "the answer was in hand before the kill and is still good")
+    assert proc.killed, "and the process was not leaked"
+
+
+def test_a_worker_that_dies_without_answering_is_still_a_failure(monkeypatch):
+    """The teeth for the exemption above: it is scoped to a kill *we* made
+    after an answer, not to non-zero exits generally. A worker that crashes on
+    import produces nothing and must still refuse."""
+    class _Crashed(_FakeProc):
+        returncode = 1
+
+    monkeypatch.setattr(safe_solve, "_spawn",
+                        lambda request: (_Crashed(), _FakePipe(), _FakePipe()))
+    monkeypatch.setattr(safe_solve, "_await_answer",
+                        lambda *a: (None, "startup"))
+    with pytest.raises(safe_solve.SolverUnavailable, match="exited 1"):
+        safe_solve.safe_sympify_values(["1"])
+
+
+def test_a_spin_is_not_retried_but_contention_is(monkeypatch):
+    """Splitting the phases inverted which timeout is worth another go.
+
+    A *solve* timeout is 3s against ~10ms of arithmetic, so it is a genuine
+    spin -- and a spin spins again, costing a second full startup to reach the
+    same kill while the student waits through both. A *startup* timeout is the
+    machine failing to launch Python, which passes; that is the case the retry
+    was built for and was observed being rescued under 18 CPU hogs.
+
+    The old shape retried the solve and not startup, which is backwards on
+    both counts.
+    """
+    def _timeout_in(phase):
+        attempts = []
+
+        def _fake(proc, stdout, startup_budget, solve_budget):
+            attempts.append(phase)
+            raise safe_solve._Timeout(
+                phase, startup_budget if phase == "startup" else solve_budget)
+
+        return attempts, _fake
+
+    solve_attempts, on_solve = _timeout_in("the solve")
+    _fake_worker(monkeypatch, on_solve)
+    with pytest.raises(safe_solve.SolverUnavailable, match="1 attempt"):
+        safe_solve.safe_sympify_values(["1"])
+    assert len(solve_attempts) == 1, "a spin is not worth a second process"
+
+    startup_attempts, on_startup = _timeout_in("startup")
+    _fake_worker(monkeypatch, on_startup)
+    with pytest.raises(safe_solve.SolverUnavailable, match="2 attempt"):
+        safe_solve.safe_sympify_values(["1"])
+    assert len(startup_attempts) == 2, "contention gets one more go"
+
+
 def test_the_probe_is_not_bounded_by_the_budget_it_measures(monkeypatch):
     """Circular, and it bit: the probe runs a solve, and once startup had its
     own budget that solve was bounded by the very setting the probe exists to
@@ -562,47 +651,22 @@ def test_a_permit_is_returned_even_when_the_solve_fails(monkeypatch):
     assert safe_solve.safe_sympify_values(["1"]) == [1.0]
 
 
-def test_a_timeout_gets_one_more_attempt_with_a_wider_budget(monkeypatch):
-    """`SOLVE_MAX_CONCURRENCY` bounds *this process's* workers and nothing
-    else. The budget is wall-clock over a child dominated by sympy startup, so
-    any co-tenant on the machine spends it: reproduced with the frontend suite
-    alongside, and again with CPU hogs -- 8 of 8 solves killed at 3.0s. Ten of
-    fourteen topics reach the worker, and since a timeout raises rather than
-    returning None, every one was a 503 on the first attempt.
+def test_contention_that_survives_both_attempts_still_refuses(monkeypatch):
+    """The teeth. Retrying for ever would reinstate the hang this module
+    exists to bound, so the count is two and the refusal still names the
+    cause.
 
-    Retrying separates the two things a timeout can mean. A genuine spin is
-    still spinning on the second attempt and is killed again; contention is a
-    property of the moment, and the moment passes. Measured at 18 cores: at
-    saturation the first attempt failed 6 of 6 and the retry rescued all 6.
+    On *startup*, which is the phase that retries now -- a solve timeout is a
+    spin and gets one attempt, pinned separately.
     """
     calls = []
 
-    def _slow_then_fine(proc, stdout, startup_budget, solve_budget):
-        calls.append(solve_budget)
-        if len(calls) == 1:
-            raise safe_solve._Timeout("the solve", solve_budget)
-        return '{"ok": true, "result": "[1.0]"}', "the solve"
-
-    _fake_worker(monkeypatch, _slow_then_fine)
-    assert safe_solve.safe_sympify_values(["1"]) == [1.0]
-    assert len(calls) == 2, "a timeout must cost a second attempt, not a 503"
-    assert calls[1] > calls[0], (
-        "the retry is given room: the first timeout is itself the evidence "
-        "that this machine is slower than the budget assumed")
-
-
-def test_a_spin_that_survives_both_attempts_still_refuses(monkeypatch):
-    """The teeth. Retrying for ever would reinstate the hang this module
-    exists to bound, so the count is two and the refusal still names the
-    cause."""
-    calls = []
-
     def _always_slow(proc, stdout, startup_budget, solve_budget):
-        calls.append(solve_budget)
-        raise safe_solve._Timeout("the solve", solve_budget)
+        calls.append(startup_budget)
+        raise safe_solve._Timeout("startup", startup_budget)
 
     _fake_worker(monkeypatch, _always_slow)
-    with pytest.raises(safe_solve.SolverUnavailable, match="after 2 attempts"):
+    with pytest.raises(safe_solve.SolverUnavailable, match="after 2 attempt"):
         safe_solve.safe_sympify_values(["1"])
     assert len(calls) == 2, "bounded at two attempts"
 
@@ -621,7 +685,9 @@ def test_the_retry_does_not_hold_a_concurrency_permit_while_it_waits(monkeypatch
         for _ in range(free):
             safe_solve._solve_slots.release()
         depth.append(safe_solve.SOLVE_MAX_CONCURRENCY - free)
-        raise safe_solve._Timeout("the solve", solve_budget)
+        # Startup, because that is the phase that retries -- a solve timeout
+        # gets one attempt and this test needs two.
+        raise safe_solve._Timeout("startup", startup_budget)
 
     _fake_worker(monkeypatch, _timeout_once)
     with pytest.raises(safe_solve.SolverUnavailable):

@@ -135,18 +135,11 @@ def _solve_slot(label):
         _solve_slots.release()
 
 
-# How much wider the retry's *solve* budget is. Startup is not widened -- see
-# the attempts list in `_run`.
-#
-# Its original justification has largely gone: the retry existed because
-# contention spent a budget dominated by startup, and startup is no longer in
-# it. What is left is the narrow case of the arithmetic itself being starved,
-# which 3s of margin over ~10ms makes rare. Kept because it is cheap and the
-# failure it covers is a 503 in front of a student, but do not read it as
-# load-bearing any more. Worst case for a genuine spin is
-# `budget * (1 + this)`, killed at both ends.
-SOLVE_RETRY_BUDGET_FACTOR = llm_client._env_number(
-    "SOLVE_RETRY_BUDGET_FACTOR", 3.0, float, minimum=1.0)
+# `SOLVE_RETRY_BUDGET_FACTOR` used to live here. It widened the *solve* budget
+# on the second attempt, and there is no second attempt at a solve any more --
+# see the retry reasoning in `_run`. Removed rather than left reading 3.0 and
+# controlling nothing: a knob whose name promises tuning that is not available
+# is worse than its absence.
 
 # Launching Python and importing sympy, which is ~99% of an ordinary solve and
 # is now budgeted separately from it. Generous on purpose: this is not the
@@ -503,22 +496,42 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
     # evidence that this machine is slower than the budget assumed -- the same
     # reasoning as `_probe_startup`'s clamp, applied when the measurement
     # arrives late.
-    # Only the *solve* budget widens. Startup is already ~15x its measured
-    # cost, so a second, longer wait there buys nothing a machine in that much
-    # trouble can use -- and the two are widened independently because a
-    # message naming a widened solve budget after a *startup* timeout describes
-    # a number that was never applied. Which is what the first version of this
-    # printed, under saturation, where it is hardest to check.
     # `startup_timeout` exists for `_probe_startup` alone. Its budget is
     # deliberately unrelated to the setting it validates -- bounded by the one
     # it is measuring, a too-small `SOLVE_STARTUP_BUDGET` makes the probe time
     # out reporting the very problem it exists to detect, and the clamp that
     # would have fixed it never runs.
-    startup = SOLVE_STARTUP_BUDGET_S if startup_timeout is None         else startup_timeout
-    attempts = [(startup, budget),
-                (startup, budget * SOLVE_RETRY_BUDGET_FACTOR)]
-    for index, (startup_budget, attempt_budget) in enumerate(attempts):
-        last = index == len(attempts) - 1
+    startup = SOLVE_STARTUP_BUDGET_S if startup_timeout is None \
+        else startup_timeout
+
+    # Only a *startup* timeout is retried, and splitting the phases is what
+    # inverted that.
+    #
+    # Before the split the budget was ~99% startup, so "timeout" almost always
+    # meant contention, and retrying was how a moment of it was survived. Now
+    # the two are distinguishable and they mean opposite things:
+    #
+    #   * a **solve** timeout is 3s against ~10ms of arithmetic -- 300x margin,
+    #     so it is a genuine spin. A spin spins again. Retrying costs a second
+    #     full startup and another budget to reach the same kill, and the
+    #     student waits through both for the same 503.
+    #   * a **startup** timeout is the machine failing to launch Python and
+    #     import sympy in 15s. That is contention, it passes, and it is the
+    #     case the retry was built for -- observed once under 18 CPU hogs and
+    #     rescued.
+    #
+    # So the retry moved to where the evidence puts it. The worst-case hold on
+    # an anyio threadpool slot drops with it: a spin is 18s absolute rather
+    # than 42s, and ~4s in practice, on the hottest path in the product.
+    #
+    # `SOLVE_RETRY_BUDGET_FACTOR` went with the old shape. It widened the solve
+    # budget on the second attempt, and there is no second attempt at a solve
+    # any more -- a knob that controls nothing is worse than none, since the
+    # next reader assumes the tuning it names is available.
+    attempts = 2
+    reaped = False
+    for index in range(attempts):
+        last = index == attempts - 1
         # The permit is taken *outside* the try, so a queue refusal is not
         # caught by the `except Exception` below and re-labelled "could not be
         # started" -- it was never started, and saying so wrongly is what this
@@ -535,22 +548,20 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
                     f"the solver could not be started: "
                     f"{type(e).__name__}: {e}") from e
             try:
-                raw, phase = _await_answer(proc, stdout, startup_budget,
-                                           attempt_budget)
+                raw, phase = _await_answer(proc, stdout, startup, budget)
             except _Timeout as t:
                 # Killed here, which is the whole point: the in-process
                 # equivalent leaves the spin running for the life of the
                 # worker.
                 _kill(proc)
-                if not last:
-                    nxt = attempts[index + 1]
-                    print(f"[safe_solve] exceeded {t.budget:g}s in {t.phase} "
-                          f"({label}); retrying once at startup {nxt[0]:g}s / "
-                          f"solve {nxt[1]:g}s")
+                if t.phase == "startup" and not last:
+                    print(f"[safe_solve] exceeded {t.budget:g}s in startup "
+                          f"({label}); retrying once -- startup is where "
+                          f"contention shows, and contention passes")
                     continue
                 raise SolverUnavailable(
                     f"the solver exceeded {t.budget:g}s in {t.phase} and was "
-                    f"killed ({label}), after {len(attempts)} attempts"
+                    f"killed ({label}), after {index + 1} attempt(s)"
                 ) from None
             # The answer is out but the child has not necessarily exited yet:
             # it still has to flush and tear down the interpreter. Killing it
@@ -561,12 +572,20 @@ def _run(request: dict, timeout, label: str, startup_timeout=None):
             except subprocess.TimeoutExpired:
                 # It answered and then would not leave. The answer is already
                 # in hand and is good; this is only about not leaking a
-                # process.
+                # process -- so the kill must not then be read as the solve
+                # having failed, which is what the exit-code check below did.
+                # A correct answer came back as `the solver exited -9`, and
+                # the student got a 503 for it.
                 _kill(proc)
+                reaped = True
             break
 
     returncode = proc.returncode
-    if returncode != 0:
+    # Skipped when we are the ones who killed it after it answered: the exit
+    # code then describes our signal, not the solve. It still applies to every
+    # other path, where a non-zero exit is the diagnosis for a worker that
+    # produced nothing usable.
+    if returncode != 0 and not reaped:
         raise SolverUnavailable(
             f"the solver exited {returncode}: "
             f"{(stderr.text() or '').strip()[:200]}")

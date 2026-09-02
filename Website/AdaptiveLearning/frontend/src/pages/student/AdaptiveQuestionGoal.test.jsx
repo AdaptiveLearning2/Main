@@ -79,6 +79,33 @@ it('never ends the session just because a goal was picked', async () => {
   expect(endSession).not.toHaveBeenCalled()
 })
 
+it('counts an answer only once it has been recorded', () => {
+  // `goalReached`'s own comment claims "the count only moves when an answer
+  // is recorded", and it did not: `setSessionCount` sat beside
+  // `setPhase('result')`, before the await, and nothing rolled it back when
+  // the write failed. A student whose answers were all failing to save --
+  // `recordAnswer` returns null and toasts on a missing id or a failed POST
+  // -- still got "you have answered 10 questions" over a database holding
+  // none of them, and the banner is the page's own claim that the sitting is
+  // done.
+  //
+  // A source check because driving the whole answer flow through this page
+  // means standing up the question fetch, the selection and the submit, and
+  // the property worth pinning is an *ordering* that a rendered assertion
+  // would not see anyway. Same trade the test below makes.
+  const src = readFileSync(
+    resolve(process.cwd(), 'src/pages/student/Adaptive.jsx'), 'utf8')
+  const submit = src.slice(src.indexOf('const handleSubmit'))
+  const body = submit.slice(0, submit.indexOf('const getAcc'))
+  const recorded = body.indexOf('await recordAnswer')
+  const guarded = body.indexOf('if (res)')
+  const counted = body.indexOf('setSessionCount')
+  expect(recorded).toBeGreaterThan(-1)
+  expect(guarded).toBeGreaterThan(recorded)
+  // After the write, and inside the branch that only runs when it succeeded.
+  expect(counted).toBeGreaterThan(guarded)
+})
+
 it('re-arms the check-in for the next session in the sitting', async () => {
   // `goalDismissed` is per-session state and has to clear with the session,
   // exactly like `timeUpDismissed` beside it. Left standing, one "Keep going"

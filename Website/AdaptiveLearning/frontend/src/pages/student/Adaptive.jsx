@@ -851,7 +851,6 @@ export default function Adaptive() {
   const handleSubmit = async () => {
     const isCorrect = JSON.stringify(data.answer_options[selectedAnswer]) === JSON.stringify(data.correct_answer)
     setCorrect(isCorrect)
-    setSessionCount(n => n + 1)
     setPhase('result')
 
     // The POST, missing-id guard, and failure toast live in `lib/session.js`,
@@ -865,6 +864,18 @@ export default function Adaptive() {
       correct: isCorrect,
     })
     if (res) {
+      // Counted here rather than beside `setPhase('result')`, so the figure
+      // only moves for an answer that reached the database. `recordAnswer`
+      // returns null on every failure path -- a missing session or question
+      // id, or a failed POST -- and toasts as it goes, so an uncounted answer
+      // has already been reported to the student.
+      //
+      // This is what `goalReached` claims: "the count only moves when an
+      // answer is recorded". It was incremented optimistically before the
+      // await and never rolled back, so a session whose writes were all
+      // failing still announced "you have answered 10 questions" over a
+      // database that held none of them.
+      setSessionCount(n => n + 1)
       // Uses the topic the backend attributed the answer to -- not a local
       // guess, which is what caused these figures to disagree before.
       applyAttempt(res?.topic, isCorrect)

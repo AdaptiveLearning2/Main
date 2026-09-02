@@ -9,8 +9,9 @@ import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 import QuestionFigure from '../../components/questions/QuestionFigure'
+import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
 
-const TOPICS = ['all','ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
+const TOPICS = ['all', ...ALL_TOPICS]
 const DIFFS  = ['all','easy','medium','hard']
 
 const DIFF_STYLE = {
@@ -221,7 +222,7 @@ export default function Questions() {
         <div className="relative">
           <select value={topicFilter} onChange={e => { setTopicFilter(e.target.value); setPage(1) }}
             className="appearance-none pl-3 pr-8 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-violet-500 capitalize cursor-pointer">
-            {TOPICS.map(t => <option key={t} value={t}>{t === 'all' ? 'All Topics' : t.replace('_', ' ')}</option>)}
+            {TOPICS.map(t => <option key={t} value={t}>{t === 'all' ? 'All Topics' : topicLabel(t)}</option>)}
           </select>
           <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none dark:text-gray-400" />
         </div>

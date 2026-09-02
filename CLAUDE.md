@@ -274,6 +274,28 @@ Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, 
 design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses
 `pyproject.toml` plus `requirements*.lock`.
 
+### `supabase/seed.sql` is gitignored, so a broken one is a local problem
+
+Each machine generates its own with `supabase db dump --local --data-only`; nothing ships it, and CI
+never runs it — the `Database migrations` job applies migrations to an empty stack and stops there.
+
+**A regenerated seed collides with the migrations that seed `math_topics`.** `db reset` applies every
+migration *first*, and several of them now insert topics (`missing_number`, `patterns`, `graphs`,
+`shape_fractions`), taking ids from the sequence. A dump written with explicit ids — which is what
+`--data-only` produces — then hits `duplicate key value violates unique constraint
+"math_topics_pkey"` and the seed dies part way, leaving a database with four topics and no users.
+That reads as a corrupt checkout rather than as a seed that needs regenerating.
+
+Fix a local copy by inserting topics **by name** with `ON CONFLICT ("topic_name") DO NOTHING`, and by
+deriving the `setval` from `MAX(id)` rather than hardcoding it — a literal was right only while the
+seed was the sole writer, and winding the sequence back makes the *next* insert collide, which is the
+same failure one step later. Nothing references `math_topics.id`: `record_topic_attempt` joins on
+`topic_name`, and the one foreign key to it, `user_math_performance`, is not seeded.
+
+`backend/tests/test_seed_sql.py` checks all three, and **skips when the file is absent** rather than
+failing on something the repo does not contain. It is a guard for whoever regenerates the file, not a
+gate.
+
 ### The Supabase CLI is a repo-local npm install
 
 It is **not on `PATH`** — `which supabase` and `Get-Command supabase` both report it missing, which
@@ -2686,6 +2708,29 @@ reason: `_ensure_queue` runs *after* the response is assembled, so letting a fai
 a served question into a 500. The daily ceiling is **Claude-only** on purpose: Ollama is local and
 free, so a call ceiling there would refuse a child a question to protect nothing.
 
+**An API that cannot be *reached* is a 503, not a 500, and the message names the base URL.**
+`generate_text` catches `anthropic.APIConnectionError` (which `APITimeoutError` subclasses) and
+re-raises it as `GenerationUnavailable`, so both `main.py` call sites already turn it into the 503
+that means "this deployment cannot serve right now". Unclassified it was a 500 with a 200-line
+traceback, and the student's page said *"make sure the backend is running"* while the backend was
+running and the unreachable thing was the API.
+
+**`AuthenticationError` is deliberately excluded** — it is an `APIStatusError`, a different branch,
+and a bad key is a misconfiguration that must stay loud rather than read as a passing outage. That is
+the line between classifying and swallowing: a connection failure still fails the call and still
+serves no question.
+
+The URL is in the message because it is the whole diagnosis when it is wrong. A stale
+`ANTHROPIC_BASE_URL` in the *user's Windows environment* — pointing at a local proxy that is not
+listening — gives exactly `WinError 10061`, and took three rounds to find because "Connection error."
+names nothing. It is inherited at process start, so clearing it needs a new terminal, not a reload.
+
+**`start.ps1` skips Ollama when `backend/.env` says `LLM_PROVIDER=claude`.** It ran unconditionally,
+so a Claude deployment still started `ollama serve` in its own window and would `ollama pull
+llama3.1:8b` if that model was missing — a multi-gigabyte download for a model nothing calls, and a
+window saying the opposite of what is configured. Guarded with `Test-Path` and a match check, per the
+rule above.
+
 **On breach the answer is to refuse — `GenerationUnavailable`, surfaced as 503, never a fallback.**
 Serving a question from the bank or from a cheaper model instead would change what a child is asked
 with nothing on any surface saying so, which is the same class of failure as a dashboard that cannot
@@ -3048,6 +3093,33 @@ question, not the question.
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
 student answered. `/api/questions` uses `select("*")` and needed nothing.
 
+### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
+
+1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from
+`rationals`, which is 4.NF.3 onward and is fraction *arithmetic*** — this is recognition, which is
+why it sits at grade 1 while `rationals` starts at 4. Its figure is required, for the same reason
+`graphs`' is.
+
+**Lowest terms is required, and refusing otherwise is the point.** Two shaded parts in four is a
+perfectly good picture and an ambiguous question: `2/4` and `1/2` are both correct readings, and
+whichever the solver picked, a student giving the other is marked wrong for a right answer — the
+failure this codebase treats as the worst available, and worse than a refusal, which costs one retry.
+Reducing the answer instead is the other option and is worse: the student is asked to read the
+picture, and the picture says two of four. `question_figures._part_whole` deliberately does **not**
+check it — a reducible fraction is perfectly drawable, and drawability and answerability are
+different questions.
+
+**The distractor space is checked exhaustively rather than sampled**, because it is 21 fractions.
+Two properties, both violated before: an option of one or more cannot be part of a shape, so `2/1` is
+not a misreading a child could make but an option nobody considers — which quietly makes a three-way
+choice a two-way one. And `1/1` and `2/2` were both offered against `1/2`, two options of equal value
+that go together with a single thought. Halves is what forced neighbouring denominators into the
+candidate list: with only near-misses of 2, the sole proper distractor available was `1/3`.
+
+**The whole is a constant width and the parts divide it**, not the other way round. Fixed-size parts
+drew eighths at twice the width of halves, which says the wrong thing about what a whole is — and is
+exactly the misconception these standards are about. Found by rendering it and looking.
+
 ### `graphs` is the one topic whose figure is required
 
 1.MD.4 ("ask and answer questions about how many more or less"), 2.MD.10 (a bar graph with up to
@@ -3088,7 +3160,7 @@ the reading 1.MD.4 asks for. The component is named `BarGraph` because the obvio
 hand-written `<svg>` is the case that guard states it cannot see, so the match is a false accusation.
 The word cannot appear in that file's comments either; the guard reads the file, not the syntax tree.
 
-### Grade 1 had two topics, and now has five
+### Grade 1 had two topics, and now has six
 
 `missing_number` (1.OA.8, the unknown in an equation — "8 + ? = 11", through 3.OA.4's unknown
 factor) and `patterns` (1.NBT.1 counting sequences and 2.NBT.2 skip counting, through 5.OA.3). Both
@@ -3131,8 +3203,17 @@ than falling through to an `UnboundLocalError` on `return response`); **a `math_
 migration** — `record_topic_attempt` joins `math_topics.topic_name = questions.subject` and
 attributes nothing when that finds none, so a topic without one serves and scores questions while
 crediting the student's work to nothing, which is exactly what `20260907000000` had to repair for
-`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and the frontend's four hardcoded
-topic lists, or the topic has no tile in the student's accuracy panel. `test_young_topics.py` pins
+`rationals`; an entry in `grade_appropriateness.FORBIDDEN_BANDS`; and `frontend/src/lib/topics.js`.
+
+**That last one used to be four hardcoded lists, and was six.** Two teacher surfaces had never been
+updated past the original ten: `Analytics.jsx` counted questions on the newer topics in *nothing* —
+its chart drops empty bars, so they vanished with no hint anything was missing — and `Questions.jsx`
+offered no way to filter the bank to them. Both bite hardest for grades 1-3, whose topics those are.
+Three changes in a row left a list behind, so the list stopped being a thing to remember.
+`lib/topics.js` is now the only place one is written down, and **`topics.test.js` parses
+`ALL_TOPICS` out of `LLM_topic_decider.py` and fails if the two disagree** — a React bundle cannot
+import Python, so the copy is checked rather than trusted. A third test fails on any new file that
+writes a topic list of its own. `test_young_topics.py` pins
 the first three.
 
 The per-topic history in `get_user_history` is now derived from `ALL_TOPICS` rather than listed
@@ -3354,6 +3435,31 @@ one; prefetch, the inline path and practice reach the worker independently. So a
 together took every solve-backed topic down, and once a solve failure became `SolverUnavailable` it
 did so as a **503 with no retry**. `SOLVE_MAX_CONCURRENCY` (8) fixes it by queueing: 48 of 48 now
 succeed, and 96 of 96 within `SOLVE_QUEUE_TIMEOUT` (20s).
+
+**The semaphore bounds *this process*, and a co-tenant still spends the budget — so a timeout gets
+one more attempt.** The budget is wall-clock over a child dominated by sympy startup, so any other
+load on the machine can exhaust it: reproduced with the frontend suite running alongside the backend
+one, and again with CPU hogs — **8 of 8 solves killed at 3.0s**. Ten of the fourteen topics reach the
+worker, and since a timeout raises rather than returning `None`, every one was a **503 on the first
+attempt**.
+
+Retrying is what separates the two things a timeout can mean. A genuine spin is still spinning on the
+second attempt and is killed again, at a bounded extra wait and no wrong answer; contention is a
+property of the moment, and the moment passes. Nothing in-process can tell them apart, and the retry
+does not need to. The second budget is wider (`SOLVE_RETRY_BUDGET_FACTOR`, 3×) because the first
+timeout is itself evidence that this machine is slower than the budget assumed — the same reasoning
+as `_probe_startup`'s clamp, applied when the measurement arrives late.
+
+**Measured at 18 cores, and the limit is worth knowing.** Eight background hogs: no timeouts at all.
+At **saturation the first attempt failed 6 of 6 and the retry rescued all six**. At 2×
+oversubscription the retry rescues none — a machine that far past its capacity refuses, which is
+honest, but it is not fixed. **The real fix is to stop paying startup inside the budget**: the child
+would signal readiness after importing sympy, and the bound would then cover the arithmetic, which is
+what it is for. That is a rewrite of `_run`'s process handling and has not been done.
+
+The permit is taken **per attempt**, not around both: holding one through a wait that has already
+failed shrinks the effective concurrency exactly when the machine is busiest, which is when the retry
+exists.
 
 **Waiting for a slot deliberately does *not* come out of the solve budget** — the opposite of
 `llm_client`, and for a stated reason. There the wait is the caller's own deadline, so charging the

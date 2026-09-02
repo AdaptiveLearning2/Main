@@ -1040,13 +1040,32 @@ def _stale_sweep_loop() -> None:
     rather than up to an interval away -- the same rule the poller threads
     follow, and the reason this thread can be joined rather than abandoned to
     interpreter teardown.
+
+    **Sweeps once at startup, then on the interval.** It used to wait a whole
+    interval first, which meant a process that did not live 15 minutes never
+    swept at all -- and `uvicorn --reload` restarts on every file save, so on a
+    development machine that is most of them. Measured on a local stack after a
+    stretch of this: **123 sessions open, every one of them past the 6h
+    threshold**, on a sweep that works correctly when called. In production the
+    same gap is smaller and still real: nothing is collected until 15 minutes
+    after each deploy.
+
+    The first pass is safe to run at boot because it is batch-limited and lives
+    on this thread, so it does not delay startup or block the first request.
     """
-    while not _stale_sweep_stop.wait(_STALE_SWEEP_INTERVAL_SEC):
+    first = True
+    while first or not _stale_sweep_stop.wait(_STALE_SWEEP_INTERVAL_SEC):
+        first = False
         try:
             _sweep_abandoned_sessions()
         except Exception as e:                                 # noqa: BLE001
             # The loop outliving one bad pass is the whole point of a sweeper.
             print(f"[stale_sweep] pass failed: {e}")
+        # Checked between passes as well as at the top, so a stop arriving
+        # during the first sweep is not made to wait a full interval for the
+        # loop condition to notice it.
+        if _stale_sweep_stop.is_set():
+            return
 
 
 def start_stale_sweeper() -> bool:

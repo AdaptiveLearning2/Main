@@ -130,30 +130,20 @@ describe('the streak card', () => {
 })
 
 describe('the topic tiles', () => {
-  // A source check, because the defect is invisible at runtime: React renders
-  // `undefined` as nothing, so a topic with no icon is an empty slot rather
-  // than an error. `TOPICS` and `ICONS` are two literals one line apart, and
-  // an edit adding `missing_number` and `patterns` to the first and not the
-  // second landed exactly that way -- on the panel a student sees, for the two
-  // topics aimed at the youngest users.
+  // The check that used to live here parsed `TOPICS` and `ICONS` out of
+  // `Dashboard.jsx`, because they were literals in it and disagreed. They are
+  // not any more -- both come from `lib/topics.js`, which is the only place a
+  // topic list is written down -- so this parsed nothing and reported itself
+  // inert, which is the guard it carried for exactly that.
   //
-  // The other three topic lists in this app all default a missing icon; this
-  // one did not, which is why half an edit showed nowhere else.
-  const source = readFileSync(
-    resolve(process.cwd(), 'src/pages/student/Dashboard.jsx'), 'utf8')
-
-  const listOf = (name) => {
-    const line = source.split('\n').find(l => l.startsWith(`const ${name}`))
-    return [...line.matchAll(/([a-z_]+)\s*:/g)].map(m => m[1])
-  }
-
-  it('gives every topic an icon', () => {
-    const topics = [...source.split('\n')
-      .find(l => l.startsWith('const TOPICS'))
-      .matchAll(/'([a-z_]+)'/g)].map(m => m[1])
-    const icons = listOf('ICONS')
-    expect(topics.length).toBeGreaterThan(0)
-    expect(icons.length).toBeGreaterThan(0)
-    expect(topics.filter(t => !icons.includes(t))).toEqual([])
+  // `lib/topics.test.js` replaces it and is strictly stronger: it checks every
+  // topic has an icon at the source, and additionally that the list matches
+  // the backend's, which no per-page check could.
+  it('take their icons from the shared list', async () => {
+    const { TOPICS, TOPIC_ICONS } = await import('../../lib/topics')
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/pages/student/Dashboard.jsx'), 'utf8')
+    expect(source).toContain("from '../../lib/topics'")
+    expect(TOPICS.filter(t => !TOPIC_ICONS[t])).toEqual([])
   })
 })

@@ -239,3 +239,18 @@ def graphs(scenario_name):
                             "count": {"type": "string", "pattern": r"^\d{1,2}$"},
                         })},
                     "target": _STRING_LIST})
+
+
+def shape_fractions():
+    """A shape's part count and how many of them are shaded.
+
+    Neither the relationship between them nor the lowest-terms rule is
+    expressible in a schema -- `question_figures._part_whole` enforces
+    `1 <= shaded < parts` and the generator enforces the rest, and they are
+    the only things that do.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": ["part_whole"]},
+                    "parts": {"type": "string", "pattern": r"^\d$"},
+                    "shaded": {"type": "string", "pattern": r"^\d$"}})

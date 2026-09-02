@@ -105,12 +105,40 @@ def _bar_chart(variables):
     return {"type": "bar_chart", "bars": bars}
 
 
+# 1.G.3 partitions into two and four equal shares, 2.G.3 adds thirds, and
+# 3.NF.1 reaches eighths. Past that the parts are too thin to count at the size
+# a question card gives them, which is the whole reading being asked for.
+MAX_PARTS = 8
+
+
+def _part_whole(variables):
+    """1.G.3 / 2.G.3 / 3.NF.1 -- a shape partitioned into equal parts, some
+    shaded.
+
+    Reads the same `parts` and `shaded` the solver divides. Note what is *not*
+    checked here: whether the fraction is in lowest terms. A picture of two
+    shaded parts in four is perfectly drawable; it is the *answer* that is
+    ambiguous, so the generator refuses it. Drawability and answerability are
+    different questions and this module only answers the first.
+    """
+    parts = _positive_int(variables.get("parts"), MAX_PARTS)
+    shaded = _positive_int(variables.get("shaded"), MAX_PARTS)
+    if parts is None or shaded is None or parts < 2:
+        return None
+    if not 1 <= shaded < parts:
+        # None shaded and all shaded are not fraction questions a picture can
+        # ask -- 0/4 has nothing to point at and 4/4 is the whole shape.
+        return None
+    return {"type": "part_whole", "parts": parts, "shaded": shaded}
+
+
 # Scenario name -> the builder for its figure. A scenario absent from this map
 # has no figure, which is the ordinary case: most questions here are text.
 BUILDERS = {
     "rectangle_area_by_counting": _rect_grid,
     "how_many_total": _bar_chart,
     "how_many_more": _bar_chart,
+    "part_whole": _part_whole,
 }
 
 

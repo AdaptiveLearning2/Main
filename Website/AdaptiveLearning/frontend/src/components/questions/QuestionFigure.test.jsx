@@ -129,6 +129,44 @@ describe('a bar chart', () => {
   })
 })
 
+describe('a partitioned shape', () => {
+  it('says how many parts and how many are shaded, not the fraction', () => {
+    // Naming "three quarters" would answer the question for a screen-reader
+    // user that a sighted one has to read off the picture -- two different
+    // questions from the same page.
+    render(<QuestionFigure figure={{ type: 'part_whole', parts: 4, shaded: 3 }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'A shape split into 4 equal parts, 3 of them shaded.')
+  })
+
+  it('says "1 equal part" rather than "1 equal parts"', () => {
+    render(<QuestionFigure figure={{ type: 'part_whole', parts: 2, shaded: 1 }} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName(
+      'A shape split into 2 equal parts, 1 of them shaded.')
+  })
+
+  it('fills the shaded parts and outlines the rest', () => {
+    // Filled versus outlined, not two colours: it survives being printed in
+    // black and white and does not depend on telling two hues apart.
+    const { container } = render(
+      <QuestionFigure figure={{ type: 'part_whole', parts: 4, shaded: 3 }} />)
+    const fills = [...container.querySelectorAll('rect')]
+      .map(r => r.getAttribute('fill'))
+    expect(fills).toEqual(['currentColor', 'currentColor', 'currentColor', 'none'])
+  })
+
+  it.each([
+    ['every part shaded, which is the whole shape', { type: 'part_whole', parts: 4, shaded: 4 }],
+    ['nothing shaded', { type: 'part_whole', parts: 4, shaded: 0 }],
+    ['one part, which is not a partition', { type: 'part_whole', parts: 1, shaded: 1 }],
+    ['more parts than the backend will build', { type: 'part_whole', parts: 12, shaded: 5 }],
+    ['a fractional count', { type: 'part_whole', parts: 4.5, shaded: 2 }],
+  ])('renders nothing for %s', (_label, figure) => {
+    const { container } = render(<QuestionFigure figure={figure} />)
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
 describe('every surface that presents a question', () => {
   // Exhaustiveness, like the backend's close-site and _MODE_AWARE tests, and
   // for the same reason: this shipped wired into two of five surfaces. A

@@ -130,6 +130,13 @@ def _solve_slot(label):
         _solve_slots.release()
 
 
+# How much wider the retry's budget is. The first timeout is evidence that
+# this machine is slower right now than the budget assumed, so the second
+# attempt is given room rather than the same wall to hit again. Worst case for
+# a genuine spin is `budget * (1 + this)`, killed at both ends.
+SOLVE_RETRY_BUDGET_FACTOR = llm_client._env_number(
+    "SOLVE_RETRY_BUDGET_FACTOR", 3.0, float, minimum=1.0)
+
 _STARTUP_SAFETY_FACTOR = 3.0
 
 # The probe's own budget, deliberately unrelated to the setting it validates:
@@ -323,31 +330,65 @@ def _run(request: dict, timeout, label: str):
     this.
     """
     budget = SOLVE_TIMEOUT_S if timeout is None else timeout
-    # The permit is taken *outside* the try, so a queue refusal is not caught
-    # by the `except Exception` below and re-labelled "could not be started" --
-    # it was never started, and saying so wrongly is what this whole type
-    # exists to stop. It is released before the output is parsed: that part is
-    # a JSON load on a capped string and holding a slot through it would shrink
-    # the effective concurrency for no reason.
-    with _solve_slot(label):
-        try:
-            proc = subprocess.run(
-                [sys.executable, _WORKER],
-                input=json.dumps(request), capture_output=True, text=True,
-                timeout=budget,
-                # Inherit nothing the child does not need.
-                env={"PATH": os.environ.get("PATH", ""),
-                     "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
-            )
-        except subprocess.TimeoutExpired:
-            # subprocess.run kills the child here, which is the whole point:
-            # the in-process equivalent leaves the spin running for the life of
-            # the worker.
-            raise SolverUnavailable(
-                f"the solver exceeded {budget}s and was killed ({label})") from None
-        except Exception as e:                  # pragma: no cover - defensive
-            raise SolverUnavailable(
-                f"the solver could not be started: {type(e).__name__}: {e}") from e
+    # A timeout gets one more go, with a wider budget.
+    #
+    # `SOLVE_MAX_CONCURRENCY` bounds *this process's* workers and nothing else.
+    # The budget is wall-clock over a child dominated by sympy startup, so any
+    # co-tenant on the machine spends it -- reproduced with the frontend suite
+    # running alongside, and again with CPU hogs: 8 of 8 solves killed at 3.0s.
+    # Ten of the fourteen topics reach the worker, and since a timeout raises
+    # rather than returning None, every one of those was a 503 on the first
+    # attempt.
+    #
+    # Retrying is what separates the two things a timeout can mean. A genuine
+    # spin -- `parse_expr("9**9**9")` -- is still spinning on the second
+    # attempt and is killed again, so it costs a bounded extra wait and no
+    # wrong answer. Contention is not: it is a property of the moment, and the
+    # moment passes. Nothing in-process can tell them apart, and the retry does
+    # not need to.
+    #
+    # The second budget is wider because the first timeout is itself the
+    # evidence that this machine is slower than the budget assumed -- the same
+    # reasoning as `_probe_startup`'s clamp, applied when the measurement
+    # arrives late.
+    attempts = [budget, budget * SOLVE_RETRY_BUDGET_FACTOR]
+    for index, attempt_budget in enumerate(attempts):
+        last = index == len(attempts) - 1
+        # The permit is taken *outside* the try, so a queue refusal is not
+        # caught by the `except Exception` below and re-labelled "could not be
+        # started" -- it was never started, and saying so wrongly is what this
+        # whole type exists to stop. Taken per attempt rather than around both,
+        # so a retrying caller does not hold a slot through a wait it already
+        # knows failed. Released before the output is parsed: that is a JSON
+        # load on a capped string, and holding a slot through it would shrink
+        # the effective concurrency for no reason.
+        with _solve_slot(label):
+            try:
+                proc = subprocess.run(
+                    [sys.executable, _WORKER],
+                    input=json.dumps(request), capture_output=True, text=True,
+                    timeout=attempt_budget,
+                    # Inherit nothing the child does not need.
+                    env={"PATH": os.environ.get("PATH", ""),
+                         "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")},
+                )
+                break
+            except subprocess.TimeoutExpired:
+                # subprocess.run kills the child here, which is the whole
+                # point: the in-process equivalent leaves the spin running for
+                # the life of the worker.
+                if not last:
+                    print(f"[safe_solve] exceeded {attempt_budget}s ({label}); "
+                          f"retrying once at "
+                          f"{budget * SOLVE_RETRY_BUDGET_FACTOR}s")
+                    continue
+                raise SolverUnavailable(
+                    f"the solver exceeded {attempt_budget}s and was killed "
+                    f"({label}), after {len(attempts)} attempts") from None
+            except Exception as e:              # pragma: no cover - defensive
+                raise SolverUnavailable(
+                    f"the solver could not be started: "
+                    f"{type(e).__name__}: {e}") from e
 
     if proc.returncode != 0:
         raise SolverUnavailable(

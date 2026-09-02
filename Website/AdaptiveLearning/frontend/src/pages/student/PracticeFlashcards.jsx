@@ -23,23 +23,36 @@ export default function PracticeFlashcards({ session, onFinish }) {
   const reviewedRef = useRef(0)
   const flippedRef = useRef(false)
 
+  // See PracticeTest: the same two problems, the same two fixes. Only the
+  // latest request may write state, and the mount effect runs once per
+  // session rather than once per StrictMode replay.
+  const requestRef = useRef(0)
+
   const loadCard = useCallback(async () => {
+    const mine = ++requestRef.current
     setLoading(true)
     setFailed(false)
     setFlipped(false)
     flippedRef.current = false
     try {
       const q = await apiFetch(`/api/practice-sessions/${session.id}/question`)
+      if (mine !== requestRef.current) return
       setQuestion(q)
     } catch (e) {
+      if (mine !== requestRef.current) return
       console.error('Failed to load the next card:', e)
       setFailed(true)
     } finally {
-      setLoading(false)
+      if (mine === requestRef.current) setLoading(false)
     }
   }, [session.id])
 
-  useEffect(() => { loadCard() }, [loadCard])
+  const autoLoadedFor = useRef(null)
+  useEffect(() => {
+    if (autoLoadedFor.current === session.id) return
+    autoLoadedFor.current = session.id
+    loadCard()
+  }, [loadCard, session.id])
 
   async function handleFlip() {
     if (flippedRef.current || !question) return

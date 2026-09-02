@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Muse,
     [switch]$Camera,
     [int]$CameraIndex = 0,
@@ -175,8 +175,36 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Ollama
+#
+# Skipped entirely when the backend is configured for Claude. This block used
+# to run unconditionally, so `LLM_PROVIDER=claude` still started `ollama serve`
+# in its own window and would `ollama pull llama3.1:8b` if that model was
+# missing -- a multi-gigabyte download for a model the deployment never calls,
+# and a window that says the opposite of what is configured.
+#
+# `Test-Path` first: `Select-String -Path` on a missing file is a *terminating*
+# error under this file's $ErrorActionPreference, so a fresh checkout with no
+# backend .env would abort the launcher here rather than at the step that
+# creates one. Same guard the -Camera path already carries, and for the same
+# reason.
+$llmProvider = "ollama"
+$backendEnvPath = Join-Path $backendDir ".env"
+if (Test-Path $backendEnvPath) {
+    $providerLine = Select-String -Path $backendEnvPath -Pattern '^\s*LLM_PROVIDER\s*=\s*(\S+)' |
+        Select-Object -First 1
+    # Guard the *match* too, not just the file: indexing .Matches[0] on a key
+    # that is not there is a null-array index, which fails the same way one
+    # step later.
+    if ($providerLine -and $providerLine.Matches.Count -gt 0) {
+        $llmProvider = $providerLine.Matches[0].Groups[1].Value.Trim().ToLower()
+    }
+}
+
 Write-Host "[1/5] Ollama (LLM)" -ForegroundColor Cyan
-if (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
+if ($llmProvider -eq "claude") {
+    Write-Host "  LLM_PROVIDER=claude in backend/.env -- skipping Ollama." -ForegroundColor Gray
+    Write-Host "  Nothing local is needed for question generation." -ForegroundColor Gray
+} elseif (!(Get-Command ollama -ErrorAction SilentlyContinue)) {
     Write-Host "  Ollama not found. Install from https://ollama.com then re-run." -ForegroundColor Yellow
 } else {
     $running = ollama list 2>$null

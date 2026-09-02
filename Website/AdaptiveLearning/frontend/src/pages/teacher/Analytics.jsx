@@ -6,8 +6,9 @@ import AccessibleChart from '../../components/charts/AccessibleChart'
 import { sliceSpec } from '../../components/charts/describeSeries'
 import { fetchQuestionsCached } from '../../lib/questionsCache'
 import LoadError from '../../components/ui/LoadError'
+import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
 
-const TOPICS = ['ordering','rationals','expressions','algebra','geometry','angle_relationships','mean','median','mode','probability']
+const TOPICS = ALL_TOPICS
 const COLORS  = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#84cc16','#f97316','#14b8a6']
 const PIE_COLORS = { easy: '#10b981', medium: '#f59e0b', hard: '#ef4444' }
 
@@ -40,7 +41,7 @@ export default function TeacherAnalytics() {
   useEffect(load, [])
 
   const topicData = TOPICS.map((t, i) => ({
-    topic: t.replace('_', ' '),
+    topic: topicLabel(t),
     count: questions.filter(q => q.subject === t).length,
     fill:  COLORS[i],
   })).filter(d => d.count > 0)

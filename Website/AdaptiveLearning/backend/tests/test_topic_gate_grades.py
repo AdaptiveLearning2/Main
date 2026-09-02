@@ -80,9 +80,9 @@ def test_grade_one_has_no_geometry():
 
     What changed is the rest of the list. Grade 1 had exactly two topics, which
     meant a 6-year-old saw `ordering` and `expressions` on rotation;
-    `missing_number` (1.OA.8), `patterns` (1.NBT.1) and `graphs` (1.MD.4) are
-    real grade-1 standards with exact solvers, so the honest size of the list
-    is five.
+    `missing_number` (1.OA.8), `patterns` (1.NBT.1), `graphs` (1.MD.4) and
+    `shape_fractions` (1.G.3) are real grade-1 standards with exact solvers, so
+    the honest size of the list is six.
 
     This one pins the set, because its whole point is what a 6-year-old can be
     asked. The tests below deliberately do not: "an unreadable grade is treated
@@ -91,7 +91,8 @@ def test_grade_one_has_no_geometry():
     time the youngest grade gained a topic -- twice now.
     """
     assert set(decider._allowed_topics("1")) == {
-        "ordering", "expressions", "missing_number", "patterns", "graphs"}
+        "ordering", "expressions", "missing_number", "patterns", "graphs",
+        "shape_fractions"}
     assert "geometry" in decider._allowed_topics("2")
 
 

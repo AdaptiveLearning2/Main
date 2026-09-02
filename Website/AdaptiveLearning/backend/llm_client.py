@@ -271,10 +271,16 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
     code-level check downstream of it stay load-bearing and stay tested.
 
     Raises rather than returning "" when a bound refuses -- see
-    `GenerationUnavailable`. Network and API errors are deliberately *not*
-    caught here: the call sites do not catch them today either, and a swallow
-    would turn a misconfigured API key into questions that quietly stop
-    generating.
+    `GenerationUnavailable`, which a *failure to reach the API* is also raised
+    as -- being unable to connect is the same kind of fact as a bound refusing,
+    and it says nothing about the model or the reply.
+
+    Everything else is deliberately *not* caught: the call sites do not catch
+    them either, and swallowing would turn a misconfigured API key into
+    questions that quietly stop generating. The line between the two is
+    classification versus silence -- a connection failure still fails the call
+    and still serves no question; it just arrives as the 503 that means "this
+    deployment cannot serve right now" rather than as a 500.
     """
     budget = GENERATION_LLM_TIMEOUT if timeout is None else timeout
 
@@ -301,6 +307,10 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
         if LLM_PROVIDER == "claude":
             _claim_call_slot()
             client = _get_anthropic_client().with_options(timeout=remaining)
+            # Imported here for the same reason the client is built lazily: a
+            # deployment on ollama need not have the package. By this line the
+            # client exists, so the import is already cached.
+            import anthropic
             # `output_config` only when there is a schema: an absent key and
             # a permissive schema are not the same request, and the topics
             # that cannot express one (see `question_schemas.probability`)
@@ -308,13 +318,43 @@ def generate_text(prompt: str, *, temperature: float = 1.1,
             structured = ({"output_config":
                            {"format": {"type": "json_schema", "schema": schema}}}
                           if schema is not None else {})
-            resp = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-                **_claude_sampling(claude_temperature),
-                **structured,
-            )
+            try:
+                resp = client.messages.create(
+                    model=CLAUDE_MODEL,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                    **_claude_sampling(claude_temperature),
+                    **structured,
+                )
+            except anthropic.APIConnectionError as e:
+                # The API could not be *reached*. That is the same kind of fact
+                # as a bound refusing or a solver that will not start: this
+                # deployment cannot serve right now, and it says nothing about
+                # the model or the reply. Unclassified it surfaced as a 500
+                # with a 200-line traceback, and the page told the student to
+                # "make sure the backend is running" -- while the backend was
+                # running and the unreachable thing was the API.
+                #
+                # `APITimeoutError` subclasses this, so both are covered.
+                # `AuthenticationError` deliberately is not: it is an
+                # `APIStatusError`, and a bad key is a misconfiguration that
+                # must stay loud rather than read as a passing outage.
+                #
+                # This is a *classification*, not a swallow -- the call still
+                # fails and no question is served. The distinction the
+                # docstring draws is about not turning a broken key into
+                # questions that quietly stop generating.
+                #
+                # The base URL is named because it is the whole diagnosis when
+                # it is wrong: a stale `ANTHROPIC_BASE_URL` pointing at a local
+                # proxy that is not running gives exactly this error, and
+                # "Connection error." on its own sends you to look at the
+                # backend, the network and the key before the one setting that
+                # is actually at fault. It is not a secret; the key is, and is
+                # not logged.
+                raise GenerationUnavailable(
+                    f"cannot reach the model API at {client.base_url} -- "
+                    f"{type(e).__name__}") from e
             return next((b.text for b in resp.content if b.type == "text"), "")
 
         # Imported here, not at module scope, so a deployment running

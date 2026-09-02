@@ -473,19 +473,6 @@ def test_the_identity_is_never_built(band, scenario):
                         and poly[1] == 0), f"{name} = {poly} is the identity"
 
 
-def test_a_composition_still_composes_something():
-    """The consequence, stated as the property rather than the mechanism: an
-    identity outer function makes f(g(x)) equal g(x) for every input."""
-    for _ in range(500):
-        f, g, x = funcs._choose_functions(funcs.COMPOSE, "advanced")
-        composed, _r = hs_solvers.solve_composition(f, g, x)
-        inner, _r2 = hs_solvers.evaluate_polynomial(g, x)
-        outer_of_inner_alone = inner
-        if composed == outer_of_inner_alone:
-            # Possible by coincidence, but not because f does nothing.
-            assert not (len(f) == 2 and abs(f[0]) == 1 and f[1] == 0), f
-
-
 def test_a_constant_function_is_never_built():
     """"If f(x) = 7, what is f(4)" asks nothing about function notation.
 
@@ -502,7 +489,6 @@ def test_a_constant_function_is_never_built():
     for band in ("early", "middle", "upper", "advanced"):
         for _ in range(100):
             f, _g, _x = funcs._choose_functions(funcs.EVALUATE, band)
-            assert len(f) >= 2 and f[0] != 0, f
             assert len(f) >= 2 and f[0] != 0, f
 
 

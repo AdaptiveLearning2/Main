@@ -87,6 +87,58 @@ BEGIN
     END IF;
 END $$;
 
+-- Every column `student_sessions` filters an activity read on, checked against
+-- the live schema and scoped to its own table.
+--
+-- `main._ACTIVITY_SOURCES` names these, and the filter is applied server-side:
+-- a column that is not there makes PostgREST reject the request, the endpoint
+-- catches it, and `activity_known` goes False for every session with `idle`
+-- following -- which puts the pulsing LIVE badge back on a teacher's screen
+-- for a student who has gone home. Silent, and green everywhere.
+--
+-- The Python guard (`test_every_filtered_column_exists`) greps the migration
+-- text, and text is the wrong thing to ask. Its first version matched a
+-- quoted name *anywhere* in the concatenated files, so a dropped column still
+-- satisfied it -- `identity_confidence` appears in 20260812000000 only as
+-- `DROP COLUMN IF EXISTS`, and would have passed. It is table-scoped and
+-- drop-aware now, but it is still reading SQL rather than a schema, so this
+-- is the half that actually answers the question.
+--
+-- Deliberately not derived from a list in the backend: this file is the
+-- independent statement of what must be true, and a check that imported its
+-- own expectations would agree with itself.
+DO $$
+DECLARE
+    spec record;
+BEGIN
+    FOR spec IN
+        SELECT * FROM (VALUES
+            ('session_answers',   'answered_at'),
+            ('cognitive_signals', 'ts'),
+            ('cognitive_signals', 'focus'),
+            ('face_signals',      'ts'),
+            ('face_signals',      'emotion'),
+            ('face_signals',      'gaze_x'),
+            ('face_signals',      'head_yaw'),
+            ('heart_signals',     'ts'),
+            ('heart_signals',     'heart_rate_bpm')
+        ) AS t(tbl, col)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = t.tbl
+              AND column_name = t.col)
+    LOOP
+        RAISE EXCEPTION
+            '%.% is gone, and student_sessions filters an activity read on '
+            'it. PostgREST will reject that request, the endpoint swallows '
+            'the error, and every session then reports activity unknown -- so '
+            'a quiet session reads LIVE again. Update _ACTIVITY_SOURCES in '
+            'main.py in the same change that drops the column.',
+            spec.tbl, spec.col;
+    END LOOP;
+END $$;
+
 -- ── fixtures ────────────────────────────────────────────────────────────────
 --
 -- heart_signals.user_id -> profiles.id -> auth.users.id, and session_id ->

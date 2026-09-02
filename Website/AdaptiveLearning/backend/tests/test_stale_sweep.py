@@ -6,6 +6,7 @@ sweep worked correctly every time it was called by hand -- it just was not
 being called.
 """
 import os
+import re
 import time
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -342,23 +343,83 @@ def test_the_filters_are_valid_postgrest():
         assert "order=" in params and "limit=500" in params, (table, params)
 
 
-def test_every_filtered_column_exists():
-    """The other half a recorded string cannot check: that the columns are
-    real. `gaze_x` and `head_yaw` arrived in later migrations than the table,
-    so "it is on face_signals" is not something to take on trust."""
-    migrations = os.path.join(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))), "..", "..",
-        "supabase", "migrations")
-    sql = ""
-    for name in sorted(os.listdir(migrations)):
-        if name.endswith(".sql"):
-            sql += open(os.path.join(migrations, name), encoding="utf-8").read()
+def _columns_after_every_migration():
+    """Per-table column sets, replayed over the migrations in order.
 
+    Deliberately not a substring search over the concatenated files, which is
+    what this started as and is two kinds of wrong: it is not table-scoped, and
+    a name that appears only in a `DROP COLUMN` still matches. The proof is in
+    the tree -- `identity_confidence` occurs in 20260812000000 solely as
+    `DROP COLUMN IF EXISTS`, so putting it in `_ACTIVITY_SOURCES` passed. A
+    check that exists to catch a retirement could not catch a retirement.
+
+    Still only a reading of SQL text. `scripts/assert_signal_rls.sql` asks the
+    live schema in CI and is the authoritative half; this one runs in every
+    local pytest with no stack, and its job is fast feedback.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    migrations = os.path.join(root, "..", "..", "supabase", "migrations")
+    columns: dict[str, set] = {}
+    create = re.compile(
+        r'CREATE TABLE (?:IF NOT EXISTS )?"public"\."(\w+)"\s*\((.*?)\n\);',
+        re.S | re.I)
+    alter = re.compile(
+        r'ALTER TABLE (?:ONLY )?"?public"?\."?(\w+)"?\s+'
+        r'(ADD|DROP) COLUMN (?:IF (?:NOT )?EXISTS )?"?(\w+)"?', re.I)
+
+    for name in sorted(os.listdir(migrations)):
+        if not name.endswith(".sql"):
+            continue
+        sql = open(os.path.join(migrations, name), encoding="utf-8").read()
+        for table, body in create.findall(sql):
+            found = columns.setdefault(table, set())
+            for line in body.splitlines():
+                match = re.match(r'\s*"(\w+)"\s+\S', line)
+                if match:
+                    found.add(match.group(1))
+        for table, action, column in alter.findall(sql):
+            found = columns.setdefault(table, set())
+            if action.upper() == "ADD":
+                found.add(column)
+            else:
+                found.discard(column)
+    return columns
+
+
+def test_every_filtered_column_exists():
+    """The half a recorded filter string cannot check: that the columns are
+    real, on the table being filtered, and still there.
+
+    `gaze_x` and `head_yaw` arrived in migrations later than their table, so
+    "it is on face_signals" was never something to take on trust.
+    """
+    columns = _columns_after_every_migration()
     for table, column, measured in main._ACTIVITY_SOURCES:
+        assert columns.get(table), (
+            f"no CREATE TABLE parsed for {table} -- this guard has gone "
+            "inert, which is worse than it failing")
         for name in (column, *measured):
-            assert f'"{name}"' in sql, (
-                f"{table}.{name} appears in no migration -- the filter would "
-                "throw, and every session would report activity unknown")
+            assert name in columns[table], (
+                f"{table}.{name} is not a column after the migrations replay. "
+                "student_sessions filters an activity read on it, so PostgREST "
+                "would reject the request, the endpoint would swallow it, and "
+                "every session would report activity unknown -- a quiet "
+                "session reads LIVE again.")
+
+
+def test_the_column_replay_notices_a_drop():
+    """The teeth for the parser, against a column this repo really retired.
+
+    `identity_confidence` was created on `face_signals` in 20260625000000 and
+    dropped in 20260812000000. The substring version of the test above matched
+    it in the DROP statement and passed, which is exactly the failure it was
+    written to prevent.
+    """
+    columns = _columns_after_every_migration()
+    assert "emotion" in columns["face_signals"], "the parser found the table"
+    assert "identity_confidence" not in columns["face_signals"], (
+        "a dropped column is still being counted as present")
 
 
 def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):

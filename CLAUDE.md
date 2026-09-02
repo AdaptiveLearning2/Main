@@ -274,6 +274,28 @@ Dependencies are pinned: `backend/requirements.txt` (runtime, direct deps only, 
 design — no `pip freeze`), `requirements-dev.txt` pulls it in and adds pytest. EEGResearch uses
 `pyproject.toml` plus `requirements*.lock`.
 
+### `supabase/seed.sql` is gitignored, so a broken one is a local problem
+
+Each machine generates its own with `supabase db dump --local --data-only`; nothing ships it, and CI
+never runs it — the `Database migrations` job applies migrations to an empty stack and stops there.
+
+**A regenerated seed collides with the migrations that seed `math_topics`.** `db reset` applies every
+migration *first*, and several of them now insert topics (`missing_number`, `patterns`, `graphs`,
+`shape_fractions`), taking ids from the sequence. A dump written with explicit ids — which is what
+`--data-only` produces — then hits `duplicate key value violates unique constraint
+"math_topics_pkey"` and the seed dies part way, leaving a database with four topics and no users.
+That reads as a corrupt checkout rather than as a seed that needs regenerating.
+
+Fix a local copy by inserting topics **by name** with `ON CONFLICT ("topic_name") DO NOTHING`, and by
+deriving the `setval` from `MAX(id)` rather than hardcoding it — a literal was right only while the
+seed was the sole writer, and winding the sequence back makes the *next* insert collide, which is the
+same failure one step later. Nothing references `math_topics.id`: `record_topic_attempt` joins on
+`topic_name`, and the one foreign key to it, `user_math_performance`, is not seeded.
+
+`backend/tests/test_seed_sql.py` checks all three, and **skips when the file is absent** rather than
+failing on something the repo does not contain. It is a guard for whoever regenerates the file, not a
+gate.
+
 ### The Supabase CLI is a repo-local npm install
 
 It is **not on `PATH`** — `which supabase` and `Get-Command supabase` both report it missing, which

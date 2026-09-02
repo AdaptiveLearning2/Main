@@ -49,7 +49,13 @@ beforeEach(() => {
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade' }),
     'POST /api/sessions/start': () => ({ id: 'sess-phantom' }),
     'GET /api/eeg/health': () => ({ available: false }),
-    'GET /api/performance/student/u1': () => ({ topics: [] }),
+    // An array, not `{topics: []}`: the page iterates the response
+    // directly (`for (const r of rows || [])`), so an object throws
+    // `(rows || []) is not iterable` *after* the test body finishes --
+    // which vitest counts as a failed run even though every assertion
+    // passed. It surfaced only on CI, where unhandled rejections are
+    // not tolerated.
+    'GET /api/performance/student/u1': () => [],
     // The router matches the whole path, query included.
     'GET /api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=sess-phantom': () => ({
       id: 'q1', question_text: 'What is 2 + 2?', question_topic: 'ordering',

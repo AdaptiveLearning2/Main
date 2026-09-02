@@ -18,8 +18,26 @@ reintroduces the bug unless they know not to.
 import os
 import re
 
+import pytest
+
 SEED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                     "..", "..", "..", "supabase", "seed.sql")
+
+
+# `supabase/seed.sql` is **gitignored** (`supabase/.gitignore`), so it is a
+# per-developer file rather than something the repo ships: each machine
+# generates its own with `supabase db dump --local --data-only`. CI therefore
+# has no copy, and these checks skip there rather than failing on a file that
+# was never meant to be present.
+#
+# That makes them a local guard, not a gate -- which is the honest description.
+# They fire for the person who regenerates the file and runs the suite, which
+# is exactly who reintroduces the bug, and they say nothing on CI because CI
+# has nothing to say it about.
+_HAVE_SEED = os.path.exists(SEED)
+pytestmark = pytest.mark.skipif(
+    not _HAVE_SEED,
+    reason="supabase/seed.sql is gitignored and per-developer; absent here")
 
 
 def _seed():

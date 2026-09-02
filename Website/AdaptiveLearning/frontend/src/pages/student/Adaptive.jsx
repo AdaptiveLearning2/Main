@@ -191,6 +191,39 @@ export default function Adaptive() {
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
 
+  // Read from a ref, because the cleanup below runs from a closure captured
+  // once and would otherwise always see 0.
+  const sessionCountRef = useRef(0)
+  useEffect(() => { sessionCountRef.current = sessionCount }, [sessionCount])
+
+  // A session created only to reserve the headband is not a session the
+  // student started.
+  //
+  // `toggleHeadband` has to create one -- under `INGEST_MODE=pull` the EEG
+  // reservation is scoped by `session_id`, so connecting needs a session to
+  // hang off. But a student who connects a headband and then walks away has
+  // not practised, and the row sat in History as a 0-question "Adaptive
+  // Session" until the 6h sweep collected it. That is what "it recorded a
+  // session I never started" looks like from the outside.
+  //
+  // Ending it hands it to `_discard_if_nothing_recorded`, which deletes a
+  // session that recorded nothing rather than closing it -- so the phantom
+  // disappears instead of merely gaining an end stamp.
+  //
+  // Guarded on the count, so a session with real answers in it is never
+  // ended by navigation: that is `finishSession`'s job, and closing one here
+  // would end a lesson the student was part way through.
+  //
+  // Only covers leaving the page. A tab close still falls to the sweep --
+  // `endSession` uses `apiFetch`, which does not outlive the document, and
+  // the keepalive dance `stopPushOnUnload` does is not worth repeating for a
+  // row the sweep already collects.
+  useEffect(() => () => {
+    if (sessionIdRef.current && sessionCountRef.current === 0) {
+      endSession(sessionIdRef.current)
+    }
+  }, [])
+
   // Cleans up on unmount: `phaseTimer` is a 30s safety net that resets the
   // headband card if a connect attempt hangs, and must not fire after the
   // page is gone. `window.AL_currentSessionId` must not keep naming a

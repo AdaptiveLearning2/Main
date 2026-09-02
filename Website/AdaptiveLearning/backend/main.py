@@ -6120,8 +6120,21 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # scores, not a real reading of zero. Dropped and counted, so a caller
     # can tell "sent 50, recorded 0" from "sent nothing".
     rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
-    if rows: supabase.table("cognitive_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows),
+    # Upsert on `cog_session_ts_key` (20260914000000), matching the heart
+    # endpoint below. A replayed batch is then a no-op rather than a second
+    # copy of every sample -- and a deployment left on `pull` whose sidecar
+    # also pushes stops double-counting this channel, which is the overlap
+    # `/api/v1/push/start` refuses under `pull` because there was no key.
+    inserted = 0
+    if rows:
+        resp = supabase.table("cognitive_signals").upsert(
+            rows, on_conflict="session_id,ts", ignore_duplicates=True
+        ).execute()
+        # What the database wrote, not what was sent: `len(rows)` would report
+        # a replay as having inserted a batch it inserted none of, which is
+        # the number `push_client` counts delivery from.
+        inserted = len(resp.data or [])
+    return {"ok": True, "inserted": inserted,
             "dropped": len(payload.samples) - len(rows)}
 
 @app.post("/api/signals/face")
@@ -6156,11 +6169,19 @@ def ingest_face(payload: FaceBatch, request: Request):
             payload.session_id, user["id"])
         for s in payload.samples
     ) if r is not None]
-    # Insert, not upsert: `face_signals` has no dedupe key yet. See
-    # CLAUDE.md for why that is deferred rather than undecided, and the
-    # query to run before adding one.
-    if rows: supabase.table("face_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows)}
+    # Upsert on `face_session_ts_key` (20260914000000). This was an insert
+    # with a note saying the key was deferred until production had been
+    # checked for duplicates; it was checked (961 rows, 961 distinct) and the
+    # key added, so a replayed batch is now a no-op rather than a second copy.
+    inserted = 0
+    if rows:
+        resp = supabase.table("face_signals").upsert(
+            rows, on_conflict="session_id,ts", ignore_duplicates=True
+        ).execute()
+        # What the database wrote, not what was sent -- see the cognitive
+        # endpoint above.
+        inserted = len(resp.data or [])
+    return {"ok": True, "inserted": inserted}
 
 
 @app.post("/api/signals/heart")

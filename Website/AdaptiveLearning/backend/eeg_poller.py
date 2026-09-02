@@ -263,8 +263,21 @@ class _Poller(threading.Thread):
                         # timeline intact for class_live's staleness check.
                         print(f">>> [eeg-poller] loop={loops} poor contact, inserting null measurements", flush=True)
                     try:
-                        res = self.supabase.table("cognitive_signals").insert(row).execute()
-                        self.samples += 1
+                        # Upsert, matching `/api/signals/cognitive` and the
+                        # heart channel above. `cog_session_ts_key` makes a
+                        # repeat a no-op, so a deployment left on `pull` whose
+                        # sidecar also pushes stops writing every EEG sample
+                        # twice -- which it did silently, since a duplicate is
+                        # not an error and shows up only as a wrong average.
+                        res = self.supabase.table("cognitive_signals").upsert(
+                            row, on_conflict="session_id,ts",
+                            ignore_duplicates=True
+                        ).execute()
+                        # Count what was written, not that the call returned.
+                        # A deduped repeat writes nothing, and counting it
+                        # would put the overlap this key exists to remove back
+                        # into the number the student's page shows.
+                        self.samples += len(res.data or [])
                         if self.samples <= 3 or self.samples % 10 == 0:
                             print(f"+++ [eeg-poller] INSERTED #{self.samples} session={self.session_id[:8]} focus={row.get('focus')}", flush=True)
                     except Exception as e:

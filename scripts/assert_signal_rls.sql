@@ -87,6 +87,44 @@ BEGIN
     END IF;
 END $$;
 
+-- The three signal tables each carry a unique key, so a replayed ingest batch
+-- is a no-op rather than a second copy of every sample.
+--
+-- Asserted here because the writers cannot show it: the backend suite drives
+-- `main.py` with a fake client, so it proves the endpoints *ask* for
+-- `ON CONFLICT` and not that anything enforces it. Postgres is the only place
+-- that question can be answered, and the answer is what stands between a
+-- flaky connection and a permanently wrong average -- a duplicate row is not
+-- an error, appears on no dashboard, and is carried into the rollup that
+-- outlives the raw rows.
+--
+-- Dropping one of these would leave every writer's `on_conflict` silently
+-- inert, which is the shape worth failing CI over.
+DO $$
+DECLARE
+    spec record;
+BEGIN
+    FOR spec IN
+        SELECT * FROM (VALUES
+            ('cognitive_signals', 'cog_session_ts_key'),
+            ('face_signals',      'face_session_ts_key'),
+            ('heart_signals',     'heart_session_source_ts_key')
+        ) AS t(tbl, idx)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = t.tbl
+              AND indexname = t.idx)
+    LOOP
+        RAISE EXCEPTION
+            '%.% is missing. Every writer of that table upserts against it, '
+            'so without it a replayed batch -- or a poller running alongside '
+            'a pusher -- writes every sample twice, with no error anywhere '
+            'and nothing but a wrong average to show for it.',
+            spec.tbl, spec.idx;
+    END LOOP;
+END $$;
+
 -- Every column `student_sessions` filters an activity read on, checked against
 -- the live schema and scoped to its own table.
 --

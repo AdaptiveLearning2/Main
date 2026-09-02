@@ -1193,8 +1193,11 @@ Three properties worth not breaking:
   unconditionally.
 - **Nothing after `raise_for_status()` may raise, and no POST is cancelled mid-flight.** The rows are
   committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
-  re-post duplicates them, and `cognitive_signals` and `face_signals` have no dedupe key. `stop()`
-  therefore *asks* the loop to finish and awaits it, cancelling only once `SHUTDOWN_BUDGET` is spent.
+  re-post duplicates them. All three signal tables carry a dedupe key now (`20260914000000` added
+  the last two), so a re-post is a no-op rather than a second copy — but this rule stands on its own
+  and should not be relaxed against it: the key makes the *rows* idempotent, and nothing makes the
+  local accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling only
+  once `SHUTDOWN_BUDGET` is spent.
   A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor `dropped_locally`.
 - **`stop()` is bounded by the clock.** An attempt cap is not a bound a reader can convert into
   seconds; 12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C.
@@ -1209,8 +1212,12 @@ keeps recording for up to an hour after they walked away — a consent problem, 
   recorded nothing.
 
 `/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
-writer alongside a poller — `cognitive_signals` has no dedupe key, so both running means every EEG
-sample lands twice with no error.
+writer alongside a poller. The original reason was that `cognitive_signals` had no dedupe key, so
+both running meant every EEG sample landed twice with no error; `cog_session_ts_key`
+(`20260914000000`) closes that, and every writer upserts against it. **The refusal stays**, because
+two writers on one channel is still a deployment nobody chose — the key means the overlap now costs
+duplicate work rather than corrupt data, which is a reason to keep the guard honest rather than to
+drop it.
 
 ### The browser calls the sidecar directly, and two tokens are in play
 

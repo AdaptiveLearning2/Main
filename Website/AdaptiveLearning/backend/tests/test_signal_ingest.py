@@ -243,6 +243,72 @@ def test_replaying_a_batch_inserts_nothing_the_second_time(store):
     assert second["duplicates"] == 2
 
 
+def test_replaying_a_cognitive_batch_inserts_nothing_the_second_time(store):
+    """`cog_session_ts_key` (20260914000000), and this is the channel with two
+    live writers rather than one.
+
+    `eeg_poller` writes `cognitive_signals` with the service-role client under
+    `INGEST_MODE=pull` while the sidecar's push client posts here, so an
+    overlapping deployment wrote every EEG sample twice -- silently, because a
+    duplicate is not an error and surfaces only as a wrong average, carried
+    forward by the rollup that outlives the raw rows. `/api/v1/push/start`
+    refuses under `pull` precisely because there was no key to make the
+    overlap harmless.
+    """
+    store["cognitive_signals"] = []
+    _consent(store, eeg_enabled=True)
+    batch = [{"ts": "2026-08-10T10:00:00Z", "focus": 0.7},
+             {"ts": "2026-08-10T10:00:01Z", "focus": 0.8}]
+
+    first = main.ingest_cognitive(
+        main.CognitiveBatch(session_id=SESSION, samples=batch), request=None)
+    second = main.ingest_cognitive(
+        main.CognitiveBatch(session_id=SESSION, samples=batch), request=None)
+
+    assert first["inserted"] == 2
+    assert len(store["cognitive_signals"]) == 2, "the replay doubled the rows"
+    # From what the database wrote, not from what was sent -- `push_client`
+    # counts delivery off this number, so reporting the batch size would tell
+    # a retrying client its retry landed.
+    assert second["inserted"] == 0
+
+
+def test_replaying_a_face_batch_inserts_nothing_the_second_time(store):
+    """`face_session_ts_key` (20260914000000). 20260809120000 deferred this
+    one pending a duplicate count against production; it came back clean (961
+    rows, 961 distinct) and the key went on."""
+    _consent(store, camera_enabled=True)
+    batch = [{"ts": "2026-08-10T10:00:00Z", "emotion": "neutral"},
+             {"ts": "2026-08-10T10:00:01Z", "emotion": "happy"}]
+
+    first = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=batch), request=None)
+    second = main.ingest_face(
+        main.FaceBatch(session_id=SESSION, samples=batch), request=None)
+
+    assert first["inserted"] == 2
+    assert len(store["face_signals"]) == 2, "the replay doubled the rows"
+    assert second["inserted"] == 0
+
+
+def test_two_samples_a_second_apart_are_both_kept(store):
+    """The teeth for both keys above. A key that deduped on `session_id`
+    alone, or a mapper that stamped rows at insertion time instead of taking
+    the sidecar's `timestamp`, would collapse a whole session into one row --
+    and the replay tests would still pass."""
+    store["cognitive_signals"] = []
+    _consent(store, eeg_enabled=True)
+
+    out = main.ingest_cognitive(main.CognitiveBatch(session_id=SESSION, samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.7},
+        {"ts": "2026-08-10T10:00:01Z", "focus": 0.8},
+        {"ts": "2026-08-10T10:00:02Z", "focus": 0.9},
+    ]), request=None)
+
+    assert out["inserted"] == 3
+    assert len(store["cognitive_signals"]) == 3
+
+
 def test_two_sources_may_report_the_same_instant(store):
     """Which is why `source` is in the key. A key without it would discard the
     second reading as a duplicate of the first."""

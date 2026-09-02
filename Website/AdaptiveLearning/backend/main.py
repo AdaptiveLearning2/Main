@@ -3336,6 +3336,12 @@ def student_stats(student_id: str, request: Request):
 # passed: a renamed column or a mis-spelled operator would throw inside the
 # request, take `activity_known` to False for every session, and leave the
 # suite green.
+#
+# That whether the columns still *exist* is asked of `information_schema` in
+# `scripts/assert_signal_rls.sql`, not here and not of the migration text --
+# so a migration dropping one of these has to be paired with a change to this
+# tuple, and CI says so. Adding a column here without adding it there leaves
+# the new one unchecked.
 _ACTIVITY_SOURCES = (
     ("session_answers",   "answered_at", ()),
     ("cognitive_signals", "ts", ("focus",)),

@@ -6,7 +6,6 @@ sweep worked correctly every time it was called by hand -- it just was not
 being called.
 """
 import os
-import re
 import time
 
 os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
@@ -53,8 +52,8 @@ class _FakeDB:
     # limit: nothing here *executes* these. A renamed column or a mis-spelled
     # operator would satisfy every assertion below and throw against a real
     # database. `test_the_filters_are_valid_postgrest` builds them with the
-    # real client, and `test_every_filtered_column_exists` checks the names
-    # against the migrations.
+    # real client, and `scripts/assert_signal_rls.sql` checks the columns
+    # exist against `information_schema` in CI.
 
     def or_(self, expression):
         self.filters.append((self._t, expression))
@@ -343,154 +342,23 @@ def test_the_filters_are_valid_postgrest():
         assert "order=" in params and "limit=500" in params, (table, params)
 
 
-def _columns_after_every_migration():
-    """Per-table column sets, replayed over the migrations in order.
-
-    Deliberately not a substring search over the concatenated files, which is
-    what this started as and is two kinds of wrong: it is not table-scoped, and
-    a name that appears only in a `DROP COLUMN` still matches. The proof is in
-    the tree -- `identity_confidence` occurs in 20260812000000 solely as
-    `DROP COLUMN IF EXISTS`, so putting it in `_ACTIVITY_SOURCES` passed. A
-    check that exists to catch a retirement could not catch a retirement.
-
-    Still only a reading of SQL text. `scripts/assert_signal_rls.sql` asks the
-    live schema in CI and is the authoritative half; this one runs in every
-    local pytest with no stack, and its job is fast feedback.
-    """
-    root = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    migrations = os.path.join(root, "..", "..", "supabase", "migrations")
-    return _replay_columns(
-        open(os.path.join(migrations, name), encoding="utf-8").read()
-        for name in sorted(os.listdir(migrations)) if name.endswith(".sql"))
-
-
-def _replay_columns(statements):
-    """The parser itself, over SQL texts in order.
-
-    Split from the reader so a shape with no example in the tree can still be
-    pinned -- a multi-clause `DROP COLUMN` is the one this file's history says
-    to worry about, and there is none to point at.
-    """
-    columns: dict[str, set] = {}
-    create = re.compile(
-        r'CREATE TABLE (?:IF NOT EXISTS )?"public"\."(\w+)"\s*\((.*?)\n\);',
-        re.S | re.I)
-    # Two stages, because one ALTER TABLE carries any number of clauses and a
-    # single pattern matches each statement once. `20260820000000` is exactly
-    # that shape -- three `ADD COLUMN`s under one ALTER -- and a
-    # statement-at-a-time regex saw `head_yaw` and neither of the others.
-    #
-    # It passed only because `_ACTIVITY_SOURCES` happens to name the first of
-    # the three. Adding `head_pitch` would have failed this guard with a
-    # message insisting the column does not exist, and a future multi-clause
-    # `DROP COLUMN` would have restored exactly the drop-blindness the replay
-    # was written to remove.
-    alter = re.compile(
-        r'ALTER TABLE (?:ONLY )?"?public"?\."?(\w+)"?(.*?);', re.S | re.I)
-    clause = re.compile(
-        r'\b(ADD|DROP) COLUMN (?:IF (?:NOT )?EXISTS )?"?(\w+)"?', re.I)
-
-    for sql in statements:
-        for table, body in create.findall(sql):
-            found = columns.setdefault(table, set())
-            for line in body.splitlines():
-                match = re.match(r'\s*"(\w+)"\s+\S', line)
-                if match:
-                    found.add(match.group(1))
-        for table, body in alter.findall(sql):
-            found = columns.setdefault(table, set())
-            # In clause order: one statement may drop and add, and the last
-            # word about a column has to win.
-            for action, column in clause.findall(body):
-                if action.upper() == "ADD":
-                    found.add(column)
-                else:
-                    found.discard(column)
-    return columns
-
-
-def test_every_filtered_column_exists():
-    """The half a recorded filter string cannot check: that the columns are
-    real, on the table being filtered, and still there.
-
-    `gaze_x` and `head_yaw` arrived in migrations later than their table, so
-    "it is on face_signals" was never something to take on trust.
-    """
-    columns = _columns_after_every_migration()
-    for table, column, measured in main._ACTIVITY_SOURCES:
-        assert columns.get(table), (
-            f"no CREATE TABLE parsed for {table} -- this guard has gone "
-            "inert, which is worse than it failing")
-        for name in (column, *measured):
-            assert name in columns[table], (
-                f"{table}.{name} is not a column after the migrations replay. "
-                "student_sessions filters an activity read on it, so PostgREST "
-                "would reject the request, the endpoint would swallow it, and "
-                "every session would report activity unknown -- a quiet "
-                "session reads LIVE again.")
-
-
-def test_the_column_replay_reads_every_clause_of_a_multi_clause_alter():
-    """One `ALTER TABLE` can carry any number of clauses, and a regex over
-    whole statements matches each one once.
-
-    `20260820000000` adds `head_yaw`, `head_pitch` and `head_roll` under a
-    single ALTER, and the first version of the replay saw only `head_yaw`.
-    Nothing failed, because `_ACTIVITY_SOURCES` names exactly that one -- so
-    the guard was wrong and green, and would have started accusing a real
-    column of not existing the moment anyone filtered on `head_pitch`.
-
-    Pinned on all three rather than on the parser's shape: what matters is
-    that a clause is not skipped, not how the skipping was avoided.
-    """
-    face = _columns_after_every_migration()["face_signals"]
-    for column in ("head_yaw", "head_pitch", "head_roll"):
-        assert column in face, (
-            f"{column} was added by a multi-clause ALTER and the replay "
-            "missed it -- every clause after the first is being dropped")
-
-
-def test_the_replay_handles_a_multi_clause_drop():
-    """The shape with no example in the tree, and the one the multi-clause
-    ADD bug says to expect: a statement dropping several columns at once must
-    drop all of them, not just the first.
-
-    Synthetic because there is nothing to point at yet -- which is exactly
-    why it is worth pinning now rather than after a migration relies on it.
-    """
-    columns = _replay_columns([
-        'CREATE TABLE IF NOT EXISTS "public"."t" (\n'
-        '    "a" integer,\n    "b" integer,\n    "c" integer\n);',
-        'ALTER TABLE "public"."t"\n'
-        '    DROP COLUMN IF EXISTS "a",\n    DROP COLUMN IF EXISTS "b";',
-    ])
-    assert columns["t"] == {"c"}
-
-
-def test_the_replay_takes_the_last_word_about_a_column():
-    """One statement may drop and re-add, so clause order decides."""
-    columns = _replay_columns([
-        'CREATE TABLE IF NOT EXISTS "public"."t" (\n    "a" integer\n);',
-        'ALTER TABLE "public"."t"\n'
-        '    DROP COLUMN IF EXISTS "a",\n    ADD COLUMN IF NOT EXISTS "a" text;',
-    ])
-    assert columns["t"] == {"a"}
-
-
-def test_the_column_replay_notices_a_drop():
-    """The teeth for the parser, against a column this repo really retired.
-
-    `identity_confidence` was created on `face_signals` in 20260625000000 and
-    dropped in 20260812000000. The substring version of the test above matched
-    it in the DROP statement and passed, which is exactly the failure it was
-    written to prevent.
-    """
-    columns = _columns_after_every_migration()
-    assert "emotion" in columns["face_signals"], "the parser found the table"
-    assert "identity_confidence" not in columns["face_signals"], (
-        "a dropped column is still being counted as present")
-
+# The column-existence half of this used to live here as a replay of the
+# migrations -- CREATE TABLE, ADD COLUMN and DROP COLUMN applied in order --
+# and it is gone deliberately.
+#
+# It was a regex over SQL text, and it was wrong twice in consecutive commits:
+# first matching a name anywhere in the concatenated files, so a column
+# occurring only in a `DROP COLUMN` counted as present; then matching one
+# clause per `ALTER TABLE`, so two of the three columns in `20260820000000`
+# went unseen. Both were green, and both were green for the same reason --
+# `_ACTIVITY_SOURCES` happens to name the column that survived each bug.
+#
+# `scripts/assert_signal_rls.sql` asks `information_schema` instead, runs
+# against a real stack in the `Database migrations` CI job under
+# `ON_ERROR_STOP=1`, and would have caught both. A parser with a demonstrated
+# error rate sitting next to an exact check is not defence in depth; it is a
+# second thing to be wrong, and the one more likely to be believed because it
+# runs on every local pytest.
 
 def test_nothing_to_look_up_is_not_a_failed_read(monkeypatch):
     """`activity_known` separates "quiet" from "we could not tell", so it has

@@ -96,13 +96,18 @@ END $$;
 -- following -- which puts the pulsing LIVE badge back on a teacher's screen
 -- for a student who has gone home. Silent, and green everywhere.
 --
--- The Python guard (`test_every_filtered_column_exists`) greps the migration
--- text, and text is the wrong thing to ask. Its first version matched a
--- quoted name *anywhere* in the concatenated files, so a dropped column still
--- satisfied it -- `identity_confidence` appears in 20260812000000 only as
--- `DROP COLUMN IF EXISTS`, and would have passed. It is table-scoped and
--- drop-aware now, but it is still reading SQL rather than a schema, so this
--- is the half that actually answers the question.
+-- This is the only check on these columns, and that is deliberate. A Python
+-- guard replaying the migrations used to sit beside it and was retired: it
+-- was a regex over SQL text and was wrong twice in consecutive commits --
+-- first matching a quoted name *anywhere* in the concatenated files, so a
+-- column appearing only in a `DROP COLUMN` counted as present
+-- (`identity_confidence`, 20260812000000, would have passed); then reading
+-- one clause per `ALTER TABLE`, so two of the three columns added by
+-- 20260820000000 went unseen. Both were green, and for the same reason:
+-- `_ACTIVITY_SOURCES` happens to name the column that survived each bug.
+--
+-- Text is the wrong thing to ask. `information_schema` is the schema, and
+-- reading it here costs nothing that the job was not already paying.
 --
 -- Deliberately not derived from a list in the backend: this file is the
 -- independent statement of what must be true, and a check that imported its

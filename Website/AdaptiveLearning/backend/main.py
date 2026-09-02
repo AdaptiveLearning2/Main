@@ -3386,18 +3386,34 @@ def student_sessions(student_id: str, request: Request):
         # and a nulled row is evidence of nothing. The columns are the ones
         # `rollup_signal_day` already counts per channel for the same reason
         # -- `focus` for cognitive, `emotion` for face.
+        # An OR across every measurement the table can carry, not a single
+        # column. `face_signals` has two producers and either may succeed
+        # alone: `-Gaze -NoEmotion` is a supported and deliberately cheaper
+        # camera deployment (gaze needs no 35 MB FER+ model), and in it every
+        # row has `emotion` NULL. Filtering on emotion alone would make the
+        # camera contribute no activity at all there, so a student it was
+        # measuring through a long question would still read idle -- the same
+        # failure as the `contact_poor` one this filter exists to stop, from
+        # the other direction. `20260819000000` puts it plainly: a row is
+        # enqueued when *either* measurement succeeds.
+        #
+        # Head pose refuses independently of gaze -- near profile the fit
+        # refuses while the eyes are readable, a closed eye the reverse -- so
+        # a pose-only row is real too and counts the same.
         newest: dict[str, tuple] = {}
         for table, column, measured in (
                 ("session_answers",   "answered_at", None),
-                ("cognitive_signals", "ts",          "focus"),
-                ("face_signals",      "ts",          "emotion"),
-                ("heart_signals",     "ts",          "heart_rate_bpm")):
+                ("cognitive_signals", "ts", "focus.not.is.null"),
+                ("face_signals",      "ts", "emotion.not.is.null,"
+                                            "gaze_x.not.is.null,"
+                                            "head_yaw.not.is.null"),
+                ("heart_signals",     "ts", "heart_rate_bpm.not.is.null")):
             try:
                 query = (supabase.table(table)
                          .select(f"session_id, {column}")
                          .in_("session_id", ids))
                 if measured:
-                    query = query.filter(measured, "not.is", "null")
+                    query = query.or_(measured)
                 recent = (query.order(column, desc=True)
                           .limit(500).execute().data or [])
             except Exception as e:                              # noqa: BLE001

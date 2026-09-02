@@ -110,7 +110,6 @@ def test_rendering_and_evaluating_agree_about_a_leading_zero():
     one layer up, not here -- drawability and askability are different."""
     assert hs_solvers.render_polynomial([0, 3]) == "3"
     assert hs_solvers.evaluate_polynomial([0, 3], 7) == (3, None)
-    assert hs_solvers.is_constant_polynomial([0, 3])
 
 
 # --- the function solver --------------------------------------------------
@@ -143,31 +142,6 @@ def test_a_value_too_large_to_ask_about_is_refused():
 
 def test_a_degree_above_two_is_refused():
     assert hs_solvers.evaluate_polynomial([1, 1, 1, 1], 2)[0] is None
-
-
-# --- parsing model output, which is what replaces the subprocess ----------
-
-@pytest.mark.parametrize("raw,expected", [
-    ("12", 12), ("-7", -7), ("0", 0),
-    ("99999", None),        # past four digits
-    ("9**9**9", None),      # the operand safe_solve exists for
-    (" 12 ", None), ("+3", None), ("1.5", None), ("x", None),
-    (None, None), (True, None),
-])
-def test_only_a_bounded_integer_is_accepted(raw, expected):
-    """This is what lets these two topics skip the bounded subprocess: there
-    is no parser to hand `9**9**9` to, because nothing reaches `int()` until
-    it has matched a four-digit pattern."""
-    assert hs_solvers.parse_int(raw) == expected
-
-
-def test_one_unusable_coefficient_rejects_the_whole_list():
-    """Taking the readable ones would silently change the polynomial's degree,
-    and the question would be scored against a function nobody wrote."""
-    assert hs_solvers.parse_int_list(["1", "x", "3"], 3) is None
-    assert hs_solvers.parse_int_list(["1", "2", "3", "4"], 3) is None
-    assert hs_solvers.parse_int_list([], 3) is None
-    assert hs_solvers.parse_int_list(["1", "-2"], 3) == [1, -2]
 
 
 # --- shown versus scored --------------------------------------------------
@@ -381,7 +355,7 @@ def test_every_built_function_question_is_answerable(scenario, band):
     for _ in range(200):
         f, g, x = funcs._choose_functions(scenario, band)
         assert x != 0, "f(0) is the constant term and asks nothing"
-        assert not hs_solvers.is_constant_polynomial(f)
+        assert len(f) >= 2 and f[0] != 0, f
         if scenario == funcs.COMPOSE:
             assert len(g) == 2, "the inner function is what bounds the result"
             value, reason = hs_solvers.solve_composition(f, g, x)
@@ -417,7 +391,8 @@ def test_a_second_function_is_recognised_without_catching_ordinary_words(
     assert funcs._mentions_second_function(text) is flagged
 
 
-def test_an_evaluate_question_naming_a_second_function_retries(reply):
+def test_an_evaluate_question_naming_a_second_function_retries(
+        reply, fixed_functions):
     """`_EVALUATE_BLOCK` says `Do NOT include "g"`, which is prompt text --
     and the lesson plan is appended after it and cannot know which scenario
     was chosen, so it can only be written to name no function the block did
@@ -428,14 +403,38 @@ def test_an_evaluate_question_naming_a_second_function_retries(reply):
     while the solver reads f alone and the student is shown a function that
     plays no part in the answer.
     """
+    # Differs from the accepted text below by the g clause and nothing else:
+    # it carries the right function and asks for the right value, so
+    # `shown_matches_scored` is satisfied and only the second-function guard
+    # can reject it.
+    #
+    # Written that way deliberately. The first version of this test omitted
+    # `fixed_functions`, so the generator drew its own functions, the reply
+    # matched none of them, and all three attempts died in
+    # `shown_matches_scored` -- it raised ValueError, passed, and would have
+    # gone on passing with the guard deleted. That is the shape this file
+    # warns about elsewhere, and it survived an earlier mutation check
+    # because the check ran *before* the redesign that moved the coefficients
+    # into code. A mutation check is a point-in-time property; a later
+    # refactor can hollow out a test without touching it.
     reply({"question_text":
-           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x - 3, what is f(4)?",
+           "If f(x) = 3x^2 - 2x + 1 and g(x) = 2x - 3, what is f(3)?",
            "question_topic": "functions",
-           "scenario": "evaluate",
-           "f": ["3", "-2", "1"],
-           "input": "4"})
+           "scenario": "evaluate"})
     with pytest.raises(ValueError):
         funcs.generate_functions_question([], [], "easy", "9th Grade")
+
+
+def test_the_same_text_without_the_second_function_is_accepted(
+        reply, fixed_functions):
+    """The positive control for the test above, and the reason it has teeth:
+    the two replies differ only by the g clause, so a failure of the first
+    can only be the guard."""
+    reply({"question_text": "If f(x) = 3x^2 - 2x + 1, what is f(3)?",
+           "question_topic": "functions",
+           "scenario": "evaluate"})
+    question = funcs.generate_functions_question([], [], "easy", "9th Grade")
+    assert question["correct_answer"] == "22"
 
 
 def test_compose_is_still_allowed_to_name_g(reply, fixed_functions):
@@ -449,16 +448,24 @@ def test_compose_is_still_allowed_to_name_g(reply, fixed_functions):
     assert question["correct_answer"] == "134"
 
 
-def test_a_constant_function_retries(reply):
-    """"If f(x) = 7, what is f(4)" asks nothing about function notation, and
-    it renders perfectly -- the tell is only in the coefficient list."""
-    reply({"question_text": "If f(x) = 7, what is f(4)?",
-           "question_topic": "functions",
-           "scenario": "evaluate",
-           "f": ["0", "7"],
-           "input": "4"})
-    with pytest.raises(ValueError):
-        funcs.generate_functions_question([], [], "easy", "9th Grade")
+def test_a_constant_function_is_never_built():
+    """"If f(x) = 7, what is f(4)" asks nothing about function notation.
+
+    This was a retry test against a reply carrying `f: ["0", "7"]`, and the
+    redesign made it vacuous rather than wrong: the generator no longer reads
+    a coefficient list from the reply, so that payload was ignored and the
+    ValueError came from the text not matching whatever had been drawn. The
+    guard it named had no caller left either.
+
+    The property survives the redesign in a stronger form -- a constant is
+    now unrepresentable rather than rejected -- so this asserts *that*,
+    against the function that builds them.
+    """
+    for band in ("early", "middle", "upper", "advanced"):
+        for _ in range(100):
+            f, _g, _x = funcs._choose_functions(funcs.EVALUATE, band)
+            assert len(f) >= 2 and f[0] != 0, f
+            assert len(f) >= 2 and f[0] != 0, f
 
 
 # --- the grade gate -------------------------------------------------------

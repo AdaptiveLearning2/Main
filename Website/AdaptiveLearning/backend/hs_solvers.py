@@ -11,12 +11,16 @@ which is what this is.
 
 Three properties, and the first is why this file is not sympy:
 
-  * **Integer arithmetic only, so nothing here can hang.** `safe_solve` exists
-    because `sympify("9**9**9")` never returns and the spin holds the GIL, so
-    only an external kill stops it. There is no parser here to feed: every
-    input is matched against `_INT` before `int()` touches it, and every
-    operation is one arithmetic step on bounded integers. Same reasoning as
-    `missing_number` and `patterns`, which also skip the bounded subprocess.
+  * **No model-supplied value reaches this file at all**, which is why it is
+    not sympy. `safe_solve` exists because `sympify("9**9**9")` never returns
+    and the spin holds the GIL, so only an external kill stops it. Here there
+    is nothing to parse: the generators choose the coefficients and the input
+    themselves and hand them to the model, so every operation below is one
+    arithmetic step on integers this codebase picked. That is a stronger
+    property than the bounded-parse one this docstring used to claim -- there
+    was a `parse_int` guarding model output, and it went when the generators
+    stopped asking the model for numbers. `missing_number` and `patterns`
+    skip the subprocess for the older, weaker reason and still parse.
   * **Refuse rather than guess.** Every function answers `(value, reason)` and
     returns `None` for anything it cannot score exactly -- an irrational root,
     a repeated root where "the larger" means nothing, a result too large to be
@@ -39,11 +43,6 @@ subprocess, and the two topics share every helper below this line.
 """
 
 import math
-import re
-
-# Bounded by inspection, which is what lets `int()` run on model output with no
-# subprocess around it: at most four digits and an optional sign.
-_INT = re.compile(r"^-?\d{1,4}$")
 
 # A result past this is not a question anyone would ask, and for `functions` it
 # is also the bound on the arithmetic: f(g(x)) over two quadratics squares its
@@ -56,39 +55,6 @@ MAX_ABS_RESULT = 10 ** 6
 # Degree 2 is the whole of what these topics ask for, and it bounds the
 # composition above: a cubic inner function would cube the magnitude.
 MAX_DEGREE = 2
-
-
-def parse_int(raw):
-    """The integer in `raw`, or None if it is not one this file will accept.
-
-    `int()` alone would take "999999999999" and " 12 " and "+3"; the point of
-    the regex is that everything downstream can assume a bounded magnitude
-    without re-checking.
-    """
-    if isinstance(raw, bool):        # bool is an int subclass; not a coefficient
-        return None
-    if isinstance(raw, int):
-        return raw if abs(raw) <= 9999 else None
-    if not isinstance(raw, str) or not _INT.match(raw):
-        return None
-    return int(raw)
-
-
-def parse_int_list(raws, max_length):
-    """A list of integers, or None if any entry is not one.
-
-    All-or-nothing: a coefficient list with one unusable entry is an unusable
-    polynomial, and taking the readable ones would silently change its degree.
-    """
-    if not isinstance(raws, list) or not 1 <= len(raws) <= max_length:
-        return None
-    out = []
-    for raw in raws:
-        value = parse_int(raw)
-        if value is None:
-            return None
-        out.append(value)
-    return out
 
 
 # --- rendering ------------------------------------------------------------
@@ -263,18 +229,6 @@ def evaluate_polynomial(coefficients, x):
         if abs(total) > MAX_ABS_RESULT:
             return None, "the value is too large to ask about"
     return total, None
-
-
-def is_constant_polynomial(coefficients):
-    """True if this is the same value for every x, e.g. `[0, 0, 7]`.
-
-    A constant is a perfectly good function and a useless question: "if
-    f(x) = 7, what is f(4)" asks nothing about function notation, which is the
-    whole of what this topic is for. `render_polynomial` skips leading zeros,
-    so the reply also *looks* fine on screen -- the tell is only in the
-    coefficient list, which is where this can be caught.
-    """
-    return all(coefficient == 0 for coefficient in coefficients[:-1])
 
 
 def solve_composition(outer, inner, x):

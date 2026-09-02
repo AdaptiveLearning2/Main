@@ -43,12 +43,12 @@ class _FakeDB:
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
 
-    def filter(self, column, operator, value):
+    def or_(self, expression):
         # Recorded, not just swallowed. The measured-row filter is what keeps
         # a headband on a desk from advancing the activity clock, and it is
         # applied server-side -- so a test that only looked at the returned
         # rows could not tell it was there at all.
-        self.filters.append((self._t, column, operator, value))
+        self.filters.append((self._t, expression))
         return self
 
     def execute(self):
@@ -240,13 +240,35 @@ def test_a_headband_on_a_desk_does_not_keep_a_session_alive(monkeypatch):
     out = main.student_sessions("u1", request=None)
     assert out[0]["idle"] is True, "nothing measured anything; the student left"
 
-    applied = {(table, column) for table, column, op, value in db.filters
-               if op == "not.is" and value == "null"}
-    assert applied == {("cognitive_signals", "focus"),
-                       ("face_signals", "emotion"),
-                       ("heart_signals", "heart_rate_bpm")}, applied
-    assert not any(t == "session_answers" for t, _c, _o, _v in db.filters), (
+    applied = dict(db.filters)
+    assert set(applied) == {"cognitive_signals", "face_signals",
+                            "heart_signals"}, applied
+    assert applied["cognitive_signals"] == "focus.not.is.null"
+    assert applied["heart_signals"] == "heart_rate_bpm.not.is.null"
+    assert "session_answers" not in applied, (
         "an answer is activity whatever the sensors were doing")
+
+
+def test_a_gaze_only_face_row_counts_as_a_measurement(monkeypatch):
+    """`face_signals` has two producers and either may succeed alone --
+    `20260819000000` says a row is enqueued when *either* does.
+
+    `-Gaze -NoEmotion` is a supported and deliberately cheaper camera
+    deployment, and in it every face row has `emotion` NULL. Filtering on
+    emotion alone would make the camera contribute no activity at all there,
+    so a student it was measuring through a long question would still read
+    idle -- the `contact_poor` failure from the other direction. Head pose
+    refuses independently of gaze, so a pose-only row counts too.
+    """
+    rows = [_session("s-cam", started_min_ago=30)]
+    db = _FakeDB(rows, answers=[])
+    _as_teacher(monkeypatch, db)
+    main.student_sessions("u1", request=None)
+
+    face = dict(db.filters)["face_signals"]
+    assert "emotion.not.is.null" in face
+    assert "gaze_x.not.is.null" in face, "a gaze-only deployment measures too"
+    assert "head_yaw.not.is.null" in face
 
 
 def test_a_measured_signal_row_still_counts(monkeypatch):

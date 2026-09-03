@@ -66,6 +66,15 @@ class DeviceSession:
         self.latest_payload: dict[str, Any] = {}
         self.samples_processed = 0
         self.errors_seen = 0
+        # Device health, for the status endpoints. `errors_seen` above is a
+        # lifetime total nothing could act on; these say what is happening
+        # *now*. Both None/0 until the first good tick, and reset by stop().
+        self.last_good_at: float | None = None
+        self.last_good_ts: str | None = None
+        self.consecutive_errors = 0
+        # monotonic() at which requested_preset first disagreed with
+        # active_preset, or None while they agree (or either is unknown).
+        self._preset_mismatch_since: float | None = None
         self._task: asyncio.Task[None] | None = None
         self.running = False
         # Set by StreamManager when push ingestion is on. A plain callable
@@ -283,6 +292,56 @@ class DeviceSession:
             self.adaptation.reset_for_signal_loss()
             self._reset_heart()
             self.latest_payload = self._no_signal_payload()
+            # The stream is over, so "last good reading" describes a session
+            # that has ended. Cleared for the same reason latest_payload is.
+            self.last_good_at = None
+            self.last_good_ts = None
+            self.consecutive_errors = 0
+            self._preset_mismatch_since = None
+
+    # A preset switch after CONNECTED interrupts and restores streaming, and
+    # the headband's configuration is re-read live, so the two fields can
+    # legitimately disagree for a moment. Only a disagreement that outlasts
+    # this is a request the device ignored.
+    PRESET_SETTLE_SECONDS = 5.0
+
+    def _note_good_tick(self, timestamp: str) -> None:
+        self.last_good_at = time.monotonic()
+        self.last_good_ts = timestamp
+        self.consecutive_errors = 0
+
+    def _note_preset(self, raw_meta: dict[str, Any]) -> None:
+        """Track whether the headband is on the preset the bridge asked for.
+
+        Both empty when there is no headband, and the bridge clears both on
+        disconnect, so an unknown side means "nothing to compare" rather than
+        a mismatch.
+        """
+        requested = raw_meta.get("requested_preset") or ""
+        active = raw_meta.get("active_preset") or ""
+        if not requested or not active or requested == active:
+            self._preset_mismatch_since = None
+        elif self._preset_mismatch_since is None:
+            self._preset_mismatch_since = time.monotonic()
+
+    def health_fields(self) -> dict[str, Any]:
+        """What `ingestion` carries about this device's liveness.
+
+        `last_good_age_s` is derived at read time rather than stored, so a
+        consumer sees it grow while nothing arrives instead of a fixed number
+        that was true when the last tick happened. None before the first good
+        tick -- "never" is not "very old".
+        """
+        age = None if self.last_good_at is None else round(time.monotonic() - self.last_good_at, 3)
+        mismatch = (self._preset_mismatch_since is not None
+                    and time.monotonic() - self._preset_mismatch_since >= self.PRESET_SETTLE_SECONDS)
+        return {
+            "last_good_ts": self.last_good_ts,
+            "last_good_age_s": age,
+            "errors_seen": self.errors_seen,
+            "consecutive_errors": self.consecutive_errors,
+            "preset_mismatch": mismatch,
+        }
 
     async def _loop(self) -> None:
         period = 1 / max(1, self.settings.eeg_sample_hz)
@@ -312,6 +371,7 @@ class DeviceSession:
                 # state so real scores don't resume by blending pre-gap and
                 # post-gap samples.
                 self.errors_seen += 1
+                self.consecutive_errors += 1
                 logger.debug(
                     "EEG read failed for device %s, reporting no signal: %s: %s",
                     self.device_id, type(exc).__name__, exc,
@@ -333,6 +393,7 @@ class DeviceSession:
                 try:
                     self.latest_payload = self._face_payload(samples, raw_meta)
                     self.samples_processed += len(samples)
+                    self._note_good_tick(self.latest_payload["timestamp"])
                     await self._emit()
                 except Exception as exc:
                     self.errors_seen += 1
@@ -356,6 +417,7 @@ class DeviceSession:
                 # already prevents an unbounded backlog; it doesn't require
                 # re-processing every buffered sample, just the newest one.
                 sample = samples[-1]
+                self._note_preset(raw_meta)
                 features = self.processor.update(sample, raw_meta)
                 features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)
@@ -388,6 +450,7 @@ class DeviceSession:
                 if heart is not None:
                     self.latest_payload["heart"] = heart
                 self.samples_processed += len(samples)
+                self._note_good_tick(self.latest_payload["timestamp"])
                 await self._emit()
             except Exception as exc:
                 # A real sample was read successfully, so this is a bug in the
@@ -433,6 +496,10 @@ class DeviceSession:
         if hasattr(self.adapter, "get_ingestion_meta"):
             raw_meta = self.adapter.get_ingestion_meta()
             ing = enrich_ingestion_dict(self.settings, raw_meta, source=self.device_config.kind)
+            # Inside `ingestion`, which the response model types as an open
+            # dict, rather than as new top-level keys -- those would need
+            # declaring on InterpretedEegData or /api/v1/state drops them.
+            ing.update(self.health_fields())
             out["ingestion"] = ing
             if no_signal:
                 # Adapters cache their last-known band values and don't reset
@@ -474,8 +541,13 @@ class DeviceSession:
 
     def muse_ingestion_snapshot(self) -> dict[str, Any]:
         if hasattr(self.adapter, "get_ingestion_meta"):
-            return enrich_ingestion_dict(self.settings, self.adapter.get_ingestion_meta(), source=self.device_config.kind)
-        return enrich_ingestion_dict(self.settings, {}, source=self.device_config.kind)
+            ing = enrich_ingestion_dict(self.settings, self.adapter.get_ingestion_meta(), source=self.device_config.kind)
+        else:
+            ing = enrich_ingestion_dict(self.settings, {}, source=self.device_config.kind)
+        # Same fields as snapshot()'s ingestion block, so /api/v1/muse/status
+        # and /api/v1/state cannot disagree about whether a device is alive.
+        ing.update(self.health_fields())
+        return ing
 
 
 class StreamManager:

@@ -6,6 +6,7 @@ import { LineChart, Line, YAxis } from 'recharts'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
+import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
 
 // POLL_MAX_MS caps the backoff when the endpoint is failing, so a broken
@@ -56,12 +57,20 @@ const SPARK_COLUMNS = [
   { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
 ]
 
-function StudentCard({ student, history }) {
+function StudentCard({ student, history, now }) {
   const active = student.active_session
   const cog    = student.latest_cognitive
   const face   = student.latest_face
   const heart  = student.latest_heart
   const initial = (student.name || '?')[0].toUpperCase()
+
+  // Age of the newest headband row. A binary on/off could not tell "just
+  // went quiet" from "never connected", so a teacher watching a card go
+  // blank had nothing to act on. `now` is a prop so every card ticks
+  // together and a re-render is not needed per card per second.
+  const cogAgeMs = cog?.ts ? now - Date.parse(cog.ts) : null
+  const cogStale = cogAgeMs != null && cogAgeMs > STALE_AFTER_S * 1000
+  const cogWeak  = eegWeak(cog)
 
   // Percentages, because the rolling window holds raw 0..1 ratios -- the chart
   // plots them against `domain={[0, 1]}`. Unscaled this said "Focus 0 to 1" for
@@ -88,9 +97,18 @@ function StudentCard({ student, history }) {
         </span>
       </div>
 
-      <div className="flex gap-2 mb-4 text-[10px]">
-        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${cog ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
+      <div className="flex gap-2 mb-4 text-[10px] flex-wrap">
+        {/* Three things on one badge, each shown rather than hidden: whether a
+            row exists, how old it is, and whether it was usable. Grey for
+            stale and for weak, like the heart badge, so the card doesn't
+            look dead -- it looks like a headband that needs attention. */}
+        <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${
+          cog && !cogStale && !cogWeak
+            ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+            : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Brain size={11} /> Headband {cog ? 'on' : 'off'}
+          {cog && cogAgeMs != null && ` · ${cogStale ? 'stale, ' : ''}${formatAge(cogAgeMs)}`}
+          {cogWeak && ' · weak signal'}
         </span>
         <span className={`px-2 py-1 rounded-full font-bold flex items-center gap-1 ${face ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
           <Camera size={11} /> Camera {face ? 'on' : 'off'}
@@ -176,6 +194,14 @@ export default function Live() {
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
   const historyRef = useRef({}) // user_id -> [{focus, engagement, stress}]
+  // One clock for every card's "Xs ago", ticking whether or not a poll
+  // landed -- a reading's age grows while the endpoint is failing too, and
+  // that is exactly when a teacher needs to see it.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     apiFetch('/api/classes')
@@ -303,6 +329,7 @@ export default function Live() {
               key={s.user_id}
               student={s}
               history={historyRef.current[s.user_id] || []}
+              now={now}
             />
           ))}
         </div>

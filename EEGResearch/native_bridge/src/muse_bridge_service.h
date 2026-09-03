@@ -8,6 +8,7 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(ENABLE_LIBMUSE)
@@ -123,6 +124,26 @@ struct DeviceConfig {
     std::string preset;
     int eeg_channel_count{0};
     bool known{false};
+};
+
+/**
+ * Where the bridge is in recovering a link that dropped on its own.
+ *
+ * `reconnecting` covers both waiting out a backoff and an attempt in flight;
+ * `exhausted` means every attempt failed and a person has to click Connect.
+ * The two are separate from muse_connected: while reconnecting the link is
+ * down, and a consumer that only read muse_connected would tell the student
+ * the headband is gone when it is about to come back.
+ */
+struct ReconnectStatus {
+    bool enabled{false};
+    bool reconnecting{false};
+    int attempt{0};
+    int max_attempts{0};
+    bool exhausted{false};
+    /** ms since the last EEG packet on this connection, or -1 when not
+     *  connected or nothing has arrived since connecting. */
+    long long eeg_age_ms{-1};
 };
 
 class MuseBridgeService {
@@ -246,6 +267,35 @@ public:
     void disconnect_muse();
 
     /**
+     * Drive the automatic reconnect. Call once per main-loop iteration; it
+     * returns immediately unless something is due.
+     *
+     * Two jobs. First, a liveness watchdog: libMuse reports a drop through
+     * receive_muse_connection_packet, but a BLE link can also just stop
+     * delivering while the SDK still says CONNECTED, and nothing else here
+     * would notice -- NOTCH_STALE_MS only arbitrates raw-vs-notch packet
+     * selection. Second, the reconnect itself: an unexpected drop arms a
+     * bounded, backed-off sequence of connect_named() calls against the last
+     * headband, and this is where they are launched and judged.
+     *
+     * The preset is not carried across: apply_model_preset() re-derives it
+     * from the environment on every CONNECTED, so a reconnect lands on
+     * exactly the configuration the process was launched with.
+     */
+    void service_auto_reconnect();
+    /**
+     * Abandon any reconnect in progress. Called on every command a person
+     * sends -- connect, disconnect, refresh -- because a click means they are
+     * taking over, and a reconnect landing after a deliberate disconnect
+     * would pair a headband the student just asked to release.
+     */
+    void cancel_auto_reconnect();
+    ReconnectStatus reconnect_status() const;
+    /** Attempts before giving up. Mirrored by the frontend's own cap so the
+     *  two never disagree about how long is too long. */
+    static constexpr int MAX_RECONNECT_ATTEMPTS = 5;
+
+    /**
      * Whether the Windows Bluetooth radio itself is powered on (matches
      * GettingData32's check_bluetooth_enabled/is_bluetooth_enabled). True
      * when the radio state can't be determined, so this never blocks a scan
@@ -281,6 +331,42 @@ private:
     // steady_clock ms at which the last notch-filtered packet arrived; 0 means
     // none yet. Not a bool: see notch_available().
     std::atomic<long long> last_notch_ms_{0};
+
+    // ── auto-reconnect ──────────────────────────────────────────────────
+    // Atomics, not fields under queue_mutex_: they are read on the main loop
+    // and written from the libMuse connection callback and the reconnect
+    // thread, and the callback already holds queue_mutex_ when it runs.
+    //
+    // steady_clock ms of the last EEG packet on the current connection, and
+    // of the CONNECTED transition. Both 0 when not connected. The watchdog
+    // measures from whichever is later, so a fresh connection whose preset
+    // switch briefly interrupts streaming is not mistaken for a dead one.
+    std::atomic<long long> last_any_eeg_ms_{0};
+    std::atomic<long long> connected_since_ms_{0};
+    // A drop was noticed and an attempt is scheduled for next_reconnect_at_ms_.
+    std::atomic<bool> reconnect_armed_{false};
+    // connect_named() has been launched and CONNECTED has not arrived yet.
+    std::atomic<bool> reconnect_in_flight_{false};
+    std::atomic<bool> reconnect_exhausted_{false};
+    std::atomic<int> reconnect_attempt_{0};
+    std::atomic<long long> next_reconnect_at_ms_{0};
+    std::atomic<long long> attempt_started_ms_{0};
+    // Bumped by cancel_auto_reconnect(). A reconnect thread compares the
+    // value it launched under against this after connect_named() returns,
+    // and undoes its own connect if a person cancelled meanwhile.
+    std::atomic<int> reconnect_generation_{0};
+    std::atomic<bool> reconnect_thread_done_{true};
+    std::thread reconnect_thread_;
+    // The headband to reconnect to. Deliberately not cleared by
+    // reset_device_fields_locked(), which runs on every disconnect -- that is
+    // exactly when this has to survive. Guarded by queue_mutex_.
+    std::string last_connected_name_;
+
+    void arm_reconnect();
+    /** Schedules the next attempt after a backoff, or marks the sequence
+     *  exhausted. Safe from any thread. */
+    void schedule_next_reconnect();
+    void launch_reconnect_attempt();
 
 #if defined(ENABLE_LIBMUSE)
     class BridgeMuseListener;

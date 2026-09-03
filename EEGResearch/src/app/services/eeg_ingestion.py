@@ -6,6 +6,7 @@ import queue
 import random
 import socket
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -115,6 +116,19 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
         "is_ppg_good",
         "is_heart_good",
         "optics_age_ms",
+        # The bridge's own recovery of a dropped BLE link. `reconnecting`
+        # covers a backoff wait and an attempt in flight; `reconnect_exhausted`
+        # means it gave up and a person has to click Connect. Kept beside
+        # `muse_connected` rather than folded into it, so a consumer can say
+        # "coming back" instead of "gone".
+        "auto_reconnect",
+        "reconnecting",
+        "reconnect_attempt",
+        "reconnect_max_attempts",
+        "reconnect_exhausted",
+        # ms since the last EEG packet on the current link, null when not
+        # connected or before the first packet -- the bridge's liveness view.
+        "eeg_age_ms",
     ):
         if key not in payload:
             continue
@@ -147,12 +161,13 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 target[key] = float(v)
             except (TypeError, ValueError):
                 continue
-        elif key in {"optics_packets", "ppg_packets", "optics_values", "ppg_values"}:
+        elif key in {"optics_packets", "ppg_packets", "optics_values", "ppg_values",
+                     "reconnect_attempt", "reconnect_max_attempts"}:
             try:
                 target[key] = int(payload[key])
             except (TypeError, ValueError):
                 continue
-        elif key == "optics_age_ms":
+        elif key in {"optics_age_ms", "eeg_age_ms"}:
             # null before the first optical packet, so "never arrived" is kept
             # distinct from "arrived this instant" (which 0 would mean).
             v = payload[key]
@@ -186,7 +201,8 @@ def _apply_bridge_ingestion_fields(target: dict[str, Any], payload: dict[str, An
                 # Ignore malformed values from bridge and keep prior metadata.
                 continue
         elif key in {"muse_connected", "muse_discovered", "bluetooth_enabled", "notch_filtered",
-                     "optical_supported"}:
+                     "optical_supported", "auto_reconnect", "reconnecting",
+                     "reconnect_exhausted"}:
             target[key] = bool(payload[key])
         elif key == "connection_state":
             v = payload[key]
@@ -408,12 +424,29 @@ class TcpMuseBridgeAdapter:
     # useless to anybody.
     OPTICS_BUFFER_MAXLEN = 4096
 
+    # Backoff between TCP connection attempts while the bridge process is not
+    # answering. Retrying on every 4Hz tick against a port nobody is listening
+    # on is harmless to the kernel but prints a log line each time and makes
+    # "bridge not up yet" indistinguishable in the log from "bridge down for
+    # an hour". Doubles from the floor to the cap, and resets on success.
+    #
+    # The cap is deliberately short. This is the socket to a process on the
+    # same machine; a bridge that comes back should be noticed within a few
+    # seconds, not a minute, because every tick until then reports no_signal.
+    CONNECT_BACKOFF_MIN_S = 0.5
+    CONNECT_BACKOFF_MAX_S = 5.0
+
     def __init__(self, host: str, port: int, timeout_seconds: int) -> None:
         self.host = host
         self.port = port
         self.timeout_seconds = timeout_seconds
         self._socket: socket.socket | None = None
         self._stream: TextIO | None = None
+        self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
+        # monotonic() before which no connection attempt will be made. 0.0
+        # means "now", so the very first attempt is never delayed.
+        self._next_connect_at = 0.0
+        self.connect_failures = 0
         self._ingestion_meta: dict[str, Any] = {
             "bridge_mode": "unknown",
             "muse_connected": False,
@@ -622,12 +655,28 @@ class TcpMuseBridgeAdapter:
         return OpticsWindow(channels, fs, received_rate, completeness,
                             span_s, largest_gap_s, width, unusable)
 
+    def connect_wait_remaining(self) -> float:
+        """Seconds until the next TCP attempt is allowed; 0.0 if allowed now."""
+        return max(0.0, self._next_connect_at - time.monotonic())
+
     def _try_connect(self) -> bool:
-        """Attempt one TCP connection. Returns True on success, False if bridge not up yet."""
+        """Attempt one TCP connection. Returns True on success, False if bridge not up yet.
+
+        False also while a previous failure's backoff has not elapsed -- no
+        attempt is made then. A caller that wants to know which it was reads
+        `connect_wait_remaining()`.
+        """
+        if self.connect_wait_remaining() > 0.0:
+            return False
         try:
             sock = socket.create_connection((self.host, self.port), timeout=self.timeout_seconds)
         except OSError:
+            self.connect_failures += 1
+            self._next_connect_at = time.monotonic() + self._connect_backoff_s
+            self._connect_backoff_s = min(self.CONNECT_BACKOFF_MAX_S, self._connect_backoff_s * 2)
             return False
+        self._connect_backoff_s = self.CONNECT_BACKOFF_MIN_S
+        self._next_connect_at = 0.0
         self._reader_stop.clear()
         self._socket = sock
         self._stream = sock.makefile("r", encoding="utf-8")
@@ -693,8 +742,10 @@ class TcpMuseBridgeAdapter:
         # If not connected, try to connect now (bridge may have started since last attempt).
         if not self._reader_thread:
             if not self._try_connect():
+                wait = self.connect_wait_remaining()
                 raise RuntimeError(
                     f"Native bridge not available on {self.host}:{self.port}"
+                    + (f" (next attempt in {wait:.1f}s)" if wait > 0 else "")
                 )
         # Never block forever waiting for EEG data. If the bridge stalls/disconnects,
         # surface a recoverable error so the stream loop can keep running.

@@ -9,6 +9,67 @@
 #include <string>
 #include <thread>
 
+namespace {
+long long steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+bool env_flag_off(const char* name) {
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw) {
+        return false;
+    }
+    const std::string value(raw);
+    return value == "0" || value == "false" || value == "FALSE" || value == "no" || value == "off";
+}
+
+// Whether a dropped link is retried without a person clicking Connect.
+// On by default: the alternative is a student silently losing the rest of a
+// lesson's recording. MUSE_AUTO_RECONNECT=0 turns it off, for a session that
+// is deliberately testing the manual path.
+bool auto_reconnect_enabled() {
+    static const bool enabled = !env_flag_off("MUSE_AUTO_RECONNECT");
+    return enabled;
+}
+
+// How long CONNECTED with no EEG packet counts as a dead link. Generous:
+// EEG arrives at 220-256Hz, and a preset switch on connect interrupts
+// streaming for a moment, so anything under a few seconds would false-alarm
+// on every fresh connection. Tunable because the number is a judgement, not a
+// measurement, and 0 disables the watchdog while leaving reconnect-on-callback
+// alone.
+long long liveness_timeout_ms() {
+    static const long long value = [] {
+        const char* raw = std::getenv("MUSE_LIVENESS_TIMEOUT_MS");
+        if (!raw || !*raw) {
+            return 8000LL;
+        }
+        char* end = nullptr;
+        const long parsed = std::strtol(raw, &end, 10);
+        if (end == raw || *end != '\0' || parsed < 0) {
+            std::cerr << "Invalid MUSE_LIVENESS_TIMEOUT_MS='" << raw << "'; using 8000\n";
+            return 8000LL;
+        }
+        return static_cast<long long>(parsed);
+    }();
+    return value;
+}
+
+// Wait before each attempt, by attempt number. Short first, since most BLE
+// drops are momentary, then backing off so a headband that has genuinely
+// gone (switched off, out of range) is not scanned for every two seconds.
+constexpr long long RECONNECT_BACKOFF_MS[] = {2000, 4000, 8000, 16000, 30000};
+static_assert(sizeof(RECONNECT_BACKOFF_MS) / sizeof(RECONNECT_BACKOFF_MS[0])
+                  >= MuseBridgeService::MAX_RECONNECT_ATTEMPTS,
+              "one backoff entry per attempt");
+// How long an attempt may take to reach CONNECTED before it counts as
+// failed. connect_named() returns as soon as run_asynchronously() is called,
+// so the outcome is only knowable from the connection callback.
+constexpr long long RECONNECT_ATTEMPT_TIMEOUT_MS = 15000;
+}  // namespace
+
 #if defined(ENABLE_LIBMUSE)
 #include <winrt/Windows.Devices.Radios.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -48,9 +109,14 @@ public:
             // Same channels as raw EEG with 45-65Hz mains hum removed. Prefer
             // this when it flows, since hum gets worse as contact worsens.
             service_.note_notch_available();
+            service_.last_any_eeg_ms_.store(steady_now_ms());
             service_.enqueue_frame(packet);
             break;
         case interaxon::bridge::MuseDataPacketType::EEG:
+            // Stamped on both branches: the watchdog asks whether the link is
+            // delivering at all, which a raw packet answers even when it is
+            // not the one enqueued.
+            service_.last_any_eeg_ms_.store(steady_now_ms());
             // Fall back to raw only while notch-filtered packets aren't
             // arriving, so a preset without them (or one where they stop
             // mid-session) still produces data instead of going silent.
@@ -146,6 +212,12 @@ bool MuseBridgeService::start() {
 
 void MuseBridgeService::stop() {
     running_.store(false);
+    // Before the teardown below: a reconnect thread mid-connect_named() would
+    // otherwise touch manager_ and active_muse_ while they are being freed.
+    cancel_auto_reconnect();
+    if (reconnect_thread_.joinable()) {
+        reconnect_thread_.join();
+    }
 
 #if defined(ENABLE_LIBMUSE)
     {
@@ -422,6 +494,7 @@ bool MuseBridgeService::connect_named(const std::string& name) {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         active_muse_ = chosen;
         active_muse_name_ = chosen->get_name();
+        last_connected_name_ = active_muse_name_;
     }
     chosen->run_asynchronously();
     return true;
@@ -598,14 +671,6 @@ ContactQuality MuseBridgeService::contact_quality() const {
     return ContactQuality{};
 #endif
 }
-
-namespace {
-long long steady_now_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-}  // namespace
 
 bool MuseBridgeService::notch_available() const {
     const long long last = last_notch_ms_.load();
@@ -925,16 +990,192 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
     // Every reconnect the sidecar drives goes through connect_named(), which
     // calls disconnect_muse() first and resets properly there.
     std::lock_guard<std::mutex> lock(queue_mutex_);
+    const bool was_connected = connected_;
     last_connection_state_ = static_cast<int>(state);
     connected_ = (state == interaxon::bridge::ConnectionState::CONNECTED);
-    if (state != interaxon::bridge::ConnectionState::CONNECTED) {
-        firmware_version_.clear();
-        // Cleared with firmware, not left standing like the queues: a charge
-        // percentage is a claim about a link that's currently down.
-        battery_percent_ = -1.0;
+    if (connected_) {
+        // A fresh baseline for the watchdog, and the end of any reconnect
+        // sequence: CONNECTED arriving is the one outcome that counts as
+        // success, since connect_named() itself only reports that the
+        // attempt was launched.
+        connected_since_ms_.store(steady_now_ms());
+        last_any_eeg_ms_.store(0);
+        if (reconnect_armed_.load() || reconnect_in_flight_.load()) {
+            std::cerr << "auto-reconnect: link restored on attempt "
+                      << reconnect_attempt_.load() << "\n";
+        }
+        reconnect_armed_.store(false);
+        reconnect_in_flight_.store(false);
+        reconnect_exhausted_.store(false);
+        reconnect_attempt_.store(0);
+        return;
+    }
+    connected_since_ms_.store(0);
+    last_any_eeg_ms_.store(0);
+    firmware_version_.clear();
+    // Cleared with firmware, not left standing like the queues: a charge
+    // percentage is a claim about a link that's currently down.
+    battery_percent_ = -1.0;
+    // Only a CONNECTED -> not-CONNECTED edge is a drop worth recovering.
+    // disconnect_muse() sets connected_ false *before* asking the SDK to
+    // disconnect, so the callback for a deliberate disconnect -- a person's
+    // command, or connect_named()'s own cleanup -- sees was_connected false
+    // and arms nothing. That ordering is what separates the two cases; no
+    // separate flag is needed, and none is used.
+    if (was_connected && auto_reconnect_enabled()) {
+        std::cerr << "auto-reconnect: link dropped (state " << static_cast<int>(state)
+                  << "), will retry\n";
+        arm_reconnect();
+    }
+}
+#endif
+
+// Outside the ENABLE_LIBMUSE guard, like the accessors below: main.cpp calls
+// service_auto_reconnect() and reconnect_status() unconditionally, and the
+// OFF build is the one CI compiles. Everything here is atomics and public
+// methods that already have OFF bodies.
+void MuseBridgeService::arm_reconnect() {
+    // Flag-only: this is called from inside the connection callback, where
+    // re-entering libMuse deadlocks. The attempt itself is launched from the
+    // main loop by service_auto_reconnect().
+    reconnect_attempt_.store(0);
+    reconnect_exhausted_.store(false);
+    reconnect_in_flight_.store(false);
+    schedule_next_reconnect();
+}
+
+void MuseBridgeService::schedule_next_reconnect() {
+    const int made = reconnect_attempt_.load();
+    reconnect_in_flight_.store(false);
+    if (made >= MAX_RECONNECT_ATTEMPTS) {
+        reconnect_armed_.store(false);
+        reconnect_exhausted_.store(true);
+        std::cerr << "auto-reconnect: giving up after " << made
+                  << " attempts; click Connect to try again\n";
+        return;
+    }
+    next_reconnect_at_ms_.store(steady_now_ms() + RECONNECT_BACKOFF_MS[made]);
+    reconnect_armed_.store(true);
+}
+
+void MuseBridgeService::launch_reconnect_attempt() {
+    std::string name;
+#if defined(ENABLE_LIBMUSE)
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        name = last_connected_name_;
+    }
+#endif
+    if (name.empty()) {
+        reconnect_armed_.store(false);
+        return;
+    }
+    // Join the previous attempt's thread first. Only ever done once it has
+    // signalled completion, so this never blocks the main loop on a
+    // connect_named() still waiting out wait_for_disconnect().
+    if (reconnect_thread_.joinable()) {
+        reconnect_thread_.join();
+    }
+    const int attempt = reconnect_attempt_.load() + 1;
+    reconnect_attempt_.store(attempt);
+    reconnect_armed_.store(false);
+    reconnect_in_flight_.store(true);
+    attempt_started_ms_.store(steady_now_ms());
+    reconnect_thread_done_.store(false);
+    const int generation = reconnect_generation_.load();
+    std::cerr << "auto-reconnect: attempt " << attempt << "/" << MAX_RECONNECT_ATTEMPTS
+              << " to " << name << "\n";
+    // Its own thread: connect_named() blocks through disconnect_muse()'s
+    // wait_for_disconnect for up to 3s, which inline would stall EEG and
+    // optics draining for every consumer of this process.
+    reconnect_thread_ = std::thread([this, name, generation] {
+        const bool launched = connect_named(name);
+        if (reconnect_generation_.load() != generation) {
+            // A person took over while this ran. Their command has already
+            // been applied; a connect landing on top of it would pair a
+            // headband they may just have asked to release.
+            if (launched) {
+                disconnect_muse();
+            }
+        } else if (!launched) {
+            // Not in the scan list any more -- the usual case after the
+            // headband was switched off and on, which gives it a fresh BLE
+            // advertisement. Rescan, and let the next attempt find it. What
+            // a person does by clicking Refresh, then Connect.
+            refresh_scan();
+            schedule_next_reconnect();
+        }
+        // Launched attempts are judged by the connection callback (success)
+        // or the attempt timeout in service_auto_reconnect() (failure).
+        reconnect_thread_done_.store(true);
+    });
+}
+
+void MuseBridgeService::service_auto_reconnect() {
+    if (!running_.load() || !auto_reconnect_enabled()) {
+        return;
+    }
+    const long long now = steady_now_ms();
+
+    // ── watchdog ──
+    // Measured from the later of the last packet and the connect itself, so
+    // the seconds a preset switch takes to restore streaming after CONNECTED
+    // do not read as a dead link.
+    const long long liveness = liveness_timeout_ms();
+    if (liveness > 0 && is_muse_connected() && !reconnect_in_flight_.load()) {
+        const long long since = std::max(last_any_eeg_ms_.load(), connected_since_ms_.load());
+        if (since > 0 && now - since > liveness) {
+            std::cerr << "auto-reconnect: no EEG for " << (now - since)
+                      << "ms while CONNECTED; treating the link as dropped\n";
+            // Through disconnect_muse() so the queues and device fields are
+            // reset exactly as for a reported drop. It sets connected_ false
+            // before the SDK call, so the resulting callback arms nothing --
+            // hence the explicit arm here.
+            disconnect_muse();
+            arm_reconnect();
+            return;
+        }
+    }
+
+    // ── an attempt that never reached CONNECTED ──
+    if (reconnect_in_flight_.load() && reconnect_thread_done_.load()
+            && now - attempt_started_ms_.load() > RECONNECT_ATTEMPT_TIMEOUT_MS) {
+        std::cerr << "auto-reconnect: attempt " << reconnect_attempt_.load()
+                  << " did not reach CONNECTED within " << RECONNECT_ATTEMPT_TIMEOUT_MS << "ms\n";
+        schedule_next_reconnect();
+        return;
+    }
+
+    // ── the next attempt is due ──
+    if (reconnect_armed_.load() && !reconnect_in_flight_.load()
+            && reconnect_thread_done_.load() && now >= next_reconnect_at_ms_.load()) {
+        launch_reconnect_attempt();
     }
 }
 
+void MuseBridgeService::cancel_auto_reconnect() {
+    reconnect_generation_.fetch_add(1);
+    reconnect_armed_.store(false);
+    reconnect_in_flight_.store(false);
+    reconnect_exhausted_.store(false);
+    reconnect_attempt_.store(0);
+}
+
+ReconnectStatus MuseBridgeService::reconnect_status() const {
+    ReconnectStatus out;
+    out.enabled = auto_reconnect_enabled();
+    out.reconnecting = reconnect_armed_.load() || reconnect_in_flight_.load();
+    out.attempt = reconnect_attempt_.load();
+    out.max_attempts = MAX_RECONNECT_ATTEMPTS;
+    out.exhausted = reconnect_exhausted_.load();
+    const long long last = last_any_eeg_ms_.load();
+    if (last > 0 && is_muse_connected()) {
+        out.eeg_age_ms = steady_now_ms() - last;
+    }
+    return out;
+}
+
+#if defined(ENABLE_LIBMUSE)
 void MuseBridgeService::refresh_bluetooth_state() {
     // Blocking .get() is safe here: this process has no message pump to
     // stall (main() runs winrt::init_apartment() in MTA mode).

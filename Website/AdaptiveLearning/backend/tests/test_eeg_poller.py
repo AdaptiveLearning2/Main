@@ -110,6 +110,45 @@ def test_can_use_device_respects_an_unexpired_reservation():
     assert eeg_poller.can_use_device("user-b", "station-b")       # untouched
 
 
+# ── backoff while the sidecar answers nothing ────────────────────────────────
+#
+# The loop used to wait a fixed POLL_INTERVAL whatever came back, so an
+# unreachable sidecar was hammered at full rate for the life of the session.
+# The first miss still costs nothing (an idle stream at session start is
+# ordinary); further misses double the wait up to POLL_BACKOFF_MAX_S.
+
+def test_the_wait_grows_with_misses_and_is_capped():
+    base = eeg_poller.POLL_INTERVAL
+    assert eeg_poller._poll_wait(0) == base
+    assert eeg_poller._poll_wait(1) == base
+    assert eeg_poller._poll_wait(2) == pytest.approx(min(eeg_poller.POLL_BACKOFF_MAX_S, base * 2))
+    assert eeg_poller._poll_wait(3) == pytest.approx(min(eeg_poller.POLL_BACKOFF_MAX_S, base * 4))
+    assert eeg_poller._poll_wait(50) == eeg_poller.POLL_BACKOFF_MAX_S
+
+
+def test_a_run_of_empty_reads_is_counted_and_one_payload_resets_it(monkeypatch):
+    answers = {"data": None}
+    monkeypatch.setattr(eeg_client, "get_state",
+                        lambda device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0: answers["data"])
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
+    p = eeg_poller._active["session-1"]
+    deadline = time.monotonic() + 2.0
+    while p.consecutive_misses < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert p.consecutive_misses >= 3
+    assert eeg_poller.status("user-a")["consecutive_misses"] >= 3
+
+    # A payload the mapper refuses (no_signal) still counts as the sidecar
+    # answering -- the backoff is about reachability, not about whether a
+    # row was written. No insert happens, which _FakeSupabase enforces.
+    answers["data"] = {"timestamp": "2026-09-02T10:00:00+00:00",
+                       "features": {"signal_quality": "no_signal"}}
+    deadline = time.monotonic() + 2.0
+    while p.consecutive_misses != 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert p.consecutive_misses == 0
+
+
 def test_reservation_expires_and_reopens_the_station(monkeypatch):
     """An abandoned scan (tab closed mid-pairing, /stop never called) must not
     permanently lock a physical station."""

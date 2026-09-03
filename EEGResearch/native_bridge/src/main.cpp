@@ -177,6 +177,25 @@ void append_bridge_device_fields(std::ostringstream& o, const MuseBridgeService&
     } else {
         o << "null";
     }
+
+    // Additive: muse_connected keeps meaning "the link is up right now", and
+    // these say whether the bridge is busy bringing it back. A consumer that
+    // reads only muse_connected sees a drop; one that reads these can show
+    // "reconnecting" instead of "gone" and hold off its own retry.
+    const ReconnectStatus rs = svc.reconnect_status();
+    o << ",\"auto_reconnect\":" << (rs.enabled ? "true" : "false")
+      << ",\"reconnecting\":" << (rs.reconnecting ? "true" : "false")
+      << ",\"reconnect_attempt\":" << rs.attempt
+      << ",\"reconnect_max_attempts\":" << rs.max_attempts
+      << ",\"reconnect_exhausted\":" << (rs.exhausted ? "true" : "false");
+    // null before the first packet of a connection, and whenever not
+    // connected -- "never arrived" is not "arrived 0ms ago".
+    o << ",\"eeg_age_ms\":";
+    if (rs.eeg_age_ms < 0) {
+        o << "null";
+    } else {
+        o << rs.eeg_age_ms;
+    }
 }
 
 void send_status_line(BridgeTcpServer& server, MuseBridgeService& svc) {
@@ -232,11 +251,17 @@ void handle_bridge_command_line(const std::string& line, MuseBridgeService& svc,
     if (cmd.empty()) {
         return;
     }
+    // Every command from a person cancels the automatic recovery first: a
+    // click means they are driving now, and a reconnect landing after their
+    // disconnect would re-pair a headband they just released.
     if (cmd == "refresh") {
+        svc.cancel_auto_reconnect();
         svc.refresh_scan();
     } else if (cmd == "disconnect") {
+        svc.cancel_auto_reconnect();
         svc.disconnect_muse();
     } else if (cmd == "connect") {
+        svc.cancel_auto_reconnect();
         const std::string name = extract_json_object_string(line, "name");
         if (!name.empty()) {
             const bool ok = svc.connect_named(name);
@@ -331,6 +356,11 @@ int main() {
             handle_bridge_command_line(cmd_line, muse_service, server);
             last_status = clock::now();
         }
+
+        // Before the EEG branch below, which `continue`s: while samples are
+        // flowing nothing here is due, but the watchdog and a pending attempt
+        // both have to be looked at on every iteration regardless.
+        muse_service.service_auto_reconnect();
 
         // Drain optics fully, not one per loop: at 64Hz they arrive in bursts
         // between 256Hz EEG samples, and queuing them behind poll_frame's

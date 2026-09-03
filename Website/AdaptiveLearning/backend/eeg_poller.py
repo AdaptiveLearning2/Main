@@ -11,6 +11,23 @@ import signal_mapping
 
 POLL_INTERVAL = 1.0 / max(0.5, float(os.getenv("EEG_POLL_HZ", "1")))
 
+# Longest a poller waits between reads while the sidecar keeps answering
+# nothing. The first miss costs nothing extra -- an idle stream at session
+# start is ordinary -- and each further miss doubles the wait up to this.
+#
+# Small on purpose. The consent re-check below runs on the same loop, so this
+# is also the most a withdrawal's detection can be delayed by an outage; and a
+# sidecar that comes back should be noticed within seconds, since every tick
+# until then is a tick nothing was recorded on.
+POLL_BACKOFF_MAX_S = 5.0
+
+
+def _poll_wait(consecutive_misses: int) -> float:
+    """Seconds to wait before the next read after this many empty reads in a row."""
+    if consecutive_misses <= 1:
+        return POLL_INTERVAL
+    return min(POLL_BACKOFF_MAX_S, POLL_INTERVAL * (2 ** (consecutive_misses - 1)))
+
 # Which ingestion path is live, stated rather than inferred.
 #
 # `pull` is this poller: it runs inside the backend and polls the sidecar over
@@ -80,6 +97,10 @@ class _Poller(threading.Thread):
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
+        # Empty reads in a row, driving the backoff. Exposed on status() so
+        # "the sidecar has answered nothing for a while" is readable rather
+        # than inferred from `samples` not moving.
+        self.consecutive_misses = 0
         # Not 0.0: `start()` just read consent, so the first re-check should
         # be a full interval away, not immediately on loop 1.
         self._consent_checked_at = 0.0
@@ -235,6 +256,11 @@ class _Poller(threading.Thread):
                     break
 
             data = eeg_client.get_state(self.device_id)
+            # `get_state` answers None for an unreachable sidecar and for an
+            # idle one alike; both are "nothing to record", and the backoff
+            # treats them the same. A sidecar that comes back, or a stream
+            # that starts, resets it on the first real payload.
+            self.consecutive_misses = 0 if data else self.consecutive_misses + 1
             if loops <= 3 or loops % 10 == 0:
                 print(f">>> [eeg-poller] loop={loops} got_data={bool(data)} ts={data.get('timestamp') if data else None}", flush=True)
 
@@ -285,8 +311,8 @@ class _Poller(threading.Thread):
                         print(f"!!! [eeg-poller] INSERT FAILED #{self.errors}: {type(e).__name__}: {e}", flush=True)
                         print(f"!!! [eeg-poller] row was: {row}", flush=True)
             # wait(), not sleep(): stop() then returns within microseconds
-            # instead of waiting out the rest of POLL_INTERVAL.
-            self._stop_event.wait(POLL_INTERVAL)
+            # instead of waiting out the rest of the interval.
+            self._stop_event.wait(_poll_wait(self.consecutive_misses))
 
         try:
             # Each device_id (station) is its own sidecar stream; only another
@@ -779,6 +805,11 @@ def status(user_id: str) -> dict:
                     "samples":    p.samples,
                     "errors":     p.errors,
                     "last_ts":    p.last_ts,
+                    # How many reads in a row came back empty. 0 means the
+                    # last read carried data; a climbing number is a sidecar
+                    # that has stopped answering, which `samples` standing
+                    # still cannot distinguish from a student sitting still.
+                    "consecutive_misses": p.consecutive_misses,
                     # Counted separately from `samples`: a session recording
                     # EEG fine while its heart channel is refused, declined,
                     # or unmeasurable is normal, and one combined number

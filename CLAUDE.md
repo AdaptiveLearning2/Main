@@ -417,6 +417,72 @@ process that reads `getenv` directly and never loads `config.py`, so a `MUSE_ENA
 flag sets the variable in the window that launches the exe. Same for `MUSE_OPTICS_PRESET`, and for
 `MUSE_BRIDGE_PORT` if it ever needs one.
 
+### A dropped BLE link is retried at every layer, and the bridge goes first
+
+Reconnection used to be entirely manual, at all four layers at once: the bridge's
+`update_connection_state` deliberately did nothing on DISCONNECTED, the sidecar retried its TCP
+socket every tick with no backoff, the backend poller waited a fixed interval whatever came back,
+and the student's page answered `muse_connected === false` by silently resetting to "Connect
+Headband" — and then *stopped polling*, because the poll was gated on `connected`. A headband that
+fell off mid-question cost the rest of the lesson's recording with nothing on screen saying so.
+
+**The bridge owns recovery, and reports it.** `service_auto_reconnect()` runs once per main-loop
+tick. A CONNECTED → not-CONNECTED edge arms a bounded sequence of `connect_named()` calls against
+`last_connected_name_` (2/4/8/16/30 s backoff, `MAX_RECONNECT_ATTEMPTS = 5`), launched on their own
+thread because `connect_named` blocks through `wait_for_disconnect` for up to 3 s. **The preset is
+not carried across and must not be**: `apply_model_preset()` re-derives it from `getenv` on every
+CONNECTED, so a reconnect lands on exactly the configuration the process was launched with — don't
+add reconnect-time preset logic. A liveness watchdog (`MUSE_LIVENESS_TIMEOUT_MS`, 8000; 0 disables)
+catches the failure `NOTCH_STALE_MS` cannot: EEG stops while libMuse still says CONNECTED. It
+measures from the later of the last packet and the connect itself, since a preset switch interrupts
+streaming for a moment after every connection. `MUSE_AUTO_RECONNECT=0` turns the whole thing off.
+Set both the way `MUSE_ENABLE_OPTICS` is set — in the window that launches the exe — for the same
+reason: the bridge reads `getenv`, never `.env`.
+
+Two things about the edge detection are load-bearing. `disconnect_muse()` sets `connected_ = false`
+*before* asking the SDK to disconnect, so the callback for a deliberate disconnect — a person's
+command, or `connect_named()`'s own cleanup — sees `was_connected == false` and arms nothing; that
+ordering is the whole mechanism, and there is no separate flag. And **every command a person sends
+cancels the sequence** (`cancel_auto_reconnect()` in `handle_bridge_command_line`), with a
+generation counter so an attempt already mid-`connect_named` undoes its own connect when it returns
+— otherwise a reconnect landing after a deliberate disconnect re-pairs a headband the student just
+released. Status lines carry `auto_reconnect`, `reconnecting`, `reconnect_attempt`,
+`reconnect_max_attempts`, `reconnect_exhausted` and `eeg_age_ms`, additively — `muse_connected`
+still means "up right now". **Compiled both ways (`build_off` and the `ENABLE_LIBMUSE=ON` build
+against the vendored SDK) and smoke-tested in synthetic mode; not yet exercised against a real
+headband**, which is the only test of whether libMuse's callbacks behave as assumed on a drop.
+
+**The sidecar and the poller back off; the page shows the bridge's progress and only then drives
+its own.** `TcpMuseBridgeAdapter` waits 0.5 → 5 s between TCP attempts (`connect_wait_remaining()`,
+reset on success), and `DeviceSession.health_fields()` — `last_good_ts`, `last_good_age_s`,
+`consecutive_errors`, `preset_mismatch` (only after `PRESET_SETTLE_SECONDS`, since the two presets
+legitimately disagree for a moment after every connect) — rides inside `ingestion` on both
+`/api/v1/state` and `/api/v1/muse/status`, deliberately not as top-level keys the envelope would
+drop. `eeg_poller._poll_wait` doubles the wait per empty read up to `POLL_BACKOFF_MAX_S` (5 s); the
+first miss costs nothing, since an idle stream at session start is ordinary, and the cap is small
+because the consent re-check shares the loop. `Adaptive.jsx` polls the bridge in **both** modes now
+— under pull `poller.running` never says the headband went away — keeps polling through the new
+`reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
+on `reconnect_exhausted` or a bridge too old to report `reconnecting` at all. **"Stop trying" sends
+a bridge disconnect before the usual teardown**, because Disconnect's teardown stops the sidecar's
+stream without sending the bridge a command, and only a command cancels its attempts. The
+page-driven `pairOnce` takes the cancel token and checks it before the connect, so a cancel during
+the 12 s scan cannot be followed by a pairing; it also leaves the panel on `reconnecting` rather
+than stepping through scanning/connecting, where the button is disabled.
+
+Electrode contact reaches a student for the first time: `lib/contactQuality.js` is
+`signal_processing._signal_quality`'s contact half without the smoothing (the page debounces two
+poor polls instead), and the teacher's Live badge gained the age of the newest row and the same
+"weak signal" the heart badge had, from `lib/signalAge.js` — `STALE_AFTER_S` there mirrors the
+backend's `_LIVE_WINDOW_SEC` so the two surfaces agree on what counts as live.
+
+**`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version of it hung.** The
+pairing sequence is a chain of 1–1.5 s waits noticed by a 5 s poll; under `vi.useFakeTimers()` —
+with or without `shouldAdvanceTime` — `await act(async () => advanceTimersByTimeAsync(…))` never
+resolved and every test timed out at the 5 s default. Each of those tests costs 10–20 real
+seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
+300 ms debounce; it did not survive this component.
+
 ### Battery is device telemetry, and null for the first stretch of every session
 
 `battery_percent` rides on the bridge's ingestion block through to the badge beside Disconnect on

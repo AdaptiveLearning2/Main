@@ -19,6 +19,14 @@ clean. Everything this file described as pending has merged:
 | #167 | 2026-09-03 | dedupe keys for `cognitive_signals` and `face_signals` (§2b item 6) |
 | #168 | 2026-09-03 | `spread` (S-ID.2), the third grade 9-12 topic (§6 item 4) |
 
+**Three commits landed directly on `main` without review** — `cee8cff` (this
+file), `9e76156` (the generation load test) and `6d625d7` (the waiter cap and
+`Retry-After`). That was a mistake of process, not of content: they are green
+and were gone through in conversation, but they should have been a branch and
+a PR. Left in place rather than rewound, because `headband-connection-recovery`
+was already pushed on top of them and unwinding would have rewritten a branch
+that had left this machine. Worth knowing if the history reads oddly.
+
 Both of #168's production steps are complete: `20260915000000` applied via the
 Supabase integration (confirmed in Remote), and
 `supabase/seeds/lesson_plans_spread_topic.sql` was pasted into the dashboard

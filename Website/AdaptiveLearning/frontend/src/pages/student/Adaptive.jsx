@@ -32,6 +32,10 @@ const RECONNECT_POLL_MS = 2000
 // single poor frame -- a head turn, a hand on the strap -- must not raise the
 // hint. Two in a row is the sidecar's own smoothing, roughly.
 const CONTACT_POOR_STREAK = 2
+// Minimum gap between "The headband disconnected." toasts. A flapping link
+// at the edge of range drops every ~10s; the panel tracks each one, the
+// toast says it once.
+const DROP_TOAST_MIN_MS = 60_000
 
 // Retry delay for offering the session to the sidecar. The student often
 // opens the lesson before starting the local app, so this is normal, not an
@@ -233,6 +237,10 @@ export default function Adaptive() {
   // False once the page is gone; `pairOnce` reads it between steps. Set true
   // in the effect body rather than at declaration so StrictMode's
   // mount/unmount/mount in development does not leave it false.
+  // When the drop toast last showed, and whether the current drop was
+  // announced -- see onDropped.
+  const lastDropToast = useRef(0)
+  const dropAnnounced = useRef(false)
   const pageAlive = useRef(true)
   useEffect(() => {
     pageAlive.current = true
@@ -526,10 +534,22 @@ export default function Adaptive() {
       ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
       reconnect: { attempt: ing.reconnect_attempt || 0, max: ing.reconnect_max_attempts || 0, byBridge },
     }))
-    toast.warning('The headband disconnected.', {
-      description: 'Trying to reconnect. Check it is switched on and sitting on your head.',
-      duration: 8_000,
-    })
+    // Said once per episode, not once per drop. At the edge of range the
+    // link flaps -- reconnects in seconds, drops eight later -- and a toast
+    // pair every ten seconds is noise over a panel that already shows the
+    // state. The panel keeps changing; the toasts do not repeat until the
+    // link has been quiet for DROP_TOAST_MIN_MS.
+    const now = Date.now()
+    if (now - lastDropToast.current >= DROP_TOAST_MIN_MS) {
+      lastDropToast.current = now
+      dropAnnounced.current = true
+      toast.warning('The headband disconnected.', {
+        description: 'Trying to reconnect. Check it is switched on and sitting on your head.',
+        duration: 8_000,
+      })
+    } else {
+      dropAnnounced.current = false
+    }
     // Bridge reports no recovery of its own (older build, or it already
     // gave up): this page's loop starts now rather than on the next poll.
     if (!byBridge && !reconnectRun.current) startFrontendReconnect()
@@ -539,7 +559,9 @@ export default function Adaptive() {
     if (reconnectRun.current) reconnectRun.current.cancelled = true
     reconnectRun.current = null
     setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
-    toast.success('Headband reconnected.')
+    // Only answers a drop that was announced; a silent one gets a silent
+    // recovery, or the flapping shows up as a stream of "reconnected".
+    if (dropAnnounced.current) toast.success('Headband reconnected.')
   }
 
   // Scan + connect, up to RECONNECT_ATTEMPTS times with a growing wait. Only
@@ -572,8 +594,13 @@ export default function Adaptive() {
         onReconnected()
         return
       }
-      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
-                           battery: null, reconnect: null, contactPoor: null }))
+      // The same teardown as Disconnect and "Stop trying", and not a bare
+      // state reset: under pull `connected` is the backend's poller, which
+      // this loop never stopped, so the 3s status poll put the panel back to
+      // STREAMING with a Disconnect button three seconds after this toast --
+      // over a headband that had been out of range for four minutes. Seen on
+      // hardware. Stopping the poller is what makes "not connected" hold.
+      await disconnectHeadband(hw)
       toast.error('The headband could not be reconnected.', {
         description: 'Check it is switched on and charged, then click Connect Headband.',
         duration: 15_000,
@@ -1772,7 +1799,7 @@ export default function Adaptive() {
                           Auto-reconnect {ing.auto_reconnect === false ? 'off'
                             : ing.reconnect_exhausted ? `gave up after ${ing.reconnect_max_attempts}`
                             : ing.reconnecting ? `attempt ${ing.reconnect_attempt} of ${ing.reconnect_max_attempts}`
-                            : ing.auto_reconnect === true ? 'armed' : '—'}
+                            : ing.auto_reconnect === true ? 'on' : '—'}
                         </span>
                       </div>
                     </div>

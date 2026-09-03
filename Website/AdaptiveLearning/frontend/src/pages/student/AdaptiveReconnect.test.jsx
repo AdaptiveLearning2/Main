@@ -112,6 +112,26 @@ it('announces a drop and shows the bridge reconnecting instead of resetting the 
   expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
 }, TEST_TIMEOUT)
 
+it('says a flapping link dropped once, not once per drop', async () => {
+  // Measured at the edge of BLE range: reconnect in seconds, drop eight
+  // later, repeat. The panel tracks every drop; the toasts must not.
+  await connect()
+  const drop = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                 reconnect_attempt: 1, battery_percent: null }
+
+  bridge.ingestion = drop
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
+  bridge.ingestion = drop
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
+
+  expect(toast.warning).toHaveBeenCalledTimes(1)
+  expect(toast.success).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
 it('takes over once the bridge has given up, and gives the student a way out', async () => {
   await connect()
   const refreshes = museRefresh.mock.calls.length

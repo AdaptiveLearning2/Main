@@ -68,6 +68,14 @@ static_assert(sizeof(RECONNECT_BACKOFF_MS) / sizeof(RECONNECT_BACKOFF_MS[0])
 // failed. connect_named() returns as soon as run_asynchronously() is called,
 // so the outcome is only knowable from the connection callback.
 constexpr long long RECONNECT_ATTEMPT_TIMEOUT_MS = 15000;
+// How long a restored link has to stay up before the attempt budget is
+// reset. Measured at the edge of BLE range: every attempt reached CONNECTED
+// within seconds, no EEG followed, and the watchdog dropped it ~8s later --
+// so with the budget reset on CONNECTED the link flapped for as long as the
+// headband stayed there, a disconnect and a reconnect every ten seconds
+// with no end. A connection that lasts less than this counts against the
+// same sequence, and five of them exhaust it like five failures would.
+constexpr long long LINK_STABLE_MS = 30000;
 }  // namespace
 
 #if defined(ENABLE_LIBMUSE)
@@ -1002,10 +1010,13 @@ void MuseBridgeService::update_connection_state(interaxon::bridge::ConnectionSta
             std::cerr << "auto-reconnect: link restored on attempt "
                       << reconnect_attempt_.load() << "\n";
         }
+        // The attempt count is deliberately *not* reset here. CONNECTED is
+        // the attempt succeeding, not the link being usable: at the edge of
+        // range it arrives every time and lasts eight seconds. The budget
+        // resets once the link has held for LINK_STABLE_MS, in
+        // service_auto_reconnect(), or on a person's command.
         reconnect_armed_.store(false);
         reconnect_in_flight_.store(false);
-        reconnect_exhausted_.store(false);
-        reconnect_attempt_.store(0);
         return;
     }
     connected_since_ms_.store(0);
@@ -1036,8 +1047,11 @@ void MuseBridgeService::arm_reconnect() {
     // Flag-only: this is called from inside the connection callback, where
     // re-entering libMuse deadlocks. The attempt itself is launched from the
     // main loop by service_auto_reconnect().
-    reconnect_attempt_.store(0);
-    reconnect_exhausted_.store(false);
+    //
+    // The attempt count carries over: a drop that follows a short-lived
+    // reconnect is the same sequence continuing, and schedule_next_reconnect()
+    // exhausts it once MAX_RECONNECT_ATTEMPTS have been made. Only a stable
+    // link or a person's command starts the count again.
     reconnect_in_flight_.store(false);
     schedule_next_reconnect();
 }
@@ -1114,6 +1128,18 @@ void MuseBridgeService::service_auto_reconnect() {
         return;
     }
     const long long now = steady_now_ms();
+
+    // ── a restored link that has held ──
+    // Only now is a reconnect a success worth forgetting the attempts for.
+    if (is_muse_connected() && reconnect_attempt_.load() > 0) {
+        const long long since = connected_since_ms_.load();
+        if (since > 0 && now - since > LINK_STABLE_MS) {
+            std::cerr << "auto-reconnect: link stable for " << (now - since)
+                      << "ms; attempt budget reset\n";
+            reconnect_attempt_.store(0);
+            reconnect_exhausted_.store(false);
+        }
+    }
 
     // ── watchdog ──
     // Measured from the later of the last packet and the connect itself, so

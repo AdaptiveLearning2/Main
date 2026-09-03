@@ -28,10 +28,16 @@ vi.mock('../../lib/session', () => ({
 // The bridge as the backend relays it under pull, via /api/eeg/status.
 // `stamps` records when each status read happened: the two polls are
 // phase-locked to the first one, and the test times the drop off it.
-const bridge = { ingestion: {}, stamps: [], recorders: [] }
+// `pollerRunning` follows the recorder, as the backend's poller follows
+// /api/eeg/start and /stop: under pull that is what `connected` reads.
+const bridge = { ingestion: {}, stamps: [], recorders: [], pollerRunning: false }
 vi.mock('../../lib/signals', () => ({
   createSignalRecorder: ({ sessionId }) => {
-    const rec = { sessionId, start: vi.fn(async () => ({ ok: true, running: true })), stop: vi.fn() }
+    const rec = {
+      sessionId,
+      start: vi.fn(async () => { bridge.pollerRunning = true; return { ok: true, running: true } }),
+      stop: vi.fn(async () => { bridge.pollerRunning = false }),
+    }
     bridge.recorders.push(rec)
     return rec
   },
@@ -40,7 +46,7 @@ vi.mock('../../lib/signals', () => ({
     bridge.stamps.push(Date.now())
     return {
       ingest_mode: 'pull', service: true,
-      poller: { running: true, samples: 3 },
+      poller: { running: bridge.pollerRunning, samples: 3 },
       muse: { available: true, running: true, ingestion: { ...bridge.ingestion } },
     }
   }),
@@ -72,6 +78,7 @@ beforeEach(() => {
   bridge.ingestion = { ...CONNECTED }
   bridge.stamps = []
   bridge.recorders = []
+  bridge.pollerRunning = false
   bridge.sessions = 0
   const question = () => ({
     question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
@@ -208,6 +215,37 @@ it('does not read the pairing itself as a drop, which under pull starts with con
   expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/connect')).toHaveLength(1)
   expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
 }, 60_000)
+
+it('stays disconnected after giving up, under pull where the poller would otherwise say streaming', async () => {
+  // Seen on hardware: the bridge exhausted, the page's three attempts found
+  // nothing, the toast showed -- and three seconds later the panel read
+  // STREAMING with a Disconnect button, because the give-up path reset the
+  // state without stopping the poller, and under pull `connected` *is* the
+  // poller. The teardown has to be Disconnect's.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+
+  // The bridge has given up and no headband is in the scan.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
+                       reconnect_exhausted: true, muse_devices: [], battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, { timeout: 9000 })
+  // Three attempts: 2/4/8s backoffs, each followed by a 12s scan that finds nothing.
+  await screen.findByText(/could not be reconnected|Connect headband/i, {}, { timeout: 60000 })
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('The headband could not be reconnected.', expect.anything()),
+                { timeout: 5000 })
+
+  // Past the next status tick, and the next.
+  await new Promise(r => setTimeout(r, 7000))
+  expect(screen.queryByText(/STREAMING/)).toBeNull()
+  expect(screen.getByRole('button', { name: /connect headband/i })).toBeInTheDocument()
+  expect(bridge.recorders[0].stop).toHaveBeenCalled()
+}, 120_000)
 
 it('announces a drop under pull, where the poller keeps running through it', async () => {
   render(<Adaptive />)

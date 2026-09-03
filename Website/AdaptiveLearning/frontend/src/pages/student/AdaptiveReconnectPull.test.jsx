@@ -101,8 +101,14 @@ it('announces a drop under pull, where the poller keeps running through it', asy
   // at 5.3s puts the first observation at 6 (status) and the next at 10
   // (telemetry). A first version dropped at ~4.7s, where telemetry at 5
   // wins, and passed against the bug it was written for.
+  //
+  // Keyed to the tick, not to the clock: the drop goes in right after the
+  // 5s read has *happened*, which is a recorded event. An absolute offset
+  // sat 278ms clear of that tick and drifted out of the window under load,
+  // in both directions, without failing.
   const t0 = bridge.stamps[0]
-  await new Promise(r => setTimeout(r, Math.max(0, t0 + 5300 - Date.now())))
+  await waitFor(() => expect(bridge.stamps.some(t => t >= t0 + 4900)).toBe(true),
+                { timeout: 8000 })
 
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }

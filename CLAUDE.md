@@ -310,6 +310,35 @@ npx supabase migration list --linked
 `supabase/.temp/project-ref` holds the linked project ref, which is what `--linked` resolves
 against.
 
+### Run `assert_signal_rls.sql` locally before merging a change to it
+
+The CLI has no arbitrary-SQL command, but the local stack's Postgres is a container and `psql` is
+inside it. There is no need to wait for CI:
+
+```bash
+docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f - < scripts/assert_signal_rls.sql
+```
+
+Safe to run against a working database: the file is `BEGIN … ROLLBACK`, so its fixtures leave
+nothing. Exit 0 and a final `ROLLBACK` is a pass.
+
+**Do this for any change to that file, and for any migration that constrains a table it writes to.**
+CI was the only thing executing it, and CI is downstream of the merge — so a broken fixture is found
+after the decision to ship rather than before it. Two things were caught the first time this was run
+by hand, neither visible in a diff:
+
+- **A new unique index made the file's own fixtures illegal.** `20260914000000` added
+  `cog_session_ts_key`, and the batching-loop fixture inserted five `cognitive_signals` rows sharing
+  one `(session_id, ts)` — a `unique_violation`, unhandled, under `ON_ERROR_STOP=1`, which fails the
+  whole job and every assertion below it. The migration's own comment warns that a unique index
+  "passes CI against an empty stack and fails against real data"; the production count that warning
+  prompted was run, and **the repo's own fixtures are also that data**. Check both.
+- **A comment naming `$` `$` inside an anonymous code block closes the block**, and the syntax error
+  surfaces hundreds of lines later. Nothing but execution finds that.
+
+It also revealed that an assertion added in the same change had never been executed at all — a `DO`
+block only CI ever ran, and only after merge.
+
 ### How a migration reaches production
 
 **Merging to `main` applies the migration to production, a few minutes later.** The Supabase
@@ -1193,8 +1222,11 @@ Three properties worth not breaking:
   unconditionally.
 - **Nothing after `raise_for_status()` may raise, and no POST is cancelled mid-flight.** The rows are
   committed by then; a throw — or a `task.cancel()` during the request — restores the batch and the
-  re-post duplicates them, and `cognitive_signals` and `face_signals` have no dedupe key. `stop()`
-  therefore *asks* the loop to finish and awaits it, cancelling only once `SHUTDOWN_BUDGET` is spent.
+  re-post duplicates them. All three signal tables carry a dedupe key now (`20260914000000` added
+  the last two), so a re-post is a no-op rather than a second copy — but this rule stands on its own
+  and should not be relaxed against it: the key makes the *rows* idempotent, and nothing makes the
+  local accounting so. `stop()` therefore *asks* the loop to finish and awaits it, cancelling only
+  once `SHUTDOWN_BUDGET` is spent.
   A batch whose fate is unknown is `unaccounted`, which is neither `recorded` nor `dropped_locally`.
 - **`stop()` is bounded by the clock.** An attempt cap is not a bound a reader can convert into
   seconds; 12 attempts × 3 channels × a 4 s timeout is ~144 s on a Ctrl-C.
@@ -1209,8 +1241,12 @@ keeps recording for up to an hour after they walked away — a consent problem, 
   recorded nothing.
 
 `/api/v1/push/start` refuses with 409 when `PUSH_ENABLED` is false rather than becoming a second
-writer alongside a poller — `cognitive_signals` has no dedupe key, so both running means every EEG
-sample lands twice with no error.
+writer alongside a poller. The original reason was that `cognitive_signals` had no dedupe key, so
+both running meant every EEG sample landed twice with no error; `cog_session_ts_key`
+(`20260914000000`) closes that, and every writer upserts against it. **The refusal stays**, because
+two writers on one channel is still a deployment nobody chose — the key means the overlap now costs
+duplicate work rather than corrupt data, which is a reason to keep the guard honest rather than to
+drop it.
 
 ### The browser calls the sidecar directly, and two tokens are in play
 

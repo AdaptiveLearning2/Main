@@ -179,6 +179,62 @@ async def test_delivery_is_counted_from_the_backends_answer(client, monkeypatch)
 
 
 @pytest.mark.anyio
+async def test_a_replayed_batch_is_not_read_as_a_silent_sensor(client, monkeypatch):
+    """`recorded: 0` means two opposite things once the backend has dedupe
+    keys, and only one of them is a problem.
+
+    A batch the backend already had writes no rows -- healthy, and the normal
+    consequence of a retry after a committed POST, which this client cannot
+    rule out. Counted into `recorded` it would report one reading twice across
+    the retry; left uncounted and unreported it is indistinguishable from a
+    camera whose every window was refused, which is the state a person
+    watching the status is actually looking for.
+
+    So it gets its own bucket, for the reason `unaccounted` has one.
+    """
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(
+        body={"ok": True, "inserted": 0, "dropped": 0, "duplicates": 2}))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("face", {"ts": 0})
+    client.enqueue("face", {"ts": 1})
+
+    await client._flush_once()
+
+    status = client.status()
+    assert status["duplicates"]["face"] == 2
+    assert status["recorded"]["face"] == 0, "not counted twice across a retry"
+    # And not folded into either of the other two zeros. `dropped_locally` is
+    # queue overflow on this side, `unaccounted` is a receipt we could not
+    # read -- a duplicate is neither, and the whole point is that it says so.
+    assert status["dropped_locally"]["face"] == 0
+    assert status["unaccounted"]["face"] == 0
+
+
+@pytest.mark.anyio
+async def test_a_backend_that_reports_no_duplicates_still_reads_cleanly(client,
+                                                                        monkeypatch):
+    """The field defaults to 0, so a backend predating it -- or the heart
+    endpoint before its own key -- reads as "none" rather than breaking the
+    receipt and sending the batch to `unaccounted`."""
+    fake = _FakeClient(responder=lambda *_a, **_k: _Response(
+        body={"ok": True, "inserted": 2}))
+    monkeypatch.setattr("src.app.services.push_client.httpx.AsyncClient",
+                        lambda **_k: fake)
+    await _started(client)
+    client.enqueue("face", {"ts": 0})
+    client.enqueue("face", {"ts": 1})
+
+    await client._flush_once()
+
+    status = client.status()
+    assert status["recorded"]["face"] == 2
+    assert status["duplicates"]["face"] == 0
+    assert status["unaccounted"]["face"] == 0
+
+
+@pytest.mark.anyio
 async def test_repeated_failures_back_off_and_recover(client, monkeypatch):
     """A downed backend must not be retried at the flush rate for a whole
     lesson."""

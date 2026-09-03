@@ -15,6 +15,22 @@
 --
 -- Every assertion raises rather than returning a row, so a failure fails the
 -- job instead of scrolling past in the log.
+--
+-- RUN IT LOCALLY BEFORE MERGING A CHANGE TO THIS FILE. The local stack's
+-- Postgres is a container, so there is no need to wait for CI:
+--
+--   docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres \
+--     -v ON_ERROR_STOP=1 -f - < scripts/assert_signal_rls.sql
+--
+-- Safe against a working database -- this is BEGIN ... ROLLBACK, so the
+-- fixtures below leave nothing. Exit 0 and a closing ROLLBACK is a pass.
+--
+-- Worth the habit because CI is downstream of the merge, and because the two
+-- defects the first hand-run caught were both invisible in a diff: a new
+-- unique index that made these fixtures illegal, and a comment naming the
+-- dollar-quote marker inside a block, which closes it and breaks the file
+-- hundreds of lines later. See CLAUDE.md, "Run assert_signal_rls.sql
+-- locally".
 
 BEGIN;
 
@@ -85,6 +101,44 @@ BEGIN
             'its own consent channel before it needs a column. If this is a '
             'rollback, the schema is older than the code.';
     END IF;
+END $$;
+
+-- The three signal tables each carry a unique key, so a replayed ingest batch
+-- is a no-op rather than a second copy of every sample.
+--
+-- Asserted here because the writers cannot show it: the backend suite drives
+-- `main.py` with a fake client, so it proves the endpoints *ask* for
+-- `ON CONFLICT` and not that anything enforces it. Postgres is the only place
+-- that question can be answered, and the answer is what stands between a
+-- flaky connection and a permanently wrong average -- a duplicate row is not
+-- an error, appears on no dashboard, and is carried into the rollup that
+-- outlives the raw rows.
+--
+-- Dropping one of these would leave every writer's `on_conflict` silently
+-- inert, which is the shape worth failing CI over.
+DO $$
+DECLARE
+    spec record;
+BEGIN
+    FOR spec IN
+        SELECT * FROM (VALUES
+            ('cognitive_signals', 'cog_session_ts_key'),
+            ('face_signals',      'face_session_ts_key'),
+            ('heart_signals',     'heart_session_source_ts_key')
+        ) AS t(tbl, idx)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND tablename = t.tbl
+              AND indexname = t.idx)
+    LOOP
+        RAISE EXCEPTION
+            '%.% is missing. Every writer of that table upserts against it, '
+            'so without it a replayed batch -- or a poller running alongside '
+            'a pusher -- writes every sample twice, with no error anywhere '
+            'and nothing but a wrong average to show for it.',
+            spec.tbl, spec.idx;
+    END LOOP;
 END $$;
 
 -- Every column `student_sessions` filters an activity read on, checked against
@@ -614,8 +668,23 @@ BEGIN
     INSERT INTO public.retention_window (starts_on, ends_on, timezone)
     VALUES ('2025-09-01', '2026-06-30', 'America/Los_Angeles');
 
+    -- Distinct stamps, which `cog_session_ts_key` (20260914000000) now
+    -- requires: five rows sharing one `(session_id, ts)` was legal when this
+    -- fixture was written and is a `unique_violation` since. Unhandled in an
+    -- anonymous code block under `ON_ERROR_STOP=1`, that fails the whole job
+    -- and takes every assertion below it with it.
+    --
+    -- (Written without the dollar-quote marker on purpose: naming it inside
+    -- one of these blocks closes the block, which is a syntax error two
+    -- hundred lines later. This comment cost exactly that once.)
+    --
+    -- Seconds apart, not minutes: all five stay on one school day in
+    -- America/Los_Angeles, so the day bucketing these assertions rest on is
+    -- unchanged and only the batching is being measured. Same shape the
+    -- heart_signals fixtures have used since that table got its own key.
     INSERT INTO public.cognitive_signals (session_id, user_id, ts)
-    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval
+      FROM generate_series(1, 5) g;
     INSERT INTO public.signal_daily_rollup
         (user_id, day, channel, sample_count, trusted_sample_count)
     VALUES (uid, DATE '2026-03-10', 'cognitive', 5, 5);
@@ -632,7 +701,8 @@ BEGIN
     -- And the cap stops it, visibly. Without `hit_batch_cap` this state is
     -- indistinguishable from "nothing was eligible".
     INSERT INTO public.cognitive_signals (session_id, user_id, ts)
-    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz FROM generate_series(1, 5);
+    SELECT sess, uid, '2026-03-10T18:00:00Z'::timestamptz + (g || ' s')::interval
+      FROM generate_series(1, 5) g;
     result := public.expire_signal_rows(p_batch_size => 1, p_max_batches => 2);
     SELECT count(*) INTO remaining FROM public.cognitive_signals WHERE user_id = uid;
     IF remaining <> 3 THEN

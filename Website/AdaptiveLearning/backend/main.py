@@ -6120,9 +6120,32 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # scores, not a real reading of zero. Dropped and counted, so a caller
     # can tell "sent 50, recorded 0" from "sent nothing".
     rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
-    if rows: supabase.table("cognitive_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows),
-            "dropped": len(payload.samples) - len(rows)}
+    # Upsert on `cog_session_ts_key` (20260914000000), matching the heart
+    # endpoint below. A replayed batch is then a no-op rather than a second
+    # copy of every sample -- and a deployment left on `pull` whose sidecar
+    # also pushes stops double-counting this channel, which is the overlap
+    # `/api/v1/push/start` refuses under `pull` because there was no key.
+    inserted = 0
+    if rows:
+        resp = supabase.table("cognitive_signals").upsert(
+            rows, on_conflict="session_id,ts", ignore_duplicates=True
+        ).execute()
+        # What the database wrote, not what was sent: `len(rows)` would report
+        # a replay as having inserted a batch it inserted none of, which is
+        # the number `push_client` counts delivery from.
+        #
+        # Relies on PostgREST returning a representation (postgrest-py's
+        # default), exactly as the heart endpoint below does. Under
+        # `return=minimal` this would misreport every successful write as
+        # `inserted: 0`.
+        inserted = len(resp.data or [])
+    # `duplicates` reported rather than left derivable. It was arithmetic the
+    # caller could do -- samples minus dropped minus inserted -- and that is
+    # not the same as saying it: three states share the value 0 here, and a
+    # reader with two numbers has to know which subtraction means which.
+    return {"ok": True, "inserted": inserted,
+            "dropped": len(payload.samples) - len(rows),
+            "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")
 def ingest_face(payload: FaceBatch, request: Request):
@@ -6156,11 +6179,28 @@ def ingest_face(payload: FaceBatch, request: Request):
             payload.session_id, user["id"])
         for s in payload.samples
     ) if r is not None]
-    # Insert, not upsert: `face_signals` has no dedupe key yet. See
-    # CLAUDE.md for why that is deferred rather than undecided, and the
-    # query to run before adding one.
-    if rows: supabase.table("face_signals").insert(rows).execute()
-    return {"ok": True, "inserted": len(rows)}
+    # Upsert on `face_session_ts_key` (20260914000000). This was an insert
+    # with a note saying the key was deferred until production had been
+    # checked for duplicates; it was checked (961 rows, 961 distinct) and the
+    # key added, so a replayed batch is now a no-op rather than a second copy.
+    inserted = 0
+    if rows:
+        resp = supabase.table("face_signals").upsert(
+            rows, on_conflict="session_id,ts", ignore_duplicates=True
+        ).execute()
+        # What the database wrote, not what was sent -- see the cognitive
+        # endpoint above, including the `return=minimal` caveat.
+        inserted = len(resp.data or [])
+    # Three numbers, because with one `inserted: 0` means three different
+    # things and this endpoint just gained the third. It used to mean only
+    # "nothing here was mappable" -- every window refused by FER+ and the
+    # landmarker; adding the dedupe key made it also mean "every sample was
+    # already recorded", which is a replayed batch and entirely healthy.
+    # `push_client` reads these to keep a quiet camera apart from a retry, and
+    # `ingest_heart` has reported them separately since it gained its own key.
+    return {"ok": True, "inserted": inserted,
+            "dropped": len(payload.samples) - len(rows),
+            "duplicates": len(rows) - inserted}
 
 
 @app.post("/api/signals/heart")

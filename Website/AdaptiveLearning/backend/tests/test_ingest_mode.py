@@ -583,12 +583,23 @@ def _capture_inserts(monkeypatch):
     """Stub supabase, returning the list the endpoint inserts into."""
     written = []
 
-    class _Ins:
+    class _Write:
         def __init__(self, rows): self.rows = rows
-        def execute(self): written.extend(self.rows)
+
+        def execute(self):
+            written.extend(self.rows)
+            # `.data` matters: the endpoints count `inserted` from what the
+            # database wrote rather than from what was sent, so a fake
+            # returning nothing would report every batch as inserting zero.
+            return type("R", (), {"data": list(self.rows)})
 
     class _Tbl:
-        def insert(self, rows): return _Ins(rows)
+        def insert(self, rows, **_k): return _Write(rows)
+
+        # Upserting since 20260914000000. Conflict semantics are modelled
+        # properly in `test_signal_ingest.py`; the subject here is the
+        # mapping, so this records and hands the rows back.
+        def upsert(self, rows, **_k): return _Write(rows)
 
     monkeypatch.setattr(main, "supabase", type("S", (), {"table": lambda _s, _n: _Tbl()})())
     return written

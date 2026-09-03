@@ -93,6 +93,9 @@ class PushClient:
         # Committed by the backend but with an unreadable receipt -- neither
         # recorded nor lost, so it gets its own bucket instead of a guess.
         self._unaccounted: dict[str, int] = {channel: 0 for channel in _CHANNELS}
+        # Rows the backend already had. Recorded, but not by this attempt, so
+        # neither `_sent` nor `_dropped` is true of them.
+        self._duplicates: dict[str, int] = {channel: 0 for channel in _CHANNELS}
         self._task: asyncio.Task | None = None
         # Serialises start/stop: both await, so two starts for the same new
         # session could interleave and leave a running loop with no token.
@@ -157,10 +160,14 @@ class PushClient:
         deadline = time.monotonic() + SHUTDOWN_BUDGET
         task, self._task = self._task, None
         if task is not None:
-            # Asked to finish, not cancelled outright: cancelling mid-POST could
-            # abort a request the server already committed, and the restored
-            # batch would be re-sent as duplicates into tables with no dedupe
-            # key. Letting the in-flight request land costs at most one timeout.
+            # Asked to finish, not cancelled outright: cancelling mid-POST
+            # could abort a request the server already committed, and the
+            # restored batch would then be re-sent. All three signal tables
+            # carry a dedupe key now, so that re-send no longer duplicates
+            # rows -- but this still stands, because the batch's *fate* is
+            # what is unknown, and `_unaccounted` exists precisely because a
+            # guess either way is wrong. Letting the in-flight request land
+            # costs at most one timeout and removes the question.
             self._stopping.set()
             self._wake.set()
             try:
@@ -206,6 +213,7 @@ class PushClient:
         self._sent = {channel: 0 for channel in _CHANNELS}
         self._dropped = {channel: 0 for channel in _CHANNELS}
         self._unaccounted = {channel: 0 for channel in _CHANNELS}
+        self._duplicates = {channel: 0 for channel in _CHANNELS}
 
     # ── producing ────────────────────────────────────────────────────────────
 
@@ -487,6 +495,13 @@ class PushClient:
             body = response.json() if response.content else {}
             inserted = int(body.get("inserted", 0))
             dropped = int(body.get("dropped", 0))
+            # Rows the backend already had, from its dedupe keys. Its own
+            # bucket for the reason `unaccounted` has one: without it a
+            # replayed batch adds 0 to `recorded` and logs nothing, so the
+            # status is indistinguishable from a sensor whose every window was
+            # refused. Defaults to 0, so an older backend that does not report
+            # it reads as "none" rather than breaking the receipt.
+            duplicates = int(body.get("duplicates", 0))
             reason = body.get("reason", "unspecified")
         except Exception as exc:  # noqa: BLE001 - see above
             # Counted as delivered-but-unknown, not not-delivered: the write
@@ -500,9 +515,17 @@ class PushClient:
         # unconsented sensor and reports how many, so counting sent instead
         # would report success for a batch that recorded nothing.
         self._sent[channel] += inserted
+        # Not added to `_sent`: these were recorded by an earlier attempt, and
+        # counting them again would report one reading twice across a retry --
+        # which is the arithmetic the dedupe keys exist to stop, reappearing in
+        # the client's own tally.
+        self._duplicates[channel] += duplicates
         if dropped:
             logger.info("push: backend dropped %d %s sample(s): %s",
                         dropped, channel, reason)
+        if duplicates:
+            logger.info("push: backend already had %d %s sample(s); a replay "
+                        "is a no-op, not a loss", duplicates, channel)
 
     # ── introspection ────────────────────────────────────────────────────────
 
@@ -524,6 +547,11 @@ class PushClient:
             # `recorded` (would overstate) and `dropped_locally` (would claim a
             # loss that didn't happen).
             "unaccounted": dict(self._unaccounted),
+            # Recorded, but by an earlier attempt. Kept apart from `recorded`
+            # so a replayed batch is not read as a sensor that measured
+            # nothing -- the two are both "0 new rows" and mean opposite
+            # things about whether the channel is working.
+            "duplicates": dict(self._duplicates),
             "backoff_seconds": self._backoff,
             "last_error": self._last_error,
         }

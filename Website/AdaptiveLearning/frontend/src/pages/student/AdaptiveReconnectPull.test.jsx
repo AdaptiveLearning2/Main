@@ -21,7 +21,8 @@ vi.mock('sonner', () => ({
 }))
 vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
-  recordAnswer: vi.fn(async () => null),
+  // Recorded, so the session count moves and a goal can be reached.
+  recordAnswer: vi.fn(async () => ({ topic: 'expressions' })),
 }))
 
 // The bridge as the backend relays it under pull, via /api/eeg/status.
@@ -71,15 +72,19 @@ beforeEach(() => {
   bridge.ingestion = { ...CONNECTED }
   bridge.stamps = []
   bridge.recorders = []
+  bridge.sessions = 0
+  const question = () => ({
+    question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
+    subject: 'expressions', difficulty: 'easy',
+  })
   mockApi({
-    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': () => ({
-      question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
-      subject: 'expressions', difficulty: 'easy',
-    }),
+    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': question,
+    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-2': question,
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
-    'POST /api/sessions/start': () => ({ id: 'sess-1' }),
+    // A new id per session, so a second sitting is a second session.
+    'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),
     'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
     'POST /api/eeg/muse/refresh': () => ({ ok: true }),
     'POST /api/eeg/muse/connect': () => ({ ok: true }),
@@ -112,6 +117,45 @@ it('brings the stream up at Connect and records only from the first question', a
   // Same session as the pairing, so the same recorder is armed in place.
   expect(bridge.recorders).toHaveLength(1)
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
+}, 30_000)
+
+it('stops the finished session\'s recorder before starting the next one\'s', async () => {
+  // Each recorder registers a `beforeunload` listener at construction that
+  // only its `stop()` removes. `armRecording` is the one place a live
+  // recorder is replaced -- after a Finish, for the next session -- and it
+  // used to drop the old one without stopping it, leaving a listener per
+  // Finish-and-resume, all posting /api/eeg/stop for long-ended sessions on
+  // tab close.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+
+  // A goal of five, then five answers, reaches the Finish banner.
+  fireEvent.click(screen.getByRole('button', { name: '5' }))
+  for (let i = 0; i < 5; i++) {
+    fireEvent.click(screen.getByRole('button', { name: i === 0 ? /generate question/i : /next question/i }))
+    await screen.findByText(/What is 2 \+ 2\?/)
+    // Option B is "4"; the letter and the value are two spans in one button.
+    fireEvent.click(screen.getByRole('button', { name: /^B\s?4/ }))
+    fireEvent.click(screen.getByRole('button', { name: /submit answer/i }))
+    await screen.findByRole('button', { name: /next question/i })
+  }
+  fireEvent.click(await screen.findByRole('button', { name: /finish session/i }))
+  await screen.findByRole('button', { name: /generate question/i })
+  expect(bridge.recorders).toHaveLength(1)
+
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  await waitFor(() => expect(bridge.recorders).toHaveLength(2))
+  expect(bridge.recorders[0].sessionId).toBe('sess-1')
+  expect(bridge.recorders[0].stop).toHaveBeenCalledTimes(1)
+  expect(bridge.recorders[1].sessionId).toBe('sess-2')
+  await waitFor(() => expect(bridge.recorders[1].start).toHaveBeenCalledWith({ record: true }))
 }, 30_000)
 
 it('abandons a pairing when the page unmounts, instead of scanning for a page that is gone', async () => {

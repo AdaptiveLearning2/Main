@@ -1076,6 +1076,12 @@ export default function Adaptive() {
     if (headband.pushMode || !headband.connected || !stationId) return
     let rec = recorder
     if (!rec || rec.sessionId !== activeSessionId) {
+      // Stop the one being replaced. It belongs to a session that has
+      // already ended, so the backend call is a no-op -- but `stop()` is
+      // also what removes the `beforeunload` listener each recorder
+      // registers at construction, and dropping it without that leaves
+      // one live listener per Finish-and-resume, all firing on tab close.
+      if (rec) await rec.stop()
       rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
       setRecorder(rec)
       recorderRef.current = rec

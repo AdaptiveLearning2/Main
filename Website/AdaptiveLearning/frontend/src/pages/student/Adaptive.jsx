@@ -15,8 +15,23 @@ import { GraduationCap, User, Minus, Plus, Sparkles, Brain, BatteryFull, Battery
 import { toast } from 'sonner'
 import QuestionFigure from '../../components/questions/QuestionFigure'
 import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
+import { contactQuality } from '../../lib/contactQuality'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
+
+// The page's own recovery of a headband that dropped mid-session, used only
+// once the native bridge has given up on its own (or is too old to try).
+// Each attempt is a full scan + connect, so three is already a minute or so
+// of trying; past that the student is better told than kept waiting.
+const RECONNECT_ATTEMPTS = 3
+const RECONNECT_BACKOFF_MS = [2000, 4000, 8000]
+// While a drop is being recovered the status is polled faster than the usual
+// 5s, since this is the moment the student is watching the panel.
+const RECONNECT_POLL_MS = 2000
+// Contact readings are one frame every few seconds with no smoothing, so a
+// single poor frame -- a head turn, a hand on the strap -- must not raise the
+// hint. Two in a row is the sidecar's own smoothing, roughly.
+const CONTACT_POOR_STREAK = 2
 
 // Retry delay for offering the session to the sidecar. The student often
 // opens the lesson before starting the local app, so this is normal, not an
@@ -155,12 +170,22 @@ export default function Adaptive() {
     // `pushMode` stays unset until a health check lands -- guessing "not
     // push" showed a false outage message on first paint.
     available: false, connected: false, samples: 0, lastTs: null,
-    phase: 'idle', // idle | starting | scanning | connecting | connected
+    // `reconnecting` is a link that dropped on its own and is being brought
+    // back -- by the bridge, or failing that by this page. `connected` is
+    // false throughout it: the data is not flowing, and saying otherwise
+    // would be the silent-drop problem wearing a different label.
+    phase: 'idle', // idle | starting | scanning | connecting | connected | reconnecting
     deviceName: null,
     // Charge percent, or null for "no reading" (not connected, an old bridge
     // with no battery field, or no BATTERY packet yet). Must never render as
     // 0%, which is a real charge level.
     battery: null,
+    // {attempt, max, byBridge} while reconnecting, else null. `attempt` is 0
+    // while the bridge is still waiting out its first backoff.
+    reconnect: null,
+    // Electrode contact from the bridge's hsi/is_good, debounced. null until
+    // measured -- "not reported" must not read as either fine or poor.
+    contactPoor: null,
   })
 
   // Sidecar stations are registered EEG devices (e.g. multiple headband
@@ -194,8 +219,20 @@ export default function Adaptive() {
   const [debugOpen, setDebugOpen]     = useState(true)
   const debugTimer  = useRef(null)
   const phaseTimer  = useRef(null)
+  // Mirrors of state for the polls and the reconnect loop, which run from
+  // timers and would otherwise read the values they closed over at creation.
+  const headbandRef = useRef(headband)
+  const recorderRef = useRef(null)
+  // The page-driven reconnect in progress, or null. A token object rather
+  // than a boolean so a cancel reaches the loop that is actually running and
+  // not one started after it.
+  const reconnectRun = useRef(null)
+  // Consecutive poor contact readings; the hint needs CONTACT_POOR_STREAK.
+  const poorStreak = useRef(0)
 
   useEffect(() => { sessionIdRef.current = sessionId }, [sessionId])
+  useEffect(() => { headbandRef.current = headband }, [headband])
+  useEffect(() => { recorderRef.current = recorder }, [recorder])
 
   // Leaving the page ends the session, whatever it holds.
   //
@@ -371,42 +408,158 @@ export default function Adaptive() {
       })
   }, [])
 
-  // Polls headband charge, and under push whether the link is still up (the
-  // backend can't see that under push, so this is the only watcher of it).
+  // Polls the headband itself: charge, electrode contact, and whether the
+  // BLE link is still up. In both modes -- under pull the backend's poller
+  // keeps running through a drop, so `poller.running` never says the
+  // headband went away; only the bridge's own `muse_connected` does.
+  //
+  // Keeps polling through `reconnecting`, which is the whole point: a drop
+  // used to set `connected: false`, which ended this effect, so nothing was
+  // left watching for the link to come back.
+  const reconnecting = headband.phase === 'reconnecting'
   useEffect(() => {
-    if (!headband.connected || !stationId) return
-    // Skips under pull once a session exists -- the status poll below already
-    // reads the same battery field then. Still runs under pull before a
-    // session starts, and always under push.
-    if (!headband.pushMode && sessionId) return
+    if (!(headband.connected || reconnecting) || !stationId) return
     let killed = false
     const read = async () => {
       try {
         const st = headband.pushMode ? await museState(stationId)
                                      : (await eegStatus(stationId))?.muse
         if (killed) return
-        const pct = st?.ingestion?.battery_percent
-        // Under push, the only thing watching for a headband that dropped on
-        // its own. `=== false`, not falsiness: an absent field means the
-        // sidecar didn't report, not that the headband went away.
-        const dropped = headband.pushMode && st?.ingestion?.muse_connected === false
+        const ing = st?.ingestion || {}
+        const prev = headbandRef.current
+        const pct = ing.battery_percent
         // typeof check, not `pct || null` -- a flat 0% battery must not be
         // read as "no reading".
-        setHeadband(s => ({
-          ...s,
-          battery: typeof pct === 'number' ? pct : null,
-          ...(dropped ? { connected: false, phase: 'idle', deviceName: null, battery: null } : {}),
-        }))
+        const battery = typeof pct === 'number' ? pct : null
+
+        // `=== false`, not falsiness: an absent field means the sidecar
+        // didn't report, not that the headband went away. Same for `=== true`
+        // on the way back.
+        const linkUp = ing.muse_connected === true
+        const dropped = ing.muse_connected === false
+
+        if (prev.phase === 'reconnecting') {
+          if (linkUp) {
+            onReconnected()
+            return
+          }
+          // Show the bridge's own progress while it is trying. Once it has
+          // given up -- or never reported trying, which is an older bridge --
+          // this page takes over.
+          const bridgeTrying = ing.reconnecting === true
+          if (bridgeTrying) {
+            setHeadband(s => ({ ...s, reconnect: {
+              attempt: ing.reconnect_attempt || 0,
+              max: ing.reconnect_max_attempts || 0,
+              byBridge: true,
+            } }))
+          } else if (!reconnectRun.current) {
+            startFrontendReconnect()
+          }
+          return
+        }
+
+        if (dropped && prev.connected) {
+          onDropped(ing)
+          return
+        }
+
+        // Steady state: charge and contact. Contact is debounced -- one poor
+        // frame is a head turn, two in a row is the strap.
+        const quality = contactQuality(ing)
+        if (quality === 'poor') poorStreak.current += 1
+        else poorStreak.current = 0
+        const contactPoor = quality == null ? null : poorStreak.current >= CONTACT_POOR_STREAK
+        setHeadband(s => ({ ...s, battery, contactPoor }))
       } catch {
-        // Leave the last known battery value on a failed read -- it's
-        // cleared on disconnect instead, which is what actually invalidates
-        // it.
+        // Leave the last known values on a failed read -- they're cleared on
+        // disconnect instead, which is what actually invalidates them.
       }
     }
     read()
-    const id = setInterval(read, 5000)
+    const id = setInterval(read, reconnecting ? RECONNECT_POLL_MS : 5000)
     return () => { killed = true; clearInterval(id) }
-  }, [headband.connected, headband.pushMode, stationId, sessionId])
+    // onDropped/onReconnected/startFrontendReconnect read everything through
+    // refs and setState, so they are stable in effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headband.connected, reconnecting, headband.pushMode, stationId])
+
+  // A link that went away on its own. Said out loud once, then watched: the
+  // panel used to reset to "Connect Headband" as if nothing had been paired,
+  // and a student mid-question had no reason to look at it.
+  const onDropped = (ing) => {
+    poorStreak.current = 0
+    const byBridge = ing.reconnecting === true
+    setHeadband(s => ({
+      ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
+      reconnect: { attempt: ing.reconnect_attempt || 0, max: ing.reconnect_max_attempts || 0, byBridge },
+    }))
+    toast.warning('The headband disconnected.', {
+      description: 'Trying to reconnect. Check it is switched on and sitting on your head.',
+      duration: 8_000,
+    })
+    // Bridge reports no recovery of its own (older build, or it already
+    // gave up): this page's loop starts now rather than on the next poll.
+    if (!byBridge && !reconnectRun.current) startFrontendReconnect()
+  }
+
+  const onReconnected = () => {
+    if (reconnectRun.current) reconnectRun.current.cancelled = true
+    reconnectRun.current = null
+    setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
+    toast.success('Headband reconnected.')
+  }
+
+  // Scan + connect, up to RECONNECT_ATTEMPTS times with a growing wait. Only
+  // reached once the bridge is not handling it -- two drivers retrying the
+  // same headband would fight over the scan.
+  const startFrontendReconnect = () => {
+    if (reconnectRun.current) return
+    const run = { cancelled: false }
+    reconnectRun.current = run
+    ;(async () => {
+      const hw = makeHw(recorderRef.current)
+      const sid = sessionIdRef.current
+      let ok = false
+      for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS && !run.cancelled; attempt++) {
+        setHeadband(s => ({ ...s, phase: 'reconnecting',
+                             reconnect: { attempt, max: RECONNECT_ATTEMPTS, byBridge: false } }))
+        await new Promise(r => setTimeout(r, RECONNECT_BACKOFF_MS[attempt - 1]))
+        if (run.cancelled) break
+        // The link may have come back on its own while waiting.
+        const st = await hw.status().catch(() => null)
+        if (run.cancelled) break
+        if (st?.ingestion?.muse_connected === true) { ok = true; break }
+        const res = await pairOnce(hw, sid, run).catch(() => ({ ok: false }))
+        if (run.cancelled) break
+        if (res.ok) { ok = true; break }
+      }
+      if (run.cancelled) return
+      reconnectRun.current = null
+      if (ok) {
+        onReconnected()
+        return
+      }
+      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
+                           battery: null, reconnect: null, contactPoor: null }))
+      toast.error('The headband could not be reconnected.', {
+        description: 'Check it is switched on and charged, then click Connect Headband.',
+        duration: 15_000,
+      })
+    })()
+  }
+
+  // "Stop trying". Goes through the same teardown as Disconnect so nothing is
+  // left half-paired -- plus an explicit bridge disconnect first, because
+  // Disconnect's teardown stops the sidecar's stream without sending the
+  // bridge a command, and only a command cancels the bridge's own attempts.
+  const cancelReconnect = async () => {
+    if (reconnectRun.current) reconnectRun.current.cancelled = true
+    reconnectRun.current = null
+    const hw = makeHw(recorderRef.current)
+    await hw.disconnect().catch(() => {})
+    await disconnectHeadband(hw)
+  }
 
   // Closes the current session. Clearing `sessionId` triggers the handover
   // effect's cleanup, which takes the student's token back off the sidecar.
@@ -456,7 +609,16 @@ export default function Adaptive() {
         available: !!s.service,
         // Only under pull: `poller.running` is the backend's own poller, which
         // doesn't exist under push and would otherwise read as disconnected.
-        ...(s.ingest_mode === 'push' ? {} : { connected: !!s.poller?.running }),
+        // And not during a reconnect: the poller runs on through a BLE drop,
+        // so `running` alone would flip the panel back to connected while the
+        // bridge is still bringing the link back. The telemetry poll above
+        // owns that transition -- and *only* it. Reading `muse_connected`
+        // here as well raced it: this poll is faster, and setting
+        // `connected: false` tore the telemetry effect down before it could
+        // claim the drop, so under pull nothing was announced or recovered.
+        ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
+          connected: !!s.poller?.running,
+        }),
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,
         // Only under pull -- the telemetry effect above already polls this
@@ -663,8 +825,118 @@ export default function Adaptive() {
     }
   }
 
+  // Under pull the backend proxies scan/connect via /api/eeg/muse/*; under
+  // push those refuse (409) and the page talks to the sidecar on loopback
+  // directly, admitted by `require_local_controller`.
+  //
+  // Takes the recorder as an argument rather than reading state, so the
+  // pull branch can close over one created moments ago and not yet rendered.
+  const makeHw = (rec) => headband.pushMode ? {
+    // Brings the hardware up only -- delivery starts separately via the
+    // `sessionId` effect once a session exists, not when the headband
+    // connects.
+    begin:      async () => { await deviceStart(stationId)
+                              return { ok: true, running: true } },
+    disconnect: () => museDisconnect(stationId),
+    scan:       () => museRefresh(stationId),
+    connect:    (name) => museConnect(name, stationId),
+    status:     () => museState(stationId),
+    // Not `stopPush()` outright: that's global to the sidecar and would
+    // also tear down a running camera's delivery.
+    end:        () => endPushDevice(stationId),
+  } : {
+    begin:      () => rec.start(),
+    disconnect: () => apiFetch('/api/eeg/muse/disconnect',
+                               { method: 'POST', body: { device_id: stationId } }),
+    scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
+                                  { method: 'POST', body: { device_id: stationId, session_id: sid } }),
+    connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
+                                        { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
+    status:     async () => (await eegStatus(stationId))?.muse || {},
+    // `?.` because the page-driven reconnect can end a session whose recorder
+    // was already dropped by a Disconnect that raced it.
+    end:        () => rec?.stop(),
+  }
+
+  // One scan-and-connect. Shared by the Connect button and the reconnect
+  // loop, which is why it reports a reason instead of showing a toast: the
+  // button explains a failure at once, the loop explains only the last one.
+  //
+  // `run` is the reconnect loop's cancel token. Checked between steps, and
+  // before the connect in particular: a "Stop trying" that landed during the
+  // 12s scan would otherwise be followed by a connect to the headband the
+  // student just asked to release. The loop also keeps the panel on
+  // `reconnecting` rather than stepping through scanning/connecting, so the
+  // way out stays on screen for the whole attempt.
+  const pairOnce = async (hw, activeSessionId, run = null) => {
+    const cancelled = () => run?.cancelled === true
+    const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
+
+    // Disconnect any previous session first, or the headband is left in a
+    // streaming state that throws BadStateError on the next connect.
+    await hw.disconnect().catch(() => {})
+    await new Promise(r => setTimeout(r, 1500))
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    phase('scanning')
+    // session_id scopes the station reservation this scan claims, so closing
+    // a different session of the same student can't release it.
+    await hw.scan(activeSessionId)
+
+    let devices = []
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      if (cancelled()) return { ok: false, reason: 'cancelled' }
+      const st = await hw.status()
+      devices = st?.ingestion?.muse_devices || []
+      if (devices.length > 0) break
+      // Stops waiting immediately if the bridge reports Bluetooth itself
+      // is off, instead of burning the full 12s timeout.
+      if (st?.ingestion?.bluetooth_enabled === false) return { ok: false, reason: 'bluetooth_off' }
+    }
+    if (devices.length === 0) return { ok: false, reason: 'no_device' }
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    const target = devices[0]
+    phase('connecting')
+    setHeadband(s => ({ ...s, deviceName: target }))
+    await hw.connect(target, activeSessionId)
+
+    // Bridge connects asynchronously; poll for it. A BadStateError here means
+    // the headband is still streaming from a prior session and needs a power-cycle.
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      if (cancelled()) return { ok: false, reason: 'cancelled' }
+      const st = await hw.status()
+      if (st?.ingestion?.muse_connected) {
+        clearTimeout(phaseTimer.current)
+        setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
+        return { ok: true }
+      }
+    }
+    return { ok: false, reason: 'not_connected' }
+  }
+
+  const disconnectHeadband = async (hw) => {
+    clearTimeout(phaseTimer.current)
+    poorStreak.current = 0
+    await hw.end()
+    // Drop rather than reuse: it closed over deviceId at creation, so
+    // reusing it after picking a different station would misattribute data.
+    setRecorder(null)
+    delete window.AL_currentSessionId
+    // Clear battery and contact too -- they describe the headband that just
+    // left, and the battery is the one number here a student acts on.
+    setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null,
+                         battery: null, reconnect: null, contactPoor: null }))
+  }
+
   const toggleHeadband = async () => {
     if (!stationId) return
+    if (headband.phase === 'reconnecting') {
+      await cancelReconnect()
+      return
+    }
     // Separate from the try below so a failed session creation still resets
     // the button state and shows an alert, instead of leaving it looking
     // dead. Push pairs against a device, not a session; pull's reservation
@@ -690,54 +962,17 @@ export default function Adaptive() {
       window.AL_currentSessionId = activeSessionId
     }
 
-    // Under pull the backend proxies scan/connect via /api/eeg/muse/*; under
-    // push those refuse (409) and the page talks to the sidecar on loopback
-    // directly, admitted by `require_local_controller`.
-    //
-    // Defined here, not as a component-level memo, so the pull branch can
-    // close over `rec`, created just above and deliberately not held in state.
-    const hw = headband.pushMode ? {
-      // Brings the hardware up only -- delivery starts separately via the
-      // `sessionId` effect once a session exists, not when the headband
-      // connects.
-      begin:      async () => { await deviceStart(stationId)
-                                return { ok: true, running: true } },
-      disconnect: () => museDisconnect(stationId),
-      scan:       () => museRefresh(stationId),
-      connect:    (name) => museConnect(name, stationId),
-      status:     () => museState(stationId),
-      // Not `stopPush()` outright: that's global to the sidecar and would
-      // also tear down a running camera's delivery.
-      end:        () => endPushDevice(stationId),
-    } : {
-      begin:      () => rec.start(),
-      disconnect: () => apiFetch('/api/eeg/muse/disconnect',
-                                 { method: 'POST', body: { device_id: stationId } }),
-      scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
-                                    { method: 'POST', body: { device_id: stationId, session_id: sid } }),
-      connect:    (name, sid) => apiFetch('/api/eeg/muse/connect',
-                                          { method: 'POST', body: { name, device_id: stationId, session_id: sid } }),
-      status:     async () => (await eegStatus(stationId))?.muse || {},
-      end:        () => rec.stop(),
-    }
+    const hw = makeHw(rec)
 
     // — Disconnect —
     if (headband.connected) {
-      clearTimeout(phaseTimer.current)
-      await hw.end()
-      // Drop rather than reuse: it closed over deviceId at creation, so
-      // reusing it after picking a different station would misattribute data.
-      setRecorder(null)
-      delete window.AL_currentSessionId
-      // Clear battery too -- it describes the headband that just left, and
-      // is the one number here a student acts on.
-      setHeadband(s => ({ ...s, connected: false, phase: 'idle', deviceName: null, battery: null }))
+      await disconnectHeadband(hw)
       return
     }
 
     clearTimeout(phaseTimer.current)
     phaseTimer.current = setTimeout(() => {
-      setHeadband(s => s.phase !== 'idle' && s.phase !== 'connected'
+      setHeadband(s => s.phase !== 'idle' && s.phase !== 'connected' && s.phase !== 'reconnecting'
         ? { ...s, phase: 'idle', deviceName: null }
         : s)
     }, 30000)
@@ -747,73 +982,30 @@ export default function Adaptive() {
       const res = await hw.begin(activeSessionId)
       if (!res?.ok && !res?.running) throw new Error(res?.error || 'Could not start EEG session')
 
-      // Disconnect any previous session first, or the headband is left in a
-      // streaming state that throws BadStateError on the next connect.
-      await hw.disconnect().catch(() => {})
-      await new Promise(r => setTimeout(r, 1500))
+      const outcome = await pairOnce(hw, activeSessionId)
+      if (outcome.ok) return
 
-      setHeadband(s => ({ ...s, phase: 'scanning' }))
-      // session_id scopes the station reservation this scan claims, so closing
-      // a different session of the same student can't release it.
-      await hw.scan(activeSessionId)
-
-      let devices = []
-      let bluetoothEnabled = true
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 1000))
-        const st = await hw.status()
-        devices = st?.ingestion?.muse_devices || []
-        if (devices.length > 0) break
-        // Stops waiting immediately if the bridge reports Bluetooth itself
-        // is off, instead of burning the full 12s timeout.
-        if (st?.ingestion?.bluetooth_enabled === false) {
-          bluetoothEnabled = false
-          break
-        }
-      }
-
-      if (devices.length === 0) {
-        setHeadband(s => ({ ...s, phase: 'idle' }))
-        // Longer dwell than the default toast -- this is an instruction the
-        // student has to act on, not just read.
-        toast.error(
-          bluetoothEnabled === false
-            ? 'Bluetooth is turned off on this PC.'
-            : 'No headband found.',
-          {
-            description: bluetoothEnabled === false
-              ? 'Turn Bluetooth on in Windows Settings, then click Connect Headband again.'
-              : 'Check the headband is switched on and within a metre of the computer, and that Bluetooth is enabled.',
-            duration: 12_000,
-          })
-        return
-      }
-
-      const target = devices[0]
-      setHeadband(s => ({ ...s, phase: 'connecting', deviceName: target }))
-      await hw.connect(target, activeSessionId)
-
-      // Bridge connects asynchronously; poll for it. A BadStateError here means
-      // the headband is still streaming from a prior session and needs a power-cycle.
-      let muse_ok = false
-      for (let i = 0; i < 10; i++) {
-        await new Promise(r => setTimeout(r, 1000))
-        const st = await hw.status()
-        if (st?.ingestion?.muse_connected) { muse_ok = true; break }
-      }
-
-      if (!muse_ok) {
-        setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
+      setHeadband(s => ({ ...s, phase: 'idle', deviceName: null }))
+      // Longer dwell than the default toast -- these are instructions the
+      // student has to act on, not just read.
+      if (outcome.reason === 'bluetooth_off') {
+        toast.error('Bluetooth is turned off on this PC.', {
+          description: 'Turn Bluetooth on in Windows Settings, then click Connect Headband again.',
+          duration: 12_000,
+        })
+      } else if (outcome.reason === 'no_device') {
+        toast.error('No headband found.', {
+          description: 'Check the headband is switched on and within a metre of the computer, and that Bluetooth is enabled.',
+          duration: 12_000,
+        })
+      } else {
         toast.error('The headband was found but would not connect.', {
           description: 'Its firmware is still streaming from a previous session. '
             + 'Hold the power button until it switches off (descending beeps), wait ten '
             + 'seconds, switch it back on, then click Connect Headband again.',
           duration: 15_000,
         })
-        return
       }
-
-      setHeadband(s => ({ ...s, connected: true, phase: 'connected' }))
 
     } catch (e) {
       console.error('[headband]', e)
@@ -915,6 +1107,8 @@ export default function Adaptive() {
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow ${
           headband.connected
             ? 'bg-gradient-to-br from-emerald-500 to-green-600 animate-pulse'
+            : headband.phase === 'reconnecting'
+              ? 'bg-gradient-to-br from-amber-500 to-orange-600 animate-pulse'
             : headband.available
               ? 'bg-gradient-to-br from-indigo-500 to-violet-600'
               : 'bg-gradient-to-br from-gray-400 to-gray-500'
@@ -925,7 +1119,8 @@ export default function Adaptive() {
           <p className="text-sm font-black text-gray-900 dark:text-white flex items-center gap-2">
             Muse Headband
             {headband.connected && <span className="text-[10px] font-bold px-2 py-0.5 bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded-full">● STREAMING</span>}
-            {!headband.connected && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
+            {headband.phase === 'reconnecting' && <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-full">reconnecting</span>}
+            {!headband.connected && headband.phase !== 'reconnecting' && headband.available && <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded-full">ready</span>}
             {!headband.available && !headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">offline</span>}
             {headband.pushMode && <span className="text-[10px] font-bold px-2 py-0.5 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full">on your device</span>}
             {/* Three states: push === null renders nothing (not asked yet), a
@@ -943,6 +1138,13 @@ export default function Adaptive() {
             {headband.phase === 'scanning'   && '🔍 Scanning for Muse headbands via Bluetooth...'}
             {headband.phase === 'connecting' && `🔗 Connecting to ${headband.deviceName || 'headband'}...`}
             {headband.phase === 'starting'   && 'Starting EEG session...'}
+            {/* Attempt 0 is the bridge waiting out its first backoff, which
+                is not an attempt a student should count. */}
+            {headband.phase === 'reconnecting' && (
+              `🔄 The headband disconnected — reconnecting${
+                headband.reconnect?.attempt > 0 && headband.reconnect?.max > 0
+                  ? ` (attempt ${headband.reconnect.attempt} of ${headband.reconnect.max})` : ''}…`
+            )}
             {headband.phase === 'connected'  && `${headbandSamples} samples sent · teacher can see your focus & stress live`}
             {headband.phase === 'idle' && (
               headband.connected
@@ -963,6 +1165,14 @@ export default function Adaptive() {
                   : 'EEG service not reachable on port 8001. Make sure the EEGResearch backend is running.'
             )}
           </p>
+          {/* The one contact reading a student can act on. Only on `=== true`:
+              null is "not measured", which is most of the first seconds of a
+              session and must not read as a problem. */}
+          {headband.connected && headband.contactPoor === true && (
+            <p className="text-[11px] font-bold text-amber-700 dark:text-amber-300 mt-1">
+              ⚠ Adjust the headband so the sensors sit flat against your skin — the reading is weak.
+            </p>
+          )}
         </div>
         {/* Shown only when more than one headband is registered; cameras are
             already filtered out of `stations`. */}
@@ -1006,12 +1216,14 @@ export default function Adaptive() {
         <button onClick={toggleHeadband}
           disabled={(!headband.available && !headband.pushMode) || !stationId || ['starting','scanning','connecting'].includes(headband.phase)}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition shadow disabled:opacity-50 disabled:cursor-not-allowed ${
-            headband.connected ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+            headband.connected || headband.phase === 'reconnecting'
+              ? 'bg-rose-500 hover:bg-rose-600 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}>
-          { headband.phase === 'starting'   ? 'Starting...'
-          : headband.phase === 'scanning'   ? 'Scanning...'
-          : headband.phase === 'connecting' ? 'Connecting...'
-          : headband.connected              ? 'Disconnect'
+          { headband.phase === 'starting'     ? 'Starting...'
+          : headband.phase === 'scanning'     ? 'Scanning...'
+          : headband.phase === 'connecting'   ? 'Connecting...'
+          : headband.phase === 'reconnecting' ? 'Stop trying'
+          : headband.connected                ? 'Disconnect'
           :                                   'Connect Headband' }
         </button>
       </motion.div>

@@ -669,6 +669,115 @@ def test_the_sets_must_sit_under_the_labels_they_are_scored_under():
         ["Set A: 1, 2, 3", "Set B: 4, 5, 6"])
 
 
+def test_two_correctly_labelled_sets_can_still_carry_the_wrong_question():
+    """Binding the data is not binding the ask, and this is the gap that
+    leaves.
+
+    Set A (sd 2) and Set B (sd 5), correctly labelled and in the scored
+    order, under a text asking for Set B's own standard deviation. Every data
+    check passes; the answer on screen is 5 and 3 is scored. Worse than a
+    plain wrong answer, because `near` offers each set's own spread as a
+    distractor -- so 5 is on the option list and a student who answers the
+    question actually shown is marked wrong for it.
+    """
+    shown = ["17, 19, 20, 21, 23", "13, 19, 21, 27"]
+    labelled = [f"Set A: {shown[0]}", f"Set B: {shown[1]}"]
+    asks_one = (f"Two machines. {labelled[0]}. {labelled[1]}. What is the "
+                f"population standard deviation of Set B?")
+    assert spread.shown_matches_scored(asks_one, shown, labelled) is None, \
+        "the data checks alone accept it, which is the point"
+    assert spread.shown_matches_scored(asks_one, shown, labelled,
+                                       spread.TWO_SETS)
+
+
+def test_the_comparison_must_run_in_the_direction_it_is_scored():
+    """"How much larger is A than B" is the negation of what is scored, and
+    reads as a perfectly ordinary question."""
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    body = f"{labelled[0]}. {labelled[1]}."
+    assert spread.shown_matches_scored(
+        f"{body} How much larger is the population standard deviation of "
+        f"Set B than that of Set A?", shown, labelled, spread.TWO_SETS) is None
+    assert spread.shown_matches_scored(
+        f"{body} How much larger is the population standard deviation of "
+        f"Set A than that of Set B?", shown, labelled, spread.TWO_SETS)
+    # Direction is pinned by both labels, so either anchor alone still
+    # refuses the reversal -- but only this one refuses a set compared with
+    # itself, which is what a model repeating a label produces.
+    assert spread.shown_matches_scored(
+        f"{body} How much larger is the population standard deviation of "
+        f"Set A than that of Set A?", shown, labelled, spread.TWO_SETS)
+
+
+@pytest.mark.parametrize("ask", [
+    "How much larger is the population standard deviation of Set B than that of Set A?",
+    "By how much larger is the population standard deviation of Set B than that of Set A?",
+    "How much greater is Set B's population standard deviation than Set A's?",
+    "How much bigger is the population standard deviation of Set B compared to Set A?",
+    # Neither of these reads as unusual, and an ordered regex pinning the
+    # comparative ahead of the label refused both. Only the prompt was
+    # holding that, which is one model away from three retries and a 503.
+    "By how much does the population standard deviation of Set B exceed that of Set A?",
+    "Set B's population standard deviation is how much larger than Set A's?",
+])
+def test_the_phrasings_a_model_actually_writes_are_accepted(ask):
+    """A refusal costs a retry, so the accepted set has to cover the wording
+    real replies use -- the first two are verbatim from Ollama and Claude."""
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    assert spread.shown_matches_scored(
+        f"Set A: 1, 2, 3. Set B: 4, 5, 6. {ask}", shown, labelled,
+        spread.TWO_SETS) is None, ask
+
+
+def test_a_one_set_question_may_not_ask_a_comparison():
+    """There is only one data set on screen, so a comparison can only be
+    against a number the model invented -- and a bare number is not a run, so
+    the data check would not see it."""
+    assert spread.shown_matches_scored(
+        "Readings: 1, 2, 3. How much larger is the population standard "
+        "deviation than 10?", ["1, 2, 3"], (), spread.ONE_SET)
+
+
+def test_a_comparative_in_the_context_does_not_refuse_a_one_set_question():
+    """The guard belongs to the ask, not to the sentence before it.
+
+    Consistency and spread are this topic's own subject matter and the prompt
+    asks for varied context, so "how much more consistent" in a scene-setting
+    clause breaks no stated rule. Searched over the whole text it refused
+    anyway -- and three of those exhaust the retries and reach the student as
+    a 503, on the two tiers that are ONE_SET.
+    """
+    assert spread.shown_matches_scored(
+        "A coach checks how much more consistent the team is. Scores: 1, 2, "
+        "3. What is the population standard deviation?",
+        ["1, 2, 3"], (), spread.ONE_SET) is None
+
+
+def test_a_comparative_in_the_context_does_not_excuse_a_two_set_ask():
+    """The same scoping the other way round. A two-set reply whose context
+    mentions the comparison, but whose question asks for one set's own value,
+    is the wrong question however the context reads."""
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    assert spread.shown_matches_scored(
+        f"{labelled[0]}. {labelled[1]}. The analyst asks how much larger "
+        f"Set B is than Set A. What is the population standard deviation of "
+        f"Set B?", shown, labelled, spread.TWO_SETS)
+
+
+def test_naming_both_sets_is_not_asking_how_much():
+    """"Which is larger" names both labels in the scored order and is not
+    this question -- its answer is a label, and a number is scored."""
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    assert spread.shown_matches_scored(
+        f"{labelled[0]}. {labelled[1]}. Which has the larger population "
+        f"standard deviation, Set B or Set A?", shown, labelled,
+        spread.TWO_SETS)
+
+
 def test_a_lone_number_in_the_prose_is_not_a_data_set():
     """"each of 5 games" is wording, not data. A run needs a comma, so the
     strictness above does not refuse an ordinary sentence."""
@@ -706,9 +815,13 @@ def compliant_model(monkeypatch):
         lines = _data_lines(prompt)
         seen["data"] = lines
         body = " ".join(f"{line}." for line in lines)
+        # The ask has to match the scenario too, not just the data -- which is
+        # what `shown_matches_scored`'s scenario arm enforces.
+        ask = ("How much larger is the population standard deviation of Set B "
+               "than that of Set A?" if len(lines) == 2 else
+               "What is the population standard deviation?")
         return json.dumps({
-            "question_text": f"A study records some readings. {body} What is "
-                             f"the population standard deviation?",
+            "question_text": f"A study records some readings. {body} {ask}",
             "question_topic": "spread",
             "scenario": ("compare_spread" if len(lines) == 2
                          else "population_sd"),
@@ -803,6 +916,26 @@ def test_a_text_that_swaps_the_two_sets_retries(monkeypatch):
         })
 
     monkeypatch.setattr(llm_client, "generate_text", _swap)
+    with pytest.raises(ValueError):
+        spread.generate_spread_question([], [], "hard", "9th Grade")
+
+
+def test_a_two_set_text_asking_for_one_sets_own_spread_retries(monkeypatch):
+    """The finding, driven end to end: correctly labelled, correctly ordered,
+    wrong question."""
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context",
+                        lambda p, t, b: p)
+
+    def _wrong_ask(prompt, **_kw):
+        first, second = _data_lines(prompt)
+        return json.dumps({
+            "question_text": f"Two machines. {first} {second} What is the "
+                             f"population standard deviation of Set B?",
+            "question_topic": "spread",
+            "scenario": "compare_spread",
+        })
+
+    monkeypatch.setattr(llm_client, "generate_text", _wrong_ask)
     with pytest.raises(ValueError):
         spread.generate_spread_question([], [], "hard", "9th Grade")
 

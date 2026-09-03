@@ -3483,6 +3483,27 @@ finished:
   one is deliberately strict where `question_consistency` fails open, and the difference is who
   chose the data: the generator supplied every number, so any other number is a reply that ignored
   its instructions, not an ambiguity to read generously.
+- **Binding the data is not binding the question, and the ask needs its own check.** Two correctly
+  labelled sets in the scored order still pass every data check under a text asking for *Set B's
+  own* standard deviation — scored 3 where the screen says 5, with 5 on the option list, because
+  `near` offers each set's own spread as a distractor. `quadratics` binds its ask with
+  `_TARGET_WORDS` and `functions` with the literal `f(g(4))`; the `ASK FOR:` line here was
+  prompt-level only. Two things that check has to get right: **it applies to the interrogative
+  clause, not the whole text** — "a coach checks how much more consistent the team is" is context
+  this prompt actively asks to vary, and refusing it costs three retries and a 503 — and **it must
+  not pin word order**, since "Set B's … is how much larger than Set A's?" and "…does Set B exceed
+  that of Set A?" are both exactly the scored question. Direction rides on which label appears
+  first, which is order-independent; a magnitude phrase is what separates it from "which is larger,
+  Set B or Set A?", whose answer is a label where a number is scored.
+
+**A rule a scenario cannot use is not noise in a prompt, it is a suggestion.** The shared footer
+told a *one-set* prompt about `Set A:`/`Set B:` labels and about comparisons, and llama3.1:8b duly
+invented both — labelling the single set "Set A", making up a `Set B: 74`, and asking for Set B's
+standard deviation, which would have been scored as Set A's. 4 refusals in 6 one-set generations,
+every one of them mentioning a label or a comparison. Splitting the rules per scenario took Ollama
+from **1.25 to 1.00 model calls per question** (Claude was already 1.00). Same family as the
+`expressions` early-band example: what the prompt *shows* beats what it *says*, and that includes
+rules it shows for a case that is not the one being asked.
 
 **None of the three topics appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly
 as `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question

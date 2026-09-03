@@ -161,15 +161,37 @@ sentence around them: a short, plausible context and the question. Do NOT
 change any number, do NOT add a number, and do NOT work out the answer.
 
 Rules for "question_text":
-- It must contain each data set written EXACTLY as given below under DATA,
-  in that order, comma separated, character for character -- including the
-  "Set A:" and "Set B:" labels where DATA gives them. A set written under
-  the other set's label is a different question from the one being scored.
+- It must contain the data written EXACTLY as given below under DATA, in that
+  order, comma separated, character for character.
 - It must contain no other list of numbers at all.
 - It must say "population standard deviation" in full. A question that says
   only "standard deviation" is ambiguous -- a student taught the sample
   formula would get a different number and be marked wrong.
-- Vary the context between questions. Do not write any number that is not in
+"""
+
+# Scenario-specific rules, kept out of the shared footer because a rule the
+# scenario cannot use is not merely noise -- it is a suggestion. Told about
+# "Set A:"/"Set B:" labels and about comparisons on a ONE_SET prompt,
+# llama3.1:8b invented both: it labelled a single data set "Set A", made up a
+# "Set B: 74", and asked for Set B's standard deviation -- which would have
+# been scored as Set A's. Measured 4 refusals in 6 one-set generations before
+# this split, and every one of them mentioned a label or a comparison.
+_ONE_SET_RULES = """- It must ask for the population standard deviation of the one data set, and
+  nothing else. Do NOT compare it with anything: not with the mean, not with
+  another data set, not with a number of your own.
+- There is one data set and it has no name. Do NOT label it.
+"""
+
+_TWO_SETS_RULES = """- It must contain the "Set A:" and "Set B:" labels exactly as DATA gives
+  them. A set written under the other set's label is a different question
+  from the one being scored.
+- It must ask HOW MUCH LARGER Set B's population standard deviation is than
+  Set A's, naming Set B before Set A. Asking for either set's own value, or
+  comparing them the other way round, is a different question from the one
+  being scored.
+"""
+
+_FOOTER_TAIL = """- Vary the context between questions. Do not write any number that is not in
   the data.
 
 Return ONLY valid JSON with no text before or after the JSON object.
@@ -183,8 +205,9 @@ Rules:
 def _prompt(scenario):
     """Header + the one selected scenario's block + footer. KeyError on an
     unknown scenario, for the reason `_geometry_prompt` documents."""
-    block = {ONE_SET: _ONE_SET_BLOCK, TWO_SETS: _TWO_SETS_BLOCK}[scenario]
-    return _HEADER + "\n" + block + _FOOTER
+    block, rules = {ONE_SET: (_ONE_SET_BLOCK, _ONE_SET_RULES),
+                    TWO_SETS: (_TWO_SETS_BLOCK, _TWO_SETS_RULES)}[scenario]
+    return _HEADER + "\n" + block + _FOOTER + rules + _FOOTER_TAIL
 
 
 def _render(values):
@@ -202,9 +225,70 @@ def _data_runs(text):
             for run in _DATA_RUN.finditer(text)]
 
 
-def shown_matches_scored(question_text, shown, labelled=()):
+# What the question actually asks, which is only ever an interrogative clause.
+# Searching the whole text conflates the ask with the context around it, and
+# that is wrong in both directions: a comparative in the context refuses a
+# perfectly good one-set question ("A coach checks how much more consistent
+# the team is. Scores: ... What is the population standard deviation?" breaks
+# no stated rule, and the prompt actively asks for varied context), and a
+# comparative in the context would equally *accept* a two-set reply whose real
+# ask is one set's own value.
+_ASKED = re.compile(r"[^.!?]*\?")
+
+# The parts of a comparison, kept apart rather than welded into one pattern so
+# that word order does not have to be guessed. Pinning the comparative ahead
+# of the label reads naturally and is not the only way to write it: "Set B's
+# population standard deviation is how much larger than Set A's?" and "By how
+# much does the population standard deviation of Set B exceed that of Set A?"
+# are both exactly the scored question, and a single ordered regex refused
+# both. Only the prompt was holding that, which is one model away from a 503.
+_MAGNITUDE = re.compile(r"\bhow much\b|\bwhat amount\b", re.IGNORECASE)
+_INCREASE = re.compile(r"\b(?:larger|greater|bigger|higher|more|exceeds?)\b",
+                       re.IGNORECASE)
+_DECREASE = re.compile(r"\b(?:smaller|lesser|less|lower|fewer)\b",
+                       re.IGNORECASE)
+_SET_A = re.compile(r"\bset\s+a\b", re.IGNORECASE)
+_SET_B = re.compile(r"\bset\s+b\b", re.IGNORECASE)
+
+
+def _questions_asked(text):
+    """The interrogative clauses, which is where the ask lives."""
+    return [m.group() for m in _ASKED.finditer(text)]
+
+
+def _asks_the_scored_comparison(clause):
+    """Set B's spread exceeding Set A's, however the clause words it.
+
+    Direction rides on the order the labels appear in rather than on where
+    the comparative sits, because the sign is the whole content: the same
+    sentence with the labels the other way round is the negation of what is
+    scored. A decrease word makes the direction ambiguous, so it is refused
+    rather than guessed at.
+
+    `_MAGNITUDE` is what separates this from "which is larger, Set B or Set
+    A?" -- that names both labels in the scored order, and its answer is a
+    label where a number is scored.
+    """
+    if not _MAGNITUDE.search(clause) or _DECREASE.search(clause):
+        return False
+    if not _INCREASE.search(clause):
+        return False
+    a, b = _SET_A.search(clause), _SET_B.search(clause)
+    return bool(a and b and b.start() < a.start())
+
+
+def _asks_any_comparison(clause):
+    """A one-set question drifting into a comparison, which can only be
+    against a number the model invented -- and a bare number is not a run, so
+    the data check cannot see it."""
+    return bool(_MAGNITUDE.search(clause)
+                and (_INCREASE.search(clause) or _DECREASE.search(clause)))
+
+
+def shown_matches_scored(question_text, shown, labelled=(), scenario=ONE_SET):
     """The data on screen must be exactly the data being scored, under the
-    labels the question asks about. A reason, or None.
+    labels the question asks about, and the question must ask for the quantity
+    that is scored. A reason, or None.
 
     The data is rendered from what the solver reads rather than parsed back
     out of the text -- the direction `question_figures` establishes. And the
@@ -225,6 +309,17 @@ def shown_matches_scored(question_text, shown, labelled=()):
     carrying "f(x) =" inside its shown strings; here the label lives in the
     prose, so it has to be required.
 
+    **Binding the data is not binding the question.** Two correctly labelled
+    sets in the right order can still carry the wrong ask: "what is the
+    population standard deviation of Set B?" over Set A sd 2 and Set B sd 5
+    is scored 3, and 5 is on the option list, because `near` offers each
+    set's own spread as a distractor. So a student who answers the question
+    actually on screen picks a distractor and is marked wrong -- the failure
+    this codebase treats as the worst available, reached through the one part
+    of the reply nothing had checked. `quadratics` binds its ask with
+    `_TARGET_WORDS` and `functions` with the literal `f(g(4))`; the `ASK FOR:`
+    line here was prompt-level only.
+
     Strict rather than fail-open, unlike `question_consistency`'s checks over
     a dataset the *model* chose. Here the generator supplied every number, so
     a text carrying any other one is not an ambiguity to interpret
@@ -241,6 +336,18 @@ def shown_matches_scored(question_text, shown, labelled=()):
             return f"text does not contain {anchor!r}"
     if "population standard deviation" not in question_text.lower():
         return "text does not say 'population standard deviation'"
+    asked = _questions_asked(question_text)
+    if scenario == TWO_SETS:
+        # No interrogative clause refuses too, deliberately: the ask cannot be
+        # located, and for this scenario an unlocatable ask is the unsafe
+        # direction -- accepting one costs a wrong answer, refusing costs a
+        # retry.
+        if not any(_asks_the_scored_comparison(c) for c in asked):
+            return ("text does not ask how much larger Set B's population "
+                    "standard deviation is than Set A's, which is what is "
+                    "scored")
+    elif any(_asks_any_comparison(c) for c in asked):
+        return "text asks a comparison, but only one data set is scored"
     return None
 
 
@@ -362,7 +469,7 @@ def generate_spread_question(global_questions, prev_questions,
             continue
 
         mismatch = shown_matches_scored(question_data["question_text"],
-                                        shown, labelled)
+                                        shown, labelled, scenario)
         if mismatch:
             print(f"[Attempt {attempt+1}] Shown/scored mismatch: {mismatch}")
             continue

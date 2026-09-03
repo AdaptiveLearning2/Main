@@ -479,6 +479,15 @@ poor polls instead), and the teacher's Live badge gained the age of the newest r
 "weak signal" the heart badge had, from `lib/signalAge.js` — `STALE_AFTER_S` there mirrors the
 backend's `_LIVE_WINDOW_SEC` so the two surfaces agree on what counts as live.
 
+**Nothing supervises `muse_native_bridge.exe`.** `start.ps1` launches it once, in its own window;
+if it exits, the sidecar's TCP adapter backs off to 5 s between attempts for ever and the page
+reads "not answering". That is a known gap, not an oversight: a restart from `start.ps1` would
+re-pair nothing (the bridge holds no state worth keeping), but it would also hide a crash that
+should be read in that window. Restart it by hand for now; the sidecar reconnects on its own once
+it is listening. The debug panel's *Link* row shows the fields that tell the two apart —
+`consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone, `eeg_age_ms` climbing
+with the bridge answering is the headband gone.
+
 **`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version of it hung.** The
 pairing sequence is a chain of 1–1.5 s waits noticed by a 5 s poll; under `vi.useFakeTimers()` —
 with or without `shouldAdvanceTime` — `await act(async () => advanceTimersByTimeAsync(…))` never

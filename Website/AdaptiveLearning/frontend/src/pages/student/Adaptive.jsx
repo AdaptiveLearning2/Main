@@ -1745,6 +1745,38 @@ export default function Adaptive() {
                       </div>
                     </div>
 
+                    {/* Row 0b — link health. The bridge's reconnect state and
+                        the sidecar's per-device health ride in `ingestion`;
+                        this is the one surface that shows them raw. Absent
+                        fields render as a dash: an older bridge or sidecar
+                        reports none of them, which is not a fault. */}
+                    <div className="border border-gray-700 rounded p-2 space-y-1">
+                      <p className="text-gray-400 text-[10px] uppercase tracking-widest mb-1">Link</p>
+                      <div className="flex flex-wrap gap-x-6 gap-y-1">
+                        <span className={ing.preset_mismatch ? 'text-yellow-400' : 'text-gray-300'}>
+                          Preset {ing.active_preset || '—'}
+                          {ing.requested_preset && ing.requested_preset !== ing.active_preset
+                            ? ` (asked ${ing.requested_preset})` : ''}
+                          {ing.preset_mismatch ? ' — mismatch' : ''}
+                        </span>
+                        <span className={typeof ing.eeg_age_ms === 'number' && ing.eeg_age_ms > 2000 ? 'text-yellow-400' : 'text-gray-300'}>
+                          EEG age {typeof ing.eeg_age_ms === 'number' ? `${ing.eeg_age_ms} ms` : '—'}
+                        </span>
+                        <span className="text-gray-300">
+                          Last good {typeof ing.last_good_age_s === 'number' ? `${ing.last_good_age_s.toFixed(1)} s ago` : '—'}
+                        </span>
+                        <span className={ing.consecutive_errors > 0 ? 'text-yellow-400' : 'text-gray-300'}>
+                          Sidecar errors {typeof ing.consecutive_errors === 'number' ? ing.consecutive_errors : '—'}
+                        </span>
+                        <span className={ing.reconnect_exhausted ? 'text-red-400' : ing.reconnecting ? 'text-yellow-400' : 'text-gray-300'}>
+                          Auto-reconnect {ing.auto_reconnect === false ? 'off'
+                            : ing.reconnect_exhausted ? `gave up after ${ing.reconnect_max_attempts}`
+                            : ing.reconnecting ? `attempt ${ing.reconnect_attempt} of ${ing.reconnect_max_attempts}`
+                            : ing.auto_reconnect === true ? 'armed' : '—'}
+                        </span>
+                      </div>
+                    </div>
+
                     {/* Row 1 — connection */}
                     <div className="flex flex-wrap gap-4">
                       <div>

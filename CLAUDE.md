@@ -461,8 +461,11 @@ legitimately disagree for a moment after every connect) — rides inside `ingest
 drop. `eeg_poller._poll_wait` doubles the wait per empty read up to `POLL_BACKOFF_MAX_S` (5 s); the
 first miss costs nothing, since an idle stream at session start is ordinary, and the cap is small
 because the consent re-check shares the loop. `Adaptive.jsx` polls the bridge in **both** modes now
-— under pull `poller.running` never says the headband went away — keeps polling through the new
-`reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
+— under pull `poller.running` never says the headband went away — claims a drop only from
+`phase: 'connected'` (under pull `connected` is the poller, true from `/api/eeg/start` and so
+before the scan has begun; keyed on it alone, every pairing read as a drop and this page sent a
+second connect over the first 2 s in — three clicks to pair, on hardware), keeps polling through
+the new `reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
 on `reconnect_exhausted` or a bridge too old to report `reconnecting` at all. **"Stop trying" sends
 a bridge disconnect before the usual teardown**, because Disconnect's teardown stops the sidecar's
 stream without sending the bridge a command, and only a command cancels its attempts. The

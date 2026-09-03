@@ -459,7 +459,16 @@ export default function Adaptive() {
           return
         }
 
-        if (dropped && prev.connected) {
+        // A drop is a link that was *up*, so this waits for `pairOnce` to
+        // have finished (`phase: 'connected'`) rather than for `connected`,
+        // which under pull is the backend's poller and is true from
+        // `/api/eeg/start` -- before the scan has even begun. Keyed on
+        // `connected` alone, every pull-mode pairing read as a drop the
+        // moment it started: "The headband disconnected." over a headband
+        // that had never connected, and 2s later this page's own loop sent a
+        // second connect on top of the first, which the bridge honours by
+        // disconnecting first. Measured on hardware: three clicks to pair.
+        if (dropped && prev.connected && prev.phase === 'connected') {
           onDropped(ing)
           return
         }

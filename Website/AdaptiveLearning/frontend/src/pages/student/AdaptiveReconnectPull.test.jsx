@@ -79,6 +79,27 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
+it('does not read the pairing itself as a drop, which under pull starts with connected: true', async () => {
+  // The bridge reports no headband until the scan and connect have run --
+  // the ordinary shape of every pairing, and one the 5s poll observes at
+  // least once, since `connected` is true from `/api/eeg/start`.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, active_muse_name: '', battery_percent: null }
+  const flip = setTimeout(() => { bridge.ingestion = { ...CONNECTED } }, 3500)
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await new Promise(r => setTimeout(r, 6500))
+  clearTimeout(flip)
+
+  expect(toast.warning).not.toHaveBeenCalled()
+  expect(screen.queryByText(/reconnecting/i)).toBeNull()
+  // One scan and one connect: nothing sent a second pairing over the first.
+  expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh')).toHaveLength(1)
+  expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/connect')).toHaveLength(1)
+  expect(screen.getByText(/STREAMING/)).toBeInTheDocument()
+}, 60_000)
+
 it('announces a drop under pull, where the poller keeps running through it', async () => {
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })

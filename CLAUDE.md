@@ -486,6 +486,27 @@ resolved and every test timed out at the 5 s default. Each of those tests costs 
 seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
 300 ms debounce; it did not survive this component.
 
+### Samples are stored during a session, not while a headband merely sits paired
+
+Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and
+it feeds contact and battery to the page — and the poller used to write from its first tick. So
+a student who paired and never started a question had rows on the teacher's Live view, and a
+"session" in History, for a lesson that never happened. Found on the first hardware run of #169.
+
+The poller now has two states. `POST /api/eeg/start` takes `record` (default `true`, so callers
+predating the flag are unchanged): Connect sends `record: false` — stream up, nothing written —
+and `Adaptive.jsx`'s `armRecording` sends `record: true` on the first question, which flips the
+*running* poller in place rather than restarting it. Ending the session stops the poller, as it
+always did, so the recording window is first question → Finish. After a Finish the next question
+is a new session, and `armRecording` replaces a recorder bound to the old one and starts a fresh
+poller; the headband stays paired at the bridge throughout. `status()` reports `recording` beside
+`running` because they are now different facts. Push needed none of this: `startPush` was already
+keyed on `sessionId`.
+
+**A poller that is up but not recording still moves `last_ts`**, so arming starts from the live
+tick rather than replaying a backlog — and so a paired, idle headband does not read as a sidecar
+that has stopped answering.
+
 ### Battery is device telemetry, and null for the first stretch of every session
 
 `battery_percent` rides on the bridge's ingestion block through to the badge beside Disconnect on

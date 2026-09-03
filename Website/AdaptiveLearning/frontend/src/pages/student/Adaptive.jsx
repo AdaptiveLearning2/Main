@@ -854,7 +854,9 @@ export default function Adaptive() {
     // also tear down a running camera's delivery.
     end:        () => endPushDevice(stationId),
   } : {
-    begin:      () => rec.start(),
+    // Stream up, nothing written: recording is armed by the first question
+    // (`armRecording`), the same split push has with `startPush`.
+    begin:      () => rec.start({ record: false }),
     disconnect: () => apiFetch('/api/eeg/muse/disconnect',
                                { method: 'POST', body: { device_id: stationId } }),
     scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
@@ -1029,10 +1031,35 @@ export default function Adaptive() {
   // The backend owns `user_math_performance` and derives the topic itself --
   // this page must not write to it directly, or a client update could
   // overwrite real counts.
+  // Samples are stored during a session -- from the first question to Finish
+  // -- and not while a headband merely sits paired before or between them.
+  // Under pull that is the poller's `record` flag: Connect started it with
+  // `record: false`, and this arms it. After a Finish the session is new and
+  // the old poller is gone (ending a session stops it), so a recorder bound
+  // to another session is replaced and a fresh poller started, recording
+  // from the outset. The headband itself stays paired at the bridge
+  // throughout. Push needs none of this: `startPush` is already keyed on
+  // `sessionId`, so delivery there starts and stops with the session.
+  const armRecording = async (activeSessionId) => {
+    if (headband.pushMode || !headband.connected || !stationId) return
+    let rec = recorder
+    if (!rec || rec.sessionId !== activeSessionId) {
+      rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
+      setRecorder(rec)
+      recorderRef.current = rec
+      window.AL_currentSessionId = activeSessionId
+    }
+    const res = await rec.start({ record: true })
+    if (!res?.ok) console.error('[headband] could not start recording', res?.error)
+  }
+
   const fetchQuestion = async () => {
     setPhase('loading'); setError(false)
     try {
       const activeSessionId = await getOrCreateSession()
+      // Not awaited into the question: a poller that will not arm is a
+      // recording problem, not a reason to withhold a question.
+      armRecording(activeSessionId).catch(e => console.error('[headband]', e))
 
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)

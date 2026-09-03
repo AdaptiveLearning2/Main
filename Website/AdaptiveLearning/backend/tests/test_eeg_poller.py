@@ -63,7 +63,85 @@ def test_same_user_replaces_own_poller_even_on_different_device():
 def test_restarting_same_session_is_a_noop():
     eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
     out = eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a")
-    assert out == {"running": True, "already": True}
+    assert out == {"running": True, "already": True, "recording": True}
+
+
+# ── recording is armed by the first question, not by pairing ────────────────
+#
+# Found on hardware: a student who clicked Connect and never started a question
+# had rows on the teacher's Live view, because pairing under pull starts the
+# poller and the poller wrote from its first tick. Samples belong to a session
+# -- first question to Finish -- so the poller now has two states.
+
+class _CountingSupabase:
+    def __init__(self):
+        self.rows = []
+
+    def table(self, name):
+        outer = self
+        class _T:
+            def upsert(self, row, **_k):
+                outer.rows.append((name, row))
+                class _R:
+                    data = [row]
+                    def execute(self_inner): return self_inner
+                return _R()
+        return _T()
+
+
+def _streaming(monkeypatch):
+    """A sidecar answering a fresh, good sample on every read."""
+    n = {"i": 0}
+    def get_state(device_id=eeg_client.DEFAULT_DEVICE_ID, timeout=2.0):
+        n["i"] += 1
+        return {"timestamp": f"2026-09-03T10:00:{n['i'] % 60:02d}+00:00",
+                "features": {"focus_score": 50.0, "calm_score": 50.0, "confidence": 80.0,
+                             "signal_quality": "good"},
+                "bands": {}}
+    monkeypatch.setattr(eeg_client, "get_state", get_state)
+
+
+def test_a_poller_started_without_record_writes_nothing(monkeypatch):
+    _streaming(monkeypatch)
+    db = _CountingSupabase()
+    out = eeg_poller.start(db, "user-a", "session-1", "station-a", record=False)
+    assert out["running"] and out["recording"] is False
+    time.sleep(0.15)
+    p = eeg_poller._active["session-1"]
+    assert db.rows == []
+    # It is polling -- the stream is up and ticks are being seen -- just not
+    # recording. That is the state a paired-but-idle headband sits in.
+    assert p.last_ts is not None
+    assert eeg_poller.status("user-a")["recording"] is False
+
+
+def test_start_with_record_arms_the_running_poller_in_place(monkeypatch):
+    _streaming(monkeypatch)
+    db = _CountingSupabase()
+    eeg_poller.start(db, "user-a", "session-1", "station-a", record=False)
+    time.sleep(0.1)
+    before = eeg_poller._active["session-1"]
+    out = eeg_poller.start(db, "user-a", "session-1", "station-a", record=True)
+    assert out == {"running": True, "already": True, "recording": True}
+    # Same thread, flipped -- not stopped and replaced.
+    assert eeg_poller._active["session-1"] is before
+    deadline = time.monotonic() + 2.0
+    while not db.rows and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert db.rows and db.rows[0][0] == "cognitive_signals"
+    assert eeg_poller.status("user-a")["recording"] is True
+
+
+def test_the_default_still_records_from_the_first_tick(monkeypatch):
+    """Callers predating the flag -- and the tests above them -- record as
+    they always did."""
+    _streaming(monkeypatch)
+    db = _CountingSupabase()
+    eeg_poller.start(db, "user-a", "session-1", "station-a")
+    deadline = time.monotonic() + 2.0
+    while not db.rows and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert db.rows
 
 
 def test_released_device_can_be_reclaimed_by_another_user():

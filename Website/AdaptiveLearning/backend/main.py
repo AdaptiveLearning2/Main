@@ -2405,6 +2405,11 @@ class UpdateProfileRequest(BaseModel):
 class EegSessionRequest(BaseModel):
     session_id: str
     device_id: str | None = None
+    # `/api/eeg/start` only. False brings the stream up without writing a row
+    # (pairing); the page sends True on the first question, which arms the
+    # running poller in place. Defaults to True so a caller predating the
+    # flag records as it always did.
+    record: bool = True
 
 
 # ─── profiles ────────────────────────────────────────────────────────────
@@ -6789,7 +6794,8 @@ def eeg_start(payload: EegSessionRequest, request: Request):
     if known_ids and device_id not in known_ids:
         raise HTTPException(404, f"Unknown device_id: {device_id!r}")
     try:
-        out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id)
+        out = eeg_poller.start(supabase, user["id"], payload.session_id, device_id,
+                               record=payload.record)
     except eeg_poller.ConsentError as e:
         # `_may_record` passed a moment ago and `start()` checks again, so
         # this is the gap between them (a withdrawal, or the year ending, in

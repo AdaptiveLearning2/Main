@@ -94,6 +94,14 @@ class _Poller(threading.Thread):
         # _stop() method, called internally once the thread finishes. An
         # attribute named _stop would shadow it and break is_alive()/join().
         self._stop_event = threading.Event()
+        # Whether ticks are *written*. The poller has two jobs -- keeping the
+        # sidecar's device stream up (which pairing needs, and which reports
+        # contact and battery to the page) and recording rows -- and only
+        # the second is tied to the student practising. Off, it polls and
+        # stores nothing: a student who paired and never started a question
+        # has not had a lesson recorded. `start(record=True)` arms a running
+        # poller in place; the session ending stops it outright.
+        self.recording  = True
         self.last_ts    = None
         self.samples    = 0
         self.errors     = 0
@@ -267,6 +275,17 @@ class _Poller(threading.Thread):
             # Outside the EEG freshness check below, deliberately: a heart
             # reading has its own cadence and stamp. Nesting it under "the EEG
             # timestamp moved" would drop it whenever EEG stalled.
+            if data and not self.recording:
+                # Hardware up, nothing recorded: pairing, or between one
+                # session's Finish and the next question. `last_ts` moves so
+                # arming later starts from the live tick, not a backlog.
+                if data.get("timestamp"):
+                    self.last_ts = data["timestamp"]
+                if loops <= 3 or loops % 10 == 0:
+                    print(f">>> [eeg-poller] loop={loops} not recording (no question started), skipping", flush=True)
+                self._stop_event.wait(_poll_wait(self.consecutive_misses))
+                continue
+
             if data:
                 self._record_heart(data, loops)
 
@@ -604,8 +623,16 @@ def set_consent_reason_check(fn) -> None:
     _consent_reason_check = fn
 
 
-def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
-    print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id}", flush=True)
+def start(supabase, user_id: str, session_id: str, device_id: str,
+          record: bool = True) -> dict:
+    """Start this session's poller, or arm/disarm one already running.
+
+    `record=False` brings the stream up without writing a row -- what the
+    Connect button asks for. The page calls again with `record=True` on the
+    first question, which flips the live poller in place rather than
+    restarting it; nothing before that call reaches the signal tables.
+    """
+    print(f"\n=== eeg_poller.start() called user={user_id[:8]} session={session_id[:8]} device={device_id} record={record}", flush=True)
     if INGEST_MODE == "push":
         # Not a silent no-op: {"running": False} would be indistinguishable
         # from a sidecar that's simply not up yet.
@@ -630,8 +657,13 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
         ))
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
-            print(f"=== already running for this session", flush=True)
-            return {"running": True, "already": True}
+            p = _active[session_id]
+            if p.recording != record:
+                print(f"=== already running for this session; recording -> {record}", flush=True)
+                p.recording = record
+            else:
+                print(f"=== already running for this session", flush=True)
+            return {"running": True, "already": True, "recording": record}
         # The sidecar is a single shared stream: two different users polling
         # it concurrently would each attribute the same physical device's
         # readings to their own session. Same-user restarts are fine, but a
@@ -658,13 +690,14 @@ def start(supabase, user_id: str, session_id: str, device_id: str) -> dict:
                 # hits just by starting a second session.
                 _forget_warning(sid)
         p = _Poller(supabase, user_id, session_id, device_id)
+        p.recording = record
         p.start()
         _active[session_id] = p
         # The reservation's job ends here: ownership has moved to something
         # stronger, so leaving the entry around just wastes a dict slot until
         # it expires.
         _reservations.pop(device_id, None)
-        return {"running": True, "already": False}
+        return {"running": True, "already": False, "recording": record}
 
 
 def can_use_device(user_id: str, device_id: str) -> bool:
@@ -800,6 +833,9 @@ def status(user_id: str) -> dict:
             if p.user_id == user_id and p.is_alive():
                 return {
                     "running":    True,
+                    # Running is not recording: a paired headband before the
+                    # first question polls and writes nothing.
+                    "recording":  p.recording,
                     "session_id": sid,
                     "device_id":  p.device_id,
                     "samples":    p.samples,

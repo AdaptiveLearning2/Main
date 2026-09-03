@@ -27,9 +27,13 @@ vi.mock('../../lib/session', () => ({
 // The bridge as the backend relays it under pull, via /api/eeg/status.
 // `stamps` records when each status read happened: the two polls are
 // phase-locked to the first one, and the test times the drop off it.
-const bridge = { ingestion: {}, stamps: [] }
+const bridge = { ingestion: {}, stamps: [], recorders: [] }
 vi.mock('../../lib/signals', () => ({
-  createSignalRecorder: () => ({ start: vi.fn(async () => ({ ok: true })), stop: vi.fn() }),
+  createSignalRecorder: ({ sessionId }) => {
+    const rec = { sessionId, start: vi.fn(async () => ({ ok: true, running: true })), stop: vi.fn() }
+    bridge.recorders.push(rec)
+    return rec
+  },
   eegHealth: vi.fn(async () => ({ available: true, ingest_mode: 'pull' })),
   eegStatus: vi.fn(async () => {
     bridge.stamps.push(Date.now())
@@ -66,7 +70,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   bridge.ingestion = { ...CONNECTED }
   bridge.stamps = []
+  bridge.recorders = []
   mockApi({
+    'GET /api/generate-question?user_id=u1&bias=0&grade=4th+Grade&session_id=sess-1': () => ({
+      question_text: 'What is 2 + 2?', answer_options: ['3', '4'], correct_answer: '4',
+      subject: 'expressions', difficulty: 'easy',
+    }),
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
     'GET /api/performance/student/u1': () => [],
@@ -78,6 +87,32 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+it('brings the stream up at Connect and records only from the first question', async () => {
+  // Found on hardware: a student who paired and never started a question had
+  // rows on the teacher's Live view. Pairing needs the poller; a lesson is
+  // what should be recorded.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  // Let the pairing finish before the test does: `pairOnce` is not cancelled
+  // by an unmount, and a scan it sends after this test ends is counted by
+  // the next one.
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+  expect(bridge.recorders).toHaveLength(1)
+  expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: false })
+  expect(bridge.recorders[0].start).not.toHaveBeenCalledWith({ record: true })
+
+  fireEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 2 \+ 2\?/)
+  // Same session as the pairing, so the same recorder is armed in place.
+  expect(bridge.recorders).toHaveLength(1)
+  await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
+}, 30_000)
 
 it('does not read the pairing itself as a drop, which under pull starts with connected: true', async () => {
   // The bridge reports no headband until the scan and connect have run --

@@ -26,6 +26,7 @@ import grade_appropriateness as ga  # noqa: E402
 import LLM_topic_decider as decider  # noqa: E402
 import LLM_quadratics_generation as quad  # noqa: E402
 import LLM_functions_generation as funcs  # noqa: E402
+import LLM_spread_generation as spread  # noqa: E402
 
 
 # --- the quadratic solver -------------------------------------------------
@@ -549,3 +550,112 @@ def test_the_quadratics_schema_asks_for_nothing_but_the_sentence():
     coefficients could not have revealed."""
     assert set(question_schemas.quadratics()["properties"]) == {
         "question_text", "question_topic"}
+
+
+# --- spread (S-ID.2) ------------------------------------------------------
+
+def test_every_pattern_has_an_exact_standard_deviation():
+    """The property the topic rests on, checked against every entry rather
+    than trusted.
+
+    Most datasets have an irrational population standard deviation, and an
+    answer rounded to whatever precision a formatter chose is the
+    "answered correctly, marked wrong" failure wearing a decimal point. These
+    patterns are hardcoded precisely so no search runs per request; that makes
+    them data, and data goes stale silently.
+    """
+    for pattern in spread._DEVIATION_PATTERNS:
+        assert sum(pattern) == 0, f"{pattern} does not centre on its mean"
+        sd, reason = hs_solvers.population_sd([100 + d for d in pattern])
+        assert sd is not None, f"{pattern}: {reason}"
+        assert sd > 0
+        # And scaling keeps it exact, which is what makes each line a family.
+        scaled, _r = hs_solvers.population_sd([100 + 3 * d for d in pattern])
+        assert scaled == sd * 3
+
+
+@pytest.mark.parametrize("band", ["early", "middle", "upper", "advanced"])
+def test_every_built_dataset_is_exactly_scoreable(band):
+    """Built here, not asked for -- a model choosing its own values would
+    miss an exact standard deviation on nearly every attempt, against a
+    constraint it cannot see."""
+    for _ in range(200):
+        values = spread._choose_dataset(band)
+        sd, reason = hs_solvers.population_sd(values)
+        assert sd is not None, (values, reason)
+        assert min(values) >= 0, f"a negative reading in {values}"
+
+
+@pytest.mark.parametrize("values,why", [
+    ([1, 2, 3], "irrational"),
+    ([5, 5, 5], "no spread at all"),
+    ([1, 2], "the mean is not whole"),
+    ([7], "one value is not a spread"),
+    ([], "nothing to measure"),
+])
+def test_a_dataset_with_no_exact_spread_is_refused(values, why):
+    sd, reason = hs_solvers.population_sd(values)
+    assert sd is None, why
+    assert reason
+
+
+def test_the_question_must_say_population():
+    """Sample standard deviation over n-1 is what many high-school courses
+    teach, and it gives a different number. A question saying only "standard
+    deviation" has two defensible answers and scores one -- which is worse
+    than the rounding problem this topic was deferred over, and only the
+    wording fixes it."""
+    data = "14, 16, 17, 18, 20"
+    assert spread.shown_matches_scored(
+        f"Scores: {data}. What is the population standard deviation?",
+        [data]) is None
+    assert spread.shown_matches_scored(
+        f"Scores: {data}. What is the standard deviation?", [data])
+
+
+def test_the_data_on_screen_must_be_the_data_being_scored():
+    assert spread.shown_matches_scored(
+        "A: 1, 2, 3. B: 4, 5, 6. Population standard deviation?",
+        ["1, 2, 3", "4, 5, 6"]) is None
+    assert spread.shown_matches_scored(
+        "A: 1, 2, 3. Population standard deviation?",
+        ["1, 2, 3", "4, 5, 6"]), "the second set is not on screen"
+
+
+def test_the_variance_is_offered_as_the_distractor():
+    """Forgetting the square root is the commonest error on this topic, so it
+    is the option worth putting in front of a student."""
+    values = [7, 9, 10, 11, 13]                     # sd 2, variance 4
+    wrong = spread.generate_incorrect_answers(
+        2, [hs_solvers.population_variance(values)])
+    assert 4 in wrong
+
+
+def test_no_distractor_is_a_negative_spread():
+    """A spread cannot be negative, so an option that is would be eliminable
+    without doing the arithmetic."""
+    for solution in (1, 2, 3):
+        for candidate in spread.generate_incorrect_answers(solution, [None]):
+            assert float(candidate) >= 0, candidate
+
+
+def test_the_hard_tier_compares_two_sets():
+    """S-ID.2's actual verb is comparing spread across data sets; one set is
+    the ingredient. It is the hard tier because it is two full computations
+    and a subtraction."""
+    assert spread.DIFFICULTY_SCENARIOS["hard"] == spread.TWO_SETS
+    assert spread.DIFFICULTY_SCENARIOS["easy"] == spread.ONE_SET
+
+
+def test_spread_is_offered_only_from_grade_nine():
+    for grade in ("5th Grade", "8th Grade"):
+        assert "spread" not in decider._allowed_topics(grade)
+    for grade in ("9th Grade", "12th Grade"):
+        assert "spread" in decider._allowed_topics(grade)
+
+
+def test_spread_is_absent_from_forbidden_bands():
+    """Like `algebra`, `quadratics` and `functions`: nothing here uses
+    variable notation, and the gate that keeps it from a 6-year-old is
+    `TOPIC_MIN_GRADE`."""
+    assert "spread" not in ga.FORBIDDEN_BANDS

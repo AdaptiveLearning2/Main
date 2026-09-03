@@ -17,6 +17,7 @@ import LLM_mode_generation, LLM_probability_generation, LLM_geometry_generation,
 import LLM_missing_number_generation, LLM_patterns_generation, LLM_graphs_generation
 import LLM_shape_fractions_generation
 import LLM_quadratics_generation, LLM_functions_generation
+import LLM_spread_generation
 # python -m flask --app LLM_topic_decider run
 
 load_dotenv()
@@ -28,7 +29,7 @@ ALL_TOPICS = [
     "geometry", "algebra", "expressions", "ordering", "rationals",
     "mean", "median", "mode", "probability", "angle_relationships",
     "missing_number", "patterns", "graphs", "shape_fractions",
-    "quadratics", "functions",
+    "quadratics", "functions", "spread",
 ]
 
 # Enforces in code the same grade rule the prompts below only state in
@@ -103,6 +104,11 @@ TOPIC_MIN_GRADE = {
     # which is the whole of the distinction -- so `compose`, which has no
     # grade-8 equivalent, is the medium and hard tier rather than a flourish.
     "functions":           9,
+    # S-ID.2, comparing the spread of data sets. Standard deviation only --
+    # the interquartile range and mean absolute deviation S-ID.2 also names
+    # are 6.SP.5c, so including them would put grade-6 content in a topic
+    # added to serve grades 9-12.
+    "spread":              9,
 }
 
 # A note on what this does NOT do, since the audit that prompted it is easy to
@@ -613,6 +619,16 @@ def question_generation(topic, difficulty, user_id, grade):
             history["functions"].append({
                     "text": response["question_text"],
                     "topic": "functions"})
+
+        case "spread":
+            response = LLM_spread_generation.generate_spread_question(recent_global, recent_topic,
+                difficulty=difficulty, grade=grade)
+            history["global"].append({
+                    "text": response["question_text"],
+                    "topic": "spread"})
+            history["spread"].append({
+                    "text": response["question_text"],
+                    "topic": "spread"})
 
         case _:
             # Unreachable while every ALL_TOPICS member has a case above, and

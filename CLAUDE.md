@@ -3380,7 +3380,7 @@ asks — the constraint that rules out most of high-school mathematics here. Ver
 tiers were written: variables on both sides, distribution and fractional coefficients all score
 correctly; a quadratic and a two-unknown equation are both correctly refused.
 
-### `quadratics` and `functions` are the grade 9+ content, and `hs_solvers` is why
+### `quadratics`, `functions` and `spread` are the grade 9+ content, and `hs_solvers` is why
 
 Both sit at `TOPIC_MIN_GRADE` 9 and are the first topics here whose concept is above grade 8 at all.
 `hs_solvers.py` holds the arithmetic for both — **pure bounded-integer, no sympy, so no bounded
@@ -3449,6 +3449,27 @@ unseeded cell fails open to the heuristics, so every validation that does not de
 the lesson text exercises the wrong path. Claude Haiku 4.5: **6 of 6 in 6 calls**, no retries, all
 answers correct by hand. Ollama llama3.1:8b: 3 of 3 per topic. Redo it after any edit to a seed row
 or to a prompt these topics send.
+
+**`spread` is S-ID.2, and it is standard deviation only.** The interquartile range and mean absolute
+deviation S-ID.2 also names are exactly scoreable and are **6.SP.5c** — offering them would put
+grade-6 content inside a topic added to serve grades 9-12, measured against the very audit that
+motivated it. Same reasoning that makes `compose` two of `functions`' three tiers.
+
+Two things about it are load-bearing, and the second is the one that nearly went unnoticed:
+
+- **The answer is exact because the data is built to make it so.** Most datasets have an irrational
+  standard deviation, and an answer rounded to whatever precision the formatter chose is the
+  answered-correctly-marked-wrong failure wearing a decimal point — which is why this topic was
+  deferred. `_DEVIATION_PATTERNS` holds multisets that sum to zero and whose population variance is
+  a perfect square, scaled and shifted by `_choose_dataset`; same move as restricting `quadratics`
+  to equations that factor over the integers. Hardcoded rather than searched, because "does this
+  multiset have an exact standard deviation" is a property of the numbers and a search is a loop
+  whose termination depends on its input.
+- **The question must say "population standard deviation", and the generator refuses without it.**
+  Sample standard deviation over n−1 is what many high-school courses teach, and it gives a
+  different number — so a question saying only "standard deviation" has two defensible answers and
+  scores one. That is a worse hazard than the rounding one this topic was deferred over, it is not
+  fixable by any solver, and only the wording removes it.
 
 **Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
 `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question

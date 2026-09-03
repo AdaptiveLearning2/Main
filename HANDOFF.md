@@ -207,12 +207,14 @@ Beyond `CLAUDE.md`, which covers most of it:
    told the model its text must match a `FUNCTIONS AS THEY MUST APPEAR`
    section that was never emitted. Both are now measured 3/3 on Ollama and
    6/6 on Claude with the seeds injected, zero retries.
-4. **`spread` (S-ID.2) is the obvious third topic and is not built.** Standard
-   deviation is the genuinely-HS statistic, and its answers are irrational,
-   so it needs a decision about rounding before a solver: a correct option
-   that matches only to the precision the formatter chose is the failure this
-   codebase least tolerates. IQR and range are exactly scoreable but are
-   6.SP, so they would not help grade 9.
+4. ~~**`spread` (S-ID.2) is the obvious third topic and is not built.**~~
+   **Built.** The rounding blocker dissolved the way quadratics' did: the
+   data is constructed so the population variance is a perfect square, so the
+   answer is an integer and nothing is rounded. The larger hazard turned out
+   to be one the entry did not mention — sample vs population standard
+   deviation, which differ, so the question must say "population" and the
+   generator refuses a text that does not. 6/6 on both providers, plus 2/2
+   with the lesson plan injected.
 5. ~~**Neither lesson plan is seeded on production.**~~ Done 2026-09-02 —
    `supabase/seeds/lesson_plans_hs_topics.sql` was pasted into the dashboard
    SQL editor. Not a migration, so a rebuilt production needs it again.

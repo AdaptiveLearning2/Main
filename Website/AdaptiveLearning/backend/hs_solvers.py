@@ -244,3 +244,51 @@ def solve_composition(outer, inner, x):
     if middle is None:
         return None, f"inner function: {reason}"
     return evaluate_polynomial(outer, middle)
+
+
+# --- spread (S-ID.2) ------------------------------------------------------
+
+
+def population_sd(values):
+    """The population standard deviation, or `(None, reason)` if not exact.
+
+    **Population, divided by n, and the questions say so.** Sample standard
+    deviation over n-1 is what many high-school courses teach by default, and
+    the two differ -- so a question saying only "the standard deviation" is
+    one a student can answer correctly and be marked wrong for, which this
+    codebase treats as the worst outcome available. That ambiguity is a
+    bigger hazard than the rounding one this topic was deferred over, and it
+    is not fixable by a solver: only the wording removes it.
+
+    Exact or nothing. Most datasets have an irrational standard deviation,
+    and a correct option that matches only to whatever precision a formatter
+    chose is the same wrong-answer failure wearing a decimal point. So the
+    variance must be a perfect square, and `_choose_dataset` builds data that
+    way -- the same move `quadratics` makes in restricting itself to
+    equations that factor over the integers.
+    """
+    if not values or len(values) < 2:
+        return None, "a spread needs at least two values"
+    total = sum(values)
+    if total % len(values):
+        return None, "the mean is not a whole number"
+    mean = total // len(values)
+    squares = sum((v - mean) ** 2 for v in values)
+    if squares == 0:
+        return None, "every value is the same, so the spread is zero"
+    if squares % len(values):
+        return None, "the variance is not a whole number"
+    variance = squares // len(values)
+    root = _exact_isqrt(variance)
+    if root is None:
+        return None, f"irrational: a variance of {variance} is not a square"
+    return root, None
+
+
+def population_variance(values):
+    """The variance, for the distractor a student reaches by forgetting the
+    square root -- the commonest error on this topic, and the one worth
+    putting in front of them. `None` where the standard deviation is not
+    exact, so it is never offered beside an answer that was refused."""
+    sd, _reason = population_sd(values)
+    return None if sd is None else sd * sd

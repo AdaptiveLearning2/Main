@@ -114,6 +114,36 @@ it('brings the stream up at Connect and records only from the first question', a
   await waitFor(() => expect(bridge.recorders[0].start).toHaveBeenCalledWith({ record: true }))
 }, 30_000)
 
+it('abandons a pairing when the page unmounts, instead of scanning for a page that is gone', async () => {
+  const { unmount } = render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  // Inside the 1.5s settle between the disconnect and the scan.
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/disconnect')).toBe(true))
+  unmount()
+  await new Promise(r => setTimeout(r, 3000))
+  expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/refresh')).toHaveLength(0)
+  expect(apiFetch.mock.calls.filter(c => c[0] === '/api/eeg/muse/connect')).toHaveLength(0)
+}, 20_000)
+
+it('reads topic performance once, not once per render', async () => {
+  // This harness's `useAuth` returns a fresh `user` literal on every call,
+  // which is what a real token refresh does too. Keyed on the object, the
+  // performance read re-ran on every status tick: 172 requests in 7s.
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 3500))
+  expect(apiFetch.mock.calls.filter(c => c[0] === '/api/performance/student/u1').length).toBeLessThanOrEqual(2)
+  // Let the pairing finish rather than leak into the next test.
+  await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
+                { timeout: 10000 })
+  await new Promise(r => setTimeout(r, 1500))
+}, 30_000)
+
 it('does not read the pairing itself as a drop, which under pull starts with connected: true', async () => {
   // The bridge reports no headband until the scan and connect have run --
   // the ordinary shape of every pairing, and one the 5s poll observes at

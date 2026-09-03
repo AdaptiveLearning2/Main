@@ -103,13 +103,20 @@ export default function Adaptive() {
     () => ({ total: { correct: 0, attempts: 0 }, subjects: initSubjects() }))
   const [accuracyState, setAccuracyState] = useState('loading')  // loading | ready | failed
 
+  // Keyed on the user *id*, not the user object -- the same rule as the
+  // profile read in AuthContext. The effect below re-runs whenever this
+  // callback changes, and a `user` object that is recreated (a token refresh,
+  // or a test's `useAuth` mock returning a fresh literal per call) would
+  // otherwise re-fetch the whole performance table on every render: measured
+  // at 172 requests in 7s under the reconnect tests, once per status tick.
+  const uid = user?.id
   const loadAccuracy = useCallback(async () => {
-    if (!user?.id) return
+    if (!uid) return
     // Same endpoint StudentProgressReport uses, so there's one reader of this
     // table and one access check to keep correct.
     let rows
     try {
-      rows = await apiFetch(`/api/performance/student/${user.id}`)
+      rows = await apiFetch(`/api/performance/student/${uid}`)
     } catch (e) {
       console.error('[accuracy] could not load topic performance', e)
       setAccuracyState('failed')
@@ -127,7 +134,7 @@ export default function Adaptive() {
     }
     setAccuracyStats({ total: { correct, attempts }, subjects })
     setAccuracyState('ready')
-  }, [user])
+  }, [uid])
 
   // Applies the +1 the backend already made, using the topic name it
   // returned -- avoids a full re-fetch of performance data after every
@@ -223,6 +230,14 @@ export default function Adaptive() {
   // timers and would otherwise read the values they closed over at creation.
   const headbandRef = useRef(headband)
   const recorderRef = useRef(null)
+  // False once the page is gone; `pairOnce` reads it between steps. Set true
+  // in the effect body rather than at declaration so StrictMode's
+  // mount/unmount/mount in development does not leave it false.
+  const pageAlive = useRef(true)
+  useEffect(() => {
+    pageAlive.current = true
+    return () => { pageAlive.current = false }
+  }, [])
   // The page-driven reconnect in progress, or null. A token object rather
   // than a boolean so a cancel reaches the loop that is actually running and
   // not one started after it.
@@ -879,8 +894,13 @@ export default function Adaptive() {
   // student just asked to release. The loop also keeps the panel on
   // `reconnecting` rather than stepping through scanning/connecting, so the
   // way out stays on screen for the whole attempt.
+  //
+  // Leaving the page cancels it too. A pairing is a chain of waits, and one
+  // in flight when the page unmounts otherwise runs to completion against a
+  // component that no longer exists -- sending a scan and a connect for a
+  // session the unmount just ended, the same shape as the phantom session.
   const pairOnce = async (hw, activeSessionId, run = null) => {
-    const cancelled = () => run?.cancelled === true
+    const cancelled = () => run?.cancelled === true || !pageAlive.current
     const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
 
     // Disconnect any previous session first, or the headband is left in a

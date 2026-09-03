@@ -103,13 +103,20 @@ export default function Adaptive() {
     () => ({ total: { correct: 0, attempts: 0 }, subjects: initSubjects() }))
   const [accuracyState, setAccuracyState] = useState('loading')  // loading | ready | failed
 
+  // Keyed on the user *id*, not the user object -- the same rule as the
+  // profile read in AuthContext. The effect below re-runs whenever this
+  // callback changes, and a `user` object that is recreated (a token refresh,
+  // or a test's `useAuth` mock returning a fresh literal per call) would
+  // otherwise re-fetch the whole performance table on every render: measured
+  // at 172 requests in 7s under the reconnect tests, once per status tick.
+  const uid = user?.id
   const loadAccuracy = useCallback(async () => {
-    if (!user?.id) return
+    if (!uid) return
     // Same endpoint StudentProgressReport uses, so there's one reader of this
     // table and one access check to keep correct.
     let rows
     try {
-      rows = await apiFetch(`/api/performance/student/${user.id}`)
+      rows = await apiFetch(`/api/performance/student/${uid}`)
     } catch (e) {
       console.error('[accuracy] could not load topic performance', e)
       setAccuracyState('failed')
@@ -127,7 +134,7 @@ export default function Adaptive() {
     }
     setAccuracyStats({ total: { correct, attempts }, subjects })
     setAccuracyState('ready')
-  }, [user])
+  }, [uid])
 
   // Applies the +1 the backend already made, using the topic name it
   // returned -- avoids a full re-fetch of performance data after every
@@ -223,6 +230,22 @@ export default function Adaptive() {
   // timers and would otherwise read the values they closed over at creation.
   const headbandRef = useRef(headband)
   const recorderRef = useRef(null)
+  // False once the page is gone; `pairOnce` reads it between steps. Set true
+  // in the effect body rather than at declaration so StrictMode's
+  // mount/unmount/mount in development does not leave it false.
+  const pageAlive = useRef(true)
+  useEffect(() => {
+    pageAlive.current = true
+    return () => {
+      pageAlive.current = false
+      // The page-driven reconnect loop is its own token, so cancel it too:
+      // left running it sends a disconnect per attempt to the one shared
+      // bridge device -- tearing down a link the student may since have
+      // re-paired from another page -- and toasts a failure on that page.
+      if (reconnectRun.current) reconnectRun.current.cancelled = true
+      reconnectRun.current = null
+    }
+  }, [])
   // The page-driven reconnect in progress, or null. A token object rather
   // than a boolean so a cancel reaches the loop that is actually running and
   // not one started after it.
@@ -459,7 +482,16 @@ export default function Adaptive() {
           return
         }
 
-        if (dropped && prev.connected) {
+        // A drop is a link that was *up*, so this waits for `pairOnce` to
+        // have finished (`phase: 'connected'`) rather than for `connected`,
+        // which under pull is the backend's poller and is true from
+        // `/api/eeg/start` -- before the scan has even begun. Keyed on
+        // `connected` alone, every pull-mode pairing read as a drop the
+        // moment it started: "The headband disconnected." over a headband
+        // that had never connected, and 2s later this page's own loop sent a
+        // second connect on top of the first, which the bridge honours by
+        // disconnecting first. Measured on hardware: three clicks to pair.
+        if (dropped && prev.connected && prev.phase === 'connected') {
           onDropped(ing)
           return
         }
@@ -845,7 +877,9 @@ export default function Adaptive() {
     // also tear down a running camera's delivery.
     end:        () => endPushDevice(stationId),
   } : {
-    begin:      () => rec.start(),
+    // Stream up, nothing written: recording is armed by the first question
+    // (`armRecording`), the same split push has with `startPush`.
+    begin:      () => rec.start({ record: false }),
     disconnect: () => apiFetch('/api/eeg/muse/disconnect',
                                { method: 'POST', body: { device_id: stationId } }),
     scan:       (sid) => apiFetch('/api/eeg/muse/refresh',
@@ -868,10 +902,19 @@ export default function Adaptive() {
   // student just asked to release. The loop also keeps the panel on
   // `reconnecting` rather than stepping through scanning/connecting, so the
   // way out stays on screen for the whole attempt.
+  //
+  // Leaving the page cancels it too. A pairing is a chain of waits, and one
+  // in flight when the page unmounts otherwise runs to completion against a
+  // component that no longer exists -- sending a scan and a connect for a
+  // session the unmount just ended, the same shape as the phantom session.
   const pairOnce = async (hw, activeSessionId, run = null) => {
-    const cancelled = () => run?.cancelled === true
+    const cancelled = () => run?.cancelled === true || !pageAlive.current
     const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
 
+    // Checked *before* the disconnect, not only after the settle: the
+    // disconnect is global to the shared bridge device, so a cancelled
+    // attempt must not send one.
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
     // Disconnect any previous session first, or the headband is left in a
     // streaming state that throws BadStateError on the next connect.
     await hw.disconnect().catch(() => {})
@@ -1020,10 +1063,41 @@ export default function Adaptive() {
   // The backend owns `user_math_performance` and derives the topic itself --
   // this page must not write to it directly, or a client update could
   // overwrite real counts.
+  // Samples are stored during a session -- from the first question to Finish
+  // -- and not while a headband merely sits paired before or between them.
+  // Under pull that is the poller's `record` flag: Connect started it with
+  // `record: false`, and this arms it. After a Finish the session is new and
+  // the old poller is gone (ending a session stops it), so a recorder bound
+  // to another session is replaced and a fresh poller started, recording
+  // from the outset. The headband itself stays paired at the bridge
+  // throughout. Push needs none of this: `startPush` is already keyed on
+  // `sessionId`, so delivery there starts and stops with the session.
+  const armRecording = async (activeSessionId) => {
+    if (headband.pushMode || !headband.connected || !stationId) return
+    let rec = recorder
+    if (!rec || rec.sessionId !== activeSessionId) {
+      // Stop the one being replaced. It belongs to a session that has
+      // already ended, so the backend call is a no-op -- but `stop()` is
+      // also what removes the `beforeunload` listener each recorder
+      // registers at construction, and dropping it without that leaves
+      // one live listener per Finish-and-resume, all firing on tab close.
+      if (rec) await rec.stop()
+      rec = createSignalRecorder({ sessionId: activeSessionId, deviceId: stationId })
+      setRecorder(rec)
+      recorderRef.current = rec
+      window.AL_currentSessionId = activeSessionId
+    }
+    const res = await rec.start({ record: true })
+    if (!res?.ok) console.error('[headband] could not start recording', res?.error)
+  }
+
   const fetchQuestion = async () => {
     setPhase('loading'); setError(false)
     try {
       const activeSessionId = await getOrCreateSession()
+      // Not awaited into the question: a poller that will not arm is a
+      // recording problem, not a reason to withhold a question.
+      armRecording(activeSessionId).catch(e => console.error('[headband]', e))
 
       const params = new URLSearchParams({ user_id: user.id, bias: String(bias) })
       if (mode === 'class' && classId) params.set('class_id', classId)

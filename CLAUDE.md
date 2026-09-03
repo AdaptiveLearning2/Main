@@ -461,8 +461,11 @@ legitimately disagree for a moment after every connect) — rides inside `ingest
 drop. `eeg_poller._poll_wait` doubles the wait per empty read up to `POLL_BACKOFF_MAX_S` (5 s); the
 first miss costs nothing, since an idle stream at session start is ordinary, and the cap is small
 because the consent re-check shares the loop. `Adaptive.jsx` polls the bridge in **both** modes now
-— under pull `poller.running` never says the headband went away — keeps polling through the new
-`reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
+— under pull `poller.running` never says the headband went away — claims a drop only from
+`phase: 'connected'` (under pull `connected` is the poller, true from `/api/eeg/start` and so
+before the scan has begun; keyed on it alone, every pairing read as a drop and this page sent a
+second connect over the first 2 s in — three clicks to pair, on hardware), keeps polling through
+the new `reconnecting` phase, shows the bridge's attempt count, and starts `startFrontendReconnect()` only
 on `reconnect_exhausted` or a bridge too old to report `reconnecting` at all. **"Stop trying" sends
 a bridge disconnect before the usual teardown**, because Disconnect's teardown stops the sidecar's
 stream without sending the bridge a command, and only a command cancels its attempts. The
@@ -482,6 +485,27 @@ with or without `shouldAdvanceTime` — `await act(async () => advanceTimersByTi
 resolved and every test timed out at the 5 s default. Each of those tests costs 10–20 real
 seconds and says so with a 60 s timeout. `Overview.test.jsx`'s fake-clock pattern works for a
 300 ms debounce; it did not survive this component.
+
+### Samples are stored during a session, not while a headband merely sits paired
+
+Under pull, Connect has to start the poller — it is what starts the sidecar's device stream, and
+it feeds contact and battery to the page — and the poller used to write from its first tick. So
+a student who paired and never started a question had rows on the teacher's Live view, and a
+"session" in History, for a lesson that never happened. Found on the first hardware run of #169.
+
+The poller now has two states. `POST /api/eeg/start` takes `record` (default `true`, so callers
+predating the flag are unchanged): Connect sends `record: false` — stream up, nothing written —
+and `Adaptive.jsx`'s `armRecording` sends `record: true` on the first question, which flips the
+*running* poller in place rather than restarting it. Ending the session stops the poller, as it
+always did, so the recording window is first question → Finish. After a Finish the next question
+is a new session, and `armRecording` replaces a recorder bound to the old one and starts a fresh
+poller; the headband stays paired at the bridge throughout. `status()` reports `recording` beside
+`running` because they are now different facts. Push needed none of this: `startPush` was already
+keyed on `sessionId`.
+
+**A poller that is up but not recording still moves `last_ts`**, so arming starts from the live
+tick rather than replaying a backlog — and so a paired, idle headband does not read as a sidecar
+that has stopped answering.
 
 ### Battery is device telemetry, and null for the first stretch of every session
 

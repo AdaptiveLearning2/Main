@@ -69,7 +69,7 @@ if production is ever rebuilt from scratch, both need running again.
 | 3 | **`attention` still has no producer** (Phase 11 step 3). | Blocked on a *labelled reference*, not on code. Every surface that rendered it was removed in #86; put the UI back in the same change that fills the column, not before. |
 | 4 | **Camera rPPG accuracy.** The ONNX export works and the cost objection is gone (22 MB, 1.5 s load vs ~34 s). | Still needs the video + ECG capture. `scripts/capture_face_video_ecg.py` is that capture. The POS rejection stands. |
 | 5 | ~~**`_solve_worker` pays sympy startup inside `SOLVE_TIMEOUT`.**~~ **Done.** The worker signals readiness once sympy is loaded and `_run` times startup and the solve separately. Under CPU saturation: **7/8 where it was 0/8**. 2× oversubscription is **not** fixed (1/8, was 0/8) — the machine cannot start interpreters fast enough, and no budget arrangement changes that. The trade is the tail: a contended startup now holds a slot ~30s where it used to fail in 3. See CLAUDE.md for what the two budgets now mean — they are tuned in opposite directions. |
-| 6 | **Database efficiency** — only **partitioning the three signal tables** is left. | The rest of this entry was stale and described finished work: the `cognitive_signals(user_id, ts DESC)` composite landed in `20260721000000`, `session_answers(session_id, answered_at DESC)` in `20260905010000`, the redundant-index drops in `20260905020000` (four, not two), and the dedupe keys in `20260914000000`. Before starting partitioning, get real row counts — `expire_signal_rows` already deletes per-sample rows at year end, which is a good part of what partitioning would buy, so the case may be weaker than the plan file assumed. |
+| 6 | ~~**Database efficiency**~~ **Closed as a decision, not abandoned.** Everything concrete has shipped; **partitioning is deliberately not being done yet**, and the trigger for revisiting is in section 7. | Shipped: the `cognitive_signals(user_id, ts DESC)` composite in `20260721000000`, `session_answers(session_id, answered_at DESC)` in `20260905010000`, the redundant-index drops in `20260905020000` (four, not two), the `face_signals`/`heart_signals` composites in `20260913000000`, and the dedupe keys in `20260914000000`. |
 
 ---
 
@@ -212,8 +212,42 @@ Beyond `CLAUDE.md`, which covers most of it:
    `supabase/seeds/lesson_plans_hs_topics.sql` was pasted into the dashboard
    SQL editor. Not a migration, so a rebuilt production needs it again.
 
-A long planning document from an earlier session lives at
-`C:\Users\akash\.claude\plans\create-the-plan-to-delegated-prism.md`. Most of
-its design sections describe work already merged (PR #145, the Claude
-migration); the **database efficiency** and **database security** sections are
-the parts still worth reading, and §6 of it is the origin of item 6 above.
+## 7. Why partitioning is not being done
+
+Measured 2026-09-02 against production:
+
+| table | rows |
+| --- | --- |
+| `cognitive_signals` | 3,691 |
+| `face_signals` | 961 |
+
+That is less than a quarter of one student-hour of EEG, ever. Partitioning is
+a technique for tables where bulk deletion or scan cost is a real problem, and
+at four thousand rows neither is. It would also cost something: a partition
+has to be created ahead of time by a job, foreign keys into partitioned tables
+are restricted, and **every unique index must contain the partition key** --
+which the three dedupe keys happen to satisfy already (`ts` is in all of
+them), but which constrains every key added later.
+
+**The trigger is deployment scale, not code.** At 4 Hz, one student-hour is
+~14,000 cognitive rows. A class of thirty using headbands five hours a week
+reaches tens of millions of rows within a school year, and at that size the
+year-end `expire_signal_rows` delete is the thing that hurts first --
+`p_batch_size`, `p_max_batches` and `hit_batch_cap` all exist because someone
+already worried about that delete's cost, and `DROP PARTITION` is the answer
+partitioning actually gives.
+
+So: revisit when the signal tables pass roughly a million rows, or when the
+first real pilot with headbands is scheduled -- whichever comes first. Re-run
+the counts before deciding; that is two minutes and this entry is a snapshot.
+
+Not a backlog item until then. An open item nobody can act on reads the same
+as one nobody has got to, and this one has an answer.
+
+~~A long planning document from an earlier session lives at
+`create-the-plan-to-delegated-prism.md` ... section 6 of it is the origin of
+item 6.~~ **That pointer was wrong.** That file is the Claude-migration plan,
+marked SHIPPED, and has no database section -- no "database efficiency", no
+"database security", and the word "partition" appears in no plan file at all.
+Checked 2026-09-02. Item 6 carries its own reasoning now instead of pointing
+somewhere.

@@ -256,6 +256,32 @@ def _questions_asked(text):
     return [m.group() for m in _ASKED.finditer(text)]
 
 
+def _without_data(clause, labelled):
+    """The clause with the data and its labels removed.
+
+    Direction is read from which label the *question* names first, and the
+    data carries labels of its own. Nothing requires a sentence break between
+    them, so "..., Set A: 1, 2, 3 and Set B: 4, 5, 6 -- how much larger is
+    the population standard deviation of Set B than that of Set A?" puts the
+    data's "Set A" first and reads as the reversed question, refusing a reply
+    that asks exactly what is scored.
+
+    Stripping the anchors is enough to remove the data as well, and that is a
+    consequence of the checks above rather than a coincidence: run-equality
+    has already established that the clause's data runs are exactly `shown`,
+    once each and in order, and every anchor is its label followed by one of
+    those runs. A separate pass over `_DATA_RUN` would be dead code.
+
+    Safe to strip by exact string for the same reason: the anchors are
+    checked for verbatim containment before this runs, so they are known to
+    be present as written. A space replaces them because that is what taking
+    a phrase out of prose leaves.
+    """
+    for anchor in labelled:
+        clause = clause.replace(anchor, " ")
+    return clause
+
+
 def _asks_the_scored_comparison(clause):
     """Set B's spread exceeding Set A's, however the clause words it.
 
@@ -342,7 +368,8 @@ def shown_matches_scored(question_text, shown, labelled=(), scenario=ONE_SET):
         # located, and for this scenario an unlocatable ask is the unsafe
         # direction -- accepting one costs a wrong answer, refusing costs a
         # retry.
-        if not any(_asks_the_scored_comparison(c) for c in asked):
+        if not any(_asks_the_scored_comparison(_without_data(c, labelled))
+                   for c in asked):
             return ("text does not ask how much larger Set B's population "
                     "standard deviation is than Set A's, which is what is "
                     "scored")

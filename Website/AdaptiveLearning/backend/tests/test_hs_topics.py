@@ -767,6 +767,36 @@ def test_a_comparative_in_the_context_does_not_excuse_a_two_set_ask():
         f"Set B?", shown, labelled, spread.TWO_SETS)
 
 
+@pytest.mark.parametrize("joiner", [" and ", ", "])
+def test_the_data_may_share_a_sentence_with_the_question(joiner):
+    """Direction is read from which label the question names first, and the
+    data carries labels of its own.
+
+    Nothing in the prompt requires a sentence break between them, so a reply
+    that runs both together puts the data's "Set A" ahead of everything and
+    reads as the reversed question -- refusing a reply that asks exactly what
+    is scored. Three of those exhaust the retries and reach the student as a
+    503 on the hard tier.
+    """
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    text = (f"An inspector compares two machines, {labelled[0]}{joiner}"
+            f"{labelled[1]} -- how much larger is the population standard "
+            f"deviation of Set B than that of Set A?")
+    assert spread.shown_matches_scored(
+        text, shown, labelled, spread.TWO_SETS) is None
+
+
+def test_removing_the_data_does_not_excuse_a_reversed_question():
+    """The strip must not cost the property it exists to preserve."""
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    assert spread.shown_matches_scored(
+        f"An inspector compares {labelled[0]} and {labelled[1]} -- how much "
+        f"larger is the population standard deviation of Set A than that of "
+        f"Set B?", shown, labelled, spread.TWO_SETS)
+
+
 def test_naming_both_sets_is_not_asking_how_much():
     """"Which is larger" names both labels in the scored order and is not
     this question -- its answer is a label, and a number is scored."""

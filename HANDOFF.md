@@ -9,8 +9,26 @@ flight and what is not written down anywhere else.
 
 ## 1. Where things stand
 
-Branch **`adaptive-question-goal`**, open as **PR #165**, green on all six CI
-jobs, **not merged**. Nine commits:
+**Nothing is in flight.** `main` is at `dfb9636`, no open PRs, working tree
+clean. Everything this file described as pending has merged:
+
+| PR | merged | what |
+| --- | --- | --- |
+| #165 | 2026-09-02 | question goal, session lifecycle, and the first grade 9-12 content |
+| #166 | 2026-09-02 | time the solver's startup and its arithmetic separately (§2b item 5) |
+| #167 | 2026-09-03 | dedupe keys for `cognitive_signals` and `face_signals` (§2b item 6) |
+| #168 | 2026-09-03 | `spread` (S-ID.2), the third grade 9-12 topic (§6 item 4) |
+
+Both of #168's production steps are complete: `20260915000000` applied via the
+Supabase integration (confirmed in Remote), and
+`supabase/seeds/lesson_plans_spread_topic.sql` was pasted into the dashboard
+SQL editor. Neither the seed nor its siblings is a migration, so a rebuilt
+production needs all four seed files again — see §2a.
+
+<details>
+<summary>What #165 contained, kept for the commit-level detail</summary>
+
+Nine commits:
 
 | commit | what |
 | --- | --- |
@@ -24,8 +42,10 @@ jobs, **not merged**. Nine commits:
 | `b43add8` | correct an overstated claim in that seed's comments |
 | `6ca7f99` | guard: a new `LoadError` call site must declare which kind it is |
 
-Merged just before this branch, for context: **#159–#164** — scenario grade
+Merged just before that branch, for context: **#159–#164** — scenario grade
 gating, structured outputs, four new grade 1-3 topics, and the figure pipeline.
+
+</details>
 
 ### What each of the last five commits actually fixed
 
@@ -64,7 +84,7 @@ if production is ever rebuilt from scratch, both need running again.
 
 | # | item | why it is not done |
 | --- | --- | --- |
-| 1 | ~~**Grades 9-12 have no content of their own.**~~ **Started.** `quadratics` (A-REI.4b) and `functions` (F-IF.2, F-BF.1c) added, with exact integer solvers in `hs_solvers.py`. Two things remain — see §6. | `systems` was on this list and **does not qualify**: a 2×2 linear system is 8.EE.8, so it would be another grade-8-ceiling topic wearing a grade-9 label. `spread` (S-ID.2) is still open and needs a decision about irrational answers. |
+| 1 | ~~**Grades 9-12 have no content of their own.**~~ **Done, as far as it can go without new solvers.** `quadratics` (A-REI.4b), `functions` (F-IF.2, F-BF.1c) and `spread` (S-ID.2), all on exact integer solvers in `hs_solvers.py`. Grade 9 went 81% → 56% three-or-more-grades-below. | `systems` was on this list and **does not qualify**: a 2×2 linear system is 8.EE.8, so it would be another grade-8-ceiling topic wearing a grade-9 label. **Grades 10-12 cannot be moved by another topic at this level** — the scoring ceiling is grade 9, so the rate reaches 100% at grade 12 by construction (§6 item 1). The next real lever is a solver for content *above* grade 9, and there is no candidate yet that this system can score exactly. |
 | 2 | **The spend posture has never been exercised end to end.** `GENERATION_MAX_WAITERS`, the daily ceiling, the concurrency cap. | Needs a class of ~30 starting together. Everything is unit-tested; nothing has met real simultaneous load. |
 | 3 | **`attention` still has no producer** (Phase 11 step 3). | Blocked on a *labelled reference*, not on code. Every surface that rendered it was removed in #86; put the UI back in the same change that fills the column, not before. |
 | 4 | **Camera rPPG accuracy.** The ONNX export works and the cost objection is gone (22 MB, 1.5 s load vs ~34 s). | Still needs the video + ECG capture. `scripts/capture_face_video_ecg.py` is that capture. The POS rejection stands. |
@@ -215,9 +235,31 @@ Beyond `CLAUDE.md`, which covers most of it:
    deviation, which differ, so the question must say "population" and the
    generator refuses a text that does not. 6/6 on both providers, plus 2/2
    with the lesson plan injected.
-5. ~~**Neither lesson plan is seeded on production.**~~ Done 2026-09-02 —
-   `supabase/seeds/lesson_plans_hs_topics.sql` was pasted into the dashboard
-   SQL editor. Not a migration, so a rebuilt production needs it again.
+5. ~~**Neither lesson plan is seeded on production.**~~ Done —
+   `supabase/seeds/lesson_plans_hs_topics.sql` 2026-09-02 and
+   `lesson_plans_spread_topic.sql` 2026-09-03, both pasted into the dashboard
+   SQL editor. Not migrations, so a rebuilt production needs them again.
+6. **`spread`'s shown-versus-scored check took four review rounds, and the
+   shape of that is worth more than the fix.** Each round closed the reported
+   hole and moved the failure one layer along: containment accepted an
+   appended value and swapped labels → binding runs and labels left the *ask*
+   unbound → binding the ask over the whole text refused legitimate context →
+   scoping to the interrogative clause let the data's own labels decide
+   direction, then missed an ask phrased as an instruction.
+
+   That is one design mistake showing its shape, not four bugs. The check
+   reads a natural-language ask the model wrote freely, so every fix narrows
+   *where* it reads without changing *that* it reads prose. The invariants
+   that never needed a correction are the ones where the generator supplies
+   the artefact and demands it back verbatim — the data, the labels,
+   `quadratics`' equations.
+
+   **If it needs a fifth fix, narrow it no further — supply the question stem
+   too**, and let the model write only the context around it. That takes the
+   check out of the loop rather than moving it. Not done now because both
+   providers measure 1.00 model calls per question and the remaining holes
+   were reachable only by phrasings no observed reply used; doing it on that
+   evidence would be a rewrite in search of a symptom.
 
 ## 7. Why partitioning is not being done
 

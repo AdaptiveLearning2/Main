@@ -2759,6 +2759,30 @@ in a request thread. Setting `QUESTION_QUEUE_SIZE=0` made the inline path the on
 it to the ordinary case. **Both** generation endpoints take it (`/api/generate-question` and the
 practice one); a third would need it too.
 
+**Measured against a real server, 2026-09-03** — `scripts/load_test_generation.py`, which runs
+uvicorn and fires a class at it. Nothing is billed: only the *network peer* is faked, so the
+semaphore, the budget arithmetic and every refusal are the shipped code. Two things it settles and
+one it corrects:
+
+- **The waiter cap *subsumes* the concurrency cap, it does not add to it.** `_generation_waiter`
+  wraps the whole call, so it bounds requests **in flight**; the semaphore bounds model calls
+  inside that. The ceiling is 12, not 8 + 12 — and a check written the obvious way asserted 20.
+- **The bounds hold, and the threadpool is only starved past ~40 in flight.** anyio's default
+  limiter is exactly **40** threads (measured, not assumed), shared with every other sync endpoint.
+  At 30 waiters a probe on `/api/topics` stayed at 31 ms; at 60 in flight its **worst** probe was
+  **11.9 s**, and at 80, **23.9 s**. **p50 and p95 stayed under 25 ms in every one of those runs** —
+  only the max moves, so a percentile-only report shows a healthy service that is intermittently
+  hanging for twenty seconds. Watch the max here.
+- **The cost is refusals, and how many depends entirely on arrival.** 30 students, 2 s per model
+  call, shipped `GENERATION_MAX_WAITERS=12`: **40% served on a simultaneous start, 87% over 10 s,
+  100% over 30 s.** A synchronised start is not a hypothetical — it is a teacher saying "everyone
+  start now" — and on it, 18 of 30 get a 503. Raising the cap fixes that (20 → 67%, 30 → 100%, no
+  starvation at either) and costs no extra model calls, only threads and waiting.
+
+**The 503 carries `Retry-After: 5` and nothing reads it.** `apiFetch` has no retry and
+`Adaptive.jsx` sets an error, so a refused student sees a failure rather than a pause. Whichever way
+the cap is tuned, that header is the cheaper half of the fix — it consumes no threads.
+
 **Take it through `_generation_waiter()`, never a bare acquire/release pair.** The refusal raises
 `HTTPException` *inside* the guarded block, so a hand-written release is skipped on the path most
 likely to run. The permit never comes back, and since the cap is a `BoundedSemaphore` acquired with

@@ -310,6 +310,35 @@ npx supabase migration list --linked
 `supabase/.temp/project-ref` holds the linked project ref, which is what `--linked` resolves
 against.
 
+### Run `assert_signal_rls.sql` locally before merging a change to it
+
+The CLI has no arbitrary-SQL command, but the local stack's Postgres is a container and `psql` is
+inside it. There is no need to wait for CI:
+
+```bash
+docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f - < scripts/assert_signal_rls.sql
+```
+
+Safe to run against a working database: the file is `BEGIN … ROLLBACK`, so its fixtures leave
+nothing. Exit 0 and a final `ROLLBACK` is a pass.
+
+**Do this for any change to that file, and for any migration that constrains a table it writes to.**
+CI was the only thing executing it, and CI is downstream of the merge — so a broken fixture is found
+after the decision to ship rather than before it. Two things were caught the first time this was run
+by hand, neither visible in a diff:
+
+- **A new unique index made the file's own fixtures illegal.** `20260914000000` added
+  `cog_session_ts_key`, and the batching-loop fixture inserted five `cognitive_signals` rows sharing
+  one `(session_id, ts)` — a `unique_violation`, unhandled, under `ON_ERROR_STOP=1`, which fails the
+  whole job and every assertion below it. The migration's own comment warns that a unique index
+  "passes CI against an empty stack and fails against real data"; the production count that warning
+  prompted was run, and **the repo's own fixtures are also that data**. Check both.
+- **A comment naming `$` `$` inside an anonymous code block closes the block**, and the syntax error
+  surfaces hundreds of lines later. Nothing but execution finds that.
+
+It also revealed that an assertion added in the same change had never been executed at all — a `DO`
+block only CI ever ran, and only after merge.
+
 ### How a migration reaches production
 
 **Merging to `main` applies the migration to production, a few minutes later.** The Supabase

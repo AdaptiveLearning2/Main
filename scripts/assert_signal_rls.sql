@@ -15,6 +15,22 @@
 --
 -- Every assertion raises rather than returning a row, so a failure fails the
 -- job instead of scrolling past in the log.
+--
+-- RUN IT LOCALLY BEFORE MERGING A CHANGE TO THIS FILE. The local stack's
+-- Postgres is a container, so there is no need to wait for CI:
+--
+--   docker exec -i supabase_db_AdaptiveLearning psql -U postgres -d postgres \
+--     -v ON_ERROR_STOP=1 -f - < scripts/assert_signal_rls.sql
+--
+-- Safe against a working database -- this is BEGIN ... ROLLBACK, so the
+-- fixtures below leave nothing. Exit 0 and a closing ROLLBACK is a pass.
+--
+-- Worth the habit because CI is downstream of the merge, and because the two
+-- defects the first hand-run caught were both invisible in a diff: a new
+-- unique index that made these fixtures illegal, and a comment naming the
+-- dollar-quote marker inside a block, which closes it and breaks the file
+-- hundreds of lines later. See CLAUDE.md, "Run assert_signal_rls.sql
+-- locally".
 
 BEGIN;
 

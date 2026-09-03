@@ -3380,7 +3380,7 @@ asks — the constraint that rules out most of high-school mathematics here. Ver
 tiers were written: variables on both sides, distribution and fractional coefficients all score
 correctly; a quadratic and a two-unknown equation are both correctly refused.
 
-### `quadratics` and `functions` are the grade 9+ content, and `hs_solvers` is why
+### `quadratics`, `functions` and `spread` are the grade 9+ content, and `hs_solvers` is why
 
 Both sit at `TOPIC_MIN_GRADE` 9 and are the first topics here whose concept is above grade 8 at all.
 `hs_solvers.py` holds the arithmetic for both — **pure bounded-integer, no sympy, so no bounded
@@ -3450,8 +3450,70 @@ the lesson text exercises the wrong path. Claude Haiku 4.5: **6 of 6 in 6 calls*
 answers correct by hand. Ollama llama3.1:8b: 3 of 3 per topic. Redo it after any edit to a seed row
 or to a prompt these topics send.
 
-**Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
-`algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
+**`spread` is S-ID.2, and it is standard deviation only.** The interquartile range and mean absolute
+deviation S-ID.2 also names are exactly scoreable and are **6.SP.5c** — offering them would put
+grade-6 content inside a topic added to serve grades 9-12, measured against the very audit that
+motivated it. Same reasoning that makes `compose` two of `functions`' three tiers.
+
+Three things about it are load-bearing, and the last two were each found after the first looked
+finished:
+
+- **The answer is exact because the data is built to make it so.** Most datasets have an irrational
+  standard deviation, and an answer rounded to whatever precision the formatter chose is the
+  answered-correctly-marked-wrong failure wearing a decimal point — which is why this topic was
+  deferred. `_DEVIATION_PATTERNS` holds multisets that sum to zero and whose population variance is
+  a perfect square, scaled and shifted by `_choose_dataset`; same move as restricting `quadratics`
+  to equations that factor over the integers. Hardcoded rather than searched, because "does this
+  multiset have an exact standard deviation" is a property of the numbers and a search is a loop
+  whose termination depends on its input.
+- **The question must say "population standard deviation", and the generator refuses without it.**
+  Sample standard deviation over n−1 is what many high-school courses teach, and it gives a
+  different number — so a question saying only "standard deviation" has two defensible answers and
+  scores one. That is a worse hazard than the rounding one this topic was deferred over, it is not
+  fixable by any solver, and only the wording removes it.
+- **Checking the data is *contained* in the text binds neither its extent nor its label.** The
+  containment check every sibling topic uses was wrong here in three ways at once: `"14, 16, 17,
+  18, 20, 25"` contains `"14, 16, 17, 18, 20"`, so an appended value passed; the two sets could be
+  written in either order; and — the one no ordering check catches — the same sets in the same
+  order under **swapped labels** asks for A−B while B−A is scored, putting the negation of the
+  answer on screen. `shown_matches_scored` therefore compares the text's comma-separated *runs*
+  exactly and in order, and additionally requires each set verbatim under its `Set A:`/`Set B:`
+  label. `functions` gets this free by carrying `f(x) =` inside its shown strings; **when the
+  semantics live in a label the prose writes, the label has to be part of what is checked.** This
+  one is deliberately strict where `question_consistency` fails open, and the difference is who
+  chose the data: the generator supplied every number, so any other number is a reply that ignored
+  its instructions, not an ambiguity to read generously.
+- **Binding the data is not binding the question, and the ask needs its own check.** Two correctly
+  labelled sets in the scored order still pass every data check under a text asking for *Set B's
+  own* standard deviation — scored 3 where the screen says 5, with 5 on the option list, because
+  `near` offers each set's own spread as a distractor. `quadratics` binds its ask with
+  `_TARGET_WORDS` and `functions` with the literal `f(g(4))`; the `ASK FOR:` line here was
+  prompt-level only. Two things that check has to get right: **it applies to the interrogative
+  clause, not the whole text** — "a coach checks how much more consistent the team is" is context
+  this prompt actively asks to vary, and refusing it costs three retries and a 503. Scoping has two
+  traps of its own, both found only by mutation. The clause may *contain* the data, whose
+  `Set A:`/`Set B:` labels then win the ordering, so the verbatim anchors are stripped before the
+  labels are located. And **an ask is not always a question**: with no `?` anywhere, a
+  clauses-ending-in-`?` search finds nothing, and two arms reading that empty result in opposite
+  directions is how one of them silently skipped its guard while the other refused a correctly
+  worded imperative. Fall back to the closing sentence — not to the whole text, which quietly
+  reinstates the context false-positive for every reply ending in a full stop. Then **it must
+  not pin word order**, since "Set B's … is how much larger than Set A's?" and "…does Set B exceed
+  that of Set A?" are both exactly the scored question. Direction rides on which label appears
+  first, which is order-independent; a magnitude phrase is what separates it from "which is larger,
+  Set B or Set A?", whose answer is a label where a number is scored.
+
+**A rule a scenario cannot use is not noise in a prompt, it is a suggestion.** The shared footer
+told a *one-set* prompt about `Set A:`/`Set B:` labels and about comparisons, and llama3.1:8b duly
+invented both — labelling the single set "Set A", making up a `Set B: 74`, and asking for Set B's
+standard deviation, which would have been scored as Set A's. 4 refusals in 6 one-set generations,
+every one of them mentioning a label or a comparison. Splitting the rules per scenario took Ollama
+from **1.25 to 1.00 model calls per question** (Claude was already 1.00). Same family as the
+`expressions` early-band example: what the prompt *shows* beats what it *says*, and that includes
+rules it shows for a case that is not the one being asked.
+
+**None of the three topics appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly
+as `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
 either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
 
 **This does not take the "below grade" figure to zero.** Re-measured after the two topics landed

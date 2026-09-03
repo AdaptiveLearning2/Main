@@ -286,6 +286,20 @@ def functions(scenario_name):
                     "scenario": {"type": "string", "enum": [scenario_name]}})
 
 
+def spread(scenario_name):
+    """The sentence, with the scenario pinned.
+
+    The data is not the model's to choose. Most datasets have an irrational
+    population standard deviation, so a model picking its own values would
+    fail a constraint it cannot see on nearly every attempt --
+    `_choose_dataset` builds from deviation patterns whose variance is a
+    perfect square, and the generator renders them into the prompt.
+    """
+    return _object({"question_text": _TEXT,
+                    "question_topic": _TEXT,
+                    "scenario": {"type": "string", "enum": [scenario_name]}})
+
+
 def shape_fractions():
     """A shape's part count and how many of them are shaded.
 

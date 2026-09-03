@@ -39,6 +39,7 @@ export const TOPICS = [
   'probability',
   'quadratics',
   'functions',
+  'spread',
 ]
 
 /**
@@ -63,6 +64,7 @@ export const TOPIC_ICONS = {
   probability: '🎲',
   quadratics: '📈',
   functions: 'ƒ',
+  spread: '📉',
 }
 
 /** A topic slug as a reader should see it: `angle_relationships` -> `angle

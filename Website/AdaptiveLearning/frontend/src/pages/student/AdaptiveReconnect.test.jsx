@@ -53,7 +53,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { toast } from 'sonner'
-import { museRefresh, museConnect, museDisconnect, museState } from '../../lib/sidecar'
+import { museRefresh, museConnect, museDisconnect, museState, deviceStart } from '../../lib/sidecar'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
@@ -170,6 +170,25 @@ it('stops the page-driven loop when the page unmounts, and sends the shared brid
   expect(museDisconnect.mock.calls.length).toBe(disconnects)
   expect(museRefresh.mock.calls.length).toBe(refreshes)
   expect(toast.error).not.toHaveBeenCalled()
+}, TEST_TIMEOUT)
+
+it('sends no disconnect for a Connect the page left before the pairing began', async () => {
+  // Connect's own path: two awaits (the session, then bringing the device
+  // up) run before `pairOnce`, and its first step is a disconnect that is
+  // global to the shared bridge. Leaving during those awaits used to let
+  // that disconnect land after the page was gone. The reconnect loop no
+  // longer reaches `pairOnce` cancelled, so this is the one path the
+  // pre-disconnect check still protects, and nothing else exercised it.
+  deviceStart.mockImplementationOnce(() => new Promise(r => setTimeout(() => r({}), 800)))
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await sleep(300)
+  cleanup()
+  await sleep(2500)
+  expect(museDisconnect).not.toHaveBeenCalled()
+  expect(museRefresh).not.toHaveBeenCalled()
 }, TEST_TIMEOUT)
 
 it('drives the reconnect itself against a bridge too old to report one', async () => {

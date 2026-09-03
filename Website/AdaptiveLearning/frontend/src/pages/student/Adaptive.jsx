@@ -236,7 +236,15 @@ export default function Adaptive() {
   const pageAlive = useRef(true)
   useEffect(() => {
     pageAlive.current = true
-    return () => { pageAlive.current = false }
+    return () => {
+      pageAlive.current = false
+      // The page-driven reconnect loop is its own token, so cancel it too:
+      // left running it sends a disconnect per attempt to the one shared
+      // bridge device -- tearing down a link the student may since have
+      // re-paired from another page -- and toasts a failure on that page.
+      if (reconnectRun.current) reconnectRun.current.cancelled = true
+      reconnectRun.current = null
+    }
   }, [])
   // The page-driven reconnect in progress, or null. A token object rather
   // than a boolean so a cancel reaches the loop that is actually running and
@@ -903,6 +911,10 @@ export default function Adaptive() {
     const cancelled = () => run?.cancelled === true || !pageAlive.current
     const phase = (p) => { if (!run) setHeadband(s => ({ ...s, phase: p })) }
 
+    // Checked *before* the disconnect, not only after the settle: the
+    // disconnect is global to the shared bridge device, so a cancelled
+    // attempt must not send one.
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
     // Disconnect any previous session first, or the headband is left in a
     // streaming state that throws BadStateError on the next connect.
     await hw.disconnect().catch(() => {})

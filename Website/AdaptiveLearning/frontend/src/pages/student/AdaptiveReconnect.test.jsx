@@ -53,7 +53,7 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { toast } from 'sonner'
-import { museRefresh, museConnect, museDisconnect } from '../../lib/sidecar'
+import { museRefresh, museConnect, museDisconnect, museState } from '../../lib/sidecar'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
@@ -141,6 +141,35 @@ it('takes over once the bridge has given up, and gives the student a way out', a
   bridge.ingestion = { ...CONNECTED }
   await sleep(2500)
   expect(museConnect).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
+it('stops the page-driven loop when the page unmounts, and sends the shared bridge nothing more', async () => {
+  // Cancelling `pairOnce` alone was half of it: the loop around it had its
+  // own token, which an unmount never set, and each attempt's disconnect
+  // goes to the one shared bridge device. Measured before the fix: three
+  // disconnects and three status reads over ~32s after unmount, then a
+  // failure toast on whatever page the student was on by then.
+  await connect()
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
+                       reconnect_exhausted: true, muse_devices: [] }
+  await screen.findByText(/The headband disconnected/, {}, POLL)
+
+  // Inside the first 2s backoff, before any attempt has run.
+  cleanup()
+  // Counted after the unmount: the effects' own polls stop with it, so any
+  // later read is the loop's. Each attempt reads the bridge before pairing,
+  // so this is what catches a loop that survives even when its disconnect
+  // is blocked further down.
+  const disconnects = museDisconnect.mock.calls.length
+  const refreshes = museRefresh.mock.calls.length
+  const reads = museState.mock.calls.length
+  // Past all three backoffs (2s + 4s + 8s), where the loop would give up
+  // and toast.
+  await sleep(16000)
+  expect(museState.mock.calls.length).toBe(reads)
+  expect(museDisconnect.mock.calls.length).toBe(disconnects)
+  expect(museRefresh.mock.calls.length).toBe(refreshes)
+  expect(toast.error).not.toHaveBeenCalled()
 }, TEST_TIMEOUT)
 
 it('drives the reconnect itself against a bridge too old to report one', async () => {

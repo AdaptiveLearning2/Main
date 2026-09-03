@@ -14,6 +14,7 @@
 
 import json
 import random
+import re
 
 import llm_client
 import lesson_plan_context
@@ -138,9 +139,12 @@ _TWO_SETS_BLOCK = """Scenario: compare_spread
 The question gives two data sets and asks HOW MUCH LARGER one population
 standard deviation is than the other.
 
-Example: "Two machines are tested. Machine A: 14, 16, 17, 18, 20. Machine B:
-5, 11, 15, 17, 19. How much larger is the population standard deviation of
-Machine B than that of Machine A?"
+The two sets MUST be labelled "Set A" and "Set B", exactly as they are given
+under DATA. The context around them is yours to write; the labels are not.
+
+Example: "Two machines are tested. Set A: 14, 16, 17, 18, 20. Set B: 5, 11,
+15, 17, 19. How much larger is the population standard deviation of Set B
+than that of Set A?"
 
 The JSON must follow this exact structure:
 
@@ -158,7 +162,10 @@ change any number, do NOT add a number, and do NOT work out the answer.
 
 Rules for "question_text":
 - It must contain each data set written EXACTLY as given below under DATA,
-  in that order, comma separated, character for character.
+  in that order, comma separated, character for character -- including the
+  "Set A:" and "Set B:" labels where DATA gives them. A set written under
+  the other set's label is a different question from the one being scored.
+- It must contain no other list of numbers at all.
 - It must say "population standard deviation" in full. A question that says
   only "standard deviation" is ambiguous -- a student taught the sample
   formula would get a different number and be marked wrong.
@@ -184,21 +191,54 @@ def _render(values):
     return ", ".join(str(v) for v in values)
 
 
-def shown_matches_scored(question_text, shown):
-    """Every data set on screen must be one being scored, and the question
-    must name the population formula. A reason, or None.
+# A written-out data set: two or more numbers separated by commas. One number
+# on its own is not one, so "each of 5 games" is prose rather than data.
+_DATA_RUN = re.compile(r"\d+(?:\s*,\s*\d+)+")
+
+
+def _data_runs(text):
+    """Every data set the text puts on screen, in the order it writes them."""
+    return [", ".join(part.strip() for part in run.group().split(","))
+            for run in _DATA_RUN.finditer(text)]
+
+
+def shown_matches_scored(question_text, shown, labelled=()):
+    """The data on screen must be exactly the data being scored, under the
+    labels the question asks about. A reason, or None.
 
     The data is rendered from what the solver reads rather than parsed back
     out of the text -- the direction `question_figures` establishes. And the
     "population" check is not pedantry: sample standard deviation over n-1 is
     what many courses teach, so a question that omits the word has two
     defensible answers and scores only one of them.
+
+    **Containment is not enough, and the two-set scenario is why.** Asking
+    only whether each rendered set appears somewhere binds neither the extent
+    of a set nor which label it sits under, so three wrong questions pass it:
+    a sixth value appended ("14, 16, 17, 18, 20, 25" contains "14, 16, 17,
+    18, 20"), the sets written in the other order, and -- the one no ordering
+    check catches -- the same sets in the same order with the labels swapped,
+    which asks for B minus A while A minus B is scored and puts the negation
+    of the answer on screen. So the runs must match *exactly and in order*,
+    which binds extent and order, and each labelled set must appear verbatim
+    with its label, which binds the rest. `functions` gets this for free by
+    carrying "f(x) =" inside its shown strings; here the label lives in the
+    prose, so it has to be required.
+
+    Strict rather than fail-open, unlike `question_consistency`'s checks over
+    a dataset the *model* chose. Here the generator supplied every number, so
+    a text carrying any other one is not an ambiguity to interpret
+    generously -- it is a reply that ignored its instructions, and refusing
+    costs a retry where accepting costs a wrong answer.
     """
     if not isinstance(question_text, str):
         return "question_text is not a string"
-    for rendered in shown:
-        if rendered not in question_text:
-            return f"text does not contain the data {rendered!r}"
+    runs = _data_runs(question_text)
+    if runs != list(shown):
+        return f"data on screen is {runs!r}, but {list(shown)!r} is scored"
+    for anchor in labelled:
+        if anchor not in question_text:
+            return f"text does not contain {anchor!r}"
     if "population standard deviation" not in question_text.lower():
         return "text does not say 'population standard deviation'"
     return None
@@ -251,9 +291,14 @@ def generate_spread_question(global_questions, prev_questions,
             first, second, low, high = second, first, high, low
         solution = high - low
         shown = [_render(first), _render(second)]
+        # Which set carries which label is the whole question here -- "how
+        # much larger is B than A" scored against swapped labels puts the
+        # negation of the answer on screen -- so the label travels with the
+        # data into the check rather than living only in the prompt.
+        labelled = [f"Set A: {shown[0]}", f"Set B: {shown[1]}"]
         near = [hs_solvers.population_variance(second),
                 hs_solvers.population_variance(first), high, low]
-        data_note = (f"DATA:\n  Set A: {shown[0]}\n  Set B: {shown[1]}\n\n"
+        data_note = (f"DATA:\n  {labelled[0]}\n  {labelled[1]}\n\n"
                      "ASK FOR: how much larger the population standard "
                      "deviation of Set B is than that of Set A.")
     else:
@@ -265,6 +310,7 @@ def generate_spread_question(global_questions, prev_questions,
             # change these numbers.
             raise ValueError(f"built a dataset with no exact spread: {reason}")
         shown = [_render(values)]
+        labelled = []               # one set, so there is nothing to mislabel
         near = [hs_solvers.population_variance(values)]
         data_note = (f"DATA:\n  {shown[0]}\n\n"
                      "ASK FOR: the population standard deviation.")
@@ -315,7 +361,8 @@ def generate_spread_question(global_questions, prev_questions,
                   f"{question_data.get('scenario')!r}, asked for {scenario!r}")
             continue
 
-        mismatch = shown_matches_scored(question_data["question_text"], shown)
+        mismatch = shown_matches_scored(question_data["question_text"],
+                                        shown, labelled)
         if mismatch:
             print(f"[Attempt {attempt+1}] Shown/scored mismatch: {mismatch}")
             continue

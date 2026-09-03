@@ -3455,7 +3455,8 @@ deviation S-ID.2 also names are exactly scoreable and are **6.SP.5c** — offeri
 grade-6 content inside a topic added to serve grades 9-12, measured against the very audit that
 motivated it. Same reasoning that makes `compose` two of `functions`' three tiers.
 
-Two things about it are load-bearing, and the second is the one that nearly went unnoticed:
+Three things about it are load-bearing, and the last two were each found after the first looked
+finished:
 
 - **The answer is exact because the data is built to make it so.** Most datasets have an irrational
   standard deviation, and an answer rounded to whatever precision the formatter chose is the
@@ -3470,9 +3471,21 @@ Two things about it are load-bearing, and the second is the one that nearly went
   different number — so a question saying only "standard deviation" has two defensible answers and
   scores one. That is a worse hazard than the rounding one this topic was deferred over, it is not
   fixable by any solver, and only the wording removes it.
+- **Checking the data is *contained* in the text binds neither its extent nor its label.** The
+  containment check every sibling topic uses was wrong here in three ways at once: `"14, 16, 17,
+  18, 20, 25"` contains `"14, 16, 17, 18, 20"`, so an appended value passed; the two sets could be
+  written in either order; and — the one no ordering check catches — the same sets in the same
+  order under **swapped labels** asks for A−B while B−A is scored, putting the negation of the
+  answer on screen. `shown_matches_scored` therefore compares the text's comma-separated *runs*
+  exactly and in order, and additionally requires each set verbatim under its `Set A:`/`Set B:`
+  label. `functions` gets this free by carrying `f(x) =` inside its shown strings; **when the
+  semantics live in a label the prose writes, the label has to be part of what is checked.** This
+  one is deliberately strict where `question_consistency` fails open, and the difference is who
+  chose the data: the generator supplied every number, so any other number is a reply that ignored
+  its instructions, not an ambiguity to read generously.
 
-**Neither topic appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly as
-`algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
+**None of the three topics appears in `grade_appropriateness.FORBIDDEN_BANDS`, deliberately, exactly
+as `algebra` does not.** Variable notation is what they *are*; a band rule would refuse every question
 either exists to ask. `TOPIC_MIN_GRADE` is what keeps them away from a 6-year-old.
 
 **This does not take the "below grade" figure to zero.** Re-measured after the two topics landed

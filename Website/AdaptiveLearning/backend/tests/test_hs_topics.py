@@ -639,6 +639,188 @@ def test_no_distractor_is_a_negative_spread():
             assert float(candidate) >= 0, candidate
 
 
+def test_containment_alone_would_accept_a_longer_data_set():
+    """"14, 16, 17, 18, 20, 25" contains "14, 16, 17, 18, 20", so a check
+    asking only whether each rendered set appears somewhere accepts a sixth
+    value the solver never saw. The runs have to match exactly."""
+    assert spread.shown_matches_scored(
+        "Scores: 14, 16, 17, 18, 20, 25. Population standard deviation?",
+        ["14, 16, 17, 18, 20"])
+    assert spread.shown_matches_scored(
+        "Scores: 12, 14, 16, 17, 18, 20. Population standard deviation?",
+        ["14, 16, 17, 18, 20"]), "prepending a value is the same defect"
+
+
+def test_the_two_sets_must_be_in_the_order_they_are_scored():
+    assert spread.shown_matches_scored(
+        "Set A: 4, 5, 6. Set B: 1, 2, 3. Population standard deviation?",
+        ["1, 2, 3", "4, 5, 6"])
+
+
+def test_the_sets_must_sit_under_the_labels_they_are_scored_under():
+    """The one no ordering check catches: same sets, same order, labels
+    swapped. The question then asks for A minus B while B minus A is scored,
+    so the answer on screen is the negation of the one marked correct."""
+    swapped = "Set B: 1, 2, 3. Set A: 4, 5, 6. Population standard deviation?"
+    assert spread.shown_matches_scored(swapped, ["1, 2, 3", "4, 5, 6"]) is None, \
+        "the runs alone are in the right order, which is the trap"
+    assert spread.shown_matches_scored(
+        swapped, ["1, 2, 3", "4, 5, 6"],
+        ["Set A: 1, 2, 3", "Set B: 4, 5, 6"])
+
+
+def test_a_lone_number_in_the_prose_is_not_a_data_set():
+    """"each of 5 games" is wording, not data. A run needs a comma, so the
+    strictness above does not refuse an ordinary sentence."""
+    assert spread.shown_matches_scored(
+        "In each of 5 games a team scored: 1, 2, 3. "
+        "What is the population standard deviation?", ["1, 2, 3"]) is None
+
+
+# --- spread, end to end through the retry loop ------------------------------
+
+def _data_lines(prompt):
+    """The DATA block the generator handed the model, one line per set."""
+    lines = []
+    for line in prompt.split("DATA:\n", 1)[1].splitlines():
+        if not line.strip():
+            break
+        lines.append(line.strip())
+    return lines
+
+
+@pytest.fixture
+def compliant_model(monkeypatch):
+    """A model that does exactly what it is told: writes the data it was
+    given, under the labels it was given, and says "population".
+
+    Worth a double rather than a fixed string, because the datasets are drawn
+    randomly -- so this exercises the generator over many real draws instead
+    of the one dataset a hardcoded reply could pin.
+    """
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context",
+                        lambda p, t, b: p)
+    seen = {}
+
+    def _generate(prompt, **_kw):
+        lines = _data_lines(prompt)
+        seen["data"] = lines
+        body = " ".join(f"{line}." for line in lines)
+        return json.dumps({
+            "question_text": f"A study records some readings. {body} What is "
+                             f"the population standard deviation?",
+            "question_topic": "spread",
+            "scenario": ("compare_spread" if len(lines) == 2
+                         else "population_sd"),
+        })
+
+    monkeypatch.setattr(llm_client, "generate_text", _generate)
+    return seen
+
+
+def _sd_of(line):
+    values = [int(v) for v in line.split(":")[-1].split(",")]
+    return hs_solvers.population_sd(values)[0]
+
+
+def test_a_spread_question_is_served_with_its_answer_among_options(
+        compliant_model):
+    question = spread.generate_spread_question([], [], "easy", "9th Grade")
+    assert question["question_topic"] == "spread"
+    assert question["correct_answer"] in question["answer_options"]
+    assert len(set(question["answer_options"])) == 4
+    assert question["correct_answer"] == str(
+        _sd_of(compliant_model["data"][0]))
+
+
+@pytest.mark.parametrize("run", range(25))
+def test_the_hard_tier_answers_how_much_larger_and_never_how_much_smaller(
+        compliant_model, run):
+    """The two sets are drawn independently, so whichever happens to have the
+    larger spread has to become Set B before the question is written -- the
+    swap in `generate_spread_question`.
+
+    Without it, "how much larger is Set B than Set A" is scored as a negative
+    number whenever the draw came out the other way round. That is a wrong
+    answer twice over: nothing on screen asks for a signed difference, and a
+    lone negative among three non-negative distractors is pickable without
+    doing any arithmetic.
+
+    Repeated over draws rather than over branches, and the distinction
+    matters: the second set is scaled by 2 or 3, so it is the wider one in
+    98.5% of draws and this almost always exercises the *no swap* path.
+    `test_the_wider_set_becomes_set_b_when_the_draw_comes_out_backwards`
+    is what covers the swap itself -- measured, because repeating a test 25
+    times reads like coverage of both branches and here it is not.
+    """
+    question = spread.generate_spread_question([], [], "hard", "9th Grade")
+    set_a, set_b = compliant_model["data"]
+    assert set_a.startswith("Set A:") and set_b.startswith("Set B:")
+
+    answer = float(question["correct_answer"])
+    assert answer > 0, f"scored {answer} for {set_a} / {set_b}"
+    assert answer == abs(_sd_of(set_b) - _sd_of(set_a))
+    assert _sd_of(set_b) > _sd_of(set_a), "the wider set must be Set B"
+    assert all(float(o) >= 0 for o in question["answer_options"])
+
+
+def test_the_wider_set_becomes_set_b_when_the_draw_comes_out_backwards(
+        compliant_model, monkeypatch):
+    """The swap, pinned rather than waited for.
+
+    The second dataset is drawn at scale 2 or 3, so it is the wider one in
+    all but ~1.5% of draws -- which means the branch that reorders them is
+    the rare path, and a test relying on the draw to reach it would pass
+    without ever running the line it is about. Both datasets are supplied
+    here so it runs every time.
+    """
+    wide = [13, 19, 21, 27]                 # mean 20, sd 5
+    narrow = [17, 19, 20, 21, 23]           # mean 20, sd 2
+    drawn = iter((wide, narrow))
+    monkeypatch.setattr(spread, "_choose_dataset",
+                        lambda *_a, **_k: next(drawn))
+
+    question = spread.generate_spread_question([], [], "hard", "9th Grade")
+    set_a, set_b = compliant_model["data"]
+    assert set_a == "Set A: 17, 19, 20, 21, 23", "the narrower set is A"
+    assert set_b == "Set B: 13, 19, 21, 27"
+    assert question["correct_answer"] == "3"
+
+
+def test_a_text_that_swaps_the_two_sets_retries(monkeypatch):
+    """The failure the labels exist to stop, driven end to end."""
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context",
+                        lambda p, t, b: p)
+
+    def _swap(prompt, **_kw):
+        first, second = _data_lines(prompt)
+        return json.dumps({
+            "question_text": f"Two machines. {second} {first} How much larger "
+                             f"is the population standard deviation of Set B "
+                             f"than that of Set A?",
+            "question_topic": "spread",
+            "scenario": "compare_spread",
+        })
+
+    monkeypatch.setattr(llm_client, "generate_text", _swap)
+    with pytest.raises(ValueError):
+        spread.generate_spread_question([], [], "hard", "9th Grade")
+
+
+def test_a_text_that_adds_a_value_to_the_data_retries(monkeypatch):
+    monkeypatch.setattr(lesson_plan_context, "append_lesson_context",
+                        lambda p, t, b: p)
+    monkeypatch.setattr(llm_client, "generate_text", lambda prompt, **_kw:
+                        json.dumps({
+                            "question_text":
+                                f"Readings: {_data_lines(prompt)[0]}, 99. "
+                                f"What is the population standard deviation?",
+                            "question_topic": "spread",
+                            "scenario": "population_sd"}))
+    with pytest.raises(ValueError):
+        spread.generate_spread_question([], [], "easy", "9th Grade")
+
+
 def test_the_hard_tier_compares_two_sets():
     """S-ID.2's actual verb is comparing spread across data sets; one set is
     the ingredient. It is the hard tier because it is two full computations

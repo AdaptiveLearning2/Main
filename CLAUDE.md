@@ -3490,7 +3490,14 @@ finished:
   `_TARGET_WORDS` and `functions` with the literal `f(g(4))`; the `ASK FOR:` line here was
   prompt-level only. Two things that check has to get right: **it applies to the interrogative
   clause, not the whole text** — "a coach checks how much more consistent the team is" is context
-  this prompt actively asks to vary, and refusing it costs three retries and a 503 — and **it must
+  this prompt actively asks to vary, and refusing it costs three retries and a 503. Scoping has two
+  traps of its own, both found only by mutation. The clause may *contain* the data, whose
+  `Set A:`/`Set B:` labels then win the ordering, so the verbatim anchors are stripped before the
+  labels are located. And **an ask is not always a question**: with no `?` anywhere, a
+  clauses-ending-in-`?` search finds nothing, and two arms reading that empty result in opposite
+  directions is how one of them silently skipped its guard while the other refused a correctly
+  worded imperative. Fall back to the closing sentence — not to the whole text, which quietly
+  reinstates the context false-positive for every reply ending in a full stop. Then **it must
   not pin word order**, since "Set B's … is how much larger than Set A's?" and "…does Set B exceed
   that of Set A?" are both exactly the scored question. Direction rides on which label appears
   first, which is order-independent; a magnitude phrase is what separates it from "which is larger,

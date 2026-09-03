@@ -797,6 +797,54 @@ def test_removing_the_data_does_not_excuse_a_reversed_question():
         f"Set B?", shown, labelled, spread.TWO_SETS)
 
 
+def test_an_ask_phrased_as_an_instruction_is_still_the_ask():
+    """`_ASKED` matches only clauses ending in "?", and the two scenario arms
+    read an empty result in opposite directions -- which is the bug.
+
+    The one-set arm skipped its comparison guard, so the imperative below was
+    accepted: scored 2 while the text asks for -8, and -8 is not among the
+    options, so every answer on screen is wrong. The identical text ending in
+    "?" was refused. The two-set arm had the mirror, refusing a correctly
+    worded imperative and costing a retry.
+    """
+    assert spread.shown_matches_scored(
+        "Machine readings: 17, 19, 20, 21, 23. Calculate how much larger the "
+        "population standard deviation is than 10.",
+        ["17, 19, 20, 21, 23"], (), spread.ONE_SET)
+
+    shown = ["1, 2, 3", "4, 5, 6"]
+    labelled = ["Set A: 1, 2, 3", "Set B: 4, 5, 6"]
+    assert spread.shown_matches_scored(
+        f"{labelled[0]}. {labelled[1]}. Calculate how much larger the "
+        f"population standard deviation of Set B is than that of Set A.",
+        shown, labelled, spread.TWO_SETS) is None
+
+
+def test_the_fallback_is_the_closing_sentence_and_not_the_whole_text():
+    """Falling back to the whole text passes every other test here and
+    reinstates a bug two rounds old: a comparative in the *context* refusing
+    a good one-set question, now for any reply that ends in a full stop
+    rather than a question mark. The fallback has to narrow to the ask, not
+    give up on locating it."""
+    assert spread.shown_matches_scored(
+        "A coach checks how much more consistent the team is. Scores: 1, 2, "
+        "3. Give the population standard deviation.",
+        ["1, 2, 3"], (), spread.ONE_SET) is None
+
+
+def test_an_instruction_is_read_the_same_way_a_question_would_be():
+    """The property behind the fallback: punctuation is not what decides
+    whether a text asks something, so the same wording must get the same
+    verdict either way."""
+    for tail in (".", "?"):
+        assert spread.shown_matches_scored(
+            f"Readings: 1, 2, 3. Say how much larger the population standard "
+            f"deviation is than 10{tail}", ["1, 2, 3"], (), spread.ONE_SET)
+        assert spread.shown_matches_scored(
+            f"Readings: 1, 2, 3. Give the population standard deviation{tail}",
+            ["1, 2, 3"], (), spread.ONE_SET) is None
+
+
 def test_naming_both_sets_is_not_asking_how_much():
     """"Which is larger" names both labels in the scored order and is not
     this question -- its answer is a label, and a number is scored."""

@@ -234,6 +234,7 @@ def _data_runs(text):
 # comparative in the context would equally *accept* a two-set reply whose real
 # ask is one set's own value.
 _ASKED = re.compile(r"[^.!?]*\?")
+_SENTENCE = re.compile(r"[^.!?]+[.!?]?")
 
 # The parts of a comparison, kept apart rather than welded into one pattern so
 # that word order does not have to be guessed. Pinning the comparative ahead
@@ -252,8 +253,25 @@ _SET_B = re.compile(r"\bset\s+b\b", re.IGNORECASE)
 
 
 def _questions_asked(text):
-    """The interrogative clauses, which is where the ask lives."""
-    return [m.group() for m in _ASKED.finditer(text)]
+    """Where the ask lives: the interrogative clauses, or the closing
+    sentence when the reply phrases its ask as an instruction.
+
+    The fallback is not tidiness. Without it "... Calculate how much larger
+    the population standard deviation is than 10." locates no ask at all, and
+    the two scenario arms then read that empty result in opposite directions:
+    the two-set arm refuses a correctly worded imperative, costing a retry,
+    while the one-set arm skips its comparison guard entirely and accepts a
+    question asking for -8 against a scored 2 -- with -8 not among the
+    options, so every answer on screen is wrong. An ask nobody can locate is
+    the one case where those two arms must not disagree, because the same
+    text is either a question or not.
+    """
+    asked = [m.group() for m in _ASKED.finditer(text)]
+    if asked:
+        return asked
+    sentences = [s for s in (m.group().strip()
+                             for m in _SENTENCE.finditer(text)) if s]
+    return sentences[-1:]
 
 
 def _without_data(clause, labelled):
@@ -364,10 +382,6 @@ def shown_matches_scored(question_text, shown, labelled=(), scenario=ONE_SET):
         return "text does not say 'population standard deviation'"
     asked = _questions_asked(question_text)
     if scenario == TWO_SETS:
-        # No interrogative clause refuses too, deliberately: the ask cannot be
-        # located, and for this scenario an unlocatable ask is the unsafe
-        # direction -- accepting one costs a wrong answer, refusing costs a
-        # retry.
         if not any(_asks_the_scored_comparison(_without_data(c, labelled))
                    for c in asked):
             return ("text does not ask how much larger Set B's population "

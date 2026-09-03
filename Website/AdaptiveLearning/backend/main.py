@@ -2229,8 +2229,27 @@ _generation_hits: dict[str, list[float]] = {}
 # way, and refusing keeps the threadpool available for the ingest endpoints
 # that are recording the rest of the class's session.
 #
+# 30, raised from 12 on a measurement rather than a feeling. This cap bounds
+# requests *in flight* -- it wraps the whole call, so the concurrency
+# semaphore lives inside it and the ceiling is this number alone, not this
+# plus 8. `scripts/load_test_generation.py` against a real server, 30
+# students, 2s per model call: at 12 a simultaneous start served **40%** of
+# the class and refused 18 with a 503; at 30 it serves all of them in ~16s,
+# and the victim probe on `/api/topics` never left 31ms.
+#
+# It costs threads and waiting, not money: the model calls are the same
+# either way, since a refused student generates nothing.
+#
+# **The ceiling on this number is anyio's threadpool, measured at 40.** Every
+# sync endpoint in this app draws from that pool, so 30 leaves 10 for
+# everything else -- deliberate headroom, and the reason this is not simply
+# set to 40. Past ~40 in flight the pool starves: the worst `/api/topics`
+# probe reached 11.9s at 60 and 23.9s at 80. Watch the *max* if this is
+# raised again -- p50 and p95 stayed under 25ms through all of those runs, so
+# percentiles alone show a healthy service that is intermittently hanging.
+#
 # Floored at 1, or the semaphore admits nobody and generation is off entirely.
-_GENERATION_MAX_WAITERS = _env_number("GENERATION_MAX_WAITERS", 12, int, minimum=1)
+_GENERATION_MAX_WAITERS = _env_number("GENERATION_MAX_WAITERS", 30, int, minimum=1)
 _generation_waiters = threading.BoundedSemaphore(_GENERATION_MAX_WAITERS)
 
 

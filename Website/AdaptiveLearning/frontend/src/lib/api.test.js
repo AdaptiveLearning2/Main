@@ -199,3 +199,103 @@ describe('the optional bound', () => {
       .rejects.toMatchObject({ status: 403, message: 'nope' })
   })
 })
+
+// ─── honouring Retry-After ────────────────────────────────────────────────
+//
+// The backend has always sent `Retry-After: 5` with the 503 it raises when
+// the generation waiter cap is full, and until this existed nothing read it:
+// a student refused because their class started together saw an error screen
+// rather than a pause. Measured at the shipped cap, a simultaneous start of
+// 30 students served 40% of them.
+
+const refused = (retryAfter) => ({
+  ok: false,
+  status: 503,
+  statusText: 'Service Unavailable',
+  headers: {
+    get: (name) => (name === 'Retry-After' && retryAfter != null
+      ? String(retryAfter) : null),
+  },
+  text: () => Promise.resolve(JSON.stringify({ detail: 'Too many questions' })),
+})
+
+describe('Retry-After', () => {
+  it('retries a 503 that asked us to come back, and returns the result', async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(refused(0))
+      .mockResolvedValueOnce(ok({ question: 'q' }))
+
+    await expect(apiFetch('/api/generate-question')).resolves.toEqual({ question: 'q' })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a 503 that asked for nothing', async () => {
+    // Only an explicit Retry-After is an invitation. A bare 503 is a failure,
+    // and retrying every one of them would turn any outage into a stampede.
+    globalThis.fetch = vi.fn().mockResolvedValue(refused(null))
+
+    await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 503 })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('never retries a write, however politely it was refused', async () => {
+    // GET-only is what makes this safe by construction rather than by audit:
+    // a replayed POST could repeat a side effect. Both generation endpoints
+    // are GETs, so the restriction costs nothing.
+    globalThis.fetch = vi.fn().mockResolvedValue(refused(0))
+
+    await expect(apiFetch('/api/sessions', { method: 'POST', body: { a: 1 } }))
+      .rejects.toMatchObject({ status: 503 })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up rather than retrying forever', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(refused(0))
+
+    await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 503 })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3)   // the try, then two retries
+  })
+
+  it('spreads the retry instead of coming back in lockstep', async () => {
+    // The part that is easy to omit and defeats the change: every browser
+    // refused in the same burst holds the same `Retry-After`, so honouring
+    // it exactly reforms the burst one round later.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    vi.useFakeTimers()
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(refused(4))
+      .mockResolvedValueOnce(ok())
+
+    const pending = apiFetch('/api/generate-question')
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)   // 4s x 0.5 = 2s
+    await vi.advanceTimersByTimeAsync(2)
+    await pending
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+    expect(random).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('will not be parked for an hour by whatever the header says', async () => {
+    // `Retry-After` is a request, not an instruction.
+    vi.spyOn(Math, 'random').mockReturnValue(1)
+    vi.useFakeTimers()
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(refused(3600))
+      .mockResolvedValueOnce(ok())
+
+    const pending = apiFetch('/api/generate-question')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await pending
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('leaves every other failure exactly as it was', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      failing({ status: 500, body: 'boom' }))
+
+    await expect(apiFetch('/api/generate-question')).rejects.toMatchObject({ status: 500 })
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+})

@@ -2774,14 +2774,23 @@ one it corrects:
   only the max moves, so a percentile-only report shows a healthy service that is intermittently
   hanging for twenty seconds. Watch the max here.
 - **The cost is refusals, and how many depends entirely on arrival.** 30 students, 2 s per model
-  call, shipped `GENERATION_MAX_WAITERS=12`: **40% served on a simultaneous start, 87% over 10 s,
-  100% over 30 s.** A synchronised start is not a hypothetical — it is a teacher saying "everyone
-  start now" — and on it, 18 of 30 get a 503. Raising the cap fixes that (20 → 67%, 30 → 100%, no
-  starvation at either) and costs no extra model calls, only threads and waiting.
+  call, at the *old* `GENERATION_MAX_WAITERS=12`: **40% served on a simultaneous start, 87% over
+  10 s, 100% over 30 s.** A synchronised start is not a hypothetical — it is a teacher saying
+  "everyone start now" — and on it, 18 of 30 got a 503. **The cap is now 30**, which serves the
+  whole class on a simultaneous start; it costs no extra model calls, only threads and waiting,
+  since a refused student generates nothing. 30 and not 40 because anyio's pool is 40 and every
+  other sync endpoint draws from it — the 10 remaining threads are deliberate headroom.
 
-**The 503 carries `Retry-After: 5` and nothing reads it.** `apiFetch` has no retry and
-`Adaptive.jsx` sets an error, so a refused student sees a failure rather than a pause. Whichever way
-the cap is tuned, that header is the cheaper half of the fix — it consumes no threads.
+**The 503 carries `Retry-After: 5`, and `apiFetch` now honours it** — for **GET only**, so a retry
+can never replay a side effect; both generation endpoints are GETs, which makes that restriction
+free. Bounded at two retries and clamped to 10 s, because the header is a request from the server
+and not an instruction.
+
+**Jitter is the load-bearing half of that, not a refinement.** Every browser refused in one burst
+holds the *same* `Retry-After`, so honouring it exactly reforms the burst one round later — the
+arrival table above is the measurement of why that matters, 40% against 87%. `jittered()` is full
+jitter over `[0, delay]` rather than the delay plus a wobble: a tight band around a common centre is
+still a herd. A retry added anywhere else in this app needs the same treatment.
 
 **Take it through `_generation_waiter()`, never a bare acquire/release pair.** The refusal raises
 `HTTPException` *inside* the guarded block, so a hand-written release is skipped on the path most

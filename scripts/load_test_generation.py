@@ -26,6 +26,7 @@ Exit status is non-zero if a bound did not hold.
 import argparse
 import json
 import os
+import random
 import statistics
 import sys
 import threading
@@ -48,6 +49,10 @@ ap.add_argument("--latency", type=float, default=2.0,
 ap.add_argument("--stagger", type=float, default=0.0,
                 help="seconds over which the class arrives (0 = same instant, "
                      "which is the worst case and not what a room does)")
+ap.add_argument("--client-retry", action="store_true",
+                help="mimic apiFetch: honour Retry-After with full jitter, "
+                     "twice. Without this the harness models the client as "
+                     "it was before that landed.")
 ap.add_argument("--grade", default="3rd Grade")
 ap.add_argument("--port", type=int, default=8123)
 args = ap.parse_args()
@@ -165,13 +170,22 @@ def _generate(i):
         # the burst is the worst case rather than the expected one.
         time.sleep(args.stagger * i / max(1, args.students - 1))
     t0 = time.monotonic()
+    attempts = 2 if args.client_retry else 0
     try:
-        # A distinct student each, so the per-user rate limit cannot be what
-        # refuses them -- this is about the process-wide bounds.
-        r = requests.get(f"{BASE}/api/generate-question",
-                         params={"user_id": f"kid-{i:03d}",
-                                 "grade": args.grade},
-                         timeout=180)
+        for attempt in range(attempts + 1):
+            # A distinct student each, so the per-user rate limit cannot be
+            # what refuses them -- this is about the process-wide bounds.
+            r = requests.get(f"{BASE}/api/generate-question",
+                             params={"user_id": f"kid-{i:03d}",
+                                     "grade": args.grade},
+                             timeout=180)
+            after = r.headers.get("Retry-After")
+            if r.status_code != 503 or after is None or attempt == attempts:
+                break
+            # Full jitter over [0, delay], as `jittered()` does in api.js.
+            # Honouring the delay exactly would bring every refused student
+            # back at the same instant and reform the burst.
+            time.sleep(random.random() * min(float(after), 10.0))
         return r.status_code, time.monotonic() - t0
     except Exception as e:
         return f"ERR {type(e).__name__}", time.monotonic() - t0

@@ -79,6 +79,66 @@ it('never ends the session just because a goal was picked', async () => {
   expect(endSession).not.toHaveBeenCalled()
 })
 
+// ── a goal silences the duration reminder for the sitting ────────────────────
+//
+// Both are check-ins that end nothing. With a saved duration *and* a goal
+// picked, a student got two of them -- a standing preference they may not
+// remember setting, then the number they just chose. The sitting's explicit
+// choice wins; "No limit" chose nothing over it and keeps the reminder.
+//
+// Real timers: the duration tick is 20s, so each of these costs ~22s. A
+// duration of 0.001 minutes is up on the first tick after the session starts.
+
+const QUESTION = { question_text: 'What is 1 + 1?', answer_options: ['1', '2'], correct_answer: '2',
+                   subject: 'expressions', difficulty: 'easy' }
+
+// `mockApi` replaces the route table, so the happy path is restated here.
+const ROUTES = {
+  'GET /api/performance/student/u1': () => [],
+  'POST /api/sessions/start': () => ({ id: 'sess-goal' }),
+  'GET /api/eeg/health': () => ({ available: false }),
+}
+
+async function startWithDuration(goal) {
+  mockApi({
+    ...ROUTES,
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade',
+                                    session_duration_minutes: 0.001 }),
+    'GET /api/generate-question?user_id=u1&bias=0&grade=1st+Grade&session_id=sess-goal': () => QUESTION,
+  })
+  render(<Adaptive />)
+  await screen.findByText(/how many questions/i)
+  if (goal) await userEvent.click(screen.getByRole('button', { name: goal }))
+  await userEvent.click(screen.getByRole('button', { name: /generate question/i }))
+  await screen.findByText(/What is 1 \+ 1\?/)
+  await new Promise(r => setTimeout(r, 22000))
+}
+
+it('reminds about the duration when no goal was picked', async () => {
+  await startWithDuration(null)
+  expect(screen.getByText(/That is your 0\.001 minutes/)).toBeInTheDocument()
+}, 40_000)
+
+it('does not remind about the duration once a goal is picked', async () => {
+  await startWithDuration('5')
+  expect(screen.queryByText(/That is your 0\.001 minutes/)).toBeNull()
+}, 40_000)
+
+it('says which reminder is in force', async () => {
+  mockApi({
+    ...ROUTES,
+    'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '1st Grade',
+                                    session_duration_minutes: 15 }),
+  })
+  render(<Adaptive />)
+  await screen.findByText(/how many questions/i)
+  expect(await screen.findByText(/check in after/i)).toHaveTextContent(/15 minutes/)
+  await userEvent.click(screen.getByRole('button', { name: '10' }))
+  expect(screen.getByText(/check in after/i)).toHaveTextContent(/after 10 instead of after 15 minutes/)
+  await userEvent.click(screen.getByRole('button', { name: 'No limit' }))
+  expect(screen.getByText(/check in after/i)).toHaveTextContent(/15 minutes/)
+})
+
 it('counts an answer only once it has been recorded', () => {
   // `goalReached`'s own comment claims "the count only moves when an answer
   // is recorded", and it did not: `setSessionCount` sat beside

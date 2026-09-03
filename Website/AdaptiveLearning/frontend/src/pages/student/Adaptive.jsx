@@ -332,7 +332,12 @@ export default function Adaptive() {
     return () => clearInterval(id)
   }, [sessionStartedAt, durationMin])
 
-  const timeUp = !!durationMin && !timeUpDismissed && elapsedMin >= durationMin
+  // The sitting's explicit choice wins: a question goal silences the duration
+  // reminder for that sitting. Both are check-ins, and two of them -- a
+  // standing preference the student may not remember setting, then the number
+  // they just picked -- is one more than a child needs. "No limit" (null)
+  // keeps the duration reminder, since it chose nothing over it.
+  const timeUp = !!durationMin && !questionGoal && !timeUpDismissed && elapsedMin >= durationMin
 
   // Reached, not exceeded: the count only moves when an answer is recorded, so
   // this can never fire part way through a question. Same asked-not-enforced
@@ -1501,8 +1506,10 @@ export default function Adaptive() {
                   </div>
                   <p className="text-[11px] text-gray-600 mt-2 text-center dark:text-gray-400">
                     {questionGoal
-                      ? <>We will check in after <strong>{questionGoal}</strong> — you can always keep going.</>
-                      : <>Practise for as long as you like.</>}
+                      ? <>We will check in after <strong>{questionGoal}</strong>{durationMin ? <> instead of after {durationMin} minutes</> : null} — you can always keep going.</>
+                      : durationMin
+                        ? <>We will check in after <strong>{durationMin} minutes</strong> — you can always keep going.</>
+                        : <>Practise for as long as you like.</>}
                   </p>
                 </div>
 

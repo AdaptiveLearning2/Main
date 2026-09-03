@@ -214,10 +214,8 @@ void MuseBridgeService::stop() {
     running_.store(false);
     // Before the teardown below: a reconnect thread mid-connect_named() would
     // otherwise touch manager_ and active_muse_ while they are being freed.
+    // cancel_auto_reconnect() joins it.
     cancel_auto_reconnect();
-    if (reconnect_thread_.joinable()) {
-        reconnect_thread_.join();
-    }
 
 #if defined(ENABLE_LIBMUSE)
     {
@@ -1159,6 +1157,17 @@ void MuseBridgeService::cancel_auto_reconnect() {
     reconnect_in_flight_.store(false);
     reconnect_exhausted_.store(false);
     reconnect_attempt_.store(0);
+    // Wait for an attempt in flight, and not only in stop(). Every command
+    // handler calls this and then drives the hardware on the main thread;
+    // without the join, "Stop trying" followed by "Connect" during an attempt
+    // is two concurrent connect_named() calls, and the attempt's compensating
+    // disconnect_muse() -- which is not targeted at the connection it made --
+    // could drop the link the person just established. Blocks the main loop
+    // for at most one connect_named() (~3s) and only on a command that
+    // arrived mid-attempt.
+    if (reconnect_thread_.joinable() && reconnect_thread_.get_id() != std::this_thread::get_id()) {
+        reconnect_thread_.join();
+    }
 }
 
 ReconnectStatus MuseBridgeService::reconnect_status() const {

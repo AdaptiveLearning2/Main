@@ -612,9 +612,12 @@ export default function Adaptive() {
         // And not during a reconnect: the poller runs on through a BLE drop,
         // so `running` alone would flip the panel back to connected while the
         // bridge is still bringing the link back. The telemetry poll above
-        // owns that transition.
+        // owns that transition -- and *only* it. Reading `muse_connected`
+        // here as well raced it: this poll is faster, and setting
+        // `connected: false` tore the telemetry effect down before it could
+        // claim the drop, so under pull nothing was announced or recovered.
         ...(s.ingest_mode === 'push' || prev.phase === 'reconnecting' ? {} : {
-          connected: !!s.poller?.running && s.muse?.ingestion?.muse_connected !== false,
+          connected: !!s.poller?.running,
         }),
         samples:   s.poller?.samples || 0,
         lastTs:    s.poller?.last_ts || null,

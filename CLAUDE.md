@@ -3467,10 +3467,30 @@ for content above grade 9 can, which is the wall `spread` runs into as well. Rea
 improvement as exactly that, and do not expect the upper grades to follow.
 
 The other fourteen topics carry no ceiling, so a grade-9 student is still offered them and still
-draws grade-8 content most of the time. Whether the topics that top out at grade 8 should gain a
-`TOPIC_MAX_GRADE` is a separate and larger decision — capping them would drop a grade-9 student to
-two topics, which is the same trade that took grades 4-5 from eight topics to four. It has not been
-made.
+draws grade-8 content most of the time.
+
+**Capping them was considered and rejected, on arithmetic rather than taste** (2026-09-02). Since
+the highest concept anything here can score is grade 9, a cap keyed to the student's grade removes
+everything above it:
+
+| rule | grade 9 | grade 10 | grade 11 | grade 12 |
+| --- | --- | --- | --- | --- |
+| concept grade ≥ student grade | 2 topics | **0** | **0** | **0** |
+| within two grades | 8 topics | 5 | 2 | **0** |
+
+**Capping cannot fix a ceiling.** It converts "serves below-grade content" into "serves no content",
+and `_safe_topic` calls `random.choice` on that list — empty, that is an `IndexError`, so it is a 500
+on every question at that grade rather than a graceful narrowing.
+
+**And the metric over-reads for practice topics, which matters before trusting it again.** It counts
+the grade a concept is *introduced*. S-ID.2 has high schoolers using mean and median to compare
+distributions, so a 9th grader finding a median is doing grade-appropriate work that this measure
+scores three grades below. The audit is a good instrument for "the topic arrived before the concept"
+and a poor one for "the student has outgrown this".
+
+So the only real lever for grades 9-12 is more solvers, and `spread` (S-ID.2) is the next one.
+`test_the_grade_eight_topics_are_knowingly_uncapped` holds the decision, so reversing it means
+editing a test that says why.
 
 **A test that reads "allowed iff it has no ceiling" was true only until a topic had a floor above
 8.** `test_topics_at_eighth_grade_are_those_inside_both_bounds` was that test; these two topics

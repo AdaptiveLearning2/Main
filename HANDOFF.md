@@ -187,10 +187,15 @@ Beyond `CLAUDE.md`, which covers most of it:
    topics drawn uniformly from `_allowed_topics` (what `randomize_selection`
    does) rather than by the live weighted path, and the classification is a
    judgement about which CCSS standard each question exercises.
-2. **Whether the grade-8-ceiling topics should be capped is undecided**, and
-   it is the larger half of the original finding. Capping them would take a
-   grade-9 student to two topics — the same trade that took grades 4-5 from
-   eight topics to four, which was made deliberately and hurt. Not attempted.
+2. ~~**Whether the grade-8-ceiling topics should be capped is undecided.**~~
+   **Decided 2026-09-02: no.** Not a judgement call in the end — the highest
+   concept anything here can score is grade 9, so a cap keyed to the
+   student's grade leaves grade 9 with two topics and **grades 10-12 with
+   zero**. `_safe_topic` calls `random.choice` on that list, so empty is an
+   `IndexError`: a 500 on every question at that grade. Capping cannot fix a
+   ceiling. The metric also over-reads — it counts where a concept is
+   *introduced*, and S-ID.2 has high schoolers using mean and median. See
+   CLAUDE.md and `test_the_grade_eight_topics_are_knowingly_uncapped`.
 3. **Both topics now hand the mathematics to the model rather than asking for
    it, and both needed to.** `quadratics` was measured producing a usable
    equation 0 of 3, 2 of 3 and 1 of 4 times across three promptings.

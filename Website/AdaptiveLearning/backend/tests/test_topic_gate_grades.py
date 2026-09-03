@@ -149,9 +149,55 @@ def test_each_topic_is_offered_over_exactly_the_grades_it_declares():
 
 def test_every_grade_has_something_to_ask():
     """The gate narrows; it must not empty. `_safe_topic` calls
-    `random.choice` on this list."""
-    for g in range(1, 13):
+    `random.choice` on this list, and on `[]` that is an IndexError -- a 500
+    on every question for that grade, not a graceful degradation.
+
+    Through 13, which is what `grade_levels` reads for College.
+    """
+    for g in range(1, 14):
         assert decider._allowed_topics(str(g))
+
+
+def test_the_grade_eight_topics_are_knowingly_uncapped():
+    """A decision, recorded here so reversing it means editing a test that
+    says why.
+
+    The 2026-09-02 audit measured grades 9-12 at 56/69/81/100% of questions
+    three or more grades below grade, which reads as an argument for giving
+    the topics that top out at grade 8 a `TOPIC_MAX_GRADE`. It is not one, and
+    the reason is arithmetic rather than judgement: the highest concept
+    anything here can *score* is grade 9, so a cap keyed to the student's
+    grade removes everything.
+
+        strict cap (concept >= grade)   grade  9: 2 topics    grades 10-12: 0
+        within two grades               grade  9: 8 topics    grade 12:     0
+
+    Capping cannot fix a ceiling. It converts "serves below-grade content"
+    into "serves no content", and by the line above, into a 500.
+
+    The metric also over-reads for practice topics, which is worth knowing
+    before trusting it again: it counts the grade a concept is *introduced*,
+    and S-ID.2 has high schoolers using mean and median to compare
+    distributions. A 9th grader finding a median is doing grade-appropriate
+    work that this measure scores three grades below.
+
+    So the only real lever for grades 9-12 is more solvers -- `spread`
+    (S-ID.2) is the next one -- and this asserts the topics stay available
+    until there is something to replace them with.
+    """
+    ceiling_at_eight = ["ordering", "expressions", "geometry", "algebra",
+                        "rationals", "mean", "median", "mode", "probability",
+                        "angle_relationships"]
+    for grade in ("9th Grade", "10th Grade", "11th Grade", "12th Grade"):
+        allowed = decider._allowed_topics(grade)
+        for topic in ceiling_at_eight:
+            assert topic in allowed, (
+                f"{topic} was capped below {grade}. Capping these empties the "
+                "upper grades rather than improving them -- see this test.")
+    # Inside its own loop, not trailing the one above: written there it read
+    # the leaked loop variable and checked one topic of ten.
+    for topic in ceiling_at_eight:
+        assert topic not in decider.TOPIC_MAX_GRADE, topic
 
 
 # --- per-grade overrides inside a band --------------------------------------

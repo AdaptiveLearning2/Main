@@ -7,8 +7,9 @@
  * `connected: false` before the 5s telemetry poll could claim the drop, and
  * that flip tore the telemetry effect down -- so nothing was toasted, no
  * `reconnecting` phase was entered, and the button did not come back either.
- * Reproduced with this harness at 9s after the drop; this test is that
- * reproduction kept.
+ * Whether a harness sees it depends on which poll observes the drop first;
+ * see the timing note in the test. Checked by mutation: with the clause
+ * restored this test fails, and an earlier version of it did not.
  */
 import { it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
@@ -24,15 +25,20 @@ vi.mock('../../lib/session', () => ({
 }))
 
 // The bridge as the backend relays it under pull, via /api/eeg/status.
-const bridge = { ingestion: {} }
+// `stamps` records when each status read happened: the two polls are
+// phase-locked to the first one, and the test times the drop off it.
+const bridge = { ingestion: {}, stamps: [] }
 vi.mock('../../lib/signals', () => ({
   createSignalRecorder: () => ({ start: vi.fn(async () => ({ ok: true })), stop: vi.fn() }),
   eegHealth: vi.fn(async () => ({ available: true, ingest_mode: 'pull' })),
-  eegStatus: vi.fn(async () => ({
-    ingest_mode: 'pull', service: true,
-    poller: { running: true, samples: 3 },
-    muse: { available: true, running: true, ingestion: { ...bridge.ingestion } },
-  })),
+  eegStatus: vi.fn(async () => {
+    bridge.stamps.push(Date.now())
+    return {
+      ingest_mode: 'pull', service: true,
+      poller: { running: true, samples: 3 },
+      muse: { available: true, running: true, ingestion: { ...bridge.ingestion } },
+    }
+  }),
   eegDevices: vi.fn(async () => ({ devices: [{ device_id: 'default', kind: 'muse' }] })),
 }))
 vi.mock('../../lib/sidecar', () => ({
@@ -59,6 +65,7 @@ beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
   bridge.ingestion = { ...CONNECTED }
+  bridge.stamps = []
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
@@ -84,7 +91,18 @@ it('announces a drop under pull, where the poller keeps running through it', asy
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
   await waitFor(() => expect(apiFetch.mock.calls.some(c => c[0] === '/api/eeg/muse/connect')).toBe(true),
                 { timeout: 10000 })
-  await new Promise(r => setTimeout(r, 2000))
+
+  // *When* the drop happens decides whether this test can see the bug. Both
+  // polls start from the first status read: the 3s one ticks at 3, 6, 9...
+  // and the 5s one at 5, 10... The bug -- the status poll setting
+  // `connected: false` and tearing the telemetry effect down -- only shows
+  // when the status poll observes the drop first, so the drop has to land in
+  // a window where the next 3s tick comes before the next 5s tick. Dropping
+  // at 5.3s puts the first observation at 6 (status) and the next at 10
+  // (telemetry). A first version dropped at ~4.7s, where telemetry at 5
+  // wins, and passed against the bug it was written for.
+  const t0 = bridge.stamps[0]
+  await new Promise(r => setTimeout(r, Math.max(0, t0 + 5300 - Date.now())))
 
   bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
                        reconnect_attempt: 1, battery_percent: null }

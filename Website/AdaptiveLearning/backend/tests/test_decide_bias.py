@@ -63,18 +63,32 @@ def test_the_push_reads_the_direction_not_only_the_aggregate():
 
 
 def test_get_session_performance_keeps_the_order_newest_first(monkeypatch):
+    """`recent[:2]` means "the newest two" only because the query orders
+    `answered_at` descending. That direction was irrelevant while the
+    function returned aggregates and is load-bearing now, so the fake
+    *honours* `order()` rather than passing rows through: the table holds
+    them oldest-first, and a query that asked for ascending would put the
+    two answers from ten questions ago at the front."""
     class _Q:
-        def __init__(self, rows): self.rows = rows
+        def __init__(self, rows): self.rows = list(rows)
         def select(self, *_a): return self
         def eq(self, *_a): return self
-        def order(self, *_a, **_k): return self
+        def order(self, column, desc=False, **_k):
+            self.rows.sort(key=lambda r: r[column], reverse=desc)
+            return self
         def limit(self, *_a): return self
         def execute(self): return type("R", (), {"data": self.rows})()
-    rows = [{"correct": False}, {"correct": False}, {"correct": True}, {"correct": True}]
+    # Stored oldest-first, as a table would hand them back unordered.
+    rows = [{"correct": True,  "answered_at": "2026-09-04T10:00:01Z"},
+            {"correct": True,  "answered_at": "2026-09-04T10:00:02Z"},
+            {"correct": False, "answered_at": "2026-09-04T10:00:03Z"},
+            {"correct": False, "answered_at": "2026-09-04T10:00:04Z"}]
     monkeypatch.setattr(td, "supabase", type("S", (), {"table": lambda self, _n: _Q(rows)})())
     perf = td.get_session_performance("sess")
     assert perf == {"answered": 4, "correct": 2, "accuracy": 0.5,
                     "recent": [False, False, True, True]}
+    # The two most recent were wrong: no push, whatever the aggregate says.
+    assert td._decide_bias("neutral", {**perf, "accuracy": 0.7}) == 0
 
 
 def test_a_manual_setting_still_wins_over_a_push():

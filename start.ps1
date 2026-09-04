@@ -254,7 +254,11 @@ if ($Muse) {
 
     # Set in the window that launches the exe, not in a .env: the bridge reads
     # getenv directly. Backticked so PowerShell expands them in the *child*.
-    $bridgeCmd = "& '$bridgeExe'"
+    # Run through the supervisor, which restarts the exe a bounded number of
+    # times and prints every exit; it inherits these variables from the same
+    # window, so a restart lands on the configuration chosen here.
+    $bridgeSupervisor = Join-Path $eegDir "scripts\run_bridge_supervised.ps1"
+    $bridgeCmd = "& '$bridgeSupervisor' -Exe '$bridgeExe'"
     if ($Optics) {
         if ($OpticsPreset) {
             $bridgeCmd = "`$env:MUSE_OPTICS_PRESET='$OpticsPreset'; $bridgeCmd"

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, Legend } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts'
+import ChartTooltip from '../../components/charts/ChartTooltip'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { sliceSpec } from '../../components/charts/describeSeries'
 import { fetchQuestionsCached } from '../../lib/questionsCache'
@@ -111,7 +112,7 @@ export default function TeacherAnalytics() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" className="dark:stroke-gray-700" />
                 <XAxis dataKey="topic" tick={{ fontSize: 11, fill: '#94a3b8' }} angle={-35} textAnchor="end" interval={0} />
                 <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} allowDecimals={false} />
-                <Tooltip content={<CustomTooltip />} />
+                <ChartTooltip content={<CustomTooltip />} />
                 <Bar dataKey="count" radius={[6, 6, 0, 0]}>
                   {topicData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                 </Bar>
@@ -134,7 +135,7 @@ export default function TeacherAnalytics() {
                 <Pie data={diffData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
                   {diffData.map((d, i) => <Cell key={i} fill={PIE_COLORS[d.name]} />)}
                 </Pie>
-                <Tooltip formatter={(v, n) => [v, n.charAt(0).toUpperCase() + n.slice(1)]} />
+                <ChartTooltip formatter={(v, n) => [v, n.charAt(0).toUpperCase() + n.slice(1)]} />
                 <Legend formatter={v => <span className="capitalize text-sm font-semibold text-gray-700 dark:text-gray-300">{v}</span>} />
               </PieChart>
             </AccessibleChart>

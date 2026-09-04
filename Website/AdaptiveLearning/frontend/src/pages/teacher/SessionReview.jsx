@@ -3,9 +3,10 @@ import { useParams, useLocation, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { ArrowLeft, Brain, Camera, CheckCircle2, XCircle, Activity, ChevronDown } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip,
+  LineChart, Line, XAxis, YAxis,
   CartesianGrid, ReferenceLine, Legend, PieChart, Pie, Cell
 } from 'recharts'
+import ChartTooltip from '../../components/charts/ChartTooltip'
 import AccessibleChart from '../../components/charts/AccessibleChart'
 import { asPercent, sliceSpec } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
@@ -496,7 +497,7 @@ function SessionReviewBody({ sessionId }) {
                   <YAxis yAxisId="abs" orientation="right" domain={['auto', 'auto']}
                          fontSize={10} />
                 )}
-                <Tooltip
+                <ChartTooltip
                   labelFormatter={(v) => fmtTime(v)}
                   formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)}
                 />
@@ -609,7 +610,7 @@ function SessionReviewBody({ sessionId }) {
                         <Cell key={sl.name} fill={EMOTION_COLOURS[sl.name] || '#94a3b8'} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                    <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
               </AccessibleChart>
@@ -635,7 +636,7 @@ function SessionReviewBody({ sessionId }) {
                         <Cell key={sl.name} fill={STRESS_COLOURS[sl.name] || '#94a3b8'} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(v, n) => [`${v} windows`, n]} />
+                    <ChartTooltip formatter={(v, n) => [`${v} windows`, n]} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                   </PieChart>
               </AccessibleChart>

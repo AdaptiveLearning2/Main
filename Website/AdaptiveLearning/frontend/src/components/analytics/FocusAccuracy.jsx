@@ -1,5 +1,6 @@
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
 import AccessibleChart from '../charts/AccessibleChart'
+import ChartTooltip from '../charts/ChartTooltip'
 import { fmtDate } from '../../lib/dates'
 import Panel from './Panel'
 
@@ -94,11 +95,17 @@ export default function FocusAccuracy({ data, loading, onRetry }) {
           headline={headline} rows={rows} rowKey="label" rowLabel="Focus"
           columns={COLUMNS}
         >
-          <BarChart data={rows} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+          {/* Both axes named. Without them the chart read as three purple
+              bars over three percentages, and which percentage was the
+              headband's and which the answers' was not on the picture. */}
+          <BarChart data={rows} margin={{ top: 8, right: 8, left: 4, bottom: 16 }}>
             <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
-            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-            <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} unit="%" />
-            <Tooltip formatter={v => [`${Math.round(v)}%`, 'Accuracy']} />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }}
+                   label={{ value: 'Focus reading from the headband', position: 'insideBottom', offset: -10, fontSize: 11 }} />
+            <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} unit="%"
+                   label={{ value: 'Answers correct', angle: -90, position: 'insideLeft', offset: 14, fontSize: 11 }} />
+            <ChartTooltip formatter={v => [`${Math.round(v)}%`, 'Answers correct']}
+                          labelFormatter={l => `Focus ${l}`} />
             <Bar dataKey="accuracy" fill="#7c3aed" radius={[4, 4, 0, 0]} />
           </BarChart>
         </AccessibleChart>

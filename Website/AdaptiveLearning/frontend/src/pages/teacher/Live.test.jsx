@@ -9,7 +9,7 @@
  * the headband badge level with it, and adds the age of the reading.
  */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -73,6 +73,48 @@ it('keeps a student with no row at all as plain off', async () => {
   renderLive([student()])
   const badge = await screen.findByText(/Headband off/)
   expect(badge.textContent).not.toMatch(/ago|weak|stale/)
+})
+
+// ── switching class ──────────────────────────────────────────────────────────
+//
+// `students` used to be whatever the last fetch returned, whichever class it
+// was for, so the previous class's cards stayed on screen under the new
+// class's name until the new response landed -- and before any response, the
+// page read "Nobody's joined yet", which is the wording for a *loaded* empty
+// class. Seen by hand: selecting an empty class showed the other class's
+// student for several seconds.
+
+it('does not show the previous class under the new class name while it loads', async () => {
+  let resolveB
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }, { id: 'c2', name: 'Year 5' }],
+    '/api/teacher/classes/c1/live': () => [student()],
+    '/api/teacher/classes/c2/live': () => new Promise(r => { resolveB = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText('Sam')
+
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
+  // Loading, not Sam, and not the empty state either -- nothing has been
+  // fetched for Year 5 yet, so nothing can be claimed about it.
+  await waitFor(() => expect(screen.queryByText('Sam')).toBeNull())
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+
+  resolveB([])
+  await screen.findByText(/Nobody's joined yet/)
+})
+
+it('shows the empty state only once a fetch for the selected class has answered', async () => {
+  let resolveA
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
+    '/api/teacher/classes/c1/live': () => new Promise(r => { resolveA = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await waitFor(() => expect(resolveA).toBeDefined())
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+  resolveA([])
+  await screen.findByText(/Nobody's joined yet/)
 })
 
 it('does not read a heuristic "poor" as bad electrodes', () => {

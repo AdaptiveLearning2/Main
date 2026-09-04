@@ -190,6 +190,13 @@ export default function Live() {
   const [classes, setClasses]     = useState([])
   const [classId, setClassId]     = useState('')
   const [students, setStudents]   = useState([])
+  // Which class `students` belongs to. `loading` is derived from it rather
+  // than stored (CLAUDE.md, "derived loading"): switching class raises the
+  // skeleton on the render that changes `classId`, so the previous class's
+  // cards are never painted under this one's name -- which they were, for as
+  // long as the new fetch took, and an unfetched class read as "Nobody's
+  // joined yet". Seen driving the page by hand.
+  const [loadedFor, setLoadedFor] = useState(null)
   const [error, setError]         = useState(null)
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
@@ -254,6 +261,7 @@ export default function Live() {
           historyRef.current[r.user_id] = [...arr, point].slice(-60)
         })
         setStudents(rows)
+        setLoadedFor(classId)
         delay = POLL_MS
         if (!killed) setError(null)
       } catch (e) {
@@ -280,6 +288,8 @@ export default function Live() {
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [classId])
+
+  const loadingRoster = !!classId && loadedFor !== classId
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -316,6 +326,8 @@ export default function Live() {
           <p className="font-black text-gray-900 dark:text-white">No classes yet</p>
           <p className="text-sm text-gray-500 mt-1 dark:text-gray-400">Create a class first under the Classes tab.</p>
         </div>
+      ) : loadingRoster ? (
+        <SkeletonList count={3} height="h-28" />
       ) : students.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">👀</div>

@@ -1,8 +1,9 @@
 import { Activity, Brain, Heart, Radio, Sparkles, Zap } from 'lucide-react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
   PieChart, Pie, Cell, Legend,
 } from 'recharts'
+import ChartTooltip from '../charts/ChartTooltip'
 import { sliceSpec } from '../charts/describeSeries'
 import AccessibleChart from '../charts/AccessibleChart'
 
@@ -328,7 +329,7 @@ export function SignalTrend({ trend, title = 'Term Trend' }) {
                 <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                        fontSize={11} tickLine={false} unit=" bpm" />
               )}
-              <Tooltip />
+              <ChartTooltip />
               {/* Dots for the same reason as the daily chart: a student with
                   one recorded week gives every series a single point, which
                   draws no segment and renders as an empty chart without one. */}
@@ -478,7 +479,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                   <YAxis yAxisId="bpm" orientation="right" domain={['auto', 'auto']}
                          fontSize={11} tickLine={false} unit=" bpm" />
                 )}
-                <Tooltip />
+                <ChartTooltip />
                 {/* Distinct colours per series -- all three were "currentColor",
                     which rendered them identically and made the chart unreadable.
                     Matches the MiniMetric tones above. */}
@@ -607,7 +608,7 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                       <Cell key={slice.name} fill={EMOTION_COLOURS[slice.name] || '#94a3b8'} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(v, n) => [`${v} samples`, n]} />
+                  <ChartTooltip formatter={(v, n) => [`${v} samples`, n]} />
                   <Legend />
                 </PieChart>
           </AccessibleChart>

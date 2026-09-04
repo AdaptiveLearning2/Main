@@ -1,4 +1,5 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts'
+import ChartTooltip from '../charts/ChartTooltip'
 import AccessibleChart from '../charts/AccessibleChart'
 import Panel from './Panel'
 
@@ -57,7 +58,7 @@ export default function ClassAccuracyTrend({ data, loading, onRetry }) {
             <CartesianGrid strokeDasharray="3 3" className="stroke-gray-200 dark:stroke-gray-700" />
             <XAxis dataKey="label" tick={{ fontSize: 11 }} />
             <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} unit="%" />
-            <Tooltip formatter={v => [`${Math.round(v)}%`, 'Accuracy']} />
+            <ChartTooltip formatter={v => [`${Math.round(v)}%`, 'Accuracy']} />
             <Line type="monotone" dataKey="accuracy" stroke="#7c3aed" strokeWidth={2}
               // A single day of data is a dot, not a line with no length.
               dot={{ r: 3 }} connectNulls={false} />

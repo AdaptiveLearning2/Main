@@ -1,4 +1,5 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
+import ChartTooltip from '../charts/ChartTooltip'
 import AccessibleChart from '../charts/AccessibleChart'
 import { asPercent } from '../charts/describeSeries'
 import Panel from './Panel'
@@ -104,7 +105,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
             {hasHeart && (
               <YAxis yAxisId="bpm" orientation="right" tick={{ fontSize: 11 }} unit=" bpm" />
             )}
-            <Tooltip formatter={(v, name) => (name === 'Heart rate'
+            <ChartTooltip formatter={(v, name) => (name === 'Heart rate'
               ? [`${Math.round(v)} bpm`, name]
               : [`${Math.round(v * 100)}%`, name])} />
             <Legend wrapperStyle={{ fontSize: 12 }} />

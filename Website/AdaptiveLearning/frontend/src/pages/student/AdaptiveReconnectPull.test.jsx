@@ -75,7 +75,9 @@ const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_perc
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  bridge.ingestion = { ...CONNECTED }
+  // Discoverable, not yet connected; the connect route flips it. A harness
+  // that starts connected is adopted without a scan.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false }
   bridge.stamps = []
   bridge.recorders = []
   bridge.pollerRunning = false
@@ -94,7 +96,7 @@ beforeEach(() => {
     'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),
     'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
     'POST /api/eeg/muse/refresh': () => ({ ok: true }),
-    'POST /api/eeg/muse/connect': () => ({ ok: true }),
+    'POST /api/eeg/muse/connect': () => { bridge.ingestion = { ...bridge.ingestion, muse_connected: true }; return { ok: true } },
   })
 })
 

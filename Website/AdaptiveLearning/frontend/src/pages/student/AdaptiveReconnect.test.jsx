@@ -41,7 +41,11 @@ vi.mock('../../lib/sidecar', () => ({
   stopPushOnUnload: vi.fn(),
   pushStatus: vi.fn(async () => ({ enabled: true, running: true, recorded: {} })),
   deviceStart: vi.fn(async () => ({})), deviceStop: vi.fn(async () => ({})),
-  museRefresh: vi.fn(async () => ({})), museConnect: vi.fn(async () => ({})),
+  museRefresh: vi.fn(async () => ({})),
+  // The bridge as it behaves: not connected until asked. A harness that
+  // starts connected is adopted by the page without a scan, which is the
+  // right behaviour and the wrong fixture for tests about the scan.
+  museConnect: vi.fn(async () => { bridge.ingestion = { ...bridge.ingestion, muse_connected: true }; return {} }),
   museDisconnect: vi.fn(async () => ({})),
   museState: vi.fn(async () => ({ running: true, ingestion: { ...bridge.ingestion } })),
   devices: vi.fn(async () => [{ device_id: 'default', kind: 'muse', running: false }]),
@@ -68,7 +72,8 @@ const TEST_TIMEOUT = 60_000
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  bridge.ingestion = { ...CONNECTED }
+  // Discoverable, not yet connected; `museConnect` flips it.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false }
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
@@ -91,6 +96,23 @@ async function connect() {
   // connect -> 1s poll (muse_connected).
   await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
 }
+
+it('adopts a link the bridge already has instead of tearing it down to scan for it', async () => {
+  // Seen on hardware: after both the bridge and the page had given up, the
+  // headband was switched back on and the bridge had it connected before
+  // Connect was clicked. The click's disconnect-then-scan dropped that link
+  // 1.5s in -- "connects, then immediately disconnects".
+  bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1' }
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
+  expect(museDisconnect).not.toHaveBeenCalled()
+  expect(museRefresh).not.toHaveBeenCalled()
+  expect(museConnect).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument()
+}, TEST_TIMEOUT)
 
 it('announces a drop and shows the bridge reconnecting instead of resetting the panel', async () => {
   await connect()

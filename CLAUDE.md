@@ -494,6 +494,15 @@ not be reconnected" the panel read STREAMING with a Disconnect button over a hea
 gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
 mock that always says running cannot see it.
 
+**Connect adopts a link the bridge already has.** `pairOnce` reads the bridge first and, on
+`muse_connected: true`, goes straight to connected without the disconnect-then-scan. Seen on
+hardware: after both the bridge and the page had given up, the headband was switched back on and
+the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
+that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband
+left streaming from a *previous* session; one streaming to us now is not that. Consequence for
+tests: **a harness whose bridge starts connected is adopted without a scan**, so both reconnect
+harnesses start `muse_connected: false` and flip it from their connect mock.
+
 **Nothing supervises `muse_native_bridge.exe`.** `start.ps1` launches it once, in its own window;
 if it exits, the sidecar's TCP adapter backs off to 5 s between attempts for ever and the page
 reads "not answering". That is a known gap, not an oversight: a restart from `start.ps1` would

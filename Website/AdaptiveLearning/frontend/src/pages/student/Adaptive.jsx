@@ -947,6 +947,24 @@ export default function Adaptive() {
     // disconnect is global to the shared bridge device, so a cancelled
     // attempt must not send one.
     if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    // A link that is already up is adopted, not torn down and rebuilt. Seen
+    // on hardware: after the bridge and this page had both given up, the
+    // headband was switched back on and the bridge had it connected by the
+    // time Connect was clicked -- and the click's disconnect-then-scan below
+    // dropped that link a second and a half in, which read as "connects,
+    // then immediately disconnects". The disconnect exists for a headband
+    // left streaming from a *previous* session; a bridge reporting
+    // muse_connected has one that is streaming to us now.
+    const already = await hw.status().catch(() => null)
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+    if (already?.ingestion?.muse_connected === true) {
+      clearTimeout(phaseTimer.current)
+      setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
+                           deviceName: already.ingestion.active_muse_name || s.deviceName }))
+      return { ok: true, adopted: true }
+    }
+
     // Disconnect any previous session first, or the headband is left in a
     // streaming state that throws BadStateError on the next connect.
     await hw.disconnect().catch(() => {})

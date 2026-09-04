@@ -161,6 +161,28 @@ it('says the roster could not be loaded instead of leaving the skeleton up', asy
   expect(screen.queryByText(/Couldn't load/)).toBeNull()
 })
 
+it('does not carry one class\'s failure banner over another class\'s loading', async () => {
+  // `error` was the one roster state not scoped to the selected class: A's
+  // 500 banner sat above B's skeleton until B's first request answered.
+  let resolveB
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }, { id: 'c2', name: 'Year 5' }],
+    '/api/teacher/classes/c1/live': () => { const e = new Error('Internal Server Error'); e.status = 500; throw e },
+    '/api/teacher/classes/c2/live': () => new Promise(r => { resolveB = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load the live roster/)
+
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
+  await waitFor(() => expect(screen.queryByText(/Couldn't load/)).toBeNull())
+  // Loading B: no banner, no error state, nothing claimed about a class
+  // that has not answered.
+  expect(screen.queryByText(/Internal Server Error/)).toBeNull()
+  resolveB([student()])
+  await screen.findByText('Sam')
+  expect(screen.queryByText(/Internal Server Error/)).toBeNull()
+})
+
 it('does not read a heuristic "poor" as bad electrodes', () => {
   // The legacy heuristic reports poor for any focused student; only a
   // contact-backed verdict, or the nulled row it produces, counts.

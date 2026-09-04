@@ -347,7 +347,14 @@ export default function Live() {
         )}
       </div>
 
-      {error && !rosterMissing && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
+      {/* Scoped to the selected class like the rest of the roster state:
+          `error` is written and cleared together with `failedFor`, so this
+          reads "the last answer for the selected class was a failure". Without
+          the scope, class A's failure banner sat over class B's skeleton until
+          B's first request answered. */}
+      {error && failedFor === classId && !rosterMissing && (
+        <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>
+      )}
 
       {loadingClasses ? (
         <SkeletonList count={3} height="h-28" />

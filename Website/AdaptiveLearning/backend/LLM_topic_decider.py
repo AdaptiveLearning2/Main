@@ -218,10 +218,13 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
     defers.** "stressed" always eases, whatever the answers or the control
     say. A push up needs the control on Auto and *either* a "focused"
     reading *or* a run of correct answers this session (see the constants
-    above) -- and never happens while the label is "stressed", nor while a
-    channel has vetoed an increase (`increase_withheld`, the facial
-    channel's one power: its "neutral" is a veto, not an absence, and the
-    label alone cannot tell the two apart). Pure, so the rule is testable
+    above), and four things hold it: the label being "stressed"; a manual
+    setting, which is the student's; a channel having vetoed an increase
+    (`increase_withheld`, the facial channel's one power -- its "neutral" is
+    a veto, not an absence, and the label alone cannot tell the two apart);
+    and a run of misses (`_recent_falling`), which applies to *both* sources
+    -- correctness has no quality gate, so its opinion that the student is
+    falling outranks a focused reading. Pure, so the rule is testable
     without a model or a database.
     """
     if eeg_label == "stressed":

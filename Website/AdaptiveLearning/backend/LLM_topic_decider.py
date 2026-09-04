@@ -196,6 +196,12 @@ DIFFS = ["easy", "medium", "hard"]
 # quality gate.
 PERFORMANCE_PUSH_ACCURACY = 0.7
 PERFORMANCE_PUSH_MIN_ANSWERS = 3
+# And the newest answers must be right. The aggregate cannot tell a rising
+# student from a falling one: 7 of 10 is 0.7 whether the misses were the
+# first three or the last three, and a push after three straight misses is
+# exactly the harm the asymmetry exists to prevent. Two, not one, so a single
+# slip on an otherwise strong run does not gate the push either way for long.
+PERFORMANCE_PUSH_RECENT_CORRECT = 2
 
 
 def _shift_difficulty(current, bias):
@@ -228,9 +234,21 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
         return 1
     if (session_perf
             and (session_perf.get("answered") or 0) >= PERFORMANCE_PUSH_MIN_ANSWERS
-            and (session_perf.get("accuracy") or 0) >= PERFORMANCE_PUSH_ACCURACY):
+            and (session_perf.get("accuracy") or 0) >= PERFORMANCE_PUSH_ACCURACY
+            and _recent_all_correct(session_perf.get("recent"))):
         return 1
     return 0
+
+
+def _recent_all_correct(recent):
+    """Whether the newest PERFORMANCE_PUSH_RECENT_CORRECT answers were right.
+
+    `recent` is newest first. Absent (a caller predating the field) fails
+    closed: no push, since the direction cannot be known.
+    """
+    if not recent or len(recent) < PERFORMANCE_PUSH_RECENT_CORRECT:
+        return False
+    return all(recent[:PERFORMANCE_PUSH_RECENT_CORRECT])
 
 
 def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
@@ -250,7 +268,13 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
         if not rows:
             return None
         correct = sum(1 for r in rows if r.get("correct"))
-        return {"answered": len(rows), "correct": correct, "accuracy": round(correct / len(rows), 3)}
+        # `recent` keeps the order the aggregate throws away, newest first.
+        # An accuracy of 0.7 over ten is the same number for a student on a
+        # run of seven and one who has just missed three in a row, and only
+        # one of them should be pushed harder.
+        return {"answered": len(rows), "correct": correct,
+                "accuracy": round(correct / len(rows), 3),
+                "recent": [bool(r.get("correct")) for r in rows]}
     except Exception as e:
         print(f"[session_performance] {e}")
         return None

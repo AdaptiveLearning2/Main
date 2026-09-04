@@ -17,9 +17,13 @@ import pytest  # noqa: E402
 
 import LLM_topic_decider as td  # noqa: E402
 
-GOOD_RUN = {"answered": 5, "correct": 5, "accuracy": 1.0}
-THIN_RUN = {"answered": 2, "correct": 2, "accuracy": 1.0}
-MIXED    = {"answered": 5, "correct": 3, "accuracy": 0.6}
+GOOD_RUN = {"answered": 5, "correct": 5, "accuracy": 1.0, "recent": [True] * 5}
+THIN_RUN = {"answered": 2, "correct": 2, "accuracy": 1.0, "recent": [True] * 2}
+MIXED    = {"answered": 5, "correct": 3, "accuracy": 0.6, "recent": [True, False, True, False, True]}
+# 7 of 10 either way; only the order differs. Newest first.
+RISING   = {"answered": 10, "correct": 7, "accuracy": 0.7, "recent": [True] * 7 + [False] * 3}
+FALLING  = {"answered": 10, "correct": 7, "accuracy": 0.7, "recent": [False] * 3 + [True] * 7}
+ONE_SLIP = {"answered": 10, "correct": 9, "accuracy": 0.9, "recent": [False] + [True] * 9}
 
 
 def test_a_run_of_correct_answers_pushes_up_on_its_own():
@@ -41,8 +45,36 @@ def test_the_push_needs_enough_answers_and_enough_of_them_right():
     assert td._decide_bias("neutral", None) == 0
     at_threshold = {"answered": td.PERFORMANCE_PUSH_MIN_ANSWERS,
                     "correct": td.PERFORMANCE_PUSH_MIN_ANSWERS,
-                    "accuracy": td.PERFORMANCE_PUSH_ACCURACY}
+                    "accuracy": td.PERFORMANCE_PUSH_ACCURACY,
+                    "recent": [True] * td.PERFORMANCE_PUSH_MIN_ANSWERS}
     assert td._decide_bias("neutral", at_threshold) == 1
+
+
+def test_the_push_reads_the_direction_not_only_the_aggregate():
+    """7 of 10 is 0.7 whether the misses were the first three or the last
+    three. Pushing a child who has just failed three in a row is the harm the
+    asymmetry is written against, and an aggregate cannot see it."""
+    assert td._decide_bias("neutral", RISING) == 1
+    assert td._decide_bias("neutral", FALLING) == 0
+    # One slip on a strong run gates the push until the next right answer.
+    assert td._decide_bias("neutral", ONE_SLIP) == 0
+    # A caller predating `recent` fails closed: no direction, no push.
+    assert td._decide_bias("neutral", {"answered": 5, "correct": 5, "accuracy": 1.0}) == 0
+
+
+def test_get_session_performance_keeps_the_order_newest_first(monkeypatch):
+    class _Q:
+        def __init__(self, rows): self.rows = rows
+        def select(self, *_a): return self
+        def eq(self, *_a): return self
+        def order(self, *_a, **_k): return self
+        def limit(self, *_a): return self
+        def execute(self): return type("R", (), {"data": self.rows})()
+    rows = [{"correct": False}, {"correct": False}, {"correct": True}, {"correct": True}]
+    monkeypatch.setattr(td, "supabase", type("S", (), {"table": lambda self, _n: _Q(rows)})())
+    perf = td.get_session_performance("sess")
+    assert perf == {"answered": 4, "correct": 2, "accuracy": 0.5,
+                    "recent": [False, False, True, True]}
 
 
 def test_a_manual_setting_still_wins_over_a_push():

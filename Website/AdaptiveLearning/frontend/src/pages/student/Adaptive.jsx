@@ -579,6 +579,11 @@ export default function Adaptive() {
   // and a student mid-question had no reason to look at it.
   const onDropped = (ing) => {
     poorStreak.current = 0
+    // A new episode starts with a fresh grace. Left over from a previous
+    // one -- a grace that expired into a successful scan, or a teardown
+    // mid-settle -- the stale stamp read as a grace already spent, and the
+    // next bridge reconnect was torn down on its first null-age poll.
+    settlingSince.current = null
     const byBridge = ing.reconnecting === true
     setHeadband(s => ({
       ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
@@ -608,6 +613,7 @@ export default function Adaptive() {
   const onReconnected = () => {
     if (reconnectRun.current) reconnectRun.current.cancelled = true
     reconnectRun.current = null
+    settlingSince.current = null
     setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
     // Only answers a drop that was announced; a silent one gets a silent
     // recovery, or the flapping shows up as a stream of "reconnected".
@@ -1086,6 +1092,7 @@ export default function Adaptive() {
     // alone would swallow both its warning and its recovery toast.
     lastDropToast.current = 0
     dropAnnounced.current = false
+    settlingSince.current = null
     await hw.end()
     // Drop rather than reuse: it closed over deviceId at creation, so
     // reusing it after picking a different station would misattribute data.

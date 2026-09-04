@@ -212,6 +212,25 @@ it('gives a settling link a bounded grace, then treats it as dead', async () => 
   // watchdog on it would have dropped the link first, so this is the
   // watchdog-off case.
   await waitFor(() => expect(museRefresh).toHaveBeenCalledTimes(2), { timeout: 20000 })
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+
+  // The grace is per episode. This one expired into a scan, and left as it
+  // was the stamp read as a grace already spent on the *next* drop: the
+  // bridge's reconnect, null-age for a moment, was torn down on its first
+  // poll -- "connects, then immediately disconnects" on the recovery path.
+  bridge.ingestion = { ...CONNECTED }
+  await sleep(1000)
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  // The bridge's attempt lands before the page's next poll -- its first
+  // backoff is 2s, the same as the poll -- so the first thing the page sees
+  // of the new episode is a settling link.
+  bridge.ingestion = { ...CONNECTED, reconnecting: false, eeg_age_ms: null }
+  await sleep(5000)
+  expect(museRefresh).toHaveBeenCalledTimes(2)   // no third scan inside the fresh grace
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
 }, TEST_TIMEOUT)
 
 it('does not adopt a link the bridge calls connected but has no recent EEG from', async () => {

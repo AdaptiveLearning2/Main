@@ -124,6 +124,8 @@ describe('every LoadError call site is classified', () => {
     'pages/student/PracticeTest.jsx':       'own practice session',
     'pages/teacher/Analytics.jsx':          'the question bank, which is public-read',
     'pages/teacher/Classes.jsx':            'GET /api/classes -- own classes',
+    // Same read; the relationship-checked live roster goes to its own banner.
+    'pages/teacher/Live.jsx':               'GET /api/classes -- own classes',
     'components/practice/PracticeSetup.jsx': 'own profile and the topic list',
   }
 

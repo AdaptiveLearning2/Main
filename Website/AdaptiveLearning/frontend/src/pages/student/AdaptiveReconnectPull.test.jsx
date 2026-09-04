@@ -68,14 +68,18 @@ import { toast } from 'sonner'
 import { apiFetch, mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
+// `eeg_age_ms` is part of "connected": the page counts a link as alive only
+// with EEG flowing on it.
 const CONNECTED = { muse_connected: true, muse_devices: ['Muse-1'], battery_percent: 80,
                     auto_reconnect: true, reconnecting: false, reconnect_attempt: 0,
-                    reconnect_max_attempts: 5, reconnect_exhausted: false }
+                    reconnect_max_attempts: 5, reconnect_exhausted: false, eeg_age_ms: 2 }
 
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
-  bridge.ingestion = { ...CONNECTED }
+  // Discoverable, not yet connected; the connect route flips it. A harness
+  // that starts connected is adopted without a scan.
+  bridge.ingestion = { ...CONNECTED, muse_connected: false }
   bridge.stamps = []
   bridge.recorders = []
   bridge.pollerRunning = false
@@ -94,7 +98,7 @@ beforeEach(() => {
     'POST /api/sessions/start': () => ({ id: `sess-${++bridge.sessions}` }),
     'POST /api/eeg/muse/disconnect': () => ({ ok: true }),
     'POST /api/eeg/muse/refresh': () => ({ ok: true }),
-    'POST /api/eeg/muse/connect': () => ({ ok: true }),
+    'POST /api/eeg/muse/connect': () => { bridge.ingestion = { ...bridge.ingestion, muse_connected: true }; return { ok: true } },
   })
 })
 

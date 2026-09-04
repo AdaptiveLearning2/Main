@@ -494,6 +494,33 @@ not be reconnected" the panel read STREAMING with a Disconnect button over a hea
 gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
 mock that always says running cannot see it.
 
+**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the
+bridge first and, on `muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s),
+goes straight to connected without the disconnect-then-scan. "Connected" alone is not evidence:
+libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
+disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
+link would leave nothing able to clear it. An older bridge reports no age and falls through to
+the scan. **`linkAlive(ing)` is the page's one answer to "is this link alive"**, and all three
+readers use it — Connect's adoption, the reconnect loop's "came back on its own" check, and the
+telemetry poll's recovery — because the second and third had the same gap: after the bridge had
+exhausted its attempts (exactly where the hardware run recorded CONNECTED-but-silent links) the
+loop declared success on the word "connected" and reached the same unclearable state by another
+door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. **But "not alive" is not
+"dead" on the recovery paths**: the bridge zeroes its packet clock on every CONNECTED and reports
+`eeg_age_ms: null` until the first packet, and a preset switch keeps that null for seconds — so
+every successful bridge reconnect briefly reads as connected-with-no-age, and a reader that called
+that dead started a page-driven reconnect whose first act is a bridge disconnect. `linkSettling`
+names that state, and the two recovery readers give it `SETTLE_GRACE_MS` (10 s, above
+`PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides first) —
+one grace shared through `settlingSince`, not one per reader. Adoption keeps refusing it: it needs
+positive evidence, and "no packet yet" is not that. Seen on
+hardware: after both the bridge and the page had given up, the headband was switched back on and
+the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
+that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband
+left streaming from a *previous* session; one streaming to us now is not that. Consequence for
+tests: **a harness whose bridge starts connected is adopted without a scan**, so both reconnect
+harnesses start `muse_connected: false` and flip it from their connect mock.
+
 **Nothing supervises `muse_native_bridge.exe`.** `start.ps1` launches it once, in its own window;
 if it exits, the sidecar's TCP adapter backs off to 5 s between attempts for ever and the page
 reads "not answering". That is a known gap, not an oversight: a restart from `start.ps1` would

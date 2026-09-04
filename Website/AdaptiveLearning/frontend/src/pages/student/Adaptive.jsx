@@ -36,6 +36,37 @@ const CONTACT_POOR_STREAK = 2
 // at the edge of range drops every ~10s; the panel tracks each one, the
 // toast says it once.
 const DROP_TOAST_MIN_MS = 60_000
+// How recent the bridge's last EEG packet must be for Connect to adopt the
+// link it already has rather than rebuild it. EEG arrives at 220-256Hz, so a
+// live link is single-digit milliseconds; this is generous to a preset switch
+// settling and well under the bridge's 8s watchdog.
+const ADOPT_MAX_EEG_AGE_MS = 3000
+
+// The page's one answer to "is this link alive". `muse_connected` alone is
+// not it: libMuse keeps saying CONNECTED after EEG stops, and a link taken as
+// alive on that word alone ends every recovery path with nothing left that
+// can clear it. Used by Connect's adoption, the reconnect loop's "came back
+// on its own" check, and the telemetry poll's recovery -- three readers, one
+// rule. An older bridge reports no age and is never alive by this test,
+// which sends it through the scan, as before.
+const linkAlive = (ing) =>
+  ing?.muse_connected === true
+  && typeof ing.eeg_age_ms === 'number' && ing.eeg_age_ms <= ADOPT_MAX_EEG_AGE_MS
+
+// Connected, and no EEG packet *yet*: the bridge zeroes its packet clock on
+// every CONNECTED and reports no age until the first packet, and a preset
+// switch keeps that null for a few seconds. Not alive -- adoption is right to
+// refuse it -- but not dead either, and the two recovery readers must tell
+// them apart: treating a link the bridge made a moment ago as dead started a
+// page-driven reconnect whose first act is a bridge disconnect. The bridge's
+// own watchdog measures from the later of the last packet and the connect;
+// this page has no connect time, so it gives a settling link a bounded grace
+// instead: past SETTLE_GRACE_MS with still no packet, it is dead after all.
+const linkSettling = (ing) =>
+  ing?.muse_connected === true && ing.eeg_age_ms == null
+// Above PRESET_SETTLE_SECONDS (5s) and the bridge's 8s watchdog, so with the
+// watchdog on the bridge always decides first.
+const SETTLE_GRACE_MS = 10_000
 
 // Retry delay for offering the session to the sidecar. The student often
 // opens the lesson before starting the local app, so this is normal, not an
@@ -241,6 +272,9 @@ export default function Adaptive() {
   // announced -- see onDropped.
   const lastDropToast = useRef(0)
   const dropAnnounced = useRef(false)
+  // When a reconnecting link was first seen connected with no packet yet --
+  // see linkSettling.
+  const settlingSince = useRef(null)
   const pageAlive = useRef(true)
   useEffect(() => {
     pageAlive.current = true
@@ -471,13 +505,24 @@ export default function Adaptive() {
         // `=== false`, not falsiness: an absent field means the sidecar
         // didn't report, not that the headband went away. Same for `=== true`
         // on the way back.
-        const linkUp = ing.muse_connected === true
+        // Recovery needs EEG flowing, not only CONNECTED -- see linkAlive.
+        const linkUp = linkAlive(ing)
         const dropped = ing.muse_connected === false
 
         if (prev.phase === 'reconnecting') {
           if (linkUp) {
+            settlingSince.current = null
             onReconnected()
             return
+          }
+          // A link the bridge has just made, with no packet yet, is left to
+          // settle -- neither recovered nor handed to this page's loop, which
+          // would tear it down. Bounded: past the grace it is dead.
+          if (linkSettling(ing)) {
+            if (settlingSince.current == null) settlingSince.current = Date.now()
+            if (Date.now() - settlingSince.current < SETTLE_GRACE_MS) return
+          } else {
+            settlingSince.current = null
           }
           // Show the bridge's own progress while it is trying. Once it has
           // given up -- or never reported trying, which is an older bridge --
@@ -534,6 +579,11 @@ export default function Adaptive() {
   // and a student mid-question had no reason to look at it.
   const onDropped = (ing) => {
     poorStreak.current = 0
+    // A new episode starts with a fresh grace. Left over from a previous
+    // one -- a grace that expired into a successful scan, or a teardown
+    // mid-settle -- the stale stamp read as a grace already spent, and the
+    // next bridge reconnect was torn down on its first null-age poll.
+    settlingSince.current = null
     const byBridge = ing.reconnecting === true
     setHeadband(s => ({
       ...s, connected: false, phase: 'reconnecting', battery: null, contactPoor: null,
@@ -563,6 +613,7 @@ export default function Adaptive() {
   const onReconnected = () => {
     if (reconnectRun.current) reconnectRun.current.cancelled = true
     reconnectRun.current = null
+    settlingSince.current = null
     setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null }))
     // Only answers a drop that was announced; a silent one gets a silent
     // recovery, or the flapping shows up as a stream of "reconnected".
@@ -585,10 +636,24 @@ export default function Adaptive() {
                              reconnect: { attempt, max: RECONNECT_ATTEMPTS, byBridge: false } }))
         await new Promise(r => setTimeout(r, RECONNECT_BACKOFF_MS[attempt - 1]))
         if (run.cancelled) break
-        // The link may have come back on its own while waiting.
-        const st = await hw.status().catch(() => null)
+        // The link may have come back on its own while waiting. A link that
+        // is connected but has no packet yet is given the same grace as in
+        // the telemetry poll, re-read every poll interval, rather than torn
+        // down by pairOnce's disconnect.
+        let st = await hw.status().catch(() => null)
         if (run.cancelled) break
-        if (st?.ingestion?.muse_connected === true) { ok = true; break }
+        // One grace shared with the telemetry poll via `settlingSince`: a
+        // link the poll already gave up on is not granted a second one here.
+        while (linkSettling(st?.ingestion)) {
+          if (settlingSince.current == null) settlingSince.current = Date.now()
+          if (Date.now() - settlingSince.current >= SETTLE_GRACE_MS) break
+          await new Promise(r => setTimeout(r, RECONNECT_POLL_MS))
+          if (run.cancelled) break
+          st = await hw.status().catch(() => null)
+        }
+        if (!linkSettling(st?.ingestion)) settlingSince.current = null
+        if (run.cancelled) break
+        if (linkAlive(st?.ingestion)) { ok = true; break }
         const res = await pairOnce(hw, sid, run).catch(() => ({ ok: false }))
         if (run.cancelled) break
         if (res.ok) { ok = true; break }
@@ -947,6 +1012,32 @@ export default function Adaptive() {
     // disconnect is global to the shared bridge device, so a cancelled
     // attempt must not send one.
     if (cancelled()) return { ok: false, reason: 'cancelled' }
+
+    // A link that is already up is adopted, not torn down and rebuilt. Seen
+    // on hardware: after the bridge and this page had both given up, the
+    // headband was switched back on and the bridge had it connected by the
+    // time Connect was clicked -- and the click's disconnect-then-scan below
+    // dropped that link a second and a half in, which read as "connects,
+    // then immediately disconnects". The disconnect exists for a headband
+    // left streaming from a *previous* session; a bridge reporting
+    // muse_connected has one that is streaming to us now.
+    //
+    // "Connected" alone is not evidence: libMuse keeps saying CONNECTED after
+    // EEG stops, which is why the bridge has a liveness watchdog at all. So
+    // adoption also needs a recent EEG packet (`eeg_age_ms`, which an older
+    // bridge does not report -- then this falls through to the scan, as
+    // before). Without that, a bridge stuck on a dead link is adopted into
+    // STREAMING with no data, and since this is the page's one reachable
+    // bridge disconnect outside "Stop trying", nothing could clear it.
+    const already = await hw.status().catch(() => null)
+    if (cancelled()) return { ok: false, reason: 'cancelled' }
+    if (linkAlive(already?.ingestion)) {
+      clearTimeout(phaseTimer.current)
+      setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
+                           deviceName: already.ingestion.active_muse_name || s.deviceName }))
+      return { ok: true, adopted: true }
+    }
+
     // Disconnect any previous session first, or the headband is left in a
     // streaming state that throws BadStateError on the next connect.
     await hw.disconnect().catch(() => {})
@@ -1001,6 +1092,7 @@ export default function Adaptive() {
     // alone would swallow both its warning and its recovery toast.
     lastDropToast.current = 0
     dropAnnounced.current = false
+    settlingSince.current = null
     await hw.end()
     // Drop rather than reuse: it closed over deviceId at creation, so
     // reusing it after picking a different station would misattribute data.

@@ -36,6 +36,11 @@ const CONTACT_POOR_STREAK = 2
 // at the edge of range drops every ~10s; the panel tracks each one, the
 // toast says it once.
 const DROP_TOAST_MIN_MS = 60_000
+// How recent the bridge's last EEG packet must be for Connect to adopt the
+// link it already has rather than rebuild it. EEG arrives at 220-256Hz, so a
+// live link is single-digit milliseconds; this is generous to a preset switch
+// settling and well under the bridge's 8s watchdog.
+const ADOPT_MAX_EEG_AGE_MS = 3000
 
 // Retry delay for offering the session to the sidecar. The student often
 // opens the lesson before starting the local app, so this is normal, not an
@@ -956,9 +961,19 @@ export default function Adaptive() {
     // then immediately disconnects". The disconnect exists for a headband
     // left streaming from a *previous* session; a bridge reporting
     // muse_connected has one that is streaming to us now.
+    //
+    // "Connected" alone is not evidence: libMuse keeps saying CONNECTED after
+    // EEG stops, which is why the bridge has a liveness watchdog at all. So
+    // adoption also needs a recent EEG packet (`eeg_age_ms`, which an older
+    // bridge does not report -- then this falls through to the scan, as
+    // before). Without that, a bridge stuck on a dead link is adopted into
+    // STREAMING with no data, and since this is the page's one reachable
+    // bridge disconnect outside "Stop trying", nothing could clear it.
     const already = await hw.status().catch(() => null)
     if (cancelled()) return { ok: false, reason: 'cancelled' }
-    if (already?.ingestion?.muse_connected === true) {
+    const age = already?.ingestion?.eeg_age_ms
+    if (already?.ingestion?.muse_connected === true
+        && typeof age === 'number' && age <= ADOPT_MAX_EEG_AGE_MS) {
       clearTimeout(phaseTimer.current)
       setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
                            deviceName: already.ingestion.active_muse_name || s.deviceName }))

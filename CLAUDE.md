@@ -494,8 +494,13 @@ not be reconnected" the panel read STREAMING with a Disconnect button over a hea
 gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
 mock that always says running cannot see it.
 
-**Connect adopts a link the bridge already has.** `pairOnce` reads the bridge first and, on
-`muse_connected: true`, goes straight to connected without the disconnect-then-scan. Seen on
+**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the
+bridge first and, on `muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s),
+goes straight to connected without the disconnect-then-scan. "Connected" alone is not evidence:
+libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
+disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
+link would leave nothing able to clear it. An older bridge reports no age and falls through to
+the scan. Seen on
 hardware: after both the bridge and the page had given up, the headband was switched back on and
 the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
 that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband

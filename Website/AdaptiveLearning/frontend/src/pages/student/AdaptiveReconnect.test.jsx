@@ -102,7 +102,7 @@ it('adopts a link the bridge already has instead of tearing it down to scan for 
   // headband was switched back on and the bridge had it connected before
   // Connect was clicked. The click's disconnect-then-scan dropped that link
   // 1.5s in -- "connects, then immediately disconnects".
-  bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1' }
+  bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1', eeg_age_ms: 4 }
   render(<Adaptive />)
   const button = await screen.findByRole('button', { name: /connect headband/i })
   await waitFor(() => expect(button).not.toBeDisabled())
@@ -112,6 +112,21 @@ it('adopts a link the bridge already has instead of tearing it down to scan for 
   expect(museRefresh).not.toHaveBeenCalled()
   expect(museConnect).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: /disconnect/i })).toBeInTheDocument()
+}, TEST_TIMEOUT)
+
+it('does not adopt a link the bridge calls connected but has no recent EEG from', async () => {
+  // libMuse keeps saying CONNECTED after EEG stops. Adopting that would put
+  // the panel on STREAMING with nothing flowing and skip the one bridge
+  // disconnect a click can still send, so a dead link could never be
+  // cleared. A stale age -- or no age at all, from an older bridge -- goes
+  // through the disconnect-then-scan as before.
+  bridge.ingestion = { ...CONNECTED, active_muse_name: 'Muse-1', eeg_age_ms: 20_000 }
+  render(<Adaptive />)
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await waitFor(() => expect(museDisconnect).toHaveBeenCalled(), { timeout: 5000 })
+  await waitFor(() => expect(museRefresh).toHaveBeenCalled(), { timeout: 5000 })
 }, TEST_TIMEOUT)
 
 it('announces a drop and shows the bridge reconnecting instead of resetting the panel', async () => {

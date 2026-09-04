@@ -1453,6 +1453,15 @@ store a value the ease-off rule has to contradict, and a setting the system rout
 worse than one that does not exist. It is why the control offers three options and not four: medium
 and adaptive would both mean no shift.
 
+**A run of correct answers pushes difficulty up on its own** (`_decide_bias` in
+`LLM_topic_decider`): at least `PERFORMANCE_PUSH_MIN_ANSWERS` (3) of the session's last ten answers
+at `PERFORMANCE_PUSH_ACCURACY` (70%) or better shifts up, with the control on Auto and the fused
+label not `stressed`. It used to need a `focused` reading at the moment of choosing, and on hardware
+that is a state a student cannot hold: five correct answers at grade 1 stayed on easy throughout,
+because every decision landed on `stressed` (a loose strap) or `neutral`. The asymmetry is
+untouched — stressed still eases whatever the answers say, and a manual Easier/Harder still wins
+over a push — and `test_decide_bias.py` brute-forces it.
+
 **`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
 before the first answer and served first, so a hardcoded default there makes the setting do nothing
 for the opening of every session.

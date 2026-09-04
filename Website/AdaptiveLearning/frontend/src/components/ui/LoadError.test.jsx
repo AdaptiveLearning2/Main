@@ -97,6 +97,10 @@ describe('every LoadError call site is classified', () => {
       'GET /api/students/{id}/questions -- _verify_can_view_student',
     'pages/teacher/Sessions.jsx':
       'GET /api/classes/{id}/students -- _verify_class_owner',
+    // Two sites: the own-classes read (which cannot 403) and the live roster,
+    // which can. The stricter class applies to the file, and both pass `error`.
+    'pages/teacher/Live.jsx':
+      'GET /api/teacher/classes/{id}/live -- _verify_class_owner',
   }
 
   // Exempt, and the reason is the point: two different reasons hide here, and

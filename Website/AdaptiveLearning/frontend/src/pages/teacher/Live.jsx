@@ -8,6 +8,7 @@ import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 
 // POLL_MAX_MS caps the backoff when the endpoint is failing, so a broken
 // backend costs a handful of requests a minute instead of sixty.
@@ -190,6 +191,21 @@ export default function Live() {
   const [classes, setClasses]     = useState([])
   const [classId, setClassId]     = useState('')
   const [students, setStudents]   = useState([])
+  // Which class `students` belongs to. `loading` is derived from it rather
+  // than stored (CLAUDE.md, "derived loading"): switching class raises the
+  // skeleton on the render that changes `classId`, so the previous class's
+  // cards are never painted under this one's name -- which they were, for as
+  // long as the new fetch took, and an unfetched class read as "Nobody's
+  // joined yet". Seen driving the page by hand.
+  const [loadedFor, setLoadedFor] = useState(null)
+  // Which class the last *failed* read was for, and the error. A read that
+  // keeps failing must not leave the skeleton up: with `loadedFor` only ever
+  // advancing on success, "not retrieved" collapsed into "still loading",
+  // the same collapse the class list above got its own state for. Once a
+  // fetch for the selected class has answered either way, the answer wins.
+  const [failedFor, setFailedFor]       = useState(null)
+  const [rosterFailed, setRosterFailed] = useState(null)
+  const [retryNonce, setRetryNonce]     = useState(0)
   const [error, setError]         = useState(null)
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
@@ -203,16 +219,25 @@ export default function Live() {
     return () => clearInterval(id)
   }, [])
 
-  useEffect(() => {
+  // A failed class-list read is its own state, not an empty list: `classes`
+  // left at [] rendered "No classes yet -- create a class first", which told
+  // a teacher whose read had failed that their classes did not exist and
+  // pointed them at the one action that could not help. Held as the error
+  // object so LoadError can pick the sentence from its status.
+  const [classesFailed, setClassesFailed] = useState(null)
+  const loadClasses = () => {
+    setLoadingClasses(true)
+    setClassesFailed(null)
     apiFetch('/api/classes')
       .then(rows => {
         setClasses(rows || [])
         if (rows?.length && !classId) setClassId(rows[0].id)
       })
-      .catch(e => setError(e.message))
+      .catch(e => setClassesFailed(e))
       .finally(() => setLoadingClasses(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadClasses() }, [])
 
   useEffect(() => {
     if (!classId) return
@@ -254,10 +279,17 @@ export default function Live() {
           historyRef.current[r.user_id] = [...arr, point].slice(-60)
         })
         setStudents(rows)
+        setLoadedFor(classId)
+        setFailedFor(null)
+        setRosterFailed(null)
         delay = POLL_MS
         if (!killed) setError(null)
       } catch (e) {
-        if (!killed) setError(e.message)
+        if (!killed) {
+          setError(e.message)
+          setFailedFor(classId)
+          setRosterFailed(e)
+        }
         delay = Math.min(delay * 2, POLL_MAX_MS)
       }
       // Chained timeout, not setInterval, so a slow response can't stack polls.
@@ -279,7 +311,16 @@ export default function Live() {
       clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [classId])
+    // `retryNonce` restarts the poll at once from the LoadError's Try again,
+    // rather than waiting out a backed-off interval.
+  }, [classId, retryNonce])
+
+  // Three states for the roster of the selected class: nothing has answered
+  // yet (skeleton), the last answer was a failure and no rows for this class
+  // are in hand (LoadError), or rows are in hand (cards -- with the banner
+  // above if a later poll failed, since the rows are still worth showing).
+  const rosterMissing = !!classId && loadedFor !== classId && failedFor === classId
+  const loadingRoster = !!classId && loadedFor !== classId && !rosterMissing
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -306,16 +347,30 @@ export default function Live() {
         )}
       </div>
 
-      {error && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
+      {/* Scoped to the selected class like the rest of the roster state:
+          `error` is written and cleared together with `failedFor`, so this
+          reads "the last answer for the selected class was a failure". Without
+          the scope, class A's failure banner sat over class B's skeleton until
+          B's first request answered. */}
+      {error && failedFor === classId && !rosterMissing && (
+        <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>
+      )}
 
       {loadingClasses ? (
         <SkeletonList count={3} height="h-28" />
+      ) : classesFailed ? (
+        <LoadError what="your classes" onRetry={loadClasses} error={classesFailed} />
       ) : !classes.length ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">🏫</div>
           <p className="font-black text-gray-900 dark:text-white">No classes yet</p>
           <p className="text-sm text-gray-500 mt-1 dark:text-gray-400">Create a class first under the Classes tab.</p>
         </div>
+      ) : loadingRoster ? (
+        <SkeletonList count={3} height="h-28" />
+      ) : rosterMissing ? (
+        <LoadError what="the live roster" error={rosterFailed}
+                   onRetry={() => setRetryNonce(n => n + 1)} />
       ) : students.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">👀</div>

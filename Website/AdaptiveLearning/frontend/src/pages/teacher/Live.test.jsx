@@ -9,7 +9,7 @@
  * the headband badge level with it, and adds the age of the reading.
  */
 import { it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', async () => await import('../../test/mocks/apiFetch'))
@@ -73,6 +73,114 @@ it('keeps a student with no row at all as plain off', async () => {
   renderLive([student()])
   const badge = await screen.findByText(/Headband off/)
   expect(badge.textContent).not.toMatch(/ago|weak|stale/)
+})
+
+// ── switching class ──────────────────────────────────────────────────────────
+//
+// `students` used to be whatever the last fetch returned, whichever class it
+// was for, so the previous class's cards stayed on screen under the new
+// class's name until the new response landed -- and before any response, the
+// page read "Nobody's joined yet", which is the wording for a *loaded* empty
+// class. Seen by hand: selecting an empty class showed the other class's
+// student for several seconds.
+
+it('does not show the previous class under the new class name while it loads', async () => {
+  let resolveB
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }, { id: 'c2', name: 'Year 5' }],
+    '/api/teacher/classes/c1/live': () => [student()],
+    '/api/teacher/classes/c2/live': () => new Promise(r => { resolveB = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText('Sam')
+
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
+  // Loading, not Sam, and not the empty state either -- nothing has been
+  // fetched for Year 5 yet, so nothing can be claimed about it.
+  await waitFor(() => expect(screen.queryByText('Sam')).toBeNull())
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+
+  resolveB([])
+  await screen.findByText(/Nobody's joined yet/)
+})
+
+it('shows the empty state only once a fetch for the selected class has answered', async () => {
+  let resolveA
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
+    '/api/teacher/classes/c1/live': () => new Promise(r => { resolveA = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await waitFor(() => expect(resolveA).toBeDefined())
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+  resolveA([])
+  await screen.findByText(/Nobody's joined yet/)
+})
+
+it('says the class list could not be loaded, not that there are no classes', async () => {
+  // A failed read left `classes` at [] and the page said "No classes yet --
+  // create a class first", pointing a teacher whose classes exist at the one
+  // action that could not help. Same failure class as the roster above.
+  let calls = 0
+  mockApi({
+    '/api/classes': () => {
+      calls += 1
+      if (calls === 1) { const e = new Error('boom'); e.status = 500; throw e }
+      return [{ id: 'c1', name: 'Year 4' }]
+    },
+    '/api/teacher/classes/c1/live': () => [],
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load your classes/)
+  expect(screen.queryByText(/No classes yet/)).toBeNull()
+  // Retry is offered for a failure that can pass, and works.
+  fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+  await screen.findByRole('combobox')
+  expect(screen.queryByText(/Couldn't load/)).toBeNull()
+})
+
+it('says the roster could not be loaded instead of leaving the skeleton up', async () => {
+  // `loadedFor` only advanced on success, so a roster read that kept failing
+  // rendered the skeleton for ever under the error banner: "not retrieved"
+  // folded into "still loading". Once a fetch for the selected class has
+  // answered either way, the answer wins; Try again refetches at once.
+  let calls = 0
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
+    '/api/teacher/classes/c1/live': () => {
+      calls += 1
+      if (calls === 1) { const e = new Error('Internal Server Error'); e.status = 500; throw e }
+      return [student()]
+    },
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load the live roster/)
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+  await screen.findByText('Sam')
+  expect(screen.queryByText(/Couldn't load/)).toBeNull()
+})
+
+it('does not carry one class\'s failure banner over another class\'s loading', async () => {
+  // `error` was the one roster state not scoped to the selected class: A's
+  // 500 banner sat above B's skeleton until B's first request answered.
+  let resolveB
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }, { id: 'c2', name: 'Year 5' }],
+    '/api/teacher/classes/c1/live': () => { const e = new Error('Internal Server Error'); e.status = 500; throw e },
+    '/api/teacher/classes/c2/live': () => new Promise(r => { resolveB = r }),
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load the live roster/)
+
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'c2' } })
+  await waitFor(() => expect(screen.queryByText(/Couldn't load/)).toBeNull())
+  // Loading B: no banner, no error state, nothing claimed about a class
+  // that has not answered.
+  expect(screen.queryByText(/Internal Server Error/)).toBeNull()
+  resolveB([student()])
+  await screen.findByText('Sam')
+  expect(screen.queryByText(/Internal Server Error/)).toBeNull()
 })
 
 it('does not read a heuristic "poor" as bad electrodes', () => {

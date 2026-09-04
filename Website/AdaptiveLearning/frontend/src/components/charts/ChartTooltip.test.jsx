@@ -90,15 +90,22 @@ describe('ChartTooltip', () => {
     // A source check: the chart does not lay out under jsdom (the responsive
     // container has no size), so the rendered <text> cannot be read here.
     // What can be read is that no axis `label=` prop omits a fill.
-    const offenders = walk(SRC)
+    const charted = walk(SRC)
       .filter(f => /from 'recharts'/.test(readFileSync(f, 'utf8')))
+    const offenders = charted
       .flatMap(f => axisLabels(readFileSync(f, 'utf8'))
         .filter(l => !/\bfill:/.test(l))
         .map(l => `${rel(f)}: ${l}`))
     expect(offenders).toEqual([])
-    // And this file is exercising something: FocusAccuracy has two.
-    const focus = readFileSync(join(SRC, 'components/analytics/FocusAccuracy.jsx'), 'utf8')
-    expect(axisLabels(focus)).toHaveLength(2)
+    // `[]` is also what a walk that matched nothing produces -- a renamed
+    // directory, a `.tsx` migration `walk` does not follow -- so the scanned
+    // set is pinned through the same walk and filter the guard used, not by
+    // reading FocusAccuracy directly, which would exercise the extractor and
+    // never the walk. Same shape as LoadError.test.jsx's non-empty check.
+    expect(charted.length).toBeGreaterThan(5)
+    const focus = charted.find(f => rel(f) === 'components/analytics/FocusAccuracy.jsx')
+    expect(focus).toBeDefined()
+    expect(axisLabels(readFileSync(focus, 'utf8'))).toHaveLength(2)
   })
 
   it('finds an axis label however it is written', () => {
@@ -123,7 +130,11 @@ describe('ChartTooltip', () => {
   })
 
   it('is the only file that renders a Recharts Tooltip', () => {
-    const offenders = walk(SRC)
+    const files = walk(SRC)
+    // Not vacuous: the walk found the tree, and this component in it.
+    expect(files.length).toBeGreaterThan(5)
+    expect(files.map(rel)).toContain('components/charts/ChartTooltip.jsx')
+    const offenders = files
       .filter(f => rel(f) !== 'components/charts/ChartTooltip.jsx')
       .filter(f => {
         const src = readFileSync(f, 'utf8')

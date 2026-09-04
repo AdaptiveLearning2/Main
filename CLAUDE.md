@@ -1453,6 +1453,28 @@ store a value the ease-off rule has to contradict, and a setting the system rout
 worse than one that does not exist. It is why the control offers three options and not four: medium
 and adaptive would both mean no shift.
 
+**A run of correct answers pushes difficulty up on its own** (`_decide_bias` in
+`LLM_topic_decider`): at least `PERFORMANCE_PUSH_MIN_ANSWERS` (3) of the session's last ten answers
+at `PERFORMANCE_PUSH_ACCURACY` (70%) or better shifts up — **and the newest
+`PERFORMANCE_PUSH_RECENT_CORRECT` (2) must be right**, because the aggregate cannot tell a rising
+student from a falling one: 7 of 10 is 0.7 whether the misses were the first three or the last
+three, and pushing a child who has just failed three in a row is the harm the asymmetry exists to
+prevent. `get_session_performance` keeps the order as `recent` (newest first) for that; a caller
+without it gets no push. Also with the control on Auto, the fused label not `stressed`, and no
+channel having withheld an increase (`FusedState.increase_withheld`, the facial veto, carried on
+every fused state past the ease-off step). It used to need a `focused` reading at the moment of choosing, and on hardware
+that is a state a student cannot hold: five correct answers at grade 1 stayed on easy throughout,
+because every decision landed on `stressed` (a loose strap) or `neutral`. The asymmetry is
+untouched — stressed still eases whatever the answers say, and a manual Easier/Harder still wins
+over a push — and `test_decide_bias.py` brute-forces it. **A run of misses vetoes a push from
+either source**: `recent` (newest first, kept by `get_session_performance`, whose `desc=True` is
+what makes `recent[:2]` the newest two — the fake in its test sorts by the flag so that direction
+is pinned) has to be all-correct over the newest `PERFORMANCE_PUSH_RECENT_CORRECT` (2) for the
+accuracy push, and a miss among them holds a `focused` push too. Correctness is the one channel
+here with no quality gate, so three straight misses is a trusted opinion that the student is
+falling, and every channel with an opinion must agree to raise; a focused reading over that run is
+the false-focused case the asymmetry exists for. No answers yet is no opinion, and focused pushes.
+
 **`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
 before the first answer and served first, so a hardcoded default there makes the setting do nothing
 for the opening of every session.

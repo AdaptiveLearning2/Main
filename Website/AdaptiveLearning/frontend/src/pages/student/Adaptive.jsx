@@ -42,6 +42,17 @@ const DROP_TOAST_MIN_MS = 60_000
 // settling and well under the bridge's 8s watchdog.
 const ADOPT_MAX_EEG_AGE_MS = 3000
 
+// The page's one answer to "is this link alive". `muse_connected` alone is
+// not it: libMuse keeps saying CONNECTED after EEG stops, and a link taken as
+// alive on that word alone ends every recovery path with nothing left that
+// can clear it. Used by Connect's adoption, the reconnect loop's "came back
+// on its own" check, and the telemetry poll's recovery -- three readers, one
+// rule. An older bridge reports no age and is never alive by this test,
+// which sends it through the scan, as before.
+const linkAlive = (ing) =>
+  ing?.muse_connected === true
+  && typeof ing.eeg_age_ms === 'number' && ing.eeg_age_ms <= ADOPT_MAX_EEG_AGE_MS
+
 // Retry delay for offering the session to the sidecar. The student often
 // opens the lesson before starting the local app, so this is normal, not an
 // error -- long enough to avoid hammering the port, short enough to start
@@ -476,7 +487,8 @@ export default function Adaptive() {
         // `=== false`, not falsiness: an absent field means the sidecar
         // didn't report, not that the headband went away. Same for `=== true`
         // on the way back.
-        const linkUp = ing.muse_connected === true
+        // Recovery needs EEG flowing, not only CONNECTED -- see linkAlive.
+        const linkUp = linkAlive(ing)
         const dropped = ing.muse_connected === false
 
         if (prev.phase === 'reconnecting') {
@@ -593,7 +605,7 @@ export default function Adaptive() {
         // The link may have come back on its own while waiting.
         const st = await hw.status().catch(() => null)
         if (run.cancelled) break
-        if (st?.ingestion?.muse_connected === true) { ok = true; break }
+        if (linkAlive(st?.ingestion)) { ok = true; break }
         const res = await pairOnce(hw, sid, run).catch(() => ({ ok: false }))
         if (run.cancelled) break
         if (res.ok) { ok = true; break }
@@ -971,9 +983,7 @@ export default function Adaptive() {
     // bridge disconnect outside "Stop trying", nothing could clear it.
     const already = await hw.status().catch(() => null)
     if (cancelled()) return { ok: false, reason: 'cancelled' }
-    const age = already?.ingestion?.eeg_age_ms
-    if (already?.ingestion?.muse_connected === true
-        && typeof age === 'number' && age <= ADOPT_MAX_EEG_AGE_MS) {
+    if (linkAlive(already?.ingestion)) {
       clearTimeout(phaseTimer.current)
       setHeadband(s => ({ ...s, connected: true, phase: 'connected', reconnect: null,
                            deviceName: already.ingestion.active_muse_name || s.deviceName }))

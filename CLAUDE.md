@@ -500,7 +500,12 @@ goes straight to connected without the disconnect-then-scan. "Connected" alone i
 libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
 disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
 link would leave nothing able to clear it. An older bridge reports no age and falls through to
-the scan. Seen on
+the scan. **`linkAlive(ing)` is the page's one answer to "is this link alive"**, and all three
+readers use it — Connect's adoption, the reconnect loop's "came back on its own" check, and the
+telemetry poll's recovery — because the second and third had the same gap: after the bridge had
+exhausted its attempts (exactly where the hardware run recorded CONNECTED-but-silent links) the
+loop declared success on the word "connected" and reached the same unclearable state by another
+door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. Seen on
 hardware: after both the bridge and the page had given up, the headband was switched back on and
 the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
 that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband

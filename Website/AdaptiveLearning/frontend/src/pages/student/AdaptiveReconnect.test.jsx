@@ -173,10 +173,32 @@ it('lets a bridge reconnect settle instead of tearing it down for having no pack
   expect(museDisconnect).toHaveBeenCalledTimes(1)   // only the original pairing
   expect(museRefresh).toHaveBeenCalledTimes(1)
   expect(toast.success).not.toHaveBeenCalled()
+  // And the page did not take over either: the loop's own grace would also
+  // hold the disconnect back, so the two guards are told apart here -- the
+  // panel must not have moved to the page's "of 3" attempts.
+  expect(screen.queryByText(/of 3\)/)).toBeNull()
 
   bridge.ingestion = { ...CONNECTED }
   await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
   expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
+  expect(museRefresh).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
+it('lets the page-driven loop wait for a settling link too, instead of scanning over it', async () => {
+  // The other reader. With the loop already running -- the bridge had given
+  // up -- a link that then comes up with no packet yet must not be torn down
+  // by the loop's next attempt; it waits, and adopts the link when EEG flows.
+  await connect()
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: false,
+                       reconnect_exhausted: true, muse_devices: [] }
+  await screen.findByText(/reconnecting \(attempt 1 of 3\)/, {}, POLL)
+  // Inside the loop's 2s backoff the bridge connects, no packet yet.
+  bridge.ingestion = { ...CONNECTED, reconnect_exhausted: true, eeg_age_ms: null }
+  await sleep(6000)
+  expect(museRefresh).toHaveBeenCalledTimes(1)      // only the original pairing
+  expect(museDisconnect).toHaveBeenCalledTimes(1)
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
   expect(museRefresh).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)
 

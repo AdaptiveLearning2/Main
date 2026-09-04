@@ -479,6 +479,30 @@ poor polls instead), and the teacher's Live badge gained the age of the newest r
 "weak signal" the heart badge had, from `lib/signalAge.js` — `STALE_AFTER_S` there mirrors the
 backend's `_LIVE_WINDOW_SEC` so the two surfaces agree on what counts as live.
 
+**Run against a real headband on 2026-09-03, and three things the synthetic tests could not
+show.** Out of range, the bridge's five attempts ran on schedule (2/4/8/16/30 s, each timing out at
+15 s) and exhausted at 2 m 16 s, the page took over, gave up, and the button came back. But at the
+*edge* of range every attempt reached CONNECTED within seconds, no EEG followed, and the watchdog
+dropped it 8 s later — and because the budget was reset on every CONNECTED, that flapped for as long
+as the headband stayed there, a toast pair every ten seconds. So **CONNECTED no longer resets the
+attempt count; a link held for `LINK_STABLE_MS` (30 s) does**, in `service_auto_reconnect()`, and
+five short-lived reconnects exhaust the budget like five failures. The page says "disconnected"
+once per `DROP_TOAST_MIN_MS` (60 s) and "reconnected" only for a drop it announced; the panel still
+tracks every one. And **the page's give-up path must tear down like Disconnect**, not reset state:
+under pull `connected` is the poller, which the loop never stopped, so three seconds after "could
+not be reconnected" the panel read STREAMING with a Disconnect button over a headband four minutes
+gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
+mock that always says running cannot see it.
+
+**Nothing supervises `muse_native_bridge.exe`.** `start.ps1` launches it once, in its own window;
+if it exits, the sidecar's TCP adapter backs off to 5 s between attempts for ever and the page
+reads "not answering". That is a known gap, not an oversight: a restart from `start.ps1` would
+re-pair nothing (the bridge holds no state worth keeping), but it would also hide a crash that
+should be read in that window. Restart it by hand for now; the sidecar reconnects on its own once
+it is listening. The debug panel's *Link* row shows the fields that tell the two apart —
+`consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone, `eeg_age_ms` climbing
+with the bridge answering is the headband gone.
+
 **`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version of it hung.** The
 pairing sequence is a chain of 1–1.5 s waits noticed by a 5 s poll; under `vi.useFakeTimers()` —
 with or without `shouldAdvanceTime` — `await act(async () => advanceTimersByTimeAsync(…))` never

@@ -990,6 +990,12 @@ export default function Adaptive() {
   const disconnectHeadband = async (hw) => {
     clearTimeout(phaseTimer.current)
     poorStreak.current = 0
+    // A teardown ends the episode the drop-toast throttle is counting, so a
+    // link the student re-establishes by hand and loses again inside the
+    // 60s window is announced like the first one -- otherwise wall-clock
+    // alone would swallow both its warning and its recovery toast.
+    lastDropToast.current = 0
+    dropAnnounced.current = false
     await hw.end()
     // Drop rather than reuse: it closed over deviceId at creation, so
     // reusing it after picking a different station would misattribute data.

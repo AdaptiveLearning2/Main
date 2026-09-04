@@ -132,6 +132,32 @@ it('says a flapping link dropped once, not once per drop', async () => {
   expect(toast.success).toHaveBeenCalledTimes(1)
 }, TEST_TIMEOUT)
 
+it('announces a new episode after a teardown, even inside the throttle window', async () => {
+  // The throttle is once per *episode*, not once per minute. A student who
+  // stopped trying and re-paired by hand has started a new one, and a drop
+  // on that link is news again -- keyed to wall-clock alone, it was not.
+  await connect()
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/The headband disconnected/, {}, POLL)
+  expect(toast.warning).toHaveBeenCalledTimes(1)
+
+  fireEvent.click(screen.getByRole('button', { name: /stop trying/i }))
+  const button = await screen.findByRole('button', { name: /connect headband/i })
+  bridge.ingestion = { ...CONNECTED }
+  await waitFor(() => expect(button).not.toBeDisabled())
+  fireEvent.click(button)
+  await screen.findByText(/STREAMING/, {}, { timeout: 10000 })
+
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  expect(toast.warning).toHaveBeenCalledTimes(2)
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
+  expect(toast.success).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
 it('takes over once the bridge has given up, and gives the student a way out', async () => {
   await connect()
   const refreshes = museRefresh.mock.calls.length

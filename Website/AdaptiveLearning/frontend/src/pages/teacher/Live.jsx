@@ -8,6 +8,7 @@ import { asPercent } from '../../components/charts/describeSeries'
 import { apiFetch } from '../../lib/api'
 import { STALE_AFTER_S, eegWeak, formatAge } from '../../lib/signalAge'
 import SkeletonList from '../../components/ui/Skeleton'
+import LoadError from '../../components/ui/LoadError'
 
 // POLL_MAX_MS caps the backoff when the endpoint is failing, so a broken
 // backend costs a handful of requests a minute instead of sixty.
@@ -210,16 +211,25 @@ export default function Live() {
     return () => clearInterval(id)
   }, [])
 
-  useEffect(() => {
+  // A failed class-list read is its own state, not an empty list: `classes`
+  // left at [] rendered "No classes yet -- create a class first", which told
+  // a teacher whose read had failed that their classes did not exist and
+  // pointed them at the one action that could not help. Held as the error
+  // object so LoadError can pick the sentence from its status.
+  const [classesFailed, setClassesFailed] = useState(null)
+  const loadClasses = () => {
+    setLoadingClasses(true)
+    setClassesFailed(null)
     apiFetch('/api/classes')
       .then(rows => {
         setClasses(rows || [])
         if (rows?.length && !classId) setClassId(rows[0].id)
       })
-      .catch(e => setError(e.message))
+      .catch(e => setClassesFailed(e))
       .finally(() => setLoadingClasses(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadClasses() }, [])
 
   useEffect(() => {
     if (!classId) return
@@ -320,6 +330,8 @@ export default function Live() {
 
       {loadingClasses ? (
         <SkeletonList count={3} height="h-28" />
+      ) : classesFailed ? (
+        <LoadError what="your classes" onRetry={loadClasses} error={classesFailed} />
       ) : !classes.length ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">🏫</div>

@@ -117,6 +117,28 @@ it('shows the empty state only once a fetch for the selected class has answered'
   await screen.findByText(/Nobody's joined yet/)
 })
 
+it('says the class list could not be loaded, not that there are no classes', async () => {
+  // A failed read left `classes` at [] and the page said "No classes yet --
+  // create a class first", pointing a teacher whose classes exist at the one
+  // action that could not help. Same failure class as the roster above.
+  let calls = 0
+  mockApi({
+    '/api/classes': () => {
+      calls += 1
+      if (calls === 1) { const e = new Error('boom'); e.status = 500; throw e }
+      return [{ id: 'c1', name: 'Year 4' }]
+    },
+    '/api/teacher/classes/c1/live': () => [],
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load your classes/)
+  expect(screen.queryByText(/No classes yet/)).toBeNull()
+  // Retry is offered for a failure that can pass, and works.
+  fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+  await screen.findByRole('combobox')
+  expect(screen.queryByText(/Couldn't load/)).toBeNull()
+})
+
 it('does not read a heuristic "poor" as bad electrodes', () => {
   // The legacy heuristic reports poor for any focused student; only a
   // contact-backed verdict, or the nulled row it produces, counts.

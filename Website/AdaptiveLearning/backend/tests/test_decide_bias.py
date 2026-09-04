@@ -102,6 +102,47 @@ def test_the_veto_reaches_the_decider_from_the_real_fusion():
                            increase_withheld=clear.increase_withheld) == 1
 
 
+def _eeg_states():
+    import signal_fusion as sf
+    return [
+        ("neutral", sf.ChannelState("neutral", "eeg neutral")),
+        ("no_eeg", sf.ChannelState(None, "no eeg samples", cause="no_samples")),
+        ("low confidence", sf.ChannelState(None, "eeg confidence low", cause="low_confidence")),
+        ("focused", sf.ChannelState("focused", "eeg focused and calm")),
+    ]
+
+
+@pytest.mark.parametrize("name,eeg", _eeg_states())
+def test_a_negative_face_withholds_the_accuracy_push_whatever_the_eeg_says(name, eeg):
+    """The veto used to exist only on the branch that turns "focused" into
+    "neutral". The accuracy push fires from a neutral EEG or none at all --
+    no_eeg is the case the push was built for -- so the veto has to ride on
+    every state that reaches the push, or it is absent exactly where the
+    push fires. Measured before this: neutral, no_eeg and insufficient_signal
+    with a trusted negative face all pushed +1 on a 4-of-5 run."""
+    import signal_fusion as sf
+    fused = sf.fuse(eeg, face=sf.ChannelState("negative", "face sad"))
+    assert fused.increase_withheld is True, name
+    assert td._decide_bias(fused.label, GOOD_RUN,
+                           increase_withheld=fused.increase_withheld) == 0, name
+    # Without the face, the same EEG lets the answers push.
+    clear = sf.fuse(eeg)
+    assert clear.increase_withheld is False, name
+    assert td._decide_bias(clear.label, GOOD_RUN,
+                           increase_withheld=clear.increase_withheld) == 1, name
+
+
+def test_a_negative_face_never_stops_an_ease_off():
+    """Withholding is the face's only power. It must not turn a stressed
+    reading into anything else, or carry a flag that reads as one."""
+    import signal_fusion as sf
+    fused = sf.fuse(sf.ChannelState("stressed", "eeg calm low"),
+                    face=sf.ChannelState("negative", "face sad"))
+    assert fused.label == "stressed"
+    assert td._decide_bias(fused.label, GOOD_RUN,
+                           increase_withheld=fused.increase_withheld) == -1
+
+
 def test_the_decider_applies_the_shared_rule():
     """The rule lives in one function; the decider must call it rather than
     carry a second copy that can drift -- and must hand it the veto."""

@@ -236,13 +236,21 @@ def fuse(
 
     # 2. Push harder. Every channel that has an opinion must agree, so any
     #    single doubt is enough to hold difficulty where it is.
+    #
+    #    The facial veto is carried on *every* state from here down, not only
+    #    the one that turns "focused" into "neutral". The decider can push on
+    #    its own evidence -- a run of correct answers -- from a neutral EEG or
+    #    none at all, and a veto that only existed when EEG happened to read
+    #    focused would be absent exactly where that push fires.
+    withheld = face.label == "negative"
+    common["increase_withheld"] = withheld
     if eeg.label == "focused":
         if heart.label == "stressed":          # unreachable above; kept explicit
             return FusedState("neutral", "heart contradicts eeg-focused", **common)
-        if face.label == "negative":
+        if withheld:
             return FusedState("neutral",
                               f"{face.reason} withholding eeg-focused increase",
-                              increase_withheld=True, **common)
+                              **common)
         return FusedState("focused", eeg.reason, **common)
 
     # 3. Nothing to act on. An EEG that said nothing is reported as such,

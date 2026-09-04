@@ -98,6 +98,12 @@ class FusedState:
     calm: float | None = None
     confidence: float | None = None
     channels: dict[str, str] = field(default_factory=dict)
+    # True when a channel actively vetoed an increase -- the facial channel's
+    # one power. The label is "neutral" either way, and "no opinion" and
+    # "withheld" must not collapse into the same string: a caller that pushes
+    # harder on its own evidence (a run of correct answers) has to defer to
+    # this exactly as it defers to "stressed".
+    increase_withheld: bool = False
 
     @property
     def adjusted(self) -> bool:
@@ -230,10 +236,18 @@ def fuse(
 
     # 2. Push harder. Every channel that has an opinion must agree, so any
     #    single doubt is enough to hold difficulty where it is.
+    #
+    #    The facial veto is carried on *every* state from here down, not only
+    #    the one that turns "focused" into "neutral". The decider can push on
+    #    its own evidence -- a run of correct answers -- from a neutral EEG or
+    #    none at all, and a veto that only existed when EEG happened to read
+    #    focused would be absent exactly where that push fires.
+    withheld = face.label == "negative"
+    common["increase_withheld"] = withheld
     if eeg.label == "focused":
         if heart.label == "stressed":          # unreachable above; kept explicit
             return FusedState("neutral", "heart contradicts eeg-focused", **common)
-        if face.label == "negative":
+        if withheld:
             return FusedState("neutral",
                               f"{face.reason} withholding eeg-focused increase",
                               **common)

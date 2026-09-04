@@ -186,11 +186,93 @@ EEG_BIAS_WINDOW = 5
 
 DIFFS = ["easy", "medium", "hard"]
 
+# A run of correct answers can push difficulty up on its own. It used to need
+# the fused signal to read "focused" at the moment a question was chosen --
+# and on hardware that is a state a student cannot hold: a session of five
+# correct answers stayed on easy throughout because the label at every
+# decision was "stressed" (a loose headband) or "neutral". Over the last
+# SESSION_PERFORMANCE_WINDOW answers, at least this many at or above this
+# accuracy counts as the student telling us, in the one channel that has no
+# quality gate.
+PERFORMANCE_PUSH_ACCURACY = 0.7
+PERFORMANCE_PUSH_MIN_ANSWERS = 3
+# And the newest answers must be right. The aggregate cannot tell a rising
+# student from a falling one: 7 of 10 is 0.7 whether the misses were the
+# first three or the last three, and a push after three straight misses is
+# exactly the harm the asymmetry exists to prevent. Two, not one, so a single
+# slip on an otherwise strong run does not gate the push either way for long.
+PERFORMANCE_PUSH_RECENT_CORRECT = 2
+
+
 def _shift_difficulty(current, bias):
     if current not in DIFFS:
         current = "medium"
     idx = max(0, min(len(DIFFS) - 1, DIFFS.index(current) + (bias or 0)))
     return DIFFS[idx]
+
+
+def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False):
+    """The deterministic shift applied on top of the model's difficulty.
+
+    Kept as `signal_fusion` documents: **easing off wins, pushing harder
+    defers.** "stressed" always eases, whatever the answers or the control
+    say. A push up needs the control on Auto and *either* a "focused"
+    reading *or* a run of correct answers this session (see the constants
+    above), and four things hold it: the label being "stressed"; a manual
+    setting, which is the student's; a channel having vetoed an increase
+    (`increase_withheld`, the facial channel's one power -- its "neutral" is
+    a veto, not an absence, and the label alone cannot tell the two apart);
+    and a run of misses (`_recent_falling`), which applies to *both* sources
+    -- correctness has no quality gate, so its opinion that the student is
+    falling outranks a focused reading. Pure, so the rule is testable
+    without a model or a database.
+    """
+    if eeg_label == "stressed":
+        return -1
+    if manual_bias:
+        return manual_bias
+    if increase_withheld:
+        return 0
+    # A run of wrong answers vetoes a push from *either* source. Correctness
+    # is the one channel here with no quality gate, so three straight misses
+    # is a trusted opinion that the student is falling, and "every channel
+    # with an opinion must agree" to raise. A focused reading over that run
+    # is exactly the false-focused case the asymmetry is written against:
+    # signals are least reliable when a student is agitated. With no answers
+    # yet there is no opinion, and focused pushes as before.
+    if _recent_falling(session_perf):
+        return 0
+    if eeg_label == "focused":
+        return 1
+    if (session_perf
+            and (session_perf.get("answered") or 0) >= PERFORMANCE_PUSH_MIN_ANSWERS
+            and (session_perf.get("accuracy") or 0) >= PERFORMANCE_PUSH_ACCURACY
+            and _recent_all_correct(session_perf.get("recent"))):
+        return 1
+    return 0
+
+
+def _recent_falling(session_perf):
+    """Whether the newest answers carry a miss -- an opinion against raising.
+
+    Distinct from `not _recent_all_correct`: with no answers yet, or a caller
+    predating `recent`, there is no opinion either way, and the focused push
+    is left to its own evidence. Only a recorded miss among the newest
+    PERFORMANCE_PUSH_RECENT_CORRECT answers says "falling".
+    """
+    recent = (session_perf or {}).get("recent") or []
+    return any(not r for r in recent[:PERFORMANCE_PUSH_RECENT_CORRECT])
+
+
+def _recent_all_correct(recent):
+    """Whether the newest PERFORMANCE_PUSH_RECENT_CORRECT answers were right.
+
+    `recent` is newest first. Absent (a caller predating the field) fails
+    closed: no push, since the direction cannot be known.
+    """
+    if not recent or len(recent) < PERFORMANCE_PUSH_RECENT_CORRECT:
+        return False
+    return all(recent[:PERFORMANCE_PUSH_RECENT_CORRECT])
 
 
 def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
@@ -210,7 +292,13 @@ def get_session_performance(session_id, limit=SESSION_PERFORMANCE_WINDOW):
         if not rows:
             return None
         correct = sum(1 for r in rows if r.get("correct"))
-        return {"answered": len(rows), "correct": correct, "accuracy": round(correct / len(rows), 3)}
+        # `recent` keeps the order the aggregate throws away, newest first.
+        # An accuracy of 0.7 over ten is the same number for a student on a
+        # run of seven and one who has just missed three in a row, and only
+        # one of them should be pushed harder.
+        return {"answered": len(rows), "correct": correct,
+                "accuracy": round(correct / len(rows), 3),
+                "recent": [bool(r.get("correct")) for r in rows]}
     except Exception as e:
         print(f"[session_performance] {e}")
         return None
@@ -741,19 +829,17 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
         print("LLM selection generation failed, fallback to randomized selection")
         topic,difficulty = randomize_selection(accuracy_response, grade)
 
-    # The LLM saw cognitive state and the manual control as context, but an 8B
-    # model doesn't reliably follow that instruction (it has answered "medium"
-    # for a clearly stressed student). So apply both again as a deterministic
-    # shift here: stressed always eases off, focused only pushes harder if the
-    # student left the control on Auto. Easing off overrides the manual
-    # setting; pushing harder defers to it -- same asymmetry as signal_fusion.
-    # `eeg_label` is the fused label across every consented channel, not EEG
-    # alone.
-    effective_bias = manual_bias
-    if eeg_label == "stressed":
-        effective_bias = -1
-    elif eeg_label == "focused" and manual_bias == 0:
-        effective_bias = 1
+    # The LLM saw cognitive state, this session's accuracy and the manual
+    # control as context, but an 8B model doesn't reliably follow that (it
+    # has answered "medium" for a clearly stressed student, and "easy" for
+    # five correct answers in a row at grade 1). So apply them again as a
+    # deterministic shift -- `_decide_bias`, which keeps signal_fusion's
+    # asymmetry: easing off overrides everything, pushing harder defers to
+    # the control and never happens while stressed. `eeg_label` is the fused
+    # label across every consented channel, not EEG alone.
+    effective_bias = _decide_bias(
+        eeg_label, session_perf, manual_bias,
+        increase_withheld=bool(getattr(signal_state, "increase_withheld", False)))
     if effective_bias:
         difficulty = _shift_difficulty(difficulty, effective_bias)
 

@@ -494,6 +494,33 @@ not be reconnected" the panel read STREAMING with a Disconnect button over a hea
 gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
 mock that always says running cannot see it.
 
+**Connect adopts a link the bridge already has — when EEG is flowing on it.** `pairOnce` reads the
+bridge first and, on `muse_connected: true` **with `eeg_age_ms` under `ADOPT_MAX_EEG_AGE_MS`** (3 s),
+goes straight to connected without the disconnect-then-scan. "Connected" alone is not evidence:
+libMuse keeps saying CONNECTED after EEG stops, which is why the bridge has a watchdog, and that
+disconnect is the page's only reachable bridge disconnect outside "Stop trying" — adopting a dead
+link would leave nothing able to clear it. An older bridge reports no age and falls through to
+the scan. **`linkAlive(ing)` is the page's one answer to "is this link alive"**, and all three
+readers use it — Connect's adoption, the reconnect loop's "came back on its own" check, and the
+telemetry poll's recovery — because the second and third had the same gap: after the bridge had
+exhausted its attempts (exactly where the hardware run recorded CONNECTED-but-silent links) the
+loop declared success on the word "connected" and reached the same unclearable state by another
+door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. **But "not alive" is not
+"dead" on the recovery paths**: the bridge zeroes its packet clock on every CONNECTED and reports
+`eeg_age_ms: null` until the first packet, and a preset switch keeps that null for seconds — so
+every successful bridge reconnect briefly reads as connected-with-no-age, and a reader that called
+that dead started a page-driven reconnect whose first act is a bridge disconnect. `linkSettling`
+names that state, and the two recovery readers give it `SETTLE_GRACE_MS` (10 s, above
+`PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides first) —
+one grace shared through `settlingSince`, not one per reader. Adoption keeps refusing it: it needs
+positive evidence, and "no packet yet" is not that. Seen on
+hardware: after both the bridge and the page had given up, the headband was switched back on and
+the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
+that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband
+left streaming from a *previous* session; one streaming to us now is not that. Consequence for
+tests: **a harness whose bridge starts connected is adopted without a scan**, so both reconnect
+harnesses start `muse_connected: false` and flip it from their connect mock.
+
 **`muse_native_bridge.exe` runs under `EEGResearch/scripts/run_bridge_supervised.ps1`**, which
 `start.ps1 -Muse` launches in the bridge's window. It restarts the exe on a non-zero exit, prints
 every exit with its time and code, and gives up once more than five exits land inside ten
@@ -1459,6 +1486,28 @@ signal says stressed — the same asymmetry `signal_fusion` documents. Storing "
 store a value the ease-off rule has to contradict, and a setting the system routinely ignores is
 worse than one that does not exist. It is why the control offers three options and not four: medium
 and adaptive would both mean no shift.
+
+**A run of correct answers pushes difficulty up on its own** (`_decide_bias` in
+`LLM_topic_decider`): at least `PERFORMANCE_PUSH_MIN_ANSWERS` (3) of the session's last ten answers
+at `PERFORMANCE_PUSH_ACCURACY` (70%) or better shifts up — **and the newest
+`PERFORMANCE_PUSH_RECENT_CORRECT` (2) must be right**, because the aggregate cannot tell a rising
+student from a falling one: 7 of 10 is 0.7 whether the misses were the first three or the last
+three, and pushing a child who has just failed three in a row is the harm the asymmetry exists to
+prevent. `get_session_performance` keeps the order as `recent` (newest first) for that; a caller
+without it gets no push. Also with the control on Auto, the fused label not `stressed`, and no
+channel having withheld an increase (`FusedState.increase_withheld`, the facial veto, carried on
+every fused state past the ease-off step). It used to need a `focused` reading at the moment of choosing, and on hardware
+that is a state a student cannot hold: five correct answers at grade 1 stayed on easy throughout,
+because every decision landed on `stressed` (a loose strap) or `neutral`. The asymmetry is
+untouched — stressed still eases whatever the answers say, and a manual Easier/Harder still wins
+over a push — and `test_decide_bias.py` brute-forces it. **A run of misses vetoes a push from
+either source**: `recent` (newest first, kept by `get_session_performance`, whose `desc=True` is
+what makes `recent[:2]` the newest two — the fake in its test sorts by the flag so that direction
+is pinned) has to be all-correct over the newest `PERFORMANCE_PUSH_RECENT_CORRECT` (2) for the
+accuracy push, and a miss among them holds a `focused` push too. Correctness is the one channel
+here with no quality gate, so three straight misses is a trusted opinion that the student is
+falling, and every channel with an opinion must agree to raise; a focused reading over that run is
+the false-focused case the asymmetry exists for. No answers yet is no opinion, and focused pushes.
 
 **`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
 before the first answer and served first, so a hardcoded default there makes the setting do nothing

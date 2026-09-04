@@ -205,20 +205,25 @@ def _shift_difficulty(current, bias):
     return DIFFS[idx]
 
 
-def _decide_bias(eeg_label, session_perf, manual_bias=0):
+def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False):
     """The deterministic shift applied on top of the model's difficulty.
 
     Kept as `signal_fusion` documents: **easing off wins, pushing harder
     defers.** "stressed" always eases, whatever the answers or the control
     say. A push up needs the control on Auto and *either* a "focused"
     reading *or* a run of correct answers this session (see the constants
-    above) -- and never happens while the label is "stressed". Pure, so the
-    rule is testable without a model or a database.
+    above) -- and never happens while the label is "stressed", nor while a
+    channel has vetoed an increase (`increase_withheld`, the facial
+    channel's one power: its "neutral" is a veto, not an absence, and the
+    label alone cannot tell the two apart). Pure, so the rule is testable
+    without a model or a database.
     """
     if eeg_label == "stressed":
         return -1
     if manual_bias:
         return manual_bias
+    if increase_withheld:
+        return 0
     if eeg_label == "focused":
         return 1
     if (session_perf
@@ -784,7 +789,9 @@ def LLM_single_prompt_topic_and_difficulty_decider(user_id, grade, session_id=No
     # asymmetry: easing off overrides everything, pushing harder defers to
     # the control and never happens while stressed. `eeg_label` is the fused
     # label across every consented channel, not EEG alone.
-    effective_bias = _decide_bias(eeg_label, session_perf, manual_bias)
+    effective_bias = _decide_bias(
+        eeg_label, session_perf, manual_bias,
+        increase_withheld=bool(getattr(signal_state, "increase_withheld", False)))
     if effective_bias:
         difficulty = _shift_difficulty(difficulty, effective_bias)
 

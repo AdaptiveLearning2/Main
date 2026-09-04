@@ -98,6 +98,12 @@ class FusedState:
     calm: float | None = None
     confidence: float | None = None
     channels: dict[str, str] = field(default_factory=dict)
+    # True when a channel actively vetoed an increase -- the facial channel's
+    # one power. The label is "neutral" either way, and "no opinion" and
+    # "withheld" must not collapse into the same string: a caller that pushes
+    # harder on its own evidence (a run of correct answers) has to defer to
+    # this exactly as it defers to "stressed".
+    increase_withheld: bool = False
 
     @property
     def adjusted(self) -> bool:
@@ -236,7 +242,7 @@ def fuse(
         if face.label == "negative":
             return FusedState("neutral",
                               f"{face.reason} withholding eeg-focused increase",
-                              **common)
+                              increase_withheld=True, **common)
         return FusedState("focused", eeg.reason, **common)
 
     # 3. Nothing to act on. An EEG that said nothing is reported as such,

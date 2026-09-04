@@ -73,9 +73,39 @@ def test_adding_evidence_never_raises_what_stressed_lowered(label, perf, manual)
     assert bias in (-1, 0, 1)
 
 
+def test_a_withheld_increase_is_not_overridden_by_the_answers():
+    """The facial channel's one power is to veto an increase, and it does so
+    by downgrading "focused" to "neutral". Keyed on the label alone, the
+    accuracy push turned that veto into a push: "no opinion" and "withheld"
+    were the same string. The fused state now says which, and a push defers
+    to it exactly as it defers to stressed."""
+    assert td._decide_bias("neutral", GOOD_RUN, increase_withheld=True) == 0
+    assert td._decide_bias("focused", GOOD_RUN, increase_withheld=True) == 0
+    # Easing still wins, and a manual setting is still the student's.
+    assert td._decide_bias("stressed", GOOD_RUN, increase_withheld=True) == -1
+    assert td._decide_bias("neutral", GOOD_RUN, manual_bias=1, increase_withheld=True) == 1
+
+
+def test_the_veto_reaches_the_decider_from_the_real_fusion():
+    """End to end through `signal_fusion.fuse`, not a hand-built flag: EEG
+    focused, a trusted negative face, five correct answers -- no push."""
+    import signal_fusion as sf
+    fused = sf.fuse(sf.ChannelState("focused", "eeg focus high"),
+                    face=sf.ChannelState("negative", "face sad"))
+    assert fused.label == "neutral" and fused.increase_withheld is True
+    assert td._decide_bias(fused.label, GOOD_RUN,
+                           increase_withheld=fused.increase_withheld) == 0
+    # And without the veto the same answers do push.
+    clear = sf.fuse(sf.ChannelState("focused", "eeg focus high"))
+    assert clear.increase_withheld is False
+    assert td._decide_bias(clear.label, GOOD_RUN,
+                           increase_withheld=clear.increase_withheld) == 1
+
+
 def test_the_decider_applies_the_shared_rule():
     """The rule lives in one function; the decider must call it rather than
-    carry a second copy that can drift."""
+    carry a second copy that can drift -- and must hand it the veto."""
     import inspect
     src = inspect.getsource(td.LLM_single_prompt_topic_and_difficulty_decider)
-    assert "_decide_bias(eeg_label, session_perf, manual_bias)" in src
+    assert "_decide_bias(" in src
+    assert 'increase_withheld=bool(getattr(signal_state, "increase_withheld", False))' in src

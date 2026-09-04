@@ -19,6 +19,44 @@ const walk = (dir) => readdirSync(dir).flatMap(name => {
     : full.endsWith('.jsx') && !full.includes('.test.') ? [full] : []
 })
 
+/**
+ * Every `label=` prop on an `<XAxis` / `<YAxis`, with its value captured at
+ * brace depth -- the same reason LoadError.test.jsx scans rather than
+ * matches: a regex cannot cross the `}` a nested object or a `${…}` puts
+ * inside the value. A string value (`label="…"`) is returned as-is.
+ */
+function axisLabels(src) {
+  const out = []
+  const open = /<[XY]Axis\b/g
+  let m
+  while ((m = open.exec(src))) {
+    // The element runs to the first `>` at brace depth 0.
+    let i = m.index, depth = 0
+    for (; i < src.length; i++) {
+      const c = src[i]
+      if (c === '{') depth++
+      else if (c === '}') depth--
+      else if (c === '>' && depth === 0) break
+    }
+    const element = src.slice(m.index, i + 1)
+    const at = element.search(/\blabel=/)
+    if (at < 0) continue
+    let j = at + 'label='.length
+    if (element[j] === '"' || element[j] === "'") {
+      const end = element.indexOf(element[j], j + 1)
+      out.push(element.slice(j, end + 1))
+    } else if (element[j] === '{') {
+      let d = 0, k = j
+      for (; k < element.length; k++) {
+        if (element[k] === '{') d++
+        else if (element[k] === '}' && --d === 0) break
+      }
+      out.push(element.slice(j, k + 1))
+    }
+  }
+  return out
+}
+
 describe('ChartTooltip', () => {
   it('picks readable text for each theme rather than inheriting it', () => {
     const light = tooltipStyles(false)
@@ -51,16 +89,34 @@ describe('ChartTooltip', () => {
   it('gives every axis label a fill, since the library default fails AA', () => {
     // A source check: the chart does not lay out under jsdom (the responsive
     // container has no size), so the rendered <text> cannot be read here.
-    // What can be read is that no `label={{ … }}` object omits `fill`.
-    const offenders = walk(SRC).flatMap(f => {
-      const src = readFileSync(f, 'utf8')
-      const labels = src.match(/label=\{\{[^}]*\}\}/g) || []
-      return labels.filter(l => !/\bfill:/.test(l)).map(l => `${rel(f)}: ${l}`)
-    })
+    // What can be read is that no axis `label=` prop omits a fill.
+    const offenders = walk(SRC)
+      .filter(f => /from 'recharts'/.test(readFileSync(f, 'utf8')))
+      .flatMap(f => axisLabels(readFileSync(f, 'utf8'))
+        .filter(l => !/\bfill\b/.test(l))
+        .map(l => `${rel(f)}: ${l}`))
     expect(offenders).toEqual([])
     // And this file is exercising something: FocusAccuracy has two.
     const focus = readFileSync(join(SRC, 'components/analytics/FocusAccuracy.jsx'), 'utf8')
-    expect((focus.match(/label=\{\{[^}]*\}\}/g) || []).length).toBe(2)
+    expect(axisLabels(focus)).toHaveLength(2)
+  })
+
+  it('finds an axis label however it is written', () => {
+    // The extractor scans at brace depth rather than with a regex: `[^}]*`
+    // cannot cross a `}`, so a nested `style`, a template literal's `${…}`
+    // and the plain string form all went unmatched -- and an unmatched label
+    // is never checked, which is a green guard over a #808080 label.
+    const src = `
+      <XAxis dataKey="x" label={{ value: 'A', fill: '#374151' }} />
+      <YAxis label={{ value: 'B', position: 'insideLeft' }} />
+      <XAxis label={{ value: 'C', style: { fontSize: 11 } }} />
+      <YAxis label={{ value: \`\${unit} (%)\` }} />
+      <XAxis label="D" />
+      <Gauge label="not an axis" />
+    `
+    const found = axisLabels(src)
+    expect(found).toHaveLength(5)
+    expect(found.filter(l => !/\bfill\b/.test(l))).toHaveLength(4)
   })
 
   it('is the only file that renders a Recharts Tooltip', () => {

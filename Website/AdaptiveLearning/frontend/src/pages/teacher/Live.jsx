@@ -198,6 +198,14 @@ export default function Live() {
   // long as the new fetch took, and an unfetched class read as "Nobody's
   // joined yet". Seen driving the page by hand.
   const [loadedFor, setLoadedFor] = useState(null)
+  // Which class the last *failed* read was for, and the error. A read that
+  // keeps failing must not leave the skeleton up: with `loadedFor` only ever
+  // advancing on success, "not retrieved" collapsed into "still loading",
+  // the same collapse the class list above got its own state for. Once a
+  // fetch for the selected class has answered either way, the answer wins.
+  const [failedFor, setFailedFor]       = useState(null)
+  const [rosterFailed, setRosterFailed] = useState(null)
+  const [retryNonce, setRetryNonce]     = useState(0)
   const [error, setError]         = useState(null)
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
@@ -272,10 +280,16 @@ export default function Live() {
         })
         setStudents(rows)
         setLoadedFor(classId)
+        setFailedFor(null)
+        setRosterFailed(null)
         delay = POLL_MS
         if (!killed) setError(null)
       } catch (e) {
-        if (!killed) setError(e.message)
+        if (!killed) {
+          setError(e.message)
+          setFailedFor(classId)
+          setRosterFailed(e)
+        }
         delay = Math.min(delay * 2, POLL_MAX_MS)
       }
       // Chained timeout, not setInterval, so a slow response can't stack polls.
@@ -297,9 +311,16 @@ export default function Live() {
       clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [classId])
+    // `retryNonce` restarts the poll at once from the LoadError's Try again,
+    // rather than waiting out a backed-off interval.
+  }, [classId, retryNonce])
 
-  const loadingRoster = !!classId && loadedFor !== classId
+  // Three states for the roster of the selected class: nothing has answered
+  // yet (skeleton), the last answer was a failure and no rows for this class
+  // are in hand (LoadError), or rows are in hand (cards -- with the banner
+  // above if a later poll failed, since the rows are still worth showing).
+  const rosterMissing = !!classId && loadedFor !== classId && failedFor === classId
+  const loadingRoster = !!classId && loadedFor !== classId && !rosterMissing
 
   return (
     <div className="p-6 lg:p-8 pb-12">
@@ -326,7 +347,7 @@ export default function Live() {
         )}
       </div>
 
-      {error && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
+      {error && !rosterMissing && <p className="text-sm text-rose-500 mb-4">⚠️ {error}</p>}
 
       {loadingClasses ? (
         <SkeletonList count={3} height="h-28" />
@@ -340,6 +361,9 @@ export default function Live() {
         </div>
       ) : loadingRoster ? (
         <SkeletonList count={3} height="h-28" />
+      ) : rosterMissing ? (
+        <LoadError what="the live roster" error={rosterFailed}
+                   onRetry={() => setRetryNonce(n => n + 1)} />
       ) : students.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-6xl mb-3">👀</div>

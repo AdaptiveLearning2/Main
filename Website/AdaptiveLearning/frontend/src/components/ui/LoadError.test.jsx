@@ -97,6 +97,10 @@ describe('every LoadError call site is classified', () => {
       'GET /api/students/{id}/questions -- _verify_can_view_student',
     'pages/teacher/Sessions.jsx':
       'GET /api/classes/{id}/students -- _verify_class_owner',
+    // Two sites: the own-classes read (which cannot 403) and the live roster,
+    // which can. The stricter class applies to the file, and both pass `error`.
+    'pages/teacher/Live.jsx':
+      'GET /api/teacher/classes/{id}/live -- _verify_class_owner',
   }
 
   // Exempt, and the reason is the point: two different reasons hide here, and
@@ -124,8 +128,6 @@ describe('every LoadError call site is classified', () => {
     'pages/student/PracticeTest.jsx':       'own practice session',
     'pages/teacher/Analytics.jsx':          'the question bank, which is public-read',
     'pages/teacher/Classes.jsx':            'GET /api/classes -- own classes',
-    // Same read; the relationship-checked live roster goes to its own banner.
-    'pages/teacher/Live.jsx':               'GET /api/classes -- own classes',
     'components/practice/PracticeSetup.jsx': 'own profile and the topic list',
   }
 

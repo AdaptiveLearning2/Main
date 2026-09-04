@@ -139,6 +139,28 @@ it('says the class list could not be loaded, not that there are no classes', asy
   expect(screen.queryByText(/Couldn't load/)).toBeNull()
 })
 
+it('says the roster could not be loaded instead of leaving the skeleton up', async () => {
+  // `loadedFor` only advanced on success, so a roster read that kept failing
+  // rendered the skeleton for ever under the error banner: "not retrieved"
+  // folded into "still loading". Once a fetch for the selected class has
+  // answered either way, the answer wins; Try again refetches at once.
+  let calls = 0
+  mockApi({
+    '/api/classes': () => [{ id: 'c1', name: 'Year 4' }],
+    '/api/teacher/classes/c1/live': () => {
+      calls += 1
+      if (calls === 1) { const e = new Error('Internal Server Error'); e.status = 500; throw e }
+      return [student()]
+    },
+  })
+  render(<MemoryRouter><Live /></MemoryRouter>)
+  await screen.findByText(/Couldn't load the live roster/)
+  expect(screen.queryByText(/Nobody's joined yet/)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+  await screen.findByText('Sam')
+  expect(screen.queryByText(/Couldn't load/)).toBeNull()
+})
+
 it('does not read a heuristic "poor" as bad electrodes', () => {
   // The legacy heuristic reports poor for any focused student; only a
   // contact-backed verdict, or the nulled row it produces, counts.

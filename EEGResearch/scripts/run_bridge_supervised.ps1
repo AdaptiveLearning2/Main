@@ -42,10 +42,22 @@ while ($true) {
     $run += 1
     $started = Get-Date
     Write-Host ("bridge supervisor: run {0} starting at {1:HH:mm:ss}" -f $run, $started) -ForegroundColor Cyan
+    # Cleared first: an exe that exists but cannot start (a build interrupted
+    # mid-cmake, an antivirus-truncated file, a wrong-architecture binary)
+    # raises instead of running, and $LASTEXITCODE keeps whatever it held --
+    # $null on the first run, the previous run's code after that. Either
+    # would have printed as a blank or stale code and `exit $null` reports
+    # success for a bridge that never started.
+    $LASTEXITCODE = $null
     & $Exe
     $code = $LASTEXITCODE
     $ended = Get-Date
     $lived = [int]($ended - $started).TotalSeconds
+    if ($null -eq $code) {
+        # PowerShell's own error is printed just above this line.
+        Write-Host ("bridge supervisor: did not start at {0:HH:mm:ss} (exe present but not runnable)" -f $ended) -ForegroundColor Red
+        $code = 3
+    }
     Write-Host ("bridge supervisor: exited at {0:HH:mm:ss} with code {1} after {2}s" -f $ended, $code, $lived) -ForegroundColor Yellow
 
     # Ctrl+C in the window reaches the exe first and reads as a clean exit;

@@ -69,6 +69,22 @@ def test_a_missing_exe_is_refused_rather_than_looped(tmp_path):
     assert "exe not found" in res.stdout
 
 
+def test_an_exe_that_exists_but_cannot_start_is_a_failure_with_a_code(tmp_path):
+    """Test-Path clears a file that is not runnable -- an interrupted build,
+    an antivirus-truncated binary. Invoking it raises rather than running,
+    and $LASTEXITCODE keeps $null, which printed as a blank code and made
+    `exit $null` report success for a bridge that never started."""
+    exe = tmp_path / "broken.exe"
+    exe.write_bytes(b"")
+    res = _run(exe, MaxRestarts=1, RestartDelaySeconds=0)
+    assert res.returncode == 3, res.stdout + res.stderr
+    assert "did not start" in res.stdout
+    assert "with code 3" in res.stdout
+    assert "giving up" in res.stdout
+    # Never printed a blank code.
+    assert "with code  after" not in res.stdout
+
+
 def test_start_ps1_launches_the_bridge_through_the_supervisor():
     """The loop only helps if start.ps1 uses it. The env-var prefixes are built
     around `$bridgeCmd`, so the supervisor has to be what that command runs."""

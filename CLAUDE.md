@@ -1466,7 +1466,14 @@ every fused state past the ease-off step). It used to need a `focused` reading a
 that is a state a student cannot hold: five correct answers at grade 1 stayed on easy throughout,
 because every decision landed on `stressed` (a loose strap) or `neutral`. The asymmetry is
 untouched — stressed still eases whatever the answers say, and a manual Easier/Harder still wins
-over a push — and `test_decide_bias.py` brute-forces it.
+over a push — and `test_decide_bias.py` brute-forces it. **A run of misses vetoes a push from
+either source**: `recent` (newest first, kept by `get_session_performance`, whose `desc=True` is
+what makes `recent[:2]` the newest two — the fake in its test sorts by the flag so that direction
+is pinned) has to be all-correct over the newest `PERFORMANCE_PUSH_RECENT_CORRECT` (2) for the
+accuracy push, and a miss among them holds a `focused` push too. Correctness is the one channel
+here with no quality gate, so three straight misses is a trusted opinion that the student is
+falling, and every channel with an opinion must agree to raise; a focused reading over that run is
+the false-focused case the asymmetry exists for. No answers yet is no opinion, and focused pushes.
 
 **`start_session` prewarms at the student's bias, not 0.** `QUEUE_SIZE` questions are generated
 before the first answer and served first, so a hardcoded default there makes the setting do nothing

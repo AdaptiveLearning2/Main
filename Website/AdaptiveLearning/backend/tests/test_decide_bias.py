@@ -100,9 +100,33 @@ def test_a_manual_setting_still_wins_over_a_push():
     assert td._decide_bias("neutral", GOOD_RUN, manual_bias=1) == 1
 
 
-def test_focused_pushes_as_before():
+def test_focused_pushes_unless_the_answers_are_falling():
+    """The direction gate was on the accuracy push only, so a child who had
+    just missed three running was still served a harder question whenever
+    the headband read focused -- the sentence used to justify the gate,
+    reachable through the other clause. Correctness has no quality gate and
+    a run of misses is its opinion; every channel with an opinion must agree
+    to raise. With no answers yet there is no opinion, and focused pushes."""
     assert td._decide_bias("focused", None) == 1
-    assert td._decide_bias("focused", MIXED) == 1
+    assert td._decide_bias("focused", RISING) == 1
+    assert td._decide_bias("focused", GOOD_RUN) == 1
+    # MIXED's newest answer is right and its second newest wrong: falling.
+    assert td._decide_bias("focused", MIXED) == 0
+    assert td._decide_bias("focused", FALLING) == 0
+    assert td._decide_bias("focused", ONE_SLIP) == 0
+    # A caller predating `recent` has no opinion: focused still pushes.
+    assert td._decide_bias("focused", {"answered": 5, "correct": 5, "accuracy": 1.0}) == 1
+
+
+def test_a_falling_run_vetoes_a_real_focused_reading_end_to_end():
+    import signal_fusion as sf
+    fused = sf.fuse(sf.eeg_channel(0.9, 0.9, 0.9))
+    assert fused.label == "focused"
+    assert td._decide_bias(fused.label, FALLING,
+                           increase_withheld=fused.increase_withheld) == 0
+    # Easing still wins over everything, and a manual setting is the student's.
+    assert td._decide_bias("stressed", RISING) == -1
+    assert td._decide_bias("focused", FALLING, manual_bias=1) == 1
 
 
 @pytest.mark.parametrize("label", ["neutral", "focused", "no_eeg", "insufficient_signal", "stressed"])

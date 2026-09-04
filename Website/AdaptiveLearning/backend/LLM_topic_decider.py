@@ -230,6 +230,15 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
         return manual_bias
     if increase_withheld:
         return 0
+    # A run of wrong answers vetoes a push from *either* source. Correctness
+    # is the one channel here with no quality gate, so three straight misses
+    # is a trusted opinion that the student is falling, and "every channel
+    # with an opinion must agree" to raise. A focused reading over that run
+    # is exactly the false-focused case the asymmetry is written against:
+    # signals are least reliable when a student is agitated. With no answers
+    # yet there is no opinion, and focused pushes as before.
+    if _recent_falling(session_perf):
+        return 0
     if eeg_label == "focused":
         return 1
     if (session_perf
@@ -238,6 +247,18 @@ def _decide_bias(eeg_label, session_perf, manual_bias=0, increase_withheld=False
             and _recent_all_correct(session_perf.get("recent"))):
         return 1
     return 0
+
+
+def _recent_falling(session_perf):
+    """Whether the newest answers carry a miss -- an opinion against raising.
+
+    Distinct from `not _recent_all_correct`: with no answers yet, or a caller
+    predating `recent`, there is no opinion either way, and the focused push
+    is left to its own evidence. Only a recorded miss among the newest
+    PERFORMANCE_PUSH_RECENT_CORRECT answers says "falling".
+    """
+    recent = (session_perf or {}).get("recent") or []
+    return any(not r for r in recent[:PERFORMANCE_PUSH_RECENT_CORRECT])
 
 
 def _recent_all_correct(recent):

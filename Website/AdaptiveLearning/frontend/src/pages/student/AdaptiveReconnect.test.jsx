@@ -156,6 +156,42 @@ it('does not call a drop recovered until EEG is flowing again', async () => {
   expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
 }, TEST_TIMEOUT)
 
+it('lets a bridge reconnect settle instead of tearing it down for having no packet yet', async () => {
+  // The bridge zeroes its packet clock on CONNECTED and reports no age until
+  // the first packet, which a preset switch delays by seconds. A reader that
+  // called that dead started a page-driven reconnect whose first act is a
+  // bridge disconnect: "connects, then immediately disconnects", on the
+  // recovery path. Connected-with-null-age is left to settle.
+  await connect()
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+
+  // The bridge's attempt landed: connected, its retries over, no EEG yet.
+  bridge.ingestion = { ...CONNECTED, reconnecting: false, eeg_age_ms: null }
+  await sleep(5000)
+  expect(museDisconnect).toHaveBeenCalledTimes(1)   // only the original pairing
+  expect(museRefresh).toHaveBeenCalledTimes(1)
+  expect(toast.success).not.toHaveBeenCalled()
+
+  bridge.ingestion = { ...CONNECTED }
+  await screen.findByText(/STREAMING/, {}, { timeout: 5000 })
+  expect(toast.success).toHaveBeenCalledWith('Headband reconnected.')
+  expect(museRefresh).toHaveBeenCalledTimes(1)
+}, TEST_TIMEOUT)
+
+it('gives a settling link a bounded grace, then treats it as dead', async () => {
+  await connect()
+  bridge.ingestion = { ...CONNECTED, muse_connected: false, reconnecting: true,
+                       reconnect_attempt: 1, battery_percent: null }
+  await screen.findByText(/reconnecting \(attempt 1 of 5\)/, {}, POLL)
+  bridge.ingestion = { ...CONNECTED, reconnecting: false, eeg_age_ms: null }
+  // Past the grace the page takes over and scans -- with the bridge's
+  // watchdog on it would have dropped the link first, so this is the
+  // watchdog-off case.
+  await waitFor(() => expect(museRefresh).toHaveBeenCalledTimes(2), { timeout: 20000 })
+}, TEST_TIMEOUT)
+
 it('does not adopt a link the bridge calls connected but has no recent EEG from', async () => {
   // libMuse keeps saying CONNECTED after EEG stops. Adopting that would put
   // the panel on STREAMING with nothing flowing and skip the one bridge

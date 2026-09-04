@@ -505,7 +505,15 @@ readers use it — Connect's adoption, the reconnect loop's "came back on its ow
 telemetry poll's recovery — because the second and third had the same gap: after the bridge had
 exhausted its attempts (exactly where the hardware run recorded CONNECTED-but-silent links) the
 loop declared success on the word "connected" and reached the same unclearable state by another
-door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. Seen on
+door. Test fixtures that mean "connected" must carry an `eeg_age_ms`. **But "not alive" is not
+"dead" on the recovery paths**: the bridge zeroes its packet clock on every CONNECTED and reports
+`eeg_age_ms: null` until the first packet, and a preset switch keeps that null for seconds — so
+every successful bridge reconnect briefly reads as connected-with-no-age, and a reader that called
+that dead started a page-driven reconnect whose first act is a bridge disconnect. `linkSettling`
+names that state, and the two recovery readers give it `SETTLE_GRACE_MS` (10 s, above
+`PRESET_SETTLE_SECONDS` and the 8 s watchdog, so with the watchdog on the bridge decides first) —
+one grace shared through `settlingSince`, not one per reader. Adoption keeps refusing it: it needs
+positive evidence, and "no packet yet" is not that. Seen on
 hardware: after both the bridge and the page had given up, the headband was switched back on and
 the bridge had it connected by the time Connect was clicked, and the click's own disconnect dropped
 that link 1.5 s in — "connects, then immediately disconnects". The disconnect exists for a headband

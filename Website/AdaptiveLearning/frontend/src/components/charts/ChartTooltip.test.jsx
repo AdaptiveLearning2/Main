@@ -93,7 +93,7 @@ describe('ChartTooltip', () => {
     const offenders = walk(SRC)
       .filter(f => /from 'recharts'/.test(readFileSync(f, 'utf8')))
       .flatMap(f => axisLabels(readFileSync(f, 'utf8'))
-        .filter(l => !/\bfill\b/.test(l))
+        .filter(l => !/\bfill:/.test(l))
         .map(l => `${rel(f)}: ${l}`))
     expect(offenders).toEqual([])
     // And this file is exercising something: FocusAccuracy has two.
@@ -112,11 +112,14 @@ describe('ChartTooltip', () => {
       <XAxis label={{ value: 'C', style: { fontSize: 11 } }} />
       <YAxis label={{ value: \`\${unit} (%)\` }} />
       <XAxis label="D" />
+      <YAxis label={{ value: 'answers they fill in' }} />
       <Gauge label="not an axis" />
     `
     const found = axisLabels(src)
-    expect(found).toHaveLength(5)
-    expect(found.filter(l => !/\bfill\b/.test(l))).toHaveLength(4)
+    expect(found).toHaveLength(6)
+    // `fill:` the key, not `fill` the word: a label whose *text* says "fill"
+    // carries no fill prop and paints #808080 like the rest.
+    expect(found.filter(l => !/\bfill:/.test(l))).toHaveLength(5)
   })
 
   it('is the only file that renders a Recharts Tooltip', () => {

@@ -494,13 +494,20 @@ not be reconnected" the panel read STREAMING with a Disconnect button over a hea
 gone. `AdaptiveReconnectPull.test.jsx`'s recorder mock drives `poller.running` for that reason — a
 mock that always says running cannot see it.
 
-**Nothing supervises `muse_native_bridge.exe`.** `start.ps1` launches it once, in its own window;
-if it exits, the sidecar's TCP adapter backs off to 5 s between attempts for ever and the page
-reads "not answering". That is a known gap, not an oversight: a restart from `start.ps1` would
-re-pair nothing (the bridge holds no state worth keeping), but it would also hide a crash that
-should be read in that window. Restart it by hand for now; the sidecar reconnects on its own once
-it is listening. The debug panel's *Link* row shows the fields that tell the two apart —
-`consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone, `eeg_age_ms` climbing
+**`muse_native_bridge.exe` runs under `EEGResearch/scripts/run_bridge_supervised.ps1`**, which
+`start.ps1 -Muse` launches in the bridge's window. It restarts the exe on a non-zero exit, prints
+every exit with its time and code, and gives up once more than five exits land inside ten
+minutes — so a persistent failure (a missing `libmuse.dll`, port 8765 taken) stops with its cause
+on screen rather than looping. A clean exit (Ctrl+C in the window) is not restarted. It inherits
+`MUSE_ENABLE_OPTICS` and the rest from the window `start.ps1` set them in and reads none of them
+itself, so a restart lands on the configuration the session was launched with; nothing else has to
+change, because the sidecar's TCP adapter reconnects on its own once the bridge is listening and
+the page treats the restarted bridge's "not connected" as a drop and runs its reconnect.
+`EEGResearch/tests/test_bridge_supervisor.py` drives the loop against a stub `.cmd` (Windows
+only, skipped elsewhere — the script is PowerShell, like the bridge it wraps). It is deliberately
+**not** a Windows service or a scheduled task: moving the exe out of the launcher window is how
+those variables get lost. The debug panel's *Link* row tells a dead bridge from a dropped headband
+— `consecutive_errors` climbing with `eeg_age_ms` absent is the bridge gone, `eeg_age_ms` climbing
 with the bridge answering is the headband gone.
 
 **`AdaptiveReconnect.test.jsx` runs on real timers, and every fake-clock version of it hung.** The

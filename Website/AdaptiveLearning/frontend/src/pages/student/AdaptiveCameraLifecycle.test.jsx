@@ -21,17 +21,31 @@ vi.mock('../../lib/session', () => ({
   endSession: vi.fn(async () => true),
   recordAnswer: vi.fn(async () => null),
 }))
+// Rewritten per test: the ingest mode, whether the sidecar reports the camera
+// capturing, and how many device-list reads fail before one answers (a
+// sidecar still starting up). Declared above the factories because `vi.mock`
+// is hoisted -- the factories only read it when called.
+const registry = { mode: 'push', cameraRunning: true, failures: 0 }
+
 vi.mock('../../lib/signals', () => ({
   createSignalRecorder: () => ({ start: vi.fn(), stop: vi.fn() }),
-  eegHealth: vi.fn(async () => ({ available: null, ingest_mode: 'push' })),
-  eegStatus: vi.fn(async () => ({ ingest_mode: 'push', service: null, poller: {} })),
-  eegDevices: vi.fn(async () => ({ devices: [] })),
+  eegHealth: vi.fn(async () => ({
+    // Under push the backend never probes a sidecar it has no route to.
+    available: registry.mode === 'push' ? null : true,
+    ingest_mode: registry.mode,
+  })),
+  eegStatus: vi.fn(async () => ({ ingest_mode: registry.mode, service: null, poller: {} })),
+  // The pull-side list, and the shape that matters: `eegDevices` swallows its
+  // own failure, so a failed read arrives as a resolved payload carrying
+  // `error` -- not as a rejection.
+  eegDevices: vi.fn(async () => {
+    if (registry.failures > 0) {
+      registry.failures -= 1
+      return { available: false, devices: [], error: 'EEG service unreachable' }
+    }
+    return { devices: [{ device_id: 'station1', kind: 'muse', running: false }] }
+  }),
 }))
-
-// Rewritten per test: whether the sidecar reports the camera capturing, and
-// how many device-list reads fail before it answers (a sidecar still
-// starting up).
-const registry = { cameraRunning: true, failures: 0 }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
@@ -59,12 +73,14 @@ vi.mock('../../context/AuthContext', () => ({
 }))
 
 import { deviceStop, deviceStopOnUnload, devices } from '../../lib/sidecar'
+import { eegDevices } from '../../lib/signals'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
 beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
+  registry.mode = 'push'
   registry.cameraRunning = true
   registry.failures = 0
   mockApi({
@@ -117,6 +133,29 @@ it('keeps asking for the device list until the sidecar answers, so the camera ca
   await screen.findByRole('button', { name: /turn on camera/i }, { timeout: 9000 })
   expect(devices.mock.calls.length).toBeGreaterThanOrEqual(2)
   await waitFor(() => expect(screen.getByRole('button', { name: /connect headband/i })).not.toBeDisabled())
+}, 15_000)
+
+// The same property on the pull branch, which is where it is reachable from
+// the default deployment: the health check flips `available` on one slow
+// probe and re-runs discovery at exactly the moment the devices read is
+// likeliest to fail. `eegDevices` swallows, so the failure arrives as a
+// resolved payload with `error` -- the branch's `.catch` never fires, and
+// reading only that left this case exactly as it was before the retry.
+//
+// A stale `stationId` of `default` is not cosmetic: it is what
+// `armRecording` binds `createSignalRecorder` and `/api/eeg/start` to, so a
+// session started in the window records against a station the headband is
+// not on. Connect being enabled is the observable that flips.
+it('does not fall back to the default station when the pull-side device read fails', async () => {
+  registry.mode = 'pull'
+  registry.failures = 1
+  render(<Adaptive />)
+  await waitFor(() => expect(eegDevices).toHaveBeenCalledTimes(1))
+  const connect = await screen.findByRole('button', { name: /connect headband/i })
+  expect(connect).toBeDisabled()
+  // The retry lands and the real station arrives, so Connect comes back.
+  await waitFor(() => expect(connect).not.toBeDisabled(), { timeout: 9000 })
+  expect(eegDevices.mock.calls.length).toBeGreaterThanOrEqual(2)
 }, 15_000)
 
 it('sends nothing for a camera that is already off', async () => {

@@ -136,3 +136,37 @@ def test_every_key_the_eeg_payload_carries_is_declared_on_the_model():
         "InterpretedEegData, so pydantic will drop them from /api/v1/state "
         "without raising -- the pull poller reads that endpoint"
     )
+
+
+def test_every_feature_key_the_processor_returns_is_declared_on_the_model():
+    """The sibling test above sees top-level keys only. `features` is its
+    own nested model, and a diagnostic added to `SignalProcessor.update`'s
+    return dict -- `focus_log_ratio` was the first -- is dropped there by
+    the same mechanism. Derived by calling the processor, not by reading
+    its source, so a key built up conditionally still counts.
+    """
+    from datetime import datetime, timezone
+
+    from src.app.models import EegSample
+    from src.app.schemas import FeatureData
+    from src.app.services.signal_processing import SignalProcessor
+
+    processor = SignalProcessor(window_size=4)
+    sample = EegSample(
+        timestamp=datetime.now(timezone.utc),
+        channel_tp9=590.0, channel_af7=600.0, channel_af8=605.0, channel_tp10=595.0,
+    )
+    bands = {"delta": 0.4, "theta": 0.3, "alpha": 0.5, "beta": 0.4, "gamma": 0.2,
+             "hsi": [1.0, 1.0, 1.0, 1.0], "is_good": [1.0, 1.0, 1.0, 1.0],
+             "band_channels_used": 4}
+    keys = set(processor.update(sample, bands)) | set(processor.update(sample, None))
+    # stream_manager attaches this one after the call.
+    keys.add("batch_size")
+
+    assert "focus_log_ratio" in keys, "the processor no longer reports it; this test is stale"
+
+    missing = keys - set(FeatureData.model_fields)
+    assert not missing, (
+        f"{sorted(missing)} are returned by SignalProcessor.update but not "
+        "declared on FeatureData, so /api/v1/state drops them silently"
+    )

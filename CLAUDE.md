@@ -1251,6 +1251,20 @@ heart test asserts on `session.latest_payload`, the dict *before* the model — 
 covered on both sides of the one layer eating it. `tests/test_state_envelope.py` derives the check
 from `stream_manager`'s source so the next key cannot go the same way.
 
+**`features` is its own nested model, and the same trap one level down.** That source-derived
+check sees top-level keys only; a diagnostic added to `SignalProcessor.update`'s return dict has
+to be declared on `schemas.FeatureData` or `/api/v1/state` drops it just as silently.
+`test_every_feature_key_the_processor_returns_is_declared_on_the_model` derives that set by
+calling the processor. `focus_log_ratio` / `calm_log_ratio` — the raw, pre-baseline ratios, `None`
+on a frame with no usable bands — were the first, added for the accuracy capture
+(`scripts/capture_eeg_reference.py`, HANDOFF.md Phase 0).
+
+**The bridge accepts one TCP client** (`listen(…, 1)`), so nothing can tap the raw 256 Hz stream
+while the sidecar holds it. Every frame does reach the sidecar — the queue is drained in full
+each tick, then only `samples[-1]` is scored — so a consumer of the raw stream belongs inside the
+sidecar's drain, not on a second socket. That is why the capture script's `--source bridge`
+mode is a separate run from its sidecar mode.
+
 ### Optics measured against EEG: the two coexist at the 4 CH rung
 
 Run 2026-08-15 on a MuseS-0FFC (model `MS-03`), `./start.ps1 -Muse -Optics`, default `PRESET_1035`:

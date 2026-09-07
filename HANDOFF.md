@@ -18,7 +18,43 @@ One stray file may exist locally and is not in any PR:
 scratch probe. Delete it if present.
 
 The task below was assessed in conversation on 2026-09-04 and the user asked
-for it to be written up as the next piece of work. **No code has changed.**
+for it to be written up as the next piece of work.
+
+**Phase 0 steps 1 and 2 are done on `eeg-accuracy-phase0` (2026-09-07);
+steps 3 and 4 need a person wearing the headband.** What landed:
+
+- `EEGResearch/scripts/capture_eeg_reference.py` — the capture. Default
+  source polls the sidecar's `/api/v1/state` at 8 Hz, dedupes on the tick's
+  own timestamp, tags every row with a prompted protocol segment, refuses a
+  path inside the repo, and prints the per-segment figures (mean/sd of the
+  raw ratios, scores, bands; label and quality counts; which segments the
+  first 60 usable ticks — the baseline latch — fell in). `--summarize PATH`
+  re-runs that on a saved capture. `--source bridge` records the raw 256 Hz
+  frames straight from the bridge instead (see §4.1 for why that is a
+  separate run).
+- `SignalProcessor.update` returns `focus_log_ratio` / `calm_log_ratio`
+  (raw, pre-baseline; `None` on a frame with no usable bands), declared on
+  `schemas.FeatureData` so `/api/v1/state` keeps them.
+  `test_every_feature_key_the_processor_returns_is_declared_on_the_model`
+  derives that check from the processor, since the existing envelope test
+  only saw top-level keys.
+- Smoke-tested end to end against `EEG_SOURCE=sim`: 23 rows in 6 s, both
+  ratios present, 25 duplicate polls skipped.
+
+To run the capture (`./start.ps1 -Muse`, headband paired, debug panel
+reading `contact` / `good`), from a shell with `API_TOKEN` set:
+
+```bash
+python EEGResearch/scripts/capture_eeg_reference.py --out ../eeg_captures/2026-09-07_a.jsonl --with-session
+```
+
+A local gotcha found on the way: `EEGResearch/.env` on this machine holds
+`FACE_DEBUG_PREVIEW_ENABLED=true`, written by a `start.ps1 -Preview` run on
+the `camera-preview` branch. That branch's preview commit (`c26ea20`) is
+**not on `main`** (its other two commits are), so on any branch off `main`
+the sidecar refuses to boot from `EEGResearch/` with `extra_forbidden`.
+Run tests and uvicorn from the repo root, as `CLAUDE.md` already says, or
+merge the preview branch.
 
 ---
 
@@ -260,15 +296,25 @@ five numbers per tick.
 
 ## 4. Investigations the next agent must make first
 
-1. **Does the sidecar receive every raw sample?** `TcpMuseBridgeAdapter.
-   drain_samples(max_batch)` (`eeg_ingestion.py:739`) and the tick in
-   `stream_manager.py:~347–420` (`period = 1/eeg_sample_hz`, default 4 Hz).
-   `samples[-1]` is used, the rest dropped. Confirm `max_batch` ≥ 64 so a
-   tick never truncates, confirm the bridge forwards all 256 Hz frames
-   (`main.cpp:~366` mentions queueing between samples), and confirm the
-   raw channel values are in µV with the Muse offset (~800 at rest) —
-   `FOCUS_MIN/MAX_LEVEL` 400–1000 and the comment "mean levels near 950"
-   suggest so.
+1. **Does the sidecar receive every raw sample?** **Answered 2026-09-07,
+   from the source:** yes, and then it uses one. The bridge emits every
+   EEG frame — `main.cpp` sends one `kind:"eeg"` line per `poll_frame` and
+   `continue`s, so the loop keeps pace with the SDK — and each frame
+   carries the band values, `hsi` and `is_good` via
+   `append_bridge_device_fields`. The sidecar's reader thread queues them
+   all and `drain_samples(DRAIN_MAX_BATCH=2048)` empties the queue every
+   tick (~64 frames at 4 Hz), so nothing is truncated; the tick then
+   scores `samples[-1]` and discards the rest. So the raw stream is
+   available inside the sidecar and simply unused — Phase 2's spectrum
+   can be fed from the existing drain without touching the bridge.
+   **The bridge accepts one TCP client** (`bridge_tcp_server.cpp`:
+   `listen(…, 1)`, a single `client_socket_`), which is why the capture
+   script's `--source bridge` mode cannot run beside the sidecar: it
+   records raw frames + per-frame bands in a separate run, and features
+   for such a run come from replaying it through `SignalProcessor`. Still
+   unconfirmed: that the channel values are µV with the ~800 offset
+   (`FOCUS_MIN/MAX_LEVEL` 400–1000 and "mean levels near 950" suggest so)
+   — the sim emits ~690, read it off the first hardware capture.
 2. **Units of the `*_ABSOLUTE` packets.** The code assumes Bels (log10 of
    µV²/Hz summed). libMuse docs say "absolute band power … log of the
    sum"; verify against a capture — typical values around 0.5–1.5 for alpha

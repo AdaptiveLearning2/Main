@@ -27,6 +27,11 @@ class FeatureData(BaseModel):
     samples_rejected: int | None = None
     band_channels_used: int | None = None
     batch_size: int | None = None
+    # Raw, pre-baseline log ratios (linear power, ln beta/(alpha+theta) and
+    # ln alpha/(beta+gamma)) -- diagnostics for the accuracy capture
+    # (HANDOFF.md Phase 0). None on a frame with no usable bands.
+    focus_log_ratio: float | None = None
+    calm_log_ratio: float | None = None
 
 
 class StateData(BaseModel):

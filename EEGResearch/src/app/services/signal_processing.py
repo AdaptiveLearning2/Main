@@ -437,4 +437,9 @@ class SignalProcessor:
             # electrodes the bridge averaged into the band values (4 = all).
             "samples_rejected": self._samples_rejected,
             "band_channels_used": (bands or {}).get("band_channels_used"),
+            # Raw, pre-baseline log ratios -- diagnostics for the accuracy
+            # capture (HANDOFF.md Phase 0). None on a frame with no usable
+            # bands, distinct from a real ratio of 0.
+            "focus_log_ratio": band_focus_raw,
+            "calm_log_ratio": band_calm_raw,
         }

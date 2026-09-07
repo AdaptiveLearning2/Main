@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { normalizeValue } from '../../lib/practiceQuestion'
 import QuestionFigure from '../questions/QuestionFigure'
+import CCSSBadge from '../questions/CCSSBadge'
 
 const DIFFICULTY_TONE = {
   easy: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
@@ -32,6 +33,7 @@ export default function QuestionCard({ question: q, selected, revealed, onSelect
 
       <p className="text-lg font-semibold text-gray-900 dark:text-white mb-6 leading-relaxed">{q.text}</p>
       <QuestionFigure figure={q.figure} />
+      <CCSSBadge standard={q.ccssStandard} />
 
       <div className="space-y-3">
         {q.options.map((opt, i) => {

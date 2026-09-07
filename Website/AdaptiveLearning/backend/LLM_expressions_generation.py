@@ -19,6 +19,7 @@ import lesson_plan_context
 import safe_solve
 import token_join
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import question_schemas
 
@@ -354,6 +355,7 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
     return {
         "question_text": question_data["question_text"],
         "question_topic": "expressions",
+        "ccss_standard": ccss_standards.ccss_for("expressions", grade, scenario),
         "answer_options": answers,
         "correct_answer": str(normalize_answer(solution))
     }

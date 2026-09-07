@@ -3404,6 +3404,26 @@ question, not the question.
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
 student answered. `/api/questions` uses `select("*")` and needed nothing.
 
+### A question carries its Common Core code, resolved by grade and scenario
+
+`questions.ccss_standard` (`20260916000000`) is the machine-readable copy of the codes
+`TOPIC_MIN_GRADE` and the two `SCENARIO_MIN_GRADE` tables only ever cited in comments.
+`ccss_standards.ccss_for(topic, grade, scenario)` resolves it and every generator attaches it
+to its return dict; `CCSSBadge.jsx` renders it on the same five surfaces `QuestionFigure`
+reaches, with the same source-scan exhaustiveness test.
+
+**Resolved by grade, not band, and by scenario first.** A band spans three grades and the
+standard changes inside it (`1.MD.4` at grade 1, `2.MD.10` at grade 2, both "early"), and a
+scenario names the standard inside a topic (`triangle_sum` is 8.G.5 in a grade-7 topic). A
+*ladder* of `(floor_grade, code)` per topic or scenario picks the highest floor at or below
+the student's grade; a grade below every floor takes the lowest rung, since the
+defense-in-depth tiers still describe content and the floor's standard is its honest name.
+`test_every_scenario_in_a_gate_table_has_a_code` pins the scenario tables to the gate tables,
+so a scenario added to one without the other fails. The one imprecision is difficulty inside a
+band: grade 6 algebra's two-step medium tier is 7.EE.4 content and reads `6.EE.7`, because the
+resolver does not see the tier. Same nullable-no-default rule as `figure`, and the same named
+column to add to `/api/signals/session/{id}`'s embed — `/api/questions` is `select("*")`.
+
 ### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
 
 1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from

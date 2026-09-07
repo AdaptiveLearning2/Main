@@ -6341,7 +6341,7 @@ def session_signals(session_id: str, request: Request, since: str | None = None)
                # nothing to count. Named columns, so a column added to the
                # bank has to be added here to be seen at all.
                .select("*, questions(question_text, options, correct_answer, "
-                       "subject, difficulty, figure)")
+                       "subject, difficulty, figure, ccss_standard)")
                .eq("session_id", session_id).order("answered_at")
                .execute().data or [])
     return {"cognitive": cog_data, "face": fac_data, "heart": hrt_data, "answers": answers}

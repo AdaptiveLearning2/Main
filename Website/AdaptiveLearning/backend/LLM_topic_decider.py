@@ -487,6 +487,7 @@ def add_question_to_supabase(question, difficulty):
         # generator reproduces its text, so a figure that is not stored is a
         # figure the second student never sees.
         "figure": question.get("figure"),
+        "ccss_standard": question.get("ccss_standard"),
         "difficulty": difficulty,
         "question_text": question["question_text"],
         "options" : question["answer_options"],

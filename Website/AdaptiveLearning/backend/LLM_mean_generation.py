@@ -17,6 +17,7 @@ import answer_format
 import lesson_plan_context
 import safe_solve
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import question_consistency
 
@@ -214,6 +215,7 @@ def generate_mean_question(global_questions,prev_questions,difficulty,grade,max_
     return {
         "question_text": question_data["question_text"],
         "question_topic": "mean",
+        "ccss_standard": ccss_standards.ccss_for("mean", grade),
         "answer_options": answers,
         "correct_answer": solution
     }

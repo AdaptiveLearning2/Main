@@ -21,6 +21,7 @@ import llm_client
 import lesson_plan_context
 import question_schemas
 import grade_levels
+import ccss_standards
 import hs_solvers
 import incorrect_solution_generation as inc_gen
 import answer_format
@@ -408,6 +409,7 @@ def generate_functions_question(global_questions, prev_questions,
     return {
         "question_text": question_data["question_text"],
         "question_topic": "functions",
+        "ccss_standard": ccss_standards.ccss_for("functions", grade, scenario),
         "answer_options": answers,
         "correct_answer": correct,
     }

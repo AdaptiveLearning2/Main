@@ -18,6 +18,7 @@ import answer_format
 import lesson_plan_context
 import safe_solve
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import question_consistency
 
@@ -292,6 +293,7 @@ def generate_mode_question(global_questions, prev_questions,difficulty, grade, m
     return {
         "question_text": question_data["question_text"],
         "question_topic": "mode",
+        "ccss_standard": ccss_standards.ccss_for("mode", grade),
         "answer_options": answers,
         "correct_answer": solution
     }

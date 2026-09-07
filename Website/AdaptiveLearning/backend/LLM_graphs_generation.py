@@ -28,6 +28,7 @@ import lesson_plan_context
 import question_figures
 import question_schemas
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import incorrect_solution_generation as inc_gen
 import answer_format
@@ -338,6 +339,7 @@ def generate_graphs_question(global_questions, prev_questions, difficulty,
     return {
         "question_text": question_data["question_text"],
         "question_topic": "graphs",
+        "ccss_standard": ccss_standards.ccss_for("graphs", grade),
         "answer_options": answers,
         "correct_answer": correct,
         # Drawn from the same list the solver summed, so the bar a student

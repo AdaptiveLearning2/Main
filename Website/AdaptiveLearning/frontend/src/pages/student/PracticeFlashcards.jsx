@@ -5,6 +5,7 @@ import { markPracticeViewed } from '../../lib/practiceSession'
 import LoadError from '../../components/ui/LoadError'
 import { normalizeValue } from '../../lib/practiceQuestion'
 import QuestionFigure from '../../components/questions/QuestionFigure'
+import CCSSBadge from '../../components/questions/CCSSBadge'
 
 /** Flashcard mode: self-paced, card-flip, no timer and no score. "Done" ends
  * the session at any point -- there is no fixed deck size the way a
@@ -113,6 +114,7 @@ export default function PracticeFlashcards({ session, onFinish }) {
           )}
           <p className="text-xl font-semibold text-gray-900 dark:text-white mb-4">{question.question_text}</p>
           <QuestionFigure figure={question.figure} />
+          <CCSSBadge standard={question.ccss_standard} />
           {flipped ? (
             <p className="text-2xl font-black text-indigo-600 dark:text-indigo-400">
               {normalizeValue(question.correct_answer)}

@@ -19,6 +19,7 @@ import lesson_plan_context
 import question_figures
 import question_schemas
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import answer_format
 
@@ -277,6 +278,7 @@ def generate_shape_fractions_question(global_questions, prev_questions,
     return {
         "question_text": question_data["question_text"],
         "question_topic": "shape_fractions",
+        "ccss_standard": ccss_standards.ccss_for("shape_fractions", grade),
         "answer_options": answers,
         "correct_answer": correct,
         # Drawn from the same two numbers the answer is built from.

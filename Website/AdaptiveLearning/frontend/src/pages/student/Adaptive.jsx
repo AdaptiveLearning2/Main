@@ -6,7 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
-         deviceStart, deviceStop, museRefresh, museConnect,
+         deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
          releasePushIfIdle, sidecarDebug
        } from '../../lib/sidecar'
@@ -18,6 +18,10 @@ import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
 import { contactQuality } from '../../lib/contactQuality'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
+// How often to ask for the device list again while it comes back empty --
+// the sidecar often starts after this page does. Same cadence as the health
+// check, so a sidecar that appears is noticed by both within one tick.
+const DISCOVERY_RETRY_MS = 5000
 
 // The page's own recovery of a headband that dropped mid-session, used only
 // once the native bridge has given up on its own (or is too old to try).
@@ -275,6 +279,45 @@ export default function Adaptive() {
   // When a reconnecting link was first seen connected with no packet yet --
   // see linkSettling.
   const settlingSince = useRef(null)
+
+  // The camera is stopped when this page goes away; the headband is not.
+  // A headband stays paired across navigation on purpose -- the bridge
+  // holds the Bluetooth link and re-pairing costs a 12 s scan. A webcam has
+  // no such cost, and the consent copy says it reads how a student is
+  // finding the *questions*: an open lens on the dashboard is outside that,
+  // and a student cannot tell a capturing-and-discarding camera from a
+  // recording one by its light. Nothing stopped it before this: the only
+  // `deviceStop` was behind the Turn off button, and `stopPushOnUnload`
+  // drops the token without touching the capture.
+  //
+  // Two exits, because effect cleanup does not run on a tab close: the route
+  // change takes the ordinary stop, `pagehide` the keepalive one -- the same
+  // pair `stopPushOnUnload` already is for the token. Both read the camera
+  // through a ref synced after every render, so they see the camera as it
+  // is when the page leaves rather than as it was when the listener was
+  // attached; synced in an effect, not in render, which the hooks lint
+  // refuses. Under StrictMode's dev-only mount/unmount/mount the first
+  // cleanup runs before the device list has arrived, so the ref still says
+  // off and nothing is sent.
+  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
+  useEffect(() => {
+    cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
+  })
+  useEffect(() => {
+    // Push only, like `toggleCamera`: under pull the backend owns the device.
+    const stoppable = () => {
+      const c = cameraRef.current
+      return c.running && c.id && c.pushMode ? c.id : null
+    }
+    const onPageHide = () => { const id = stoppable(); if (id) deviceStopOnUnload(id) }
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      const id = stoppable()
+      if (id) deviceStop(id).catch(() => {})
+    }
+  }, [])
+
   const pageAlive = useRef(true)
   useEffect(() => {
     pageAlive.current = true
@@ -425,38 +468,82 @@ export default function Adaptive() {
 
   // Discover sidecar stations once the EEG service is reachable. Auto-select when
   // there's exactly one; otherwise wait for the user to pick one via the picker below.
+  //
+  // Asked again every DISCOVERY_RETRY_MS until a non-empty list arrives.
+  // This ran once per mode change, so a sidecar that came up after the page
+  // -- a relaunch mid-lesson, or the page simply opened first -- had answered
+  // nothing, the camera card never appeared, and only a reload asked again.
+  //
+  // A read that *fails* applies nothing: it schedules the retry and returns
+  // before the state writes. "Not retrieved" is not "answered with nothing",
+  // and applying it as an empty list would reset `stationId` to `default`
+  // for the ~5 s until the retry -- a window in which `armRecording` binds a
+  // recorder, and `/api/eeg/start`, to a station the headband is not on.
+  // Under pull that window is reachable from the default deployment: the
+  // health check flips `available` on one slow probe and re-runs this
+  // effect at exactly the moment the devices read is likeliest to fail. An
+  // answered-empty list is still applied (so `stationId` falls back to
+  // `default` and Connect stays reachable, as before) and still retried.
   useEffect(() => {
     // `available` is null (not false) when the backend hasn't probed the
     // sidecar, which is normal under push -- gating on falsiness alone would
     // skip the push branch below.
     if (!headband.available && !headband.pushMode) return
     let alive = true
-    // Under push the backend can't reach the sidecar either, so ask it directly.
-    const source = headband.pushMode
-      ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
-      : eegDevices()
-    source.then(d => {
-      if (!alive) return
-      // Read before the headband filter below, so camera state doesn't
-      // depend on the headband picker's rules.
-      const face = (d?.devices || []).find(x => x.kind === 'face')
-      setCamera(c => ({ ...c, id: face?.device_id || null,
-                        running: !!face?.running }))
-      // Cameras share the device registry with headbands, so they're
-      // filtered out here -- otherwise this picker offers a camera as a
-      // headband to connect, and breaks the single-device auto-select below.
-      // Excludes `face` rather than allow-listing headband kinds, so a new
-      // headband kind isn't silently dropped.
-      const list = (d?.devices || []).filter(s => s.kind !== 'face')
-      setStations(list)
-      setStationId(prev => {
-        if (prev && list.some(s => s.device_id === prev)) return prev
-        if (list.length === 1) return list[0].device_id
-        if (list.length === 0) return 'default'
-        return null
+    let retry = null
+    const discover = () => {
+      // Under push the backend can't reach the sidecar either, so ask it directly.
+      const source = headband.pushMode
+        ? sidecarDevices().then(list => ({ devices: list })).catch(() => null)
+        : eegDevices().catch(() => null)
+      source.then(d => {
+        if (!alive) return
+        // Three ways this is not an answer about devices, and none of them
+        // is a rejection:
+        //   `d === null`   -- the push branch's `call()` threw.
+        //   `d.error`      -- `eegDevices` swallows its own failure and
+        //                     answers `{available: false, devices: [], error}`,
+        //                     so the `.catch` above can never fire on pull.
+        //   `available: false` -- a 200 from `/api/eeg/devices` saying it
+        //                     probed the sidecar and got nothing. Only
+        //                     `available: true` carries a real list.
+        // The last is the likeliest of the three: `is_alive()` is a 1.5 s
+        // healthz probe that `/api/eeg/health` and `/api/eeg/devices` each
+        // make separately, so a sidecar that is *slow* rather than absent
+        // gives health a success and devices a timeout -- and the health
+        // poll flipping `available` is itself what re-runs this effect, into
+        // the same window.
+        // `=== false`, never falsiness: push answers `available: null`
+        // ("not probed in this deployment"), which is a different claim, and
+        // the push branch's `d` carries no `available` at all.
+        if (d === null || d.error || d.available === false) {
+          retry = setTimeout(discover, DISCOVERY_RETRY_MS)
+          return
+        }
+        const all = d?.devices || []
+        if (all.length === 0) retry = setTimeout(discover, DISCOVERY_RETRY_MS)
+        // Read before the headband filter below, so camera state doesn't
+        // depend on the headband picker's rules.
+        const face = all.find(x => x.kind === 'face')
+        setCamera(c => ({ ...c, id: face?.device_id || null,
+                          running: !!face?.running }))
+        // Cameras share the device registry with headbands, so they're
+        // filtered out here -- otherwise this picker offers a camera as a
+        // headband to connect, and breaks the single-device auto-select below.
+        // Excludes `face` rather than allow-listing headband kinds, so a new
+        // headband kind isn't silently dropped.
+        const list = all.filter(s => s.kind !== 'face')
+        setStations(list)
+        setStationId(prev => {
+          if (prev && list.some(s => s.device_id === prev)) return prev
+          if (list.length === 1) return list[0].device_id
+          if (list.length === 0) return 'default'
+          return null
+        })
       })
-    })
-    return () => { alive = false }
+    }
+    discover()
+    return () => { alive = false; clearTimeout(retry) }
   }, [headband.available, headband.pushMode])
 
   // Re-offers the session to the sidecar. Shared by the initial handover and

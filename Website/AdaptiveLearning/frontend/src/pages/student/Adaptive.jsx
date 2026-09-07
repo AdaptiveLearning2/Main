@@ -469,14 +469,21 @@ export default function Adaptive() {
   // Discover sidecar stations once the EEG service is reachable. Auto-select when
   // there's exactly one; otherwise wait for the user to pick one via the picker below.
   //
-  // Asked again every DISCOVERY_RETRY_MS while the list comes back empty.
+  // Asked again every DISCOVERY_RETRY_MS until a non-empty list arrives.
   // This ran once per mode change, so a sidecar that came up after the page
   // -- a relaunch mid-lesson, or the page simply opened first -- had answered
   // nothing, the camera card never appeared, and only a reload asked again.
-  // A failed read is folded into an empty list on both branches, so the
-  // retry covers "not answering" as well as "answered with nothing"; the
-  // empty answer is still applied on the way (`stationId` falls back to
-  // `default` so Connect stays reachable), exactly as before.
+  //
+  // A read that *fails* applies nothing: it schedules the retry and returns
+  // before the state writes. "Not retrieved" is not "answered with nothing",
+  // and applying it as an empty list would reset `stationId` to `default`
+  // for the ~5 s until the retry -- a window in which `armRecording` binds a
+  // recorder, and `/api/eeg/start`, to a station the headband is not on.
+  // Under pull that window is reachable from the default deployment: the
+  // health check flips `available` on one slow probe and re-runs this
+  // effect at exactly the moment the devices read is likeliest to fail. An
+  // answered-empty list is still applied (so `stationId` falls back to
+  // `default` and Connect stays reachable, as before) and still retried.
   useEffect(() => {
     // `available` is null (not false) when the backend hasn't probed the
     // sidecar, which is normal under push -- gating on falsiness alone would
@@ -487,10 +494,14 @@ export default function Adaptive() {
     const discover = () => {
       // Under push the backend can't reach the sidecar either, so ask it directly.
       const source = headband.pushMode
-        ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
-        : eegDevices().catch(() => ({ devices: [] }))
+        ? sidecarDevices().then(list => ({ devices: list })).catch(() => null)
+        : eegDevices().catch(() => null)
       source.then(d => {
         if (!alive) return
+        if (d === null) {
+          retry = setTimeout(discover, DISCOVERY_RETRY_MS)
+          return
+        }
         const all = d?.devices || []
         if (all.length === 0) retry = setTimeout(discover, DISCOVERY_RETRY_MS)
         // Read before the headband filter below, so camera state doesn't

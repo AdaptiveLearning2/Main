@@ -106,9 +106,17 @@ it('keeps asking for the device list until the sidecar answers, so the camera ca
   registry.failures = 1
   registry.cameraRunning = false
   render(<Adaptive />)
+  // The failed read must apply nothing. Folded into an empty list it would
+  // set `stationId` to `default` -- which enables Connect, and is what a
+  // session started in this window would bind its recorder to. Not retrieved
+  // is not answered-with-nothing, so Connect stays disabled until a list
+  // actually arrives.
+  await waitFor(() => expect(devices).toHaveBeenCalledTimes(1))
+  expect(screen.getByRole('button', { name: /connect headband/i })).toBeDisabled()
   // The first read failed; without the retry this never renders.
   await screen.findByRole('button', { name: /turn on camera/i }, { timeout: 9000 })
   expect(devices.mock.calls.length).toBeGreaterThanOrEqual(2)
+  await waitFor(() => expect(screen.getByRole('button', { name: /connect headband/i })).not.toBeDisabled())
 }, 15_000)
 
 it('sends nothing for a camera that is already off', async () => {

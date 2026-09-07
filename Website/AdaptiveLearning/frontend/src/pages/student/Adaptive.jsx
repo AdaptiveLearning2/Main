@@ -498,14 +498,25 @@ export default function Adaptive() {
         : eegDevices().catch(() => null)
       source.then(d => {
         if (!alive) return
-        // `d.error` as well as a rejection: `eegDevices` swallows its own
-        // failure and answers `{available: false, devices: [], error}`, so on
-        // the pull branch the `.catch` above can never fire and a failed read
-        // would otherwise arrive looking exactly like an answered-empty one.
-        // `error` is set only by that catch, so it is the discriminator;
-        // `available: false` is not, since the backend reports a genuinely
-        // down sidecar that way too.
-        if (d === null || d.error) {
+        // Three ways this is not an answer about devices, and none of them
+        // is a rejection:
+        //   `d === null`   -- the push branch's `call()` threw.
+        //   `d.error`      -- `eegDevices` swallows its own failure and
+        //                     answers `{available: false, devices: [], error}`,
+        //                     so the `.catch` above can never fire on pull.
+        //   `available: false` -- a 200 from `/api/eeg/devices` saying it
+        //                     probed the sidecar and got nothing. Only
+        //                     `available: true` carries a real list.
+        // The last is the likeliest of the three: `is_alive()` is a 1.5 s
+        // healthz probe that `/api/eeg/health` and `/api/eeg/devices` each
+        // make separately, so a sidecar that is *slow* rather than absent
+        // gives health a success and devices a timeout -- and the health
+        // poll flipping `available` is itself what re-runs this effect, into
+        // the same window.
+        // `=== false`, never falsiness: push answers `available: null`
+        // ("not probed in this deployment"), which is a different claim, and
+        // the push branch's `d` carries no `available` at all.
+        if (d === null || d.error || d.available === false) {
           retry = setTimeout(discover, DISCOVERY_RETRY_MS)
           return
         }

@@ -25,7 +25,7 @@ vi.mock('../../lib/session', () => ({
 // capturing, and how many device-list reads fail before one answers (a
 // sidecar still starting up). Declared above the factories because `vi.mock`
 // is hoisted -- the factories only read it when called.
-const registry = { mode: 'push', cameraRunning: true, failures: 0 }
+const registry = { mode: 'push', cameraRunning: true, failures: 0, failureShape: 'error' }
 
 vi.mock('../../lib/signals', () => ({
   createSignalRecorder: () => ({ start: vi.fn(), stop: vi.fn() }),
@@ -35,15 +35,19 @@ vi.mock('../../lib/signals', () => ({
     ingest_mode: registry.mode,
   })),
   eegStatus: vi.fn(async () => ({ ingest_mode: registry.mode, service: null, poller: {} })),
-  // The pull-side list, and the shape that matters: `eegDevices` swallows its
-  // own failure, so a failed read arrives as a resolved payload carrying
-  // `error` -- not as a rejection.
+  // The pull-side list. Neither failure shape is a rejection, which is the
+  // whole difficulty: `eegDevices` swallows its own error, and the backend
+  // answers a plain 200 with `available: false` when its own 1.5 s healthz
+  // probe of the sidecar fails.
   eegDevices: vi.fn(async () => {
     if (registry.failures > 0) {
       registry.failures -= 1
-      return { available: false, devices: [], error: 'EEG service unreachable' }
+      return registry.failureShape === 'down'
+        ? { available: false, ingest_mode: 'pull', devices: [] }
+        : { available: false, devices: [], error: 'EEG service unreachable' }
     }
-    return { devices: [{ device_id: 'station1', kind: 'muse', running: false }] }
+    return { available: true, ingest_mode: 'pull',
+             devices: [{ device_id: 'station1', kind: 'muse', running: false }] }
   }),
 }))
 vi.mock('../../lib/sidecar', () => ({
@@ -83,6 +87,7 @@ beforeEach(() => {
   registry.mode = 'push'
   registry.cameraRunning = true
   registry.failures = 0
+  registry.failureShape = 'error'
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
@@ -146,8 +151,18 @@ it('keeps asking for the device list until the sidecar answers, so the camera ca
 // `armRecording` binds `createSignalRecorder` and `/api/eeg/start` to, so a
 // session started in the window records against a station the headband is
 // not on. Connect being enabled is the observable that flips.
-it('does not fall back to the default station when the pull-side device read fails', async () => {
+// Both shapes, because neither is a rejection and they fail differently:
+// `error` is the client swallowing its own exception, `available: false` is
+// the backend saying it probed the sidecar and got nothing. The second is
+// the likelier one -- a slow sidecar times out `/api/eeg/devices`'s healthz
+// probe while `/api/eeg/health`'s separate probe succeeds -- and it is what
+// makes `available` flip, which is itself what re-runs discovery.
+it.each([
+  ['the client swallowed its own error', 'error'],
+  ['the backend answered 200 with available: false', 'down'],
+])('does not fall back to the default station when %s', async (_name, shape) => {
   registry.mode = 'pull'
+  registry.failureShape = shape
   registry.failures = 1
   render(<Adaptive />)
   await waitFor(() => expect(eegDevices).toHaveBeenCalledTimes(1))

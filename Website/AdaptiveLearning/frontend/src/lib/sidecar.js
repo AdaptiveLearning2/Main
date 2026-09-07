@@ -159,6 +159,27 @@ export async function deviceStop(deviceId) {
               { method: 'POST', timeoutMs: LIFECYCLE_TIMEOUT_MS })
 }
 
+/**
+ * The same device stop, issued from a page that is going away.
+ *
+ * `stopPushOnUnload` drops the token on a tab close; it does not stop the
+ * capture, so a camera switched on from the Adaptive page kept its lens open
+ * after the tab was gone. Same shape for the same reason: effect cleanup
+ * does not run on unload, `keepalive` lets the request outlive the document,
+ * and `sendBeacon` cannot carry the Authorization header.
+ */
+export function deviceStopOnUnload(deviceId) {
+  try {
+    return fetch(`${SIDECAR_URL}/api/v1/session/stop?device_id=${encodeURIComponent(deviceId)}`, {
+      method: 'POST',
+      headers: SIDECAR_TOKEN ? { Authorization: `Bearer ${SIDECAR_TOKEN}` } : {},
+      keepalive: true,
+    }).catch(() => {})
+  } catch {
+    return Promise.resolve()
+  }
+}
+
 /** Every registered station and whether it is currently capturing. */
 export async function devices() {
   const res = await call('/api/v1/devices')

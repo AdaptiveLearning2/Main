@@ -1420,6 +1420,16 @@ deadlocks. Use the `session` the callback is handed; that is why `startPush` tak
 The symptom is the worst kind: the refresh handler hangs, the sidecar keeps the expired token, and
 every push 401s for the rest of the lesson with nothing raised anywhere.
 
+**The camera is stopped when the Adaptive page goes away; the headband is not.** `stopPushOnUnload`
+drops the token and never touched the capture, and the only `deviceStop` was behind the Turn off
+button — so navigating to the dashboard left the sidecar reading and discarding frames with the
+lens open until someone came back. The headband stays paired across navigation deliberately (the
+bridge holds the link, re-pairing costs a 12 s scan); a webcam has no such cost and the consent copy
+scopes it to the questions. Two exits, because effect cleanup does not run on a tab close: the route
+change sends `deviceStop`, `pagehide` sends `deviceStopOnUnload` with `keepalive`, both reading the
+camera through a ref synced after every render. `AdaptiveCameraLifecycle.test.jsx` pins both and
+that a camera already off sends nothing.
+
 `ALLOWED_ORIGINS` on the sidecar must name the **frontend** origin, not just the backend's. Getting
 it wrong fails every local call on CORS while the sidecar itself looks perfectly healthy.
 

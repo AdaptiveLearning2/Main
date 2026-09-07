@@ -6,7 +6,7 @@ import { apiFetch } from '../../lib/api'
 import { endSession, recordAnswer } from '../../lib/session'
 import { createSignalRecorder, eegHealth, eegStatus, eegDevices } from '../../lib/signals'
 import { startPush, stopPush, stopPushOnUnload, pushStatus,
-         deviceStart, deviceStop, museRefresh, museConnect,
+         deviceStart, deviceStop, deviceStopOnUnload, museRefresh, museConnect,
          museDisconnect, museState, devices as sidecarDevices,
          releasePushIfIdle, sidecarDebug
        } from '../../lib/sidecar'
@@ -275,6 +275,45 @@ export default function Adaptive() {
   // When a reconnecting link was first seen connected with no packet yet --
   // see linkSettling.
   const settlingSince = useRef(null)
+
+  // The camera is stopped when this page goes away; the headband is not.
+  // A headband stays paired across navigation on purpose -- the bridge
+  // holds the Bluetooth link and re-pairing costs a 12 s scan. A webcam has
+  // no such cost, and the consent copy says it reads how a student is
+  // finding the *questions*: an open lens on the dashboard is outside that,
+  // and a student cannot tell a capturing-and-discarding camera from a
+  // recording one by its light. Nothing stopped it before this: the only
+  // `deviceStop` was behind the Turn off button, and `stopPushOnUnload`
+  // drops the token without touching the capture.
+  //
+  // Two exits, because effect cleanup does not run on a tab close: the route
+  // change takes the ordinary stop, `pagehide` the keepalive one -- the same
+  // pair `stopPushOnUnload` already is for the token. Both read the camera
+  // through a ref synced after every render, so they see the camera as it
+  // is when the page leaves rather than as it was when the listener was
+  // attached; synced in an effect, not in render, which the hooks lint
+  // refuses. Under StrictMode's dev-only mount/unmount/mount the first
+  // cleanup runs before the device list has arrived, so the ref still says
+  // off and nothing is sent.
+  const cameraRef = useRef({ id: null, running: false, pushMode: undefined })
+  useEffect(() => {
+    cameraRef.current = { id: camera.id, running: camera.running, pushMode: headband.pushMode }
+  })
+  useEffect(() => {
+    // Push only, like `toggleCamera`: under pull the backend owns the device.
+    const stoppable = () => {
+      const c = cameraRef.current
+      return c.running && c.id && c.pushMode ? c.id : null
+    }
+    const onPageHide = () => { const id = stoppable(); if (id) deviceStopOnUnload(id) }
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      const id = stoppable()
+      if (id) deviceStop(id).catch(() => {})
+    }
+  }, [])
+
   const pageAlive = useRef(true)
   useEffect(() => {
     pageAlive.current = true

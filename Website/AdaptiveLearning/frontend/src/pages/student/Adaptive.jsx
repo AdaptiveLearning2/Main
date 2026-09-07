@@ -18,6 +18,10 @@ import { TOPICS as ALL_TOPICS, TOPIC_ICONS } from '../../lib/topics'
 import { contactQuality } from '../../lib/contactQuality'
 
 const EEG_DEBUG = import.meta.env.VITE_EEG_DEBUG === 'true'
+// How often to ask for the device list again while it comes back empty --
+// the sidecar often starts after this page does. Same cadence as the health
+// check, so a sidecar that appears is noticed by both within one tick.
+const DISCOVERY_RETRY_MS = 5000
 
 // The page's own recovery of a headband that dropped mid-session, used only
 // once the native bridge has given up on its own (or is too old to try).
@@ -464,38 +468,53 @@ export default function Adaptive() {
 
   // Discover sidecar stations once the EEG service is reachable. Auto-select when
   // there's exactly one; otherwise wait for the user to pick one via the picker below.
+  //
+  // Asked again every DISCOVERY_RETRY_MS while the list comes back empty.
+  // This ran once per mode change, so a sidecar that came up after the page
+  // -- a relaunch mid-lesson, or the page simply opened first -- had answered
+  // nothing, the camera card never appeared, and only a reload asked again.
+  // A failed read is folded into an empty list on both branches, so the
+  // retry covers "not answering" as well as "answered with nothing"; the
+  // empty answer is still applied on the way (`stationId` falls back to
+  // `default` so Connect stays reachable), exactly as before.
   useEffect(() => {
     // `available` is null (not false) when the backend hasn't probed the
     // sidecar, which is normal under push -- gating on falsiness alone would
     // skip the push branch below.
     if (!headband.available && !headband.pushMode) return
     let alive = true
-    // Under push the backend can't reach the sidecar either, so ask it directly.
-    const source = headband.pushMode
-      ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
-      : eegDevices()
-    source.then(d => {
-      if (!alive) return
-      // Read before the headband filter below, so camera state doesn't
-      // depend on the headband picker's rules.
-      const face = (d?.devices || []).find(x => x.kind === 'face')
-      setCamera(c => ({ ...c, id: face?.device_id || null,
-                        running: !!face?.running }))
-      // Cameras share the device registry with headbands, so they're
-      // filtered out here -- otherwise this picker offers a camera as a
-      // headband to connect, and breaks the single-device auto-select below.
-      // Excludes `face` rather than allow-listing headband kinds, so a new
-      // headband kind isn't silently dropped.
-      const list = (d?.devices || []).filter(s => s.kind !== 'face')
-      setStations(list)
-      setStationId(prev => {
-        if (prev && list.some(s => s.device_id === prev)) return prev
-        if (list.length === 1) return list[0].device_id
-        if (list.length === 0) return 'default'
-        return null
+    let retry = null
+    const discover = () => {
+      // Under push the backend can't reach the sidecar either, so ask it directly.
+      const source = headband.pushMode
+        ? sidecarDevices().then(list => ({ devices: list })).catch(() => ({ devices: [] }))
+        : eegDevices().catch(() => ({ devices: [] }))
+      source.then(d => {
+        if (!alive) return
+        const all = d?.devices || []
+        if (all.length === 0) retry = setTimeout(discover, DISCOVERY_RETRY_MS)
+        // Read before the headband filter below, so camera state doesn't
+        // depend on the headband picker's rules.
+        const face = all.find(x => x.kind === 'face')
+        setCamera(c => ({ ...c, id: face?.device_id || null,
+                          running: !!face?.running }))
+        // Cameras share the device registry with headbands, so they're
+        // filtered out here -- otherwise this picker offers a camera as a
+        // headband to connect, and breaks the single-device auto-select below.
+        // Excludes `face` rather than allow-listing headband kinds, so a new
+        // headband kind isn't silently dropped.
+        const list = all.filter(s => s.kind !== 'face')
+        setStations(list)
+        setStationId(prev => {
+          if (prev && list.some(s => s.device_id === prev)) return prev
+          if (list.length === 1) return list[0].device_id
+          if (list.length === 0) return 'default'
+          return null
+        })
       })
-    })
-    return () => { alive = false }
+    }
+    discover()
+    return () => { alive = false; clearTimeout(retry) }
   }, [headband.available, headband.pushMode])
 
   // Re-offers the session to the sidecar. Shared by the initial handover and

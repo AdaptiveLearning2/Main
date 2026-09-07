@@ -28,8 +28,10 @@ vi.mock('../../lib/signals', () => ({
   eegDevices: vi.fn(async () => ({ devices: [] })),
 }))
 
-// Rewritten per test: whether the sidecar reports the camera capturing.
-const registry = { cameraRunning: true }
+// Rewritten per test: whether the sidecar reports the camera capturing, and
+// how many device-list reads fail before it answers (a sidecar still
+// starting up).
+const registry = { cameraRunning: true, failures: 0 }
 vi.mock('../../lib/sidecar', () => ({
   startPush: vi.fn(async () => ({})), stopPush: vi.fn(async () => ({})),
   stopPushOnUnload: vi.fn(),
@@ -40,10 +42,13 @@ vi.mock('../../lib/sidecar', () => ({
   museConnect: vi.fn(async () => ({})),
   museDisconnect: vi.fn(async () => ({})),
   museState: vi.fn(async () => ({ running: false, ingestion: {} })),
-  devices: vi.fn(async () => [
-    { device_id: 'default', kind: 'muse', running: false },
-    { device_id: 'camera', kind: 'face', running: registry.cameraRunning },
-  ]),
+  devices: vi.fn(async () => {
+    if (registry.failures > 0) { registry.failures -= 1; throw new Error('sidecar not up yet') }
+    return [
+      { device_id: 'default', kind: 'muse', running: false },
+      { device_id: 'camera', kind: 'face', running: registry.cameraRunning },
+    ]
+  }),
   releasePushIfIdle: vi.fn(async () => ({ stopped: true, devices: [] })),
   sidecarDebug: vi.fn(async () => ({})),
   sidecarState: vi.fn(async () => null),
@@ -53,7 +58,7 @@ vi.mock('../../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'u1', email: 'a@b.c' }, role: 'student', loading: false }),
 }))
 
-import { deviceStop, deviceStopOnUnload } from '../../lib/sidecar'
+import { deviceStop, deviceStopOnUnload, devices } from '../../lib/sidecar'
 import { mockApi, resetApi } from '../../test/mocks/apiFetch'
 import Adaptive from './Adaptive'
 
@@ -61,6 +66,7 @@ beforeEach(() => {
   resetApi()
   vi.clearAllMocks()
   registry.cameraRunning = true
+  registry.failures = 0
   mockApi({
     'GET /api/profile/me': () => ({ id: 'u1', role: 'student', grade_level: '4th Grade' }),
     'GET /api/classes': () => [],
@@ -92,6 +98,18 @@ it('stops the camera on pagehide with the keepalive stop, since cleanup never ru
   expect(deviceStopOnUnload).toHaveBeenCalledWith('camera')
   expect(deviceStop).not.toHaveBeenCalled()
 })
+
+// Real timers: the retry is on a 5 s cadence and this component does not
+// survive a fake clock (see AdaptiveReconnect.test.jsx). One retry is enough
+// to show the card appears without a reload; the timeout says what it costs.
+it('keeps asking for the device list until the sidecar answers, so the camera card appears without a reload', async () => {
+  registry.failures = 1
+  registry.cameraRunning = false
+  render(<Adaptive />)
+  // The first read failed; without the retry this never renders.
+  await screen.findByRole('button', { name: /turn on camera/i }, { timeout: 9000 })
+  expect(devices.mock.calls.length).toBeGreaterThanOrEqual(2)
+}, 15_000)
 
 it('sends nothing for a camera that is already off', async () => {
   registry.cameraRunning = false

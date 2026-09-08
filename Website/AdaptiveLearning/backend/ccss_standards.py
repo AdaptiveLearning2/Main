@@ -85,9 +85,10 @@ SCENARIO_LADDER = {
     },
     "expressions": {
         # Add and subtract within 20, then within 100, then whole-number
-        # arithmetic, then mixed operations with parentheses.
-        "evaluate":            [(1, "1.OA.6"), (2, "2.NBT.5"), (3, "3.NBT.2"), (4, "5.OA.1")],
-        "order_of_operations": [(1, "5.OA.1")],
+        # arithmetic, multi-step at 4, and parentheses only from 5 --
+        # `GRADE_OVERRIDES[4]` keeps grade 4 off 5.OA.1, so the floor is 5.
+        "evaluate":            [(1, "1.OA.6"), (2, "2.NBT.5"), (3, "3.NBT.2"), (4, "4.OA.3"), (5, "5.OA.1")],
+        "order_of_operations": [(1, "4.OA.3"), (5, "5.OA.1")],
         "simplify":            [(1, "6.EE.3")],
     },
     "functions": {

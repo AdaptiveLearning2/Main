@@ -472,11 +472,19 @@ def add_question_to_supabase(question, difficulty):
     """
     # Let the database find the duplicate instead of pulling the whole
     # questions table into Python on every generated question.
-    existing = supabase.table("questions") \
+    #
+    # Keyed on the standard as well as the text: the code depends on the
+    # student's grade, the only stored field that does, so one text generated
+    # at grade 6 and again at grade 8 is two rows (6.EE.7 and 8.EE.7b) rather
+    # than one whose badge belongs to whichever grade wrote it first -- and
+    # then disagrees with what the second student saw on their own screen.
+    code = question.get("ccss_standard")
+    lookup = supabase.table("questions") \
         .select("id") \
-        .eq("question_text", question["question_text"]) \
-        .limit(1) \
-        .execute()
+        .eq("question_text", question["question_text"])
+    lookup = lookup.is_("ccss_standard", "null") if code is None \
+        else lookup.eq("ccss_standard", code)
+    existing = lookup.limit(1).execute()
 
     if existing.data:
         return existing.data[0]["id"]

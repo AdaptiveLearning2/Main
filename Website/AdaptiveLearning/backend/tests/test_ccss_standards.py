@@ -64,6 +64,101 @@ def test_an_unreadable_grade_is_the_youngest():
     assert ccss_standards.ccss_for("ordering", None) == "1.NBT.3"
 
 
+def test_grade_four_is_kept_off_the_grade_five_standard():
+    # `GRADE_OVERRIDES[4]` in the expressions generator forbids parentheses at
+    # grade 4 because 5.OA.1 is a grade-5 standard; the badge must agree.
+    for scenario in ("evaluate", "order_of_operations"):
+        assert ccss_standards.ccss_for("expressions", "4th Grade", scenario) != "5.OA.1"
+        assert ccss_standards.ccss_for("expressions", "5th Grade", scenario) == "5.OA.1"
+
+
+def test_every_scenario_selecting_generator_checks_the_reply_scenario():
+    # A reply naming a scenario other than the one asked for misses
+    # SCENARIO_LADDER and takes the topic's lowest rung -- a grade-1 code on
+    # a grade-8 question. Expressions was the one topic without this check.
+    missing = []
+    for filename in sorted(os.listdir(BACKEND)):
+        if not (filename.startswith("LLM_") and filename.endswith("_generation.py")):
+            continue
+        source = open(os.path.join(BACKEND, filename), encoding="utf-8").read()
+        # Equality with the asked-for name, or membership in the grade's
+        # allowed set (geometry, angles) -- either keeps the name inside
+        # SCENARIO_LADDER.
+        checks = ("!= _SCENARIO_NAMES[scenario]", 'question_data["scenario"] not in')
+        if "_SCENARIO_NAMES[scenario]" in source \
+                and not any(c in source for c in checks):
+            missing.append(filename)
+    assert not missing, f"these generators never check the reply's scenario: {missing}"
+
+
+class _Query:
+    def __init__(self, store, table):
+        self.store, self.table, self.filters, self.inserted = store, table, [], None
+
+    def select(self, *_):
+        return self
+
+    def eq(self, col, val):
+        self.filters.append(("eq", col, val))
+        return self
+
+    def is_(self, col, val):
+        self.filters.append(("is", col, val))
+        return self
+
+    def limit(self, *_):
+        return self
+
+    def insert(self, row):
+        self.inserted = row
+        return self
+
+    def execute(self):
+        if self.inserted is not None:
+            self.store["rows"].append({"id": f"id-{len(self.store['rows'])}", **self.inserted})
+            return type("R", (), {"data": [self.store["rows"][-1]]})()
+        hits = [r for r in self.store["rows"]
+                if all((r.get(c) is None) if kind == "is" else (r.get(c) == v)
+                       for kind, c, v in self.filters)]
+        return type("R", (), {"data": hits[:1]})()
+
+
+class _FakeSupabase:
+    def __init__(self):
+        self.store = {"rows": []}
+        self.queries = []
+
+    def table(self, name):
+        q = _Query(self.store, name)
+        self.queries.append(q)
+        return q
+
+
+def test_the_same_text_at_a_different_standard_is_a_different_row(monkeypatch):
+    fake = _FakeSupabase()
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    q = {"question_text": "Solve 2x + 3 = 11", "question_topic": "algebra",
+         "answer_options": ["4", "5"], "correct_answer": "4"}
+    first = LLM_topic_decider.add_question_to_supabase({**q, "ccss_standard": "6.EE.7"}, "easy")
+    again = LLM_topic_decider.add_question_to_supabase({**q, "ccss_standard": "6.EE.7"}, "easy")
+    other = LLM_topic_decider.add_question_to_supabase({**q, "ccss_standard": "8.EE.7b"}, "easy")
+    assert first == again
+    assert other != first
+    assert [r["ccss_standard"] for r in fake.store["rows"]] == ["6.EE.7", "8.EE.7b"]
+    # The lookup filters on the code, not just the text -- assert on the
+    # query, since a passing result alone could come from a text mismatch.
+    assert ("eq", "ccss_standard", "8.EE.7b") in fake.queries[-2].filters
+
+
+def test_a_question_with_no_standard_dedupes_against_null_not_the_string_none(monkeypatch):
+    fake = _FakeSupabase()
+    monkeypatch.setattr(LLM_topic_decider, "supabase", fake)
+    q = {"question_text": "t", "question_topic": "algebra", "answer_options": ["1"],
+         "correct_answer": "1"}
+    LLM_topic_decider.add_question_to_supabase(q, "easy")
+    assert ("is", "ccss_standard", "null") in fake.queries[0].filters
+
+
 def test_every_generator_attaches_a_standard():
     missing = []
     for filename in sorted(os.listdir(BACKEND)):

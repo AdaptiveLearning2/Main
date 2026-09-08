@@ -293,6 +293,17 @@ def generate_expression_question(global_questions, prev_questions, difficulty, g
             print(f"[Attempt {attempt+1}] Missing keys:", question_data)
             continue
 
+        # The scenario that came back, not the one asked for -- the check the
+        # other scenario topics have. `_solve_worker` reads any name that is
+        # not "simplify" as evaluate, and `ccss_for` reads an unknown name as
+        # the topic's grade-1 rung, so an off-name reply would badge a grade-8
+        # question 1.OA.6. Only the Ollama branch can produce one; the Claude
+        # branch pins the name in its schema.
+        if question_data["scenario"] != _SCENARIO_NAMES[scenario]:
+            print(f"[Attempt {attempt+1}] Wrong scenario:",
+                  question_data["scenario"])
+            continue
+
         # Backstop on what the model actually produced, not just on what
         # the prompt asked for -- see grade_appropriateness.
         if grade_appropriateness.refuse(question_data.get("question_text"),

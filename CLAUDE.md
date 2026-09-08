@@ -3424,6 +3424,13 @@ band: grade 6 algebra's two-step medium tier is 7.EE.4 content and reads `6.EE.7
 resolver does not see the tier. Same nullable-no-default rule as `figure`, and the same named
 column to add to `/api/signals/session/{id}`'s embed — `/api/questions` is `select("*")`.
 
+**`add_question_to_supabase` dedupes on text *and* standard.** The code is the first stored
+field derived from the student's grade, so one text generated at grade 6 and again at grade 8 is
+two rows (`6.EE.7`, `8.EE.7b`) rather than one whose badge belongs to whichever grade wrote it
+first and then contradicts what the second student saw on their own screen. And every
+scenario-selecting generator checks the reply's scenario name (`expressions` was the one that did
+not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1 rung.
+
 ### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
 
 1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from

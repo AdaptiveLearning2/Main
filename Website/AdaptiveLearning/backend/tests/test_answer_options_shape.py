@@ -37,6 +37,10 @@ def test_exactly_one_option_is_json_identical_to_the_correct_answer(
         name, module, entry, payload, monkeypatch):
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
+    # The stub answers `evaluate`; the generator now refuses a reply for a
+    # scenario it did not ask for, and its pick is random at this grade.
+    if name == "expressions":
+        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -67,6 +71,10 @@ def test_no_two_options_render_the_same(name, module, entry, payload, monkeypatc
     and the same thing on screen. React renders both as `24`."""
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
+    # The stub answers `evaluate`; the generator now refuses a reply for a
+    # scenario it did not ask for, and its pick is random at this grade.
+    if name == "expressions":
+        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -115,6 +123,10 @@ def test_all_options_share_one_type(name, module, entry, payload, monkeypatch):
     """
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
+    # The stub answers `evaluate`; the generator now refuses a reply for a
+    # scenario it did not ask for, and its pick is random at this grade.
+    if name == "expressions":
+        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):
@@ -159,6 +171,10 @@ def test_no_option_is_identifiable_by_its_formatting(name, module, entry,
 
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
+    # The stub answers `evaluate`; the generator now refuses a reply for a
+    # scenario it did not ask for, and its pick is random at this grade.
+    if name == "expressions":
+        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):

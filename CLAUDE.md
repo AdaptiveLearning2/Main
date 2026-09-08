@@ -3427,7 +3427,11 @@ column to add to `/api/signals/session/{id}`'s embed — `/api/questions` is `se
 **`add_question_to_supabase` dedupes on text *and* standard.** The code is the first stored
 field derived from the student's grade, so one text generated at grade 6 and again at grade 8 is
 two rows (`6.EE.7`, `8.EE.7b`) rather than one whose badge belongs to whichever grade wrote it
-first and then contradicts what the second student saw on their own screen. And every
+first and then contradicts what the second student saw on their own screen. Nothing constrains
+`question_text` unique, so the second row inserts cleanly — and a text regenerated after the
+column landed no longer matches its NULL-coded predecessor, so the bank gains one row per such
+question, visible to a teacher as a duplicate. That is the accepted trade: updating the old
+row in place would stamp a grade-8 code on a row grade-6 answers already reference. And every
 scenario-selecting generator checks the reply's scenario name (`expressions` was the one that did
 not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1 rung.
 

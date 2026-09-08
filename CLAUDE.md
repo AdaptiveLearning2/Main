@@ -3404,6 +3404,37 @@ question, not the question.
 "3 rows of 4 same-size squares" with nothing to count, which is a different question from the one the
 student answered. `/api/questions` uses `select("*")` and needed nothing.
 
+### A question carries its Common Core code, resolved by grade and scenario
+
+`questions.ccss_standard` (`20260916000000`) is the machine-readable copy of the codes
+`TOPIC_MIN_GRADE` and the two `SCENARIO_MIN_GRADE` tables only ever cited in comments.
+`ccss_standards.ccss_for(topic, grade, scenario)` resolves it and every generator attaches it
+to its return dict; `CCSSBadge.jsx` renders it on the same five surfaces `QuestionFigure`
+reaches, with the same source-scan exhaustiveness test.
+
+**Resolved by grade, not band, and by scenario first.** A band spans three grades and the
+standard changes inside it (`1.MD.4` at grade 1, `2.MD.10` at grade 2, both "early"), and a
+scenario names the standard inside a topic (`triangle_sum` is 8.G.5 in a grade-7 topic). A
+*ladder* of `(floor_grade, code)` per topic or scenario picks the highest floor at or below
+the student's grade; a grade below every floor takes the lowest rung, since the
+defense-in-depth tiers still describe content and the floor's standard is its honest name.
+`test_every_scenario_in_a_gate_table_has_a_code` pins the scenario tables to the gate tables,
+so a scenario added to one without the other fails. The one imprecision is difficulty inside a
+band: grade 6 algebra's two-step medium tier is 7.EE.4 content and reads `6.EE.7`, because the
+resolver does not see the tier. Same nullable-no-default rule as `figure`, and the same named
+column to add to `/api/signals/session/{id}`'s embed — `/api/questions` is `select("*")`.
+
+**`add_question_to_supabase` dedupes on text *and* standard.** The code is the first stored
+field derived from the student's grade, so one text generated at grade 6 and again at grade 8 is
+two rows (`6.EE.7`, `8.EE.7b`) rather than one whose badge belongs to whichever grade wrote it
+first and then contradicts what the second student saw on their own screen. Nothing constrains
+`question_text` unique, so the second row inserts cleanly — and a text regenerated after the
+column landed no longer matches its NULL-coded predecessor, so the bank gains one row per such
+question, visible to a teacher as a duplicate. That is the accepted trade: updating the old
+row in place would stamp a grade-8 code on a row grade-6 answers already reference. And every
+scenario-selecting generator checks the reply's scenario name (`expressions` was the one that did
+not): an off-name reply misses `SCENARIO_LADDER` and takes the topic's grade-1 rung.
+
 ### `shape_fractions` reads a fraction off a picture, and refuses an ambiguous one
 
 1.G.3 (halves and fourths), 2.G.3 (thirds), 3.NF.1 (a/b as a parts of b). **Distinct from

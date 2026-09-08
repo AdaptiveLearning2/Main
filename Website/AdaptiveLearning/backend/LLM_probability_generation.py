@@ -16,6 +16,7 @@ import incorrect_solution_generation as inc_gen
 import lesson_plan_context
 import safe_solve
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import question_consistency
 
@@ -326,6 +327,7 @@ def generate_probability_question(global_questions, prev_questions, difficulty, 
     return {
         "question_text": question_data["question_text"],
         "question_topic": "probability",
+        "ccss_standard": ccss_standards.ccss_for("probability", grade, scenario),
         "answer_options": answers,
         "correct_answer": solution
     }

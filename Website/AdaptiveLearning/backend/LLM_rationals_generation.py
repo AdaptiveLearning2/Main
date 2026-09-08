@@ -17,6 +17,7 @@ import lesson_plan_context
 import safe_solve
 import token_join
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 
 
@@ -231,6 +232,7 @@ def generate_rational_question(global_questions, prev_questions,difficulty, grad
         # have always hardcoded their own name; this was the only one that
         # did not.
         "question_topic": "rationals",
+        "ccss_standard": ccss_standards.ccss_for("rationals", grade),
         "answer_options": answers,
         "correct_answer": solution
     }

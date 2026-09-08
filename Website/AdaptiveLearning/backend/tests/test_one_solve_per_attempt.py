@@ -113,6 +113,10 @@ def test_a_successful_attempt_makes_exactly_one_worker_call(
                             counter(entry_name, getattr(safe_solve, entry_name)))
     monkeypatch.setattr(llm_client, "generate_text",
                         lambda *a, **k: json.dumps(payload))
+    # The stub answers `evaluate`; the generator refuses a reply for a
+    # scenario it did not ask for, and its pick is random at this grade.
+    if name == "expressions":
+        monkeypatch.setattr(module, "_pick_scenario", lambda band: 1)
     monkeypatch.setattr(module.lesson_plan_context, "append_lesson_context",
                         lambda prompt, topic, band: prompt)
     if hasattr(module, "grade_appropriateness"):

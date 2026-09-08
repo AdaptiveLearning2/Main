@@ -18,6 +18,7 @@ import lesson_plan_context
 import geometry_solvers
 import safe_solve
 import grade_levels
+import ccss_standards
 import scenario_tiers
 import grade_appropriateness
 
@@ -778,6 +779,8 @@ def generate_geometry_question(global_questions, prev_questions, difficulty, gra
     return {
         "question_text": question_data["question_text"],
         "question_topic": "geometry",
+        "ccss_standard": ccss_standards.ccss_for(
+            "geometry", grade, question_data["scenario"]),
         # Built from `variables` -- the same dict the solver above indexed --
         # so the picture cannot describe different numbers from the ones being
         # scored. None for a scenario with no figure, which is most of them.

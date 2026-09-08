@@ -22,6 +22,7 @@ import lesson_plan_context
 import angle_solvers
 import safe_solve
 import grade_levels
+import ccss_standards
 import scenario_tiers
 import grade_appropriateness
 
@@ -395,6 +396,8 @@ def generate_angle_relationship_question(global_questions,prev_questions, diffic
     return {
         "question_text": question_data["question_text"],
         "question_topic": "angle_relationships",
+        "ccss_standard": ccss_standards.ccss_for(
+            "angle_relationships", grade, question_data.get("scenario")),
         "answer_options": answers,
         "correct_answer": solution
     }

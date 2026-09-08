@@ -9,6 +9,7 @@ import LoadError from '../../components/ui/LoadError'
 import useDialog from '../../hooks/useDialog'
 import { useLatestRequest } from '../../hooks/useLatestRequest'
 import QuestionFigure from '../../components/questions/QuestionFigure'
+import CCSSBadge from '../../components/questions/CCSSBadge'
 import { TOPICS as ALL_TOPICS, topicLabel } from '../../lib/topics'
 
 const TOPICS = ['all', ...ALL_TOPICS]
@@ -56,6 +57,7 @@ function QuestionModal({ question, onClose }) {
         </div>
         <p id="question-modal-text" className="text-base font-semibold text-gray-900 dark:text-white mb-5 leading-relaxed">{question.question_text}</p>
         <QuestionFigure figure={question.figure} />
+        <CCSSBadge standard={question.ccss_standard} />
         <div className="space-y-2 mb-5">
           {question.options?.map((opt, i) => (
             <div key={i}

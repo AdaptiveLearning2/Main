@@ -16,6 +16,7 @@ from sympy import symbols, Eq, solve, sympify, Integer
 import lesson_plan_context
 import safe_solve
 import grade_levels
+import ccss_standards
 import grade_appropriateness
 import question_consistency
 from sympy.parsing.sympy_parser import (
@@ -240,6 +241,7 @@ def generate_ordering_question(global_questions, prev_questions,difficulty, grad
     return {
         "question_text": question_data["question_text"],
         "question_topic": "ordering",
+        "ccss_standard": ccss_standards.ccss_for("ordering", grade),
         "answer_options": answers,
         "correct_answer": solution
     }

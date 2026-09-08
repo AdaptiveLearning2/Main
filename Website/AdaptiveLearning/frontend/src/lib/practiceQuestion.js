@@ -30,6 +30,7 @@ export function normalizeQuestion(raw) {
     // the same question from the same endpoint. This returns a fixed object,
     // so a key it does not name does not exist for any caller downstream.
     figure: raw.figure ?? null,
+    ccssStandard: raw.ccss_standard ?? null,
   }
 }
 

@@ -35,6 +35,10 @@ class FeatureData(BaseModel):
     # Smoothed 0..1 electrode contact behind signal_quality and confidence;
     # None when the bridge reports no contact data.
     contact_ratio: float | None = None
+    # Artifact gate: ticks held this session (delta jump, EMG gamma, spread
+    # jump), and why this tick was held -- None when it was scored.
+    samples_artifact: int | None = None
+    artifact_reason: Literal["delta_jump", "emg_gamma", "spread_jump"] | None = None
 
 
 class StateData(BaseModel):

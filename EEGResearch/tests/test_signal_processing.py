@@ -114,3 +114,73 @@ def test_quality_and_confidence_read_the_same_contact():
     assert f["contact_ratio"] is not None and f["contact_ratio"] < 0.4
     g = Ticker().run(RELAXED, 30)  # no contact data at all
     assert g["contact_ratio"] is None and g["quality_basis"] == "heuristic"
+
+
+# -- 1.4 the artifact gate holds, never writes ---------------------------------
+
+def _warm(t: Ticker, ticks: int = 20):
+    return t.run({**RELAXED, **CONTACT_GOOD}, ticks)
+
+
+def test_a_delta_spike_holds_the_previous_scores_and_is_counted_not_rejected():
+    """Delta doubles on a blink. A blink is not a change in focus, so the
+    tick holds the last admitted scores -- not zero, not a fresh score off
+    an eye movement -- and says so."""
+    t = Ticker()
+    before = _warm(t)
+    blink = t.tick({**ENGAGED, "delta": RELAXED["delta"] + 0.6, **CONTACT_GOOD})
+    assert blink["artifact_reason"] == "delta_jump"
+    assert blink["samples_artifact"] == 1
+    assert blink["samples_rejected"] == before["samples_rejected"]
+    assert blink["focus_score"] == pytest.approx(before["focus_score"])
+    assert blink["calm_score"] == pytest.approx(before["calm_score"])
+    # Contact is still judged on the held tick: quality is its own fact.
+    assert blink["signal_quality"] == "good" and blink["quality_basis"] == "contact"
+
+
+def test_a_jaw_clench_is_held_on_gamma_exceeding_beta():
+    t = Ticker()
+    before = _warm(t)
+    clench = t.tick({**RELAXED, "beta": 0.3, "gamma": 1.0, **CONTACT_GOOD})
+    assert clench["artifact_reason"] == "emg_gamma"
+    assert clench["calm_score"] == pytest.approx(before["calm_score"])
+
+
+def test_a_spread_jump_is_relative_to_the_sessions_own_spread():
+    """Rest spread was 147 uV on one fitting and 23 on another, so an
+    absolute bound would reject one wearer's every tick and the other's
+    none."""
+    tight = Ticker()
+    tight.run({**RELAXED, **CONTACT_GOOD}, 20, spread=20.0)
+    assert tight.tick({**RELAXED, **CONTACT_GOOD}, spread=80.0)["artifact_reason"] == "spread_jump"
+    loose = Ticker()
+    loose.run({**RELAXED, **CONTACT_GOOD}, 20, spread=150.0)
+    assert loose.tick({**RELAXED, **CONTACT_GOOD}, spread=200.0)["artifact_reason"] is None
+
+
+def test_held_ticks_enter_neither_the_baseline_nor_the_window():
+    t = Ticker()
+    _warm(t)
+    n_base = len(t.processor._baseline_focus)
+    n_win = len(t.processor.window)
+    t.tick({**ENGAGED, "delta": 1.5, **CONTACT_GOOD})
+    assert len(t.processor._baseline_focus) == n_base
+    assert len(t.processor.window) == n_win
+
+
+def test_no_verdict_before_the_history_exists():
+    t = Ticker()
+    first = t.tick({**RELAXED, "delta": 3.0, **CONTACT_GOOD})
+    assert first["artifact_reason"] is None and first["samples_artifact"] == 0
+
+
+def test_three_states_are_distinguishable_on_the_payload():
+    t = Ticker()
+    _warm(t)
+    held = t.tick({**RELAXED, "delta": 1.5, **CONTACT_GOOD})
+    rejected = t.tick({**RELAXED, "hsi": [4.0] * 4, "is_good": [0.0] * 4})
+    low = t.tick({**ENGAGED, "alpha": -0.6, "gamma": 0.2, **CONTACT_GOOD})
+    assert held["artifact_reason"] is not None
+    assert rejected["artifact_reason"] is None and rejected["samples_rejected"] == 1
+    assert low["artifact_reason"] is None and low["samples_rejected"] == 1
+    assert low["calm_score"] < held["calm_score"]

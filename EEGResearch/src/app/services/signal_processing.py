@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import deque
-from math import log
+from math import log, log10
 from time import monotonic
-from statistics import fmean, pstdev
+from statistics import fmean, median, pstdev
 from typing import Any, Callable
 
 from src.app.models import EegSample
@@ -95,6 +95,28 @@ class SignalProcessor:
     # good nor poor, since nothing was measured.
     CONTACT_UNKNOWN = 0.5
 
+    # Per-tick artifact gate. A tick that trips it holds the previous scores
+    # and enters neither the window nor the baseline -- an artifact is not a
+    # low score, and the three-state rule (rejected, no signal, low) holds
+    # here as everywhere. Bounds are from tests/fixtures/EEG_REFERENCE.md:
+    #   - delta doubles on blinks (0.76-0.95 vs 0.31-0.41 at rest) and rises
+    #     ~1.7x on fidgeting; rest p90 is ~2.1x the median, so 2.2x the
+    #     running median catches blinks at a cost of ~10% of rest ticks.
+    #   - gamma exceeding beta by 0.5 Bels (3x in power) never happened at
+    #     rest (gamma-beta sat at -0.15..-0.40) and did on a jaw clench with
+    #     contact intact (gamma p90 +1.1 against beta 0.27).
+    #   - raw spread is contact-dependent (147 uV at rest on one fitting, 23
+    #     on another) so it is gated relative to its own running median,
+    #     where an artifact roughly doubles it.
+    # Running medians are over the admitted ticks of the last
+    # ARTIFACT_HISTORY ticks (~20 s at 4 Hz) and no gate fires until
+    # ARTIFACT_MIN_HISTORY of them exist.
+    DELTA_JUMP_FACTOR = 2.2
+    EMG_GAMMA_EXCESS = 0.5
+    SPREAD_JUMP_FACTOR = 2.5
+    ARTIFACT_HISTORY = 80
+    ARTIFACT_MIN_HISTORY = 8
+
     def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic) -> None:
         # Wall clock for the time-based smoothing windows. Injectable so a
         # recorded capture can be replayed at its own pace (scripts/
@@ -123,6 +145,13 @@ class SignalProcessor:
         # Raw focus log-ratios of the admitted ticks in the window, for the
         # spectral-stability term of confidence.
         self._ratio_history: deque[float] = deque(maxlen=window_size)
+        # Artifact gate state: running histories of delta and per-frame
+        # spread over admitted ticks, the count of ticks the gate rejected,
+        # and the scores held from the last admitted tick.
+        self._delta_history: deque[float] = deque(maxlen=self.ARTIFACT_HISTORY)
+        self._spread_history: deque[float] = deque(maxlen=self.ARTIFACT_HISTORY)
+        self._samples_artifact = 0
+        self._held_ratios: tuple[float, float] | None = None
         # Per-session baseline: scores are relative to this learner's own
         # resting values rather than fixed population constants.
         self._baseline_focus: list[float] = []
@@ -140,6 +169,10 @@ class SignalProcessor:
         self._hsi_history.clear()
         self._samples_rejected = 0
         self._ratio_history.clear()
+        self._delta_history.clear()
+        self._spread_history.clear()
+        self._samples_artifact = 0
+        self._held_ratios = None
         # Baseline is per-session: a gap long enough to reset the window means
         # contact conditions likely changed, so the old baseline no longer
         # describes the signal it would be scored against.
@@ -331,6 +364,35 @@ class SignalProcessor:
             return 0.5
         return self._clamp01(0.5 + (raw - baseline) / (2.0 * half_span))
 
+    def _artifact_reason(self, bands: dict[str, Any], frame_spread: float | None) -> str | None:
+        """Why this tick is an artifact, or None if it is not.
+
+        Judged against the running medians of admitted ticks, so a bound is
+        "this tick is unlike the recent signal" rather than an absolute
+        number that would move with the strap. No verdict until enough
+        history exists; the first ticks of a session are admitted as they
+        come, and the baseline's own contact gate is what protects those.
+        """
+        if len(self._delta_history) < self.ARTIFACT_MIN_HISTORY:
+            return None
+        try:
+            delta = float(bands.get("delta", 0.0))
+            beta = float(bands.get("beta", 0.0))
+            gamma = float(bands.get("gamma", 0.0))
+        except (TypeError, ValueError):
+            return None
+        # Bels are logs, and the medians are of log values, so "N times the
+        # running median" is log10(N) above it -- delta near 0 Bels at rest
+        # would make a ratio of the raw numbers meaningless.
+        if delta - median(self._delta_history) > log10(self.DELTA_JUMP_FACTOR):
+            return "delta_jump"
+        if gamma - beta > self.EMG_GAMMA_EXCESS:
+            return "emg_gamma"
+        if (frame_spread is not None and len(self._spread_history) >= self.ARTIFACT_MIN_HISTORY
+                and frame_spread > self.SPREAD_JUMP_FACTOR * max(median(self._spread_history), 1.0)):
+            return "spread_jump"
+        return None
+
     @staticmethod
     def _good_channel_values(sample: EegSample, meta: dict[str, Any] | None) -> list[float]:
         """The raw channel values the headband reports as usable.
@@ -410,12 +472,26 @@ class SignalProcessor:
         usable = self._sample_is_usable(bands)
         now = self._clock()
         contact = self._contact_ratio(bands, now)
-        if self.window and not usable:
-            self._samples_rejected += 1
+        band_focus_raw, band_calm_raw = self._extract_band_log_ratios(bands)
+        using_band_features = band_focus_raw is not None and band_calm_raw is not None
+
+        frame_values = self._good_channel_values(sample, bands)
+        frame_spread = (max(frame_values) - min(frame_values)) if len(frame_values) >= 2 else None
+        artifact_reason = self._artifact_reason(bands, frame_spread) if using_band_features else None
+        if artifact_reason is not None:
+            self._samples_artifact += 1
+        # A tick is admitted -- to the window, the baseline and the spectral
+        # histories -- when the headband vouches for it and the artifact gate
+        # does not reject it.
+        admit = usable and artifact_reason is None
+
+        if self.window and not admit:
+            if not usable:
+                self._samples_rejected += 1
         else:
             # Store only the electrodes the headband vouches for, so a failed
             # contact cannot skew mean level or spread for the whole window.
-            self.window.append(self._good_channel_values(sample, bands))
+            self.window.append(frame_values)
         per_sample_spreads: list[float] = []
         per_sample_means: list[float] = []
         for values in self.window:
@@ -442,15 +518,16 @@ class SignalProcessor:
             else self._clamp01(1.0 - ((mean_spread - self.CALM_MIN_SPREAD) / calm_span))
         )
 
-        band_focus_raw, band_calm_raw = self._extract_band_log_ratios(bands)
-        using_band_features = band_focus_raw is not None and band_calm_raw is not None
         if using_band_features:
             # Gated on the same verdict as the window: the baseline latches
             # after BASELINE_SAMPLES and is never revisited, so letting it
             # ingest rejected frames would skew every score for the session.
-            if usable:
+            if admit:
                 self._collect_baseline(band_focus_raw, band_calm_raw)
                 self._ratio_history.append(band_focus_raw)
+                self._delta_history.append(float(bands.get("delta", 0.0)))
+                if frame_spread is not None:
+                    self._spread_history.append(frame_spread)
             # The spectral terms take full weight. They used to be blended
             # 75/25 with the amplitude terms "for continuity", and the
             # amplitude terms are not brain activity: mean raw level is ADC
@@ -459,8 +536,14 @@ class SignalProcessor:
             # fitting and 23 uV on another for the same person at the same
             # task (tests/fixtures/EEG_REFERENCE.md). A quarter of every
             # score moved with the strap.
-            focus_ratio = self._score_against_baseline(band_focus_raw, "focus")
-            calm_ratio = self._score_against_baseline(band_calm_raw, "calm")
+            if artifact_reason is not None and self._held_ratios is not None:
+                # Hold the last admitted scores: a blink is not a change in
+                # focus, and scoring it would write one.
+                focus_ratio, calm_ratio = self._held_ratios
+            else:
+                focus_ratio = self._score_against_baseline(band_focus_raw, "focus")
+                calm_ratio = self._score_against_baseline(band_calm_raw, "calm")
+                self._held_ratios = (focus_ratio, calm_ratio)
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.
@@ -509,6 +592,11 @@ class SignalProcessor:
             # The smoothed 0..1 contact the quality verdict and confidence
             # were computed from; None when the bridge reports no contact.
             "contact_ratio": None if contact is None else round(contact, 3),
+            # Artifact gate: ticks held this session, and why this one was
+            # (None when it was admitted). Held is not rejected: a held tick
+            # still carries the previous scores and its own contact verdict.
+            "samples_artifact": self._samples_artifact,
+            "artifact_reason": artifact_reason,
             # Raw, pre-baseline log ratios -- diagnostics for the accuracy
             # capture (HANDOFF.md Phase 0). None on a frame with no usable
             # bands, distinct from a real ratio of 0.

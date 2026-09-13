@@ -57,6 +57,43 @@ class SignalProcessor:
     # span a much longer period whenever the bridge reports contact
     # intermittently.
     CONTACT_SMOOTHING_SECONDS = 5.0
+    # Contact verdict lines on the smoothed 0..1 contact ratio. Two of four
+    # electrodes (0.5) is "degraded", and degraded is the ordinary state on
+    # real hardware -- even prepared and at rest the reference capture sat at
+    # 2-3 good electrodes -- so degraded is the regime the scores must work
+    # in, and poor is the fault. Nothing below gates on "good".
+    CONTACT_GOOD = 0.8
+    CONTACT_DEGRADED = 0.4
+
+    # Confidence is a *signal quality* number: how much of the spectral
+    # score can be believed this tick. Its inputs are the window warm-up, the
+    # electrode contact, the spectral stability of the raw focus ratio over
+    # the window, and whether band powers are present at all. Calm is
+    # deliberately not among them: it was, at 32%, and that made a stressed
+    # student -- low calm -- the one most likely to be discarded as
+    # insufficient_signal, so fusion treated exactly the state worth acting
+    # on as no opinion. Measured on hardware the old confidence never left
+    # 40..98 and gated on 2 ticks in ~5000, poor contact included
+    # (tests/fixtures/EEG_REFERENCE.md).
+    #
+    # Weights are provisional -- set so that poor contact alone takes a
+    # steady signal below the 0.45 gate and degraded contact does not. The
+    # contact term is 0 anywhere below CONTACT_DEGRADED and rises linearly
+    # to 1 at full contact, rather than the raw ratio: with a linear ratio
+    # no weighting puts every "poor" reading under the gate while keeping
+    # "degraded" above it, since the two meet at 0.4. The other three terms
+    # sum to 0.40, so nothing but contact can lift a poor reading past 0.45.
+    CONFIDENCE_WEIGHT_WARMUP = 0.10
+    CONFIDENCE_WEIGHT_CONTACT = 0.60
+    CONFIDENCE_WEIGHT_STABILITY = 0.22
+    CONFIDENCE_WEIGHT_BANDS = 0.08
+    # pstdev of the raw focus log-ratio over the window at which spectral
+    # stability reads 0. Tick-level sd at rest on the reference capture was
+    # 0.5-0.9 on poor contact; 1.0 puts a steady degraded signal near 0.5.
+    RATIO_STD_MAX = 1.0
+    # Contact the confidence assumes when the bridge reports none: neither
+    # good nor poor, since nothing was measured.
+    CONTACT_UNKNOWN = 0.5
 
     def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic) -> None:
         # Wall clock for the time-based smoothing windows. Injectable so a
@@ -83,6 +120,9 @@ class SignalProcessor:
         self._hsi_history: deque[tuple[float, float]] = deque(maxlen=self._contact_history_cap)
         # Diagnostic: how many frames were kept out of the window as unusable.
         self._samples_rejected = 0
+        # Raw focus log-ratios of the admitted ticks in the window, for the
+        # spectral-stability term of confidence.
+        self._ratio_history: deque[float] = deque(maxlen=window_size)
         # Per-session baseline: scores are relative to this learner's own
         # resting values rather than fixed population constants.
         self._baseline_focus: list[float] = []
@@ -99,6 +139,7 @@ class SignalProcessor:
         self._is_good_history.clear()
         self._hsi_history.clear()
         self._samples_rejected = 0
+        self._ratio_history.clear()
         # Baseline is per-session: a gap long enough to reset the window means
         # contact conditions likely changed, so the old baseline no longer
         # describes the signal it would be scored against.
@@ -160,26 +201,15 @@ class SignalProcessor:
             history.popleft()
         return fmean([v for _, v in history])
 
-    def _signal_quality(
-        self,
-        meta: dict[str, Any] | None,
-        confidence_ratio: float,
-        calm_ratio: float,
-        now: float,
-    ) -> tuple[str, str]:
-        """How trustworthy the EEG signal is -- i.e. how well the electrodes are
-        seated -- which is a separate question from whether the wearer is calm.
+    def _contact_ratio(self, meta: dict[str, Any] | None, now: float) -> float | None:
+        """Smoothed electrode contact in 0..1, or None when the bridge reports
+        no contact data at all (an older bridge).
 
-        Returns (quality, basis) where basis is "contact" when the headband's
-        own HSI_PRECISION / IS_GOOD backed the verdict, or "heuristic" when it
-        did not and the legacy calm/confidence rule was used instead.
-
-        That distinction matters downstream: the heuristic is known to
-        under-report. It gates on calm_ratio (alpha/(beta+gamma)), and alpha is
-        suppressed in an alert, eyes-open student, so a perfectly-fitted
-        headband on a focused learner scores "poor". Callers acting on "poor"
-        must not treat a heuristic verdict as evidence of bad electrodes, or an
-        older bridge without contact data would silently disable a session.
+        Computed once per tick and shared by the quality verdict and the
+        confidence score, so the two cannot disagree about the same
+        electrodes. Takes the worse of the HSI fit and the IS_GOOD fraction
+        when both are present, so a channel that is seated but noisy still
+        counts against us.
         """
         hsi = (meta or {}).get("hsi")
         is_good = (meta or {}).get("is_good")
@@ -210,22 +240,41 @@ class SignalProcessor:
                 # HSI blip drop straight to "poor", the flapping this prevents.
                 fit_score = self._smoothed(self._hsi_history, now, instant_fit)
 
-        if fit_score is None and good_channels is None:
+        parts = [p for p in (fit_score, good_channels) if p is not None]
+        return min(parts) if parts else None
+
+    def _signal_quality(
+        self,
+        contact: float | None,
+        confidence_ratio: float,
+        calm_ratio: float,
+    ) -> tuple[str, str]:
+        """How trustworthy the EEG signal is -- i.e. how well the electrodes are
+        seated -- which is a separate question from whether the wearer is calm.
+
+        Returns (quality, basis) where basis is "contact" when the headband's
+        own HSI_PRECISION / IS_GOOD backed the verdict, or "heuristic" when it
+        did not and the legacy calm/confidence rule was used instead.
+
+        That distinction matters downstream: the heuristic is known to
+        under-report. It gates on calm_ratio (alpha/(beta+gamma)), and alpha is
+        suppressed in an alert, eyes-open student, so a perfectly-fitted
+        headband on a focused learner scores "poor". Callers acting on "poor"
+        must not treat a heuristic verdict as evidence of bad electrodes, or an
+        older bridge without contact data would silently disable a session.
+        """
+        if contact is None:
             if confidence_ratio >= 0.75 and calm_ratio >= 0.55:
                 return ("good", "heuristic")
             if confidence_ratio >= 0.45 and calm_ratio >= 0.3:
                 return ("degraded", "heuristic")
             return ("poor", "heuristic")
 
-        # Use whichever signals are present; when both are, take the worse of
-        # the two so a channel that's seated but noisy still counts against us.
-        parts = [p for p in (fit_score, good_channels) if p is not None]
-        contact = min(parts)
         # 0.8 keeps "good" at "at most one of four electrodes is mediocre"
         # (0.875); two mediocre channels (0.75) drops to degraded.
-        if contact >= 0.8:
+        if contact >= self.CONTACT_GOOD:
             return ("good", "contact")
-        if contact >= 0.4:
+        if contact >= self.CONTACT_DEGRADED:
             return ("degraded", "contact")
         return ("poor", "contact")
 
@@ -359,6 +408,8 @@ class SignalProcessor:
         # at least one sample, and a run of bad frames should hold the last good
         # reading rather than fail.
         usable = self._sample_is_usable(bands)
+        now = self._clock()
+        contact = self._contact_ratio(bands, now)
         if self.window and not usable:
             self._samples_rejected += 1
         else:
@@ -399,6 +450,7 @@ class SignalProcessor:
             # ingest rejected frames would skew every score for the session.
             if usable:
                 self._collect_baseline(band_focus_raw, band_calm_raw)
+                self._ratio_history.append(band_focus_raw)
             # The spectral terms take full weight. They used to be blended
             # 75/25 with the amplitude terms "for continuity", and the
             # amplitude terms are not brain activity: mean raw level is ADC
@@ -415,19 +467,31 @@ class SignalProcessor:
             calm_ratio = 0.5 if calm_amp_ratio is None else calm_amp_ratio
 
         warmup_factor = len(self.window) / self.window.maxlen
-        stability_std = pstdev(per_sample_means) if len(per_sample_means) > 1 else 0.0
-        stability_factor = self._clamp01(1.0 - (stability_std / self.STABILITY_STD_MAX))
-        band_presence_bonus = 0.08 if using_band_features else 0.0
+        if using_band_features:
+            # Spread of the raw focus ratio over the window: a spectrum that
+            # jumps tick to tick is one the score should not be trusted on.
+            ratio_std = pstdev(self._ratio_history) if len(self._ratio_history) > 1 else 0.0
+            stability_factor = self._clamp01(1.0 - (ratio_std / self.RATIO_STD_MAX))
+        else:
+            # Fallback path: the only signal is the raw level, so its
+            # steadiness is the only stability there is.
+            stability_std = pstdev(per_sample_means) if len(per_sample_means) > 1 else 0.0
+            stability_factor = self._clamp01(1.0 - (stability_std / self.STABILITY_STD_MAX))
+        contact_term = (
+            self.CONTACT_UNKNOWN if contact is None
+            else self._clamp01((contact - self.CONTACT_DEGRADED) / (1.0 - self.CONTACT_DEGRADED))
+        )
         confidence_ratio = self._clamp01(
-            (0.28 * warmup_factor) + (0.32 * calm_ratio) + (0.32 * stability_factor) + band_presence_bonus
+            (self.CONFIDENCE_WEIGHT_WARMUP * warmup_factor)
+            + (self.CONFIDENCE_WEIGHT_CONTACT * contact_term)
+            + (self.CONFIDENCE_WEIGHT_STABILITY * stability_factor)
+            + (self.CONFIDENCE_WEIGHT_BANDS if using_band_features else 0.0)
         )
         confidence_ratio = max(0.2, confidence_ratio)
         focus_score = focus_ratio * 100.0
         calm_score = calm_ratio * 100.0
         confidence = confidence_ratio * 100.0
-        signal_quality, quality_basis = self._signal_quality(
-            bands, confidence_ratio, calm_ratio, self._clock()
-        )
+        signal_quality, quality_basis = self._signal_quality(contact, confidence_ratio, calm_ratio)
         return {
             "focus_score": round(focus_score, 3),
             "calm_score": round(calm_score, 3),
@@ -442,6 +506,9 @@ class SignalProcessor:
             # electrodes the bridge averaged into the band values (4 = all).
             "samples_rejected": self._samples_rejected,
             "band_channels_used": (bands or {}).get("band_channels_used"),
+            # The smoothed 0..1 contact the quality verdict and confidence
+            # were computed from; None when the bridge reports no contact.
+            "contact_ratio": None if contact is None else round(contact, 3),
             # Raw, pre-baseline log ratios -- diagnostics for the accuracy
             # capture (HANDOFF.md Phase 0). None on a frame with no usable
             # bands, distinct from a real ratio of 0.

@@ -32,6 +32,9 @@ class FeatureData(BaseModel):
     # (HANDOFF.md Phase 0). None on a frame with no usable bands.
     focus_log_ratio: float | None = None
     calm_log_ratio: float | None = None
+    # Smoothed 0..1 electrode contact behind signal_quality and confidence;
+    # None when the bridge reports no contact data.
+    contact_ratio: float | None = None
 
 
 class StateData(BaseModel):

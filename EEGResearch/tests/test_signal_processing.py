@@ -68,3 +68,49 @@ def test_without_bands_the_amplitude_fallback_still_scores():
     loose = Ticker().run(None, 30, spread=150.0)
     assert tight["calm_score"] > loose["calm_score"]
     assert 0.0 <= tight["focus_score"] <= 100.0
+
+
+# -- 1.2 confidence is signal quality, and calm is not in it ------------------
+
+def test_a_stressed_spectrum_on_good_contact_is_not_low_confidence():
+    """Calm was 32% of confidence, so the stressed student -- low calm -- was
+    the one most likely to be discarded as insufficient_signal and treated
+    by fusion as no opinion. Same contact, same stability: same confidence."""
+    relaxed = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
+    aroused = Ticker().run({**ENGAGED, "alpha": -0.6, "gamma": 0.7, **CONTACT_GOOD}, 30)
+    assert aroused["calm_score"] < relaxed["calm_score"] - 20
+    assert aroused["confidence"] == pytest.approx(relaxed["confidence"], abs=1.0)
+
+
+def test_poor_contact_takes_a_steady_signal_below_the_gate_and_degraded_does_not():
+    """The gate is 0.45 in adaptation.py and signal_fusion.py. On hardware
+    the old confidence crossed it on 2 ticks in ~5000, poor contact
+    included; it has to mean something about the electrodes."""
+    good = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
+    degraded = Ticker().run({**RELAXED, "hsi": [1.0, 1.0, 4.0, 4.0],
+                             "is_good": [1.0, 1.0, 0.0, 0.0]}, 30)
+    poor = Ticker().run({**RELAXED, **CONTACT_POOR}, 30)
+    assert good["confidence"] > degraded["confidence"] > poor["confidence"]
+    assert degraded["confidence"] >= 45.0
+    assert poor["confidence"] < 45.0
+    assert good["contact_ratio"] == pytest.approx(1.0)
+    assert poor["contact_ratio"] < SignalProcessor.CONTACT_DEGRADED
+
+
+def test_a_jumping_spectrum_lowers_confidence_on_the_same_contact():
+    steady = Ticker().run({**RELAXED, **CONTACT_GOOD}, 30)
+    t = Ticker()
+    for i in range(30):
+        t.tick({**(RELAXED if i % 2 else ENGAGED), **CONTACT_GOOD})
+    jumpy = t.tick({**RELAXED, **CONTACT_GOOD})
+    assert jumpy["confidence"] < steady["confidence"] - 10
+
+
+def test_quality_and_confidence_read_the_same_contact():
+    """One smoothed contact per tick feeds both, so the verdict and the score
+    cannot disagree about the same electrodes."""
+    f = Ticker().run({**RELAXED, **CONTACT_POOR}, 30)
+    assert f["signal_quality"] == "poor" and f["quality_basis"] == "contact"
+    assert f["contact_ratio"] is not None and f["contact_ratio"] < 0.4
+    g = Ticker().run(RELAXED, 30)  # no contact data at all
+    assert g["contact_ratio"] is None and g["quality_basis"] == "heuristic"

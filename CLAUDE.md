@@ -1451,6 +1451,73 @@ All three ingest endpoints are rate-limited and length-bounded. `/api/signals/co
 until the push client existed, which was survivable only while its sole writer was the in-process
 poller.
 
+## EEG focus, calm and confidence: measured on a person once, and most of it failed
+
+Until 2026-09-13 the three EEG scores had never been compared against a wearer doing a known
+thing — the simulator solves its bands *from* the scoring formulas, so every green test on that
+path was the formula agreeing with itself. Two labelled captures (eyes closed, eyes open, silent
+rest, arithmetic, clench, blink, fidget; one adult, MuseS) are scored in
+`EEGResearch/tests/fixtures/EEG_REFERENCE.md`; the recordings stay outside the repo. Replay a
+capture through the shipped path with `scripts/replay_eeg_capture.py` — **and score a change as
+replay-against-replay (`--save`, then `--against`)**, never recorded-against-replay: the live
+sidecar had state from before the capture began, so a recording carries the inputs but not the
+prior state, and the round-trip test holds only from a fresh processor.
+
+What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about each:
+
+- **Degraded contact is the ordinary state.** Even prepared and at rest, 2–3 of 4 electrodes;
+  every active segment drops below 2, and the wearer confirmed extended `good` is not achievable.
+  `degraded` (2 of 4, contact ratio ≥ 0.4) is the regime every score must work in and `poor` is
+  the fault. **Nothing gates on `good`.**
+- **The amplitude terms were the strap.** Rest spread was 147 µV on one fitting and 23 µV on
+  another for the same person at the same task, and a quarter of every focus and calm score was
+  that. Removed; the raw-level path now serves only a bridge that reports no band powers.
+- **Confidence is a signal-quality number, and calm is not in it.** It was 32% calm, so a stressed
+  student was the one most likely to be discarded as `insufficient_signal`; on hardware it never
+  left 40–98 and crossed the 0.45 gate on 2 ticks in ~5000. It is now warm-up, contact, spectral
+  stability and band presence, with a contact term that is 0 below the degraded line — no linear
+  weighting puts every `poor` reading under the gate while keeping `degraded` above it, since the
+  two meet at 0.4. `contact_ratio` rides on the payload.
+- **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
+  not the confidence — every Engagement tile was showing strap fit. `avg_engagement` in the rollup
+  and term trend is discontinuous across the date Phase 1 merged.
+- **Delta doubles on a blink**, gamma exceeds beta by 0.5 Bels on a clench and never at rest, an
+  artifact doubles the raw spread. A tick that trips one **holds** the previous scores and enters
+  neither the window nor the baseline — held is a third state beside rejected and low, with
+  `artifact_reason` and `samples_artifact` saying so. Bounds are relative to running medians of
+  **every usable tick**: referenced on admitted ticks only, the gate ratcheted and held a third of
+  resting ticks. Per-tick SDK bands are noisy enough that no bound separates artifact from rest by
+  better than ~3:1 (grid in `EEG_REFERENCE.md`); 3.0× delta / 3.5× spread hold 12% of rest and 39%
+  of artifact ticks, and a false hold is one 250 ms tick of the previous score.
+- **The ratios are smoothed over 4 s** on the sample clock before scaling; held and rejected ticks
+  leave the smoothed value alone. 92% of a step in 10 s, under the decider's cadence.
+- **The baseline is 45 s of at-least-degraded contact, fixed for the session by decision, on one
+  scale with a 10 s ramp at the latch.** It was the first 60 usable ticks with no contact condition,
+  and on both captures that fell entirely inside the loose-strap settling period. **Open:** even
+  gated it still latches in the settling period on the capture, because that period *is* degraded
+  contact — the strap is being adjusted on 2 electrodes, with beta and gamma high from muscle. The
+  processor lives from stream start (a sidecar session start does not reset it), so in the product
+  the baseline is taken at Connect. The alternatives are a rolling reference (rejected once: a
+  sustained state decays to 50) or starting collection on `record: true` rather than on the stream.
+- **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
+  `focused` readings on the captures were the cooldown holding one spurious tick.
+
+**What the captures did not settle, and Phase 1 deliberately did not touch:** the ratios
+themselves. Eyes-closed alpha rose 0.02 Bels; beta and gamma fell 0.1–0.2 instead, and gamma drifts
+monotonically over a session (+0.25 → −0.55 over 12 min), so `calm` tracks muscle tone relaxing,
+not an alpha rhythm. Arithmetic aloud raised beta by 0.08 *with gamma by 0.10* — speech EMG — and
+`focused` was reached on 0 ticks. Whether an alpha peak exists under the aperiodic slope needs the
+raw 256 Hz stream and our own Welch spectrum with 1/f correction (Phase 2, `--source bridge`), and
+the next protocol must use *silent* arithmetic. No `focused` threshold can be set from a ratio that
+did not move with the task, so `EEG_FOCUSED_*` / `EEG_STRESSED_*` in `adaptation.py` and
+`signal_fusion.py` are unchanged and still unmeasured. The `engaged student is not stressed` test
+now pins only the ordering, because on the spectrum alone an engaged eyes-open profile sits below
+the stressed line against the population bounds — that is the true state, previously hidden by the
+strap term.
+
+`SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
+added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.
+
 ## Two columns are called stress and only one measures it
 
 `cognitive_signals.stress` is `1.0 - calm`, written by `signal_mapping.py:97`. There is no `calm`

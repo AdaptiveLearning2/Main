@@ -299,3 +299,70 @@ def test_the_gain_is_the_same_on_both_sides_of_the_latch():
     p._baseline_focus_mean = -0.5
     after = p._score_against_baseline(-0.2, "focus") - p._score_against_baseline(-0.5, "focus")
     assert before == pytest.approx(after)
+
+
+# -- 1.7b a label needs persistence before the cooldown protects it ------------
+
+def _engine():
+    from src.app.services.adaptation import AdaptationEngine
+    clock = [0.0]
+    eng = AdaptationEngine(clock=lambda: clock[0])
+    return eng, clock
+
+
+def _feat(label: str) -> dict:
+    return {
+        "focused": {"focus_score": 80.0, "calm_score": 60.0, "confidence": 90.0},
+        "stressed": {"focus_score": 40.0, "calm_score": 20.0, "confidence": 90.0},
+        "neutral": {"focus_score": 50.0, "calm_score": 60.0, "confidence": 90.0},
+    }[label]
+
+
+def test_a_single_tick_excursion_never_changes_the_label():
+    """On the captures 90 of 133 focused readings were the cooldown holding
+    one spurious tick. One tick must not become the label at all."""
+    eng, clock = _engine()
+    for _ in range(8):
+        assert eng.infer_state(_feat("neutral")).label == "neutral"
+        clock[0] += 0.25
+    spike = eng.infer_state(_feat("focused"))
+    assert spike.label == "neutral" and "persistence" in spike.reason
+    clock[0] += 0.25
+    for _ in range(12):
+        assert eng.infer_state(_feat("neutral")).label == "neutral"
+        clock[0] += 0.25
+
+
+def test_four_consecutive_ticks_commit_the_label_and_the_cooldown_then_holds_it():
+    eng, clock = _engine()
+    clock[0] = 10.0
+    eng.infer_state(_feat("neutral"))
+    labels = []
+    for _ in range(eng.persist_ticks):
+        labels.append(eng.infer_state(_feat("focused")).label)
+        clock[0] += 0.25
+    assert labels[:-1] == ["neutral"] * (eng.persist_ticks - 1) and labels[-1] == "focused"
+    # Now a run of neutral ticks inside the cooldown: persistence is met
+    # after four, but the cooldown still holds focused until it lapses.
+    held = [eng.infer_state(_feat("neutral")) for _ in range(eng.persist_ticks + 2)]
+    assert all(h.label == "focused" for h in held)
+    assert "Cooldown" in held[-1].reason
+    clock[0] += eng.cooldown_seconds
+    assert eng.infer_state(_feat("neutral")).label == "neutral"
+
+
+def test_the_first_reading_after_signal_loss_applies_at_once():
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    eng.reset_for_signal_loss()
+    assert eng.infer_state(_feat("stressed")).label == "stressed"
+
+
+def test_a_change_of_mind_mid_run_restarts_the_count():
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    for _ in range(3):
+        eng.infer_state(_feat("focused"))
+    for _ in range(3):
+        eng.infer_state(_feat("stressed"))
+    assert eng.infer_state(_feat("focused")).label == "neutral"

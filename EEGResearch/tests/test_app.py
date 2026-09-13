@@ -143,6 +143,10 @@ def test_session_lifecycle_and_state():
 
 def test_adaptation_cooldown_holds_previous_state():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     first = engine.infer_state({"focus_score": 0.9, "calm_score": 0.8, "confidence": 0.9})
     second = engine.infer_state({"focus_score": 0.1, "calm_score": 0.2, "confidence": 0.9})
@@ -153,6 +157,10 @@ def test_adaptation_cooldown_holds_previous_state():
 
 def test_adaptation_accepts_percentage_confidence_scale():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     low = engine.infer_state({"focus_score": 0.6, "calm_score": 0.6, "confidence": 30.0})
     assert low.label == "insufficient_signal"
@@ -162,6 +170,10 @@ def test_adaptation_accepts_percentage_confidence_scale():
 
 def test_adaptation_accepts_percentage_focus_and_calm_scales():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 0.0
     focused = engine.infer_state({"focus_score": 80.0, "calm_score": 70.0, "confidence": 90.0})
     assert focused.label == "focused"
@@ -971,6 +983,10 @@ def test_signal_processor_reset_clears_window():
 
 def test_adaptation_reset_for_signal_loss_bypasses_cooldown():
     engine = AdaptationEngine()
+    # A label needs persist_ticks consecutive readings before the cooldown
+    # or the scale is what's under test; that rule has its own tests in
+    # test_signal_processing.py, so it is switched off here.
+    engine.persist_ticks = 1
     engine.cooldown_seconds = 1000.0
     focused = engine.infer_state({"focus_score": 90.0, "calm_score": 80.0, "confidence": 90.0})
     assert focused.label == "focused"

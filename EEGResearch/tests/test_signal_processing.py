@@ -184,3 +184,58 @@ def test_three_states_are_distinguishable_on_the_payload():
     assert rejected["artifact_reason"] is None and rejected["samples_rejected"] == 1
     assert low["artifact_reason"] is None and low["samples_rejected"] == 1
     assert low["calm_score"] < held["calm_score"]
+
+
+# -- 1.5 the ratios are smoothed before they are scaled ------------------------
+
+def test_a_one_tick_excursion_moves_the_score_less_than_the_ratio_moved():
+    t = Ticker()
+    steady = _warm(t, 40)
+    # A large but non-artifact swing for one tick, then back.
+    spike = t.tick({**ENGAGED, **CONTACT_GOOD})
+    back = t.tick({**RELAXED, **CONTACT_GOOD})
+    raw_move = abs(spike["focus_log_ratio"] - steady["focus_log_ratio"])
+    smooth_move = abs(spike["focus_log_ratio_smoothed"] - steady["focus_log_ratio_smoothed"])
+    assert smooth_move < 0.15 * raw_move
+    assert abs(spike["focus_score"] - steady["focus_score"]) < 8.0
+    assert abs(back["focus_score"] - steady["focus_score"]) < 8.0
+
+
+def test_a_sustained_change_converges_and_within_the_deciders_cadence():
+    """The topic decider reads the label about every 10 s. 4 s of smoothing
+    reaches 92% of a step in 10 s; a relaxed-to-aroused step must cross the
+    stressed line (calm < 35) inside 40 ticks at 4 Hz."""
+    t = Ticker()
+    _warm(t, 40)
+    aroused = {**ENGAGED, "alpha": -0.6, "gamma": 0.7, **CONTACT_GOOD}
+    crossed_at = None
+    for i in range(40):
+        f = t.tick(aroused)
+        if f["calm_score"] < 35.0 and crossed_at is None:
+            crossed_at = i
+    assert crossed_at is not None and crossed_at < 40
+    settled = t.run(aroused, 80)
+    assert settled["calm_log_ratio_smoothed"] == pytest.approx(settled["calm_log_ratio"], abs=0.02)
+
+
+def test_smoothing_is_time_based_not_tick_based():
+    """The same ticks at 1 Hz and 4 Hz cover different spans, so the value
+    after N ticks differs; a count-based smoother could not tell them
+    apart."""
+    fast, slow = Ticker(hz=4.0), Ticker(hz=1.0)
+    for tk in (fast, slow):
+        _warm(tk, 40)
+        for _ in range(4):
+            f = tk.tick({**ENGAGED, **CONTACT_GOOD})
+        tk.after = f
+    assert slow.after["focus_log_ratio_smoothed"] > fast.after["focus_log_ratio_smoothed"]
+
+
+def test_held_and_rejected_ticks_do_not_advance_the_smoothed_ratio():
+    t = Ticker()
+    steady = _warm(t, 40)
+    held = t.tick({**ENGAGED, "delta": 1.5, **CONTACT_GOOD})
+    rejected = t.tick({**ENGAGED, "hsi": [4.0] * 4, "is_good": [0.0] * 4})
+    for f in (held, rejected):
+        assert f["focus_log_ratio_smoothed"] == pytest.approx(steady["focus_log_ratio_smoothed"])
+        assert f["focus_score"] == pytest.approx(steady["focus_score"])

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
-from math import log, log10
+from datetime import datetime
+from math import exp, log, log10
 from time import monotonic
 from statistics import fmean, median, pstdev
 from typing import Any, Callable
@@ -124,6 +125,19 @@ class SignalProcessor:
     ARTIFACT_HISTORY = 80
     ARTIFACT_MIN_HISTORY = 8
 
+    # Time constant of the exponential smoothing on each raw log ratio,
+    # applied before scaling. The SDK recomputes its bands ~10 times a
+    # second over its own ~1 s window and each 4 Hz tick scored whatever was
+    # latest; per-tick sd of the focus ratio at rest was 0.5-0.9 against
+    # between-segment differences of ~0.5 (EEG_REFERENCE.md). Time-based on
+    # the sample timestamps, so a stalled or bursty stream does not change
+    # the smoothing; a tick whose timestamp has not advanced counts as one
+    # nominal tick. Held and rejected ticks leave the smoothed value where
+    # it was. 4 s reaches 63% of a step in 4 s and 92% in 10 s, under the
+    # decider's ~10 s cadence.
+    RATIO_SMOOTHING_SECONDS = 4.0
+    NOMINAL_TICK_SECONDS = 0.25
+
     def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic) -> None:
         # Wall clock for the time-based smoothing windows. Injectable so a
         # recorded capture can be replayed at its own pace (scripts/
@@ -159,6 +173,11 @@ class SignalProcessor:
         self._spread_history: deque[float] = deque(maxlen=self.ARTIFACT_HISTORY)
         self._samples_artifact = 0
         self._held_ratios: tuple[float, float] | None = None
+        # Smoothed raw log ratios and the timestamp they were last advanced
+        # to. None until the first admitted tick, which seeds them.
+        self._ema_focus: float | None = None
+        self._ema_calm: float | None = None
+        self._ema_ts: datetime | None = None
         # Per-session baseline: scores are relative to this learner's own
         # resting values rather than fixed population constants.
         self._baseline_focus: list[float] = []
@@ -180,6 +199,9 @@ class SignalProcessor:
         self._spread_history.clear()
         self._samples_artifact = 0
         self._held_ratios = None
+        self._ema_focus = None
+        self._ema_calm = None
+        self._ema_ts = None
         # Baseline is per-session: a gap long enough to reset the window means
         # contact conditions likely changed, so the old baseline no longer
         # describes the signal it would be scored against.
@@ -371,6 +393,24 @@ class SignalProcessor:
             return 0.5
         return self._clamp01(0.5 + (raw - baseline) / (2.0 * half_span))
 
+    def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
+        """Advance the smoothed log ratios to this admitted tick and return them.
+
+        Seeded by the first admitted tick rather than by zero, so a session
+        does not open with a ramp from a value nobody measured.
+        """
+        if self._ema_focus is None or self._ema_calm is None or self._ema_ts is None:
+            self._ema_focus, self._ema_calm, self._ema_ts = focus_raw, calm_raw, ts
+            return focus_raw, calm_raw
+        dt = (ts - self._ema_ts).total_seconds()
+        if dt <= 0.0:
+            dt = self.NOMINAL_TICK_SECONDS
+        weight = 1.0 - exp(-dt / self.RATIO_SMOOTHING_SECONDS)
+        self._ema_focus += weight * (focus_raw - self._ema_focus)
+        self._ema_calm += weight * (calm_raw - self._ema_calm)
+        self._ema_ts = ts
+        return self._ema_focus, self._ema_calm
+
     def _artifact_reason(self, bands: dict[str, Any], frame_spread: float | None) -> str | None:
         """Why this tick is an artifact, or None if it is not.
 
@@ -549,14 +589,22 @@ class SignalProcessor:
             # fitting and 23 uV on another for the same person at the same
             # task (tests/fixtures/EEG_REFERENCE.md). A quarter of every
             # score moved with the strap.
-            if artifact_reason is not None and self._held_ratios is not None:
+            if admit:
+                focus_smooth, calm_smooth = self._smooth_ratios(
+                    band_focus_raw, band_calm_raw, sample.timestamp)
+                focus_ratio = self._score_against_baseline(focus_smooth, "focus")
+                calm_ratio = self._score_against_baseline(calm_smooth, "calm")
+                self._held_ratios = (focus_ratio, calm_ratio)
+            elif self._held_ratios is not None:
                 # Hold the last admitted scores: a blink is not a change in
-                # focus, and scoring it would write one.
+                # focus, and scoring it would write one. The smoothed ratios
+                # stay where they were too.
                 focus_ratio, calm_ratio = self._held_ratios
             else:
+                # Nothing admitted yet this session: score the raw tick, so a
+                # session that opens on a bad frame still has a number.
                 focus_ratio = self._score_against_baseline(band_focus_raw, "focus")
                 calm_ratio = self._score_against_baseline(band_calm_raw, "calm")
-                self._held_ratios = (focus_ratio, calm_ratio)
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.
@@ -615,4 +663,7 @@ class SignalProcessor:
             # bands, distinct from a real ratio of 0.
             "focus_log_ratio": band_focus_raw,
             "calm_log_ratio": band_calm_raw,
+            # The smoothed ratios the scores were actually scaled from.
+            "focus_log_ratio_smoothed": self._ema_focus,
+            "calm_log_ratio_smoothed": self._ema_calm,
         }

@@ -39,6 +39,9 @@ class FeatureData(BaseModel):
     # jump), and why this tick was held -- None when it was scored.
     samples_artifact: int | None = None
     artifact_reason: Literal["delta_jump", "emg_gamma", "spread_jump"] | None = None
+    # The exponentially smoothed ratios the scores were scaled from.
+    focus_log_ratio_smoothed: float | None = None
+    calm_log_ratio_smoothed: float | None = None
 
 
 class StateData(BaseModel):

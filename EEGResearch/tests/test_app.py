@@ -4,7 +4,7 @@ import pytest
 from statistics import fmean
 from fastapi.testclient import TestClient
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.app.config import DeviceConfig, get_settings, parse_eeg_devices
 from src.app.main import app, stream_manager
@@ -394,21 +394,31 @@ def test_signal_processor_muse_range_produces_non_saturated_features():
 
 
 def test_signal_processor_uses_band_features_when_available():
+    # The ratios are smoothed over ~4 s before scaling (Phase 1 step 1.5),
+    # so each profile is held for long enough to settle, on advancing
+    # timestamps.
     processor = SignalProcessor(window_size=4)
-    now = datetime.now(timezone.utc)
-    sample = EegSample(
-        timestamp=now,
-        channel_tp9=700.0,
-        channel_af7=705.0,
-        channel_af8=695.0,
-        channel_tp10=702.0,
-    )
-    low_focus = processor.update(sample, {"alpha": 1.5, "beta": 0.2, "theta": 1.0, "gamma": 0.3})
-    high_focus = processor.update(sample, {"alpha": 0.5, "beta": 1.6, "theta": 0.4, "gamma": 0.2})
+    t0 = datetime.now(timezone.utc)
+    tick = [0]
+
+    def hold(bands):
+        features = None
+        for _ in range(60):
+            sample = EegSample(
+                timestamp=t0 + timedelta(seconds=0.25 * tick[0]),
+                channel_tp9=700.0, channel_af7=705.0,
+                channel_af8=695.0, channel_tp10=702.0,
+            )
+            tick[0] += 1
+            features = processor.update(sample, bands)
+        return features
+
+    low_focus = hold({"alpha": 1.5, "beta": 0.2, "theta": 1.0, "gamma": 0.3})
+    high_focus = hold({"alpha": 0.5, "beta": 1.6, "theta": 0.4, "gamma": 0.2})
     assert high_focus["focus_score"] > low_focus["focus_score"]
 
-    low_calm = processor.update(sample, {"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
-    high_calm = processor.update(sample, {"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
+    low_calm = hold({"alpha": 0.2, "beta": 1.2, "theta": 0.3, "gamma": 0.9})
+    high_calm = hold({"alpha": 1.6, "beta": 0.3, "theta": 0.5, "gamma": 0.2})
     assert high_calm["calm_score"] > low_calm["calm_score"]
 
 

@@ -122,7 +122,14 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
         "user_id": user_id,
         "ts": eeg.get("timestamp"),
         "focus": focus,
-        "engagement": confidence,
+        # `engagement` is the focus index -- beta/(alpha+theta), which is
+        # what the literature calls engagement (Pope et al.) and what
+        # `focus_score` already is. It was `confidence` until Phase 1 of the
+        # EEG accuracy work, and confidence is a signal-quality number, so
+        # every Engagement tile was showing how well the strap fitted.
+        # `avg_engagement` in the daily rollup and the term trend is
+        # discontinuous across the date that landed; see CLAUDE.md.
+        "engagement": focus,
         # `stress` is `1.0 - calm`, and there is no `calm` column -- so this
         # column *is* the calm score, stored inverted. It is not a measurement
         # of stress and must never be averaged with `heart_signals.stress_score`,

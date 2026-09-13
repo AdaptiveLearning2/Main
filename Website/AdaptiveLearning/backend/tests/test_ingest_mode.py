@@ -96,7 +96,9 @@ def test_the_eeg_mapping_is_importable_without_an_http_client():
         "session-1", "user-1")
 
     assert row["focus"] == pytest.approx(0.72)
-    assert row["engagement"] == pytest.approx(0.90)
+    assert row["engagement"] == pytest.approx(0.72), (
+        "engagement is the focus index, not the confidence -- confidence is a "
+        "signal-quality number, and an Engagement tile fed by it showed strap fit")
     assert row["stress"] == pytest.approx(0.40), "stress is 1 - calm, not a measurement"
 
 

@@ -12,7 +12,9 @@ from src.app.models import EegSample
 class SignalProcessor:
     """Computes smoothed focus/calm features from incoming samples."""
 
-    # Raw amplitude bounds. Live Muse S captures show mean levels near 950 and
+    # Raw amplitude bounds. These serve ONLY the no-bands fallback (a bridge
+    # that reports no band powers); with band features present the scores
+    # are purely spectral. Live Muse S captures show mean levels near 950 and
     # cross-channel spreads in the hundreds of uV; narrower bounds clamp both
     # amplitude terms to their extremes on real hardware.
     FOCUS_MIN_LEVEL = 400.0
@@ -397,18 +399,16 @@ class SignalProcessor:
             # ingest rejected frames would skew every score for the session.
             if usable:
                 self._collect_baseline(band_focus_raw, band_calm_raw)
-            focus_band_ratio = self._score_against_baseline(band_focus_raw, "focus")
-            calm_band_ratio = self._score_against_baseline(band_calm_raw, "calm")
-            # Blend toward amplitude-derived values to preserve continuity during
-            # transient band jitter while still prioritizing spectral features.
-            focus_ratio = (0.75 * focus_band_ratio) + (0.25 * focus_amp_ratio)
-            # With no usable spread the amplitude term carries no information,
-            # so the spectral term takes full weight rather than blending in a
-            # value that was invented rather than measured.
-            calm_ratio = (
-                calm_band_ratio if calm_amp_ratio is None
-                else (0.75 * calm_band_ratio) + (0.25 * calm_amp_ratio)
-            )
+            # The spectral terms take full weight. They used to be blended
+            # 75/25 with the amplitude terms "for continuity", and the
+            # amplitude terms are not brain activity: mean raw level is ADC
+            # offset plus electrode drift, and cross-electrode spread is
+            # impedance mismatch -- rest spread was 147 uV on one strap
+            # fitting and 23 uV on another for the same person at the same
+            # task (tests/fixtures/EEG_REFERENCE.md). A quarter of every
+            # score moved with the strap.
+            focus_ratio = self._score_against_baseline(band_focus_raw, "focus")
+            calm_ratio = self._score_against_baseline(band_calm_raw, "calm")
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.

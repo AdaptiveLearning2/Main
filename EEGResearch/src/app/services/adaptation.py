@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import Callable
 
 from src.app.models import LearnerState
 
@@ -12,11 +13,14 @@ class AdaptationEngine:
     sidecar can see.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.last_label = "neutral"
         # -inf so the first real transition is never blocked by cooldown.
         self.last_change_ts = float("-inf")
         self.cooldown_seconds = 3.0
+        # Injectable for replaying a capture at its own pace; see
+        # SignalProcessor.__init__.
+        self._clock = clock
 
     def reset_for_signal_loss(self) -> None:
         """After a data gap, apply the next real reading immediately instead of
@@ -41,7 +45,7 @@ class AdaptationEngine:
         elif calm_ratio < 0.35:
             target = LearnerState("stressed", confidence, focus, calm, "High variation detected")
 
-        now = time.monotonic()
+        now = self._clock()
         if target.label != self.last_label and (now - self.last_change_ts) < self.cooldown_seconds:
             return LearnerState(self.last_label, confidence, focus, calm, "Cooldown: hold prior state")
         if target.label != self.last_label:

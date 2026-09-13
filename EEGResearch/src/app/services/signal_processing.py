@@ -4,7 +4,7 @@ from collections import deque
 from math import log
 from time import monotonic
 from statistics import fmean, pstdev
-from typing import Any
+from typing import Any, Callable
 
 from src.app.models import EegSample
 
@@ -56,7 +56,12 @@ class SignalProcessor:
     # intermittently.
     CONTACT_SMOOTHING_SECONDS = 5.0
 
-    def __init__(self, window_size: int = 20) -> None:
+    def __init__(self, window_size: int = 20, clock: Callable[[], float] = monotonic) -> None:
+        # Wall clock for the time-based smoothing windows. Injectable so a
+        # recorded capture can be replayed at its own pace (scripts/
+        # replay_eeg_capture.py): against the real monotonic() a replay runs
+        # in milliseconds and every time window collapses to one tick.
+        self._clock = clock
         # Holds the good-channel values per admitted sample, not the raw
         # EegSample: which electrodes were trustworthy is a property of the
         # moment the sample arrived, so the mask must be applied on the way in,
@@ -421,7 +426,7 @@ class SignalProcessor:
         calm_score = calm_ratio * 100.0
         confidence = confidence_ratio * 100.0
         signal_quality, quality_basis = self._signal_quality(
-            bands, confidence_ratio, calm_ratio, monotonic()
+            bands, confidence_ratio, calm_ratio, self._clock()
         )
         return {
             "focus_score": round(focus_score, 3),

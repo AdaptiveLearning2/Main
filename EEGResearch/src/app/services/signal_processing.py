@@ -108,12 +108,19 @@ class SignalProcessor:
     #   - raw spread is contact-dependent (147 uV at rest on one fitting, 23
     #     on another) so it is gated relative to its own running median,
     #     where an artifact roughly doubles it.
-    # Running medians are over the admitted ticks of the last
+    # Running medians are over the usable ticks of the last
     # ARTIFACT_HISTORY ticks (~20 s at 4 Hz) and no gate fires until
     # ARTIFACT_MIN_HISTORY of them exist.
-    DELTA_JUMP_FACTOR = 2.2
+    #
+    # Tuned by replaying both captures over a grid (EEG_REFERENCE.md,
+    # "Artifact gate"): per-tick SDK bands are noisy enough that no setting
+    # separates artifact ticks from rest by better than ~3:1. 3.0x delta and
+    # 3.5x spread hold 12% of resting ticks and 39% of blink/fidget/clench
+    # ticks on the prepared-contact run. A false hold costs one 250 ms tick
+    # of the previous score, so that trade is taken on the side of holding.
+    DELTA_JUMP_FACTOR = 3.0
     EMG_GAMMA_EXCESS = 0.5
-    SPREAD_JUMP_FACTOR = 2.5
+    SPREAD_JUMP_FACTOR = 3.5
     ARTIFACT_HISTORY = 80
     ARTIFACT_MIN_HISTORY = 8
 
@@ -525,6 +532,12 @@ class SignalProcessor:
             if admit:
                 self._collect_baseline(band_focus_raw, band_calm_raw)
                 self._ratio_history.append(band_focus_raw)
+            if usable:
+                # The gate's reference is every usable tick, held ones
+                # included. Feeding it only the ticks it admitted lets it
+                # ratchet: the median settles low, anything above it is
+                # held, held ticks never raise the median. Measured on the
+                # reference capture that held a third of resting ticks.
                 self._delta_history.append(float(bands.get("delta", 0.0)))
                 if frame_spread is not None:
                     self._spread_history.append(frame_spread)

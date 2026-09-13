@@ -98,6 +98,27 @@ holds.
    23 µV in run b for the same person at the same task; the 25% amplitude share of every
    focus and calm score moved with the strap.
 
+## Artifact gate tuning (Phase 1 step 1.4, replayed on both captures)
+
+Percentage of ticks held, rest segments against blink + fidget + clench segments, over a grid
+of the two relative bounds. `99` means that bound is off. The gate's reference is the running
+median of every usable tick; referenced on admitted ticks only it ratcheted and held a third
+of resting ticks.
+
+| delta × | spread × | run a rest / artifact | run b rest / artifact |
+| --- | --- | --- | --- |
+| 2.2 | 2.5 | 38% / 74% | 23% / 52% |
+| 3.0 | 3.5 | 29% / 59% | **12% / 39%** |
+| 3.0 | off | 15% / 28% | 7% / 12% |
+| 4.0 | 3.5 | 25% / 55% | 8% / 32% |
+| 4.0 | off | 9% / 15% | 2% / 4% |
+| off | 3.5 | 19% / 45% | 6% / 28% |
+
+No setting separates the two by better than about 3:1: the SDK's per-tick band values are
+noisy at that resolution. 3.0 / 3.5 is shipped. A false hold costs one 250 ms tick of the
+previous score, a missed blink costs one wrong tick that the ratio smoothing then damps, so
+the trade is taken on the side of holding. Run a's higher rest rate is its poor contact.
+
 ## What this settles and what it does not
 
 Settles: units; that the amplitude blend, the confidence formula, the baseline window and

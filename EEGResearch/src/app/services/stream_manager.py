@@ -407,13 +407,13 @@ class DeviceSession:
             try:
                 # Feed only the freshest drained sample through the processor.
                 # SignalProcessor's rolling window and per-session baseline
-                # (window_size, BASELINE_SAMPLES) are calibrated in ticks, not
-                # raw samples -- they assume one processor.update() call per
-                # tick. Calling update() once per drained sample would break
-                # that: a single tick can carry dozens of samples at the
-                # bridge's native rate, so the baseline would latch after one
-                # tick instead of ~15s, and the window would span
-                # milliseconds instead of ~5s. Draining the queue every tick
+                # (window_size, the artifact histories) are calibrated in
+                # ticks, not raw samples -- they assume one processor.update()
+                # call per tick. Calling update() once per drained sample
+                # would break that: a single tick can carry dozens of samples
+                # at the bridge's native rate, so the window would span
+                # milliseconds instead of ~5s. (The baseline and the ratio
+                # smoothing are on the sample clock and would survive it.) Draining the queue every tick
                 # already prevents an unbounded backlog; it doesn't require
                 # re-processing every buffered sample, just the newest one.
                 sample = samples[-1]

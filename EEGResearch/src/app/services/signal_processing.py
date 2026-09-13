@@ -48,10 +48,23 @@ class SignalProcessor:
     CALM_LOG_RATIO_MAX = 0.470  # ln(1.60)
     EPSILON = 1e-6
 
-    # Samples of usable band data collected at the start of a session before
-    # scores switch from the fixed population bounds to this learner's own
-    # baseline. At the default 4Hz stream rate this is roughly 15 seconds.
-    BASELINE_SAMPLES = 60
+    # The per-session baseline: how long, in seconds of the sample clock, the
+    # opening stretch of admitted ticks on at least degraded contact runs
+    # before the scores centre on this learner's own level. It used to be
+    # the first 60 usable ticks -- ~15 s -- with no contact condition, and on
+    # both reference captures that window fell entirely in the loose-strap
+    # settling period (60 of 60 ticks at 0.7 good electrodes, with nearly
+    # half of them labelled stressed), so the whole session was scored
+    # against a strap being adjusted. Time-based so a bursty stream cannot
+    # latch it early; the sample floor is a backstop against a stream that
+    # ticks once a minute. Fixed once latched, by decision: scores mean
+    # "relative to how this session started", and a session that starts
+    # engaged still reads focus over the lesson. Once latched the centre
+    # ramps from the population midpoint to the session mean over
+    # BASELINE_RAMP_SECONDS, so the latch is not a step in the scores.
+    BASELINE_SECONDS = 45.0
+    BASELINE_MIN_SAMPLES = 20
+    BASELINE_RAMP_SECONDS = 10.0
 
     # Wall-clock window over which per-electrode contact readings are averaged.
     # Time-based rather than sample-based: a count-based window would silently
@@ -185,6 +198,8 @@ class SignalProcessor:
         self._baseline_focus_mean: float | None = None
         self._baseline_calm_mean: float | None = None
         self._baseline_ready = False
+        self._baseline_started: datetime | None = None
+        self._baseline_latched: datetime | None = None
 
     def reset(self) -> None:
         """Drop all buffered samples (e.g. after a signal-loss gap) so the next
@@ -210,6 +225,8 @@ class SignalProcessor:
         self._baseline_focus_mean = None
         self._baseline_calm_mean = None
         self._baseline_ready = False
+        self._baseline_started = None
+        self._baseline_latched = None
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -340,8 +357,9 @@ class SignalProcessor:
             return ("degraded", "contact")
         return ("poor", "contact")
 
-    def _collect_baseline(self, focus_raw: float, calm_raw: float) -> None:
-        """Accumulate the opening samples of a session as that person's baseline.
+    def _collect_baseline(self, focus_raw: float, calm_raw: float, ts: datetime,
+                          contact: float | None) -> None:
+        """Accumulate the opening stretch of a session as that person's baseline.
 
         Absolute EEG amplitudes and band ratios vary enormously between people
         (skull thickness, hair, electrode placement), so fixed population bounds
@@ -350,26 +368,41 @@ class SignalProcessor:
         of any per-session contact offset, since the baseline is captured under
         the same contact conditions as the samples it is compared against.
 
-        Known limitation: this assumes the opening ~15s is representative of
-        rest. A learner who starts already engaged makes that engagement their
-        zero point, so genuine engagement afterward reads as neutral. Validated
-        so far only in simulation, not against a real seated capture.
+        Only ticks on at least degraded contact count, and the clock only
+        starts on the first of them: the strap being adjusted is exactly what
+        must not become the zero point (tests/fixtures/EEG_REFERENCE.md,
+        finding 6). Degraded rather than good, because degraded is the
+        ordinary state on this hardware and a baseline gated on good would
+        never latch.
+
+        Known limitation, accepted by decision: the opening stretch is taken
+        as representative. A learner who starts already engaged makes that
+        engagement their zero point.
         """
         if self._baseline_ready:
             return
+        if contact is not None and contact < self.CONTACT_DEGRADED:
+            return
+        if self._baseline_started is None:
+            self._baseline_started = ts
         self._baseline_focus.append(focus_raw)
         self._baseline_calm.append(calm_raw)
-        if len(self._baseline_focus) >= self.BASELINE_SAMPLES:
+        elapsed = (ts - self._baseline_started).total_seconds()
+        if elapsed >= self.BASELINE_SECONDS and len(self._baseline_focus) >= self.BASELINE_MIN_SAMPLES:
             self._baseline_focus_mean = fmean(self._baseline_focus)
             self._baseline_calm_mean = fmean(self._baseline_calm)
             self._baseline_ready = True
+            self._baseline_latched = ts
 
-    def _score_against_baseline(self, raw: float, which: str) -> float:
-        """Map a log-ratio to 0..1 relative to this session's baseline.
+    def _score_against_baseline(self, raw: float, which: str, ts: datetime | None = None) -> float:
+        """Map a log-ratio to 0..1, centred on this session's baseline once
+        there is one and on the population midpoint until then.
 
-        Falls back to the fixed population bounds until enough baseline samples
-        have been collected, so a session still produces usable (if less well
-        calibrated) scores from its first moments rather than nothing.
+        One scale for both: the population range, so "at your own resting
+        level" reads as 0.5 and a session crossing the latch does not change
+        gain. The centre ramps from the midpoint to the session mean over
+        BASELINE_RAMP_SECONDS after the latch, so the crossing is not a step
+        either.
         """
         if which == "focus":
             baseline = self._baseline_focus_mean
@@ -377,21 +410,18 @@ class SignalProcessor:
         else:
             baseline = self._baseline_calm_mean
             lo, hi = self.CALM_LOG_RATIO_MIN, self.CALM_LOG_RATIO_MAX
-
-        if not self._baseline_ready or baseline is None:
-            return self._clamp01((raw - lo) / (hi - lo))
-
-        # Centre on the baseline and spread by half the population range, so
-        # "at your own resting level" reads as 0.5. This makes the baseline
-        # path twice as sensitive as population scaling (saturates at +-half
-        # the range, not the full width) -- deliberate, since within-person
-        # variation is much narrower than the between-person spread the
-        # population bounds cover. A session crossing from one path to the
-        # other changes gain at that point.
-        half_span = (hi - lo) / 2.0
-        if half_span <= 0:
+        span = hi - lo
+        if span <= 0:
             return 0.5
-        return self._clamp01(0.5 + (raw - baseline) / (2.0 * half_span))
+        centre = (lo + hi) / 2.0
+        if self._baseline_ready and baseline is not None:
+            if ts is None or self._baseline_latched is None:
+                fraction = 1.0
+            else:
+                fraction = self._clamp01(
+                    (ts - self._baseline_latched).total_seconds() / self.BASELINE_RAMP_SECONDS)
+            centre += fraction * (baseline - centre)
+        return self._clamp01(0.5 + (raw - centre) / span)
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
         """Advance the smoothed log ratios to this admitted tick and return them.
@@ -567,10 +597,10 @@ class SignalProcessor:
 
         if using_band_features:
             # Gated on the same verdict as the window: the baseline latches
-            # after BASELINE_SAMPLES and is never revisited, so letting it
-            # ingest rejected frames would skew every score for the session.
+            # once and is never revisited, so letting it ingest rejected or
+            # held frames would skew every score for the session.
             if admit:
-                self._collect_baseline(band_focus_raw, band_calm_raw)
+                self._collect_baseline(band_focus_raw, band_calm_raw, sample.timestamp, contact)
                 self._ratio_history.append(band_focus_raw)
             if usable:
                 # The gate's reference is every usable tick, held ones
@@ -592,8 +622,8 @@ class SignalProcessor:
             if admit:
                 focus_smooth, calm_smooth = self._smooth_ratios(
                     band_focus_raw, band_calm_raw, sample.timestamp)
-                focus_ratio = self._score_against_baseline(focus_smooth, "focus")
-                calm_ratio = self._score_against_baseline(calm_smooth, "calm")
+                focus_ratio = self._score_against_baseline(focus_smooth, "focus", sample.timestamp)
+                calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
                 self._held_ratios = (focus_ratio, calm_ratio)
             elif self._held_ratios is not None:
                 # Hold the last admitted scores: a blink is not a change in
@@ -603,8 +633,8 @@ class SignalProcessor:
             else:
                 # Nothing admitted yet this session: score the raw tick, so a
                 # session that opens on a bad frame still has a number.
-                focus_ratio = self._score_against_baseline(band_focus_raw, "focus")
-                calm_ratio = self._score_against_baseline(band_calm_raw, "calm")
+                focus_ratio = self._score_against_baseline(band_focus_raw, "focus", sample.timestamp)
+                calm_ratio = self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.

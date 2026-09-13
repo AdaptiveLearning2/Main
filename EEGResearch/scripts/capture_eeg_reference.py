@@ -385,8 +385,11 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         out["segments"][seg] = {
             "rows": s["rows"], "labels": s["labels"], "quality": s["quality"], "fields": fields,
         }
-    # What the baseline latched on: BASELINE_SAMPLES (60) usable ticks, so
-    # the first 60 rows with a ratio say what the wearer was doing then.
+    # What the baseline latched on. Under the pre-Phase-1 processor that was
+    # the first 60 usable ticks, so the first 60 rows with a ratio say what
+    # the wearer was doing then; it is now 45 s of at-least-degraded
+    # contact, which the replay harness reports directly. Kept as the
+    # capture's own approximation.
     usable = [r for r in rows if isinstance(r.get("focus_log_ratio"), (int, float))]
     first = usable[:60]
     latch: dict[str, int] = {}

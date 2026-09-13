@@ -239,3 +239,63 @@ def test_held_and_rejected_ticks_do_not_advance_the_smoothed_ratio():
     for f in (held, rejected):
         assert f["focus_log_ratio_smoothed"] == pytest.approx(steady["focus_log_ratio_smoothed"])
         assert f["focus_score"] == pytest.approx(steady["focus_score"])
+
+
+# -- 1.6 the baseline is time-based, contact-gated and does not step ----------
+
+def _run_until_latched(t: Ticker, bands: dict, limit: int = 400) -> int:
+    for i in range(limit):
+        if t.processor._baseline_ready:
+            return i
+        t.tick(bands)
+    raise AssertionError("baseline never latched")
+
+
+def test_the_baseline_ignores_poor_contact_ticks_and_its_clock_starts_on_the_first_good_one():
+    """Both captures latched the old baseline inside the loose-strap settling
+    period. On poor contact nothing is collected and the 45 s have not
+    begun."""
+    t = Ticker()
+    t.run({**RELAXED, **CONTACT_POOR}, 400)  # 100 s of poor contact
+    assert not t.processor._baseline_ready
+    assert t.processor._baseline_started is None
+    n = _run_until_latched(t, {**RELAXED, "hsi": [1.0, 1.0, 4.0, 4.0],
+                              "is_good": [1.0, 1.0, 0.0, 0.0]})  # degraded: 2 of 4
+    assert 4 * SignalProcessor.BASELINE_SECONDS <= n <= 4 * SignalProcessor.BASELINE_SECONDS + 30
+
+
+def test_the_latch_needs_elapsed_time_not_a_tick_count():
+    slow, fast = Ticker(hz=1.0), Ticker(hz=16.0)
+    bands = {**RELAXED, **CONTACT_GOOD}
+    fast.run(bands, 200)  # 200 ticks, 12.5 s
+    assert not fast.processor._baseline_ready
+    slow.run(bands, 50)  # 50 ticks, 50 s
+    assert slow.processor._baseline_ready
+
+
+def test_a_steady_signal_crosses_the_latch_without_a_step():
+    """The centre ramps from the population midpoint to the session mean
+    over BASELINE_RAMP_SECONDS, on one scale, so the latch is not visible as
+    a jump in the scores."""
+    t = Ticker()
+    bands = {**ENGAGED, **CONTACT_GOOD}  # far from the population midpoint
+    scores = []
+    for _ in range(4 * int(SignalProcessor.BASELINE_SECONDS + SignalProcessor.BASELINE_RAMP_SECONDS) + 40):
+        scores.append(t.tick(bands)["focus_score"])
+    assert t.processor._baseline_ready
+    steps = [abs(b - a) for a, b in zip(scores, scores[1:])]
+    assert max(steps) < 3.0
+    # And it did move: from the population reading to the session's own 50.
+    assert abs(scores[0] - scores[-1]) > 10.0
+    assert scores[-1] == pytest.approx(50.0, abs=1.0)
+
+
+def test_the_gain_is_the_same_on_both_sides_of_the_latch():
+    """A raw excursion of the same size scores the same distance whether or
+    not the baseline has latched -- the old path doubled the gain at latch."""
+    p = SignalProcessor()
+    before = p._score_against_baseline(0.3, "focus") - p._score_against_baseline(0.0, "focus")
+    p._baseline_ready = True
+    p._baseline_focus_mean = -0.5
+    after = p._score_against_baseline(-0.2, "focus") - p._score_against_baseline(-0.5, "focus")
+    assert before == pytest.approx(after)

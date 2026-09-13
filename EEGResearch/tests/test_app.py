@@ -712,12 +712,28 @@ def test_a_single_hsi_blip_does_not_drop_quality_to_poor():
     assert blip["signal_quality"] == "good"
 
 
-def _sample(level=740.0):
+def _sample(level=740.0, at=None):
     return EegSample(
-        timestamp=datetime.now(timezone.utc),
+        timestamp=at or datetime.now(timezone.utc),
         channel_tp9=level, channel_af7=level + 20,
         channel_af8=level + 15, channel_tp10=level + 5,
     )
+
+
+_T0 = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+
+
+def _until_baseline(processor, bands_for_tick, *, hz=4.0, limit=400):
+    """Feed ticks on advancing timestamps until the baseline latches. The
+    baseline is time-based (BASELINE_SECONDS on the sample clock), so a loop
+    on datetime.now() would never get there."""
+    for i in range(limit):
+        if processor._baseline_ready:
+            return i
+        at = _T0 + timedelta(seconds=i / hz)
+        level, bands = bands_for_tick(i)
+        processor.update(_sample(level, at=at), bands)
+    raise AssertionError("baseline never latched")
 
 
 def test_unusable_samples_are_kept_out_of_the_rolling_window():
@@ -756,33 +772,30 @@ def test_samples_without_contact_data_are_never_discarded():
 
 def test_baseline_ignores_the_frames_the_window_rejects():
     """The baseline must reject the same frames the window rejects. It
-    latches after BASELINE_SAMPLES and is never revisited, so an artifact
-    during warm-up would shift every score for the rest of the session, not
-    just one window's worth.
+    latches once and is never revisited, so an artifact during warm-up
+    would shift every score for the rest of the session, not just one
+    window's worth.
     """
     good = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1], "hsi": [1, 1, 1, 1]}
     bad = {**_ENGAGED_BANDS, "is_good": [0, 0, 0, 0], "hsi": [4, 4, 4, 4]}
 
     clean = SignalProcessor(window_size=8)
-    while not clean._baseline_ready:
-        clean.update(_sample(), good)
+    n_clean = _until_baseline(clean, lambda i: (740.0, good))
 
     polluted = SignalProcessor(window_size=8)
-    i = 0
-    while not polluted._baseline_ready:
-        # Every third frame is a fully invalid artifact at a wildly different
-        # amplitude -- the same kind the window already refuses.
-        polluted.update(_sample(5000.0) if i % 3 == 2 else _sample(),
-                        bad if i % 3 == 2 else good)
-        i += 1
+    # Every third frame is a fully invalid artifact at a wildly different
+    # amplitude -- the same kind the window already refuses.
+    n_polluted = _until_baseline(
+        polluted, lambda i: (5000.0, bad) if i % 3 == 2 else (740.0, good))
 
     assert polluted._samples_rejected > 0, "test must actually exercise rejection"
     assert polluted._baseline_focus_mean == pytest.approx(clean._baseline_focus_mean, abs=1e-9)
     assert polluted._baseline_calm_mean == pytest.approx(clean._baseline_calm_mean, abs=1e-9)
 
     # The observable consequence: an identical good frame must score the same.
-    c = clean.update(_sample(), good)
-    p = polluted.update(_sample(), good)
+    at = _T0 + timedelta(seconds=max(n_clean, n_polluted) / 4.0)
+    c = clean.update(_sample(at=at), good)
+    p = polluted.update(_sample(at=at), good)
     assert p["focus_score"] == pytest.approx(c["focus_score"], abs=0.01)
     assert p["calm_score"] == pytest.approx(c["calm_score"], abs=0.01)
 
@@ -911,14 +924,15 @@ def test_scores_center_on_baseline_once_it_is_established():
     to place that individual."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
-    features = None
-    for _ in range(SignalProcessor.BASELINE_SAMPLES + 5):
-        features = processor.update(_sample(), steady)
+    n = _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
-    # Band term is centered at 0.5; blended with the amplitude term, the
-    # final score stays near mid-scale rather than pinned to an extreme.
-    assert 25.0 < features["focus_score"] < 75.0
-    assert 25.0 < features["calm_score"] < 75.0
+    # Past the ramp after the latch, a steady signal at its own level reads
+    # mid-scale rather than wherever the population bounds put it.
+    features = None
+    for i in range(n, n + 4 * int(SignalProcessor.BASELINE_RAMP_SECONDS) + 8):
+        features = processor.update(_sample(at=_T0 + timedelta(seconds=i / 4.0)), steady)
+    assert features["focus_score"] == pytest.approx(50.0, abs=1.0)
+    assert features["calm_score"] == pytest.approx(50.0, abs=1.0)
 
 
 def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
@@ -932,8 +946,7 @@ def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
 def test_reset_clears_the_session_baseline():
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
-    for _ in range(SignalProcessor.BASELINE_SAMPLES + 1):
-        processor.update(_sample(), steady)
+    _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
     processor.reset()
     assert processor._baseline_ready is False

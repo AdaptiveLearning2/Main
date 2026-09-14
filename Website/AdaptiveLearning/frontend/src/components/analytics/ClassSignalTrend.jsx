@@ -64,7 +64,8 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
     ...(hasCognitive ? [
       { key: 'avg_focus', label: 'Focus', unit: '%', scale: asPercent },
       { key: 'avg_stress', label: 'Stress', unit: '%', scale: asPercent },
-      { key: 'avg_engagement', label: 'Engagement', unit: '%', scale: asPercent },
+      // No `avg_engagement`: engagement is the focus index under another
+      // name (signal_mapping.py), so a second line would plot one number twice.
     ] : []),
     ...(hasHeart ? [{ key: 'avg_heart_rate_bpm', label: 'Heart rate', unit: ' bpm' }] : []),
   ]
@@ -114,8 +115,6 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
                 stroke="#7c3aed" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
               <Line yAxisId="ratio" type="monotone" dataKey="avg_stress" name="Stress"
                 stroke="#e11d48" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
-              <Line yAxisId="ratio" type="monotone" dataKey="avg_engagement" name="Engagement"
-                stroke="#0891b2" strokeWidth={2} dot={{ r: 3 }} connectNulls={false} />
             </>}
             {hasHeart && (
               <Line yAxisId="bpm" type="monotone" dataKey="avg_heart_rate_bpm" name="Heart rate"

@@ -983,3 +983,17 @@ def test_the_eeg_confidence_rides_in_raw_for_the_fusion_gate():
          "timestamp": "2026-08-09T10:00:00Z"},
         "session-1", "user-1")
     assert row["raw"]["confidence"] == pytest.approx(0.90)
+
+
+def test_a_poor_contact_row_carries_no_confidence_either():
+    """The eight measurement columns are nulled together; the confidence
+    rode in `engagement` then and went with them. Moved to `raw` it
+    survived, so four poor rows beside one good one averaged focus 0.8
+    against confidence 0.36 and dropped the whole EEG channel."""
+    poor = signal_mapping.map_eeg_to_cognitive(
+        {**_BAD_CONTACT, "features": {**_BAD_CONTACT["features"], "confidence": 30.0}}, "s", "u")
+    assert poor["focus"] is None
+    assert "confidence" not in poor["raw"]
+    good = signal_mapping.map_eeg_to_cognitive(
+        {**_LEGACY_POOR, "features": {**_LEGACY_POOR["features"], "confidence": 30.0}}, "s", "u")
+    assert good["raw"]["confidence"] == pytest.approx(0.3)

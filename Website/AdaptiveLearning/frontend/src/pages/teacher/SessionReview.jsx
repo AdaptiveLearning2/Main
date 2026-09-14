@@ -353,9 +353,11 @@ function SessionReviewBody({ sessionId }) {
   // `bpm` at first, which made a visibly-drawn heart line read as "not
   // recorded" in both the sentence and the table -- and RMSSD was absent from
   // the table entirely while being plotted beside it.
-  // The columns are the series this chart draws. `focus`, `engagement` and
-  // `stress` always have a `<Line>`; the two heart series are gated on
-  // `hasHeart`, so their columns are too.
+  // The columns are the series this chart draws. `focus` and `stress` always
+  // have a `<Line>`; the two heart series are gated on `hasHeart`, so their
+  // columns are too. `engagement` is not drawn: it is the focus index under
+  // another name (signal_mapping.py), and two lines of one number read as
+  // two measurements agreeing.
   //
   // Left unconditional, the sentence was fine — `describeSeries` drops a series
   // with no readings — but the table still emitted "Heart rate: not recorded"
@@ -366,7 +368,6 @@ function SessionReviewBody({ sessionId }) {
   const TIMELINE_COLUMNS = [
     { key: 'focus',      label: 'Focus',      unit: '%', scale: asPercent },
     { key: 'stress',     label: 'EEG stress', unit: '%', scale: asPercent },
-    { key: 'engagement', label: 'Engagement', unit: '%', scale: asPercent },
     ...(hasHeart ? [
       { key: 'heart_rate_bpm', label: 'Heart rate', unit: ' bpm' },
       { key: 'rmssd_ms',       label: 'RMSSD',      unit: ' ms' },
@@ -504,7 +505,6 @@ function SessionReviewBody({ sessionId }) {
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" dot={false} connectNulls isAnimationActive={false} />
-                <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" dot={false} connectNulls isAnimationActive={false} />
                 {/* "EEG stress" not bare "stress": distinct from the heart-derived stress_category pie below, must never share a label. */}
                 <Line yAxisId="ratio" type="monotone" dataKey="stress" name="EEG stress" stroke="#f43f5e" dot={false} connectNulls isAnimationActive={false} />
 

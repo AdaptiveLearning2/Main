@@ -38,6 +38,19 @@ class AdaptationEngine:
         # SignalProcessor.__init__.
         self._clock = clock
 
+    def restart(self) -> None:
+        """Forget the label state: a fresh engine. Called when recording is
+        armed, beside the processor's baseline restart -- the label, its
+        cooldown and its pending run were otherwise carried in from
+        pairing, so the opening rows of a lesson wore a label formed while
+        the strap was being fitted, beside scores that had been
+        re-centred."""
+        self.last_label = "neutral"
+        self.last_change_ts = float("-inf")
+        self._pending_label = None
+        self._pending_count = 0
+        self._pending_ts = None
+
     def reset_for_signal_loss(self) -> None:
         """After a data gap, the next label is not held under the cooldown --
         there is no prior state worth holding -- but it still needs

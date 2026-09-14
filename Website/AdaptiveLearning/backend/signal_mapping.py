@@ -168,6 +168,13 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
         # bails when nothing usable is left.
         for column in _MEASUREMENT_COLUMNS:
             row[column] = None
+        # The confidence goes with them. It rode in `engagement` when that
+        # was among the nulled columns; moved to `raw` it survived, so a
+        # poor-contact row with no focus still contributed a confidence
+        # capped under the gate -- four such rows beside one good one
+        # averaged focus 0.8 against confidence 0.36 and dropped the whole
+        # EEG channel, ease-off included. An unmeasured row has no opinion.
+        row["raw"].pop("confidence", None)
     return row
 
 

@@ -389,9 +389,16 @@ def get_session_signal_state(session_id, user_id=None):
     # The EEG signal-quality number lives in `raw.confidence`; no column
     # carries it. `engagement` used to, and reading it here after it became
     # the focus index turned this gate into a focus threshold.
+    # `raw` is client-supplied JSON on the push path, stored unvalidated, so
+    # the value is checked and not just the container: a string here 500'd
+    # every question until the row aged out, and `true` claimed 1.0. Only a
+    # real number in 0..1 counts (bool is an int to isinstance).
     confidence_vals = [
         r["raw"]["confidence"] for r in eeg_rows
-        if isinstance(r.get("raw"), dict) and r["raw"].get("confidence") is not None
+        if isinstance(r.get("raw"), dict)
+        and isinstance(r["raw"].get("confidence"), (int, float))
+        and not isinstance(r["raw"].get("confidence"), bool)
+        and 0.0 <= r["raw"]["confidence"] <= 1.0
     ]
 
     focus      = fmean(focus_vals)      if focus_vals      else None

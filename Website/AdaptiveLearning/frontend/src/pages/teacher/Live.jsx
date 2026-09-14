@@ -53,7 +53,8 @@ function Gauge({ label, value, color = 'bg-violet-500' }) {
 // summary is the reading.
 const SPARK_COLUMNS = [
   { key: 'focus',      label: 'Focus',      unit: '%',    scale: asPercent },
-  { key: 'engagement', label: 'Engagement', unit: '%',    scale: asPercent },
+  // No `engagement`: it is the focus index under another name
+  // (signal_mapping.py), so a second series would draw one number twice.
   { key: 'stress',     label: 'Stress',     unit: '%',    scale: asPercent },
   { key: 'bpm',        label: 'Heart rate', unit: ' bpm' },
 ]
@@ -130,7 +131,6 @@ function StudentCard({ student, history, now }) {
 
       <div className="space-y-3 mb-4">
         <Gauge label="Focus"      value={cog?.focus}      color="bg-indigo-500" />
-        <Gauge label="Engagement" value={cog?.engagement} color="bg-emerald-500" />
         <Gauge label="Stress"     value={cog?.stress}     color="bg-rose-500" />
       </div>
 
@@ -167,7 +167,6 @@ function StudentCard({ student, history, now }) {
             <YAxis yAxisId="ratio" hide domain={[0, 1]} />
             <YAxis yAxisId="bpm" hide domain={['auto', 'auto']} />
             <Line yAxisId="ratio" type="monotone" dataKey="focus"      stroke="#6366f1" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-            <Line yAxisId="ratio" type="monotone" dataKey="engagement" stroke="#10b981" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="ratio" type="monotone" dataKey="stress"     stroke="#f43f5e" strokeWidth={1.5} dot={false} isAnimationActive={false} />
             <Line yAxisId="bpm"   type="monotone" dataKey="bpm"        stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>

@@ -4002,7 +4002,8 @@ def _strategy_prompt(report: dict, topics: list[dict], baseline: list[str]) -> s
         f"Weekly summary (last {report.get('days', 7)} days):\n"
         f"- average focus {_pct(averages.get('focus'))}\n"
         f"- average stress {_pct(averages.get('stress'))}\n"
-        f"- average engagement {_pct(averages.get('engagement'))}\n"
+        # No engagement line: it is the focus index under another name
+        # (signal_mapping.py), and restated it reads as a second fact.
         f"- weakest attempted topic: {topic_line}\n"
         f"- practice sessions recorded: {(report.get('sample_counts') or {}).get('sessions', 0)}\n\n"
         "For reference, here is a safe baseline answer:\n"

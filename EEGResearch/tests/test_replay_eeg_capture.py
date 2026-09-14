@@ -148,3 +148,34 @@ def test_a_real_gap_is_an_ok_row_with_the_no_signal_payload():
     out = replay.replay(rows, window_size=8)
     assert out[6]["label"] == "no_signal" and out[6]["focus_score"] is None
     assert out[7]["samples_rejected"] == 0
+
+
+def test_a_held_no_signal_label_on_a_real_row_is_not_a_gap():
+    """The engine holds "no_signal" through the persistence run after a
+    gap, on ticks carrying real bands. Keyed on the label, a capture with
+    25 gaps replayed as 64 and each pass compounded the last."""
+    rows = _synthetic_capture(n=12)
+    rows[6] = dict(rows[6], status="error", message="no data", tp9=None,
+                   signal_quality="no_signal", label="no_signal")
+    for i in (7, 8, 9):
+        rows[i] = dict(rows[i], label="no_signal", signal_quality="degraded")
+    assert replay.is_gap(rows[6])
+    assert not any(replay.is_gap(rows[i]) for i in (7, 8, 9))
+    out = replay.replay(rows, window_size=8)
+    assert out[7]["focus_score"] is not None
+    # Round trip: replaying the replay finds the same one gap.
+    again = replay.replay(out, window_size=8)
+    assert sum(r["signal_quality"] == "no_signal" for r in again) == 1
+
+
+def test_arm_at_an_unknown_segment_is_refused_not_ignored(tmp_path, capsys):
+    rows = _synthetic_capture(n=10)
+    with pytest.raises(ValueError, match="no such segment"):
+        replay.replay(rows, window_size=8, arm_at="lesson")
+    path = tmp_path / "cap.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"header": True, "script_version": 1}) + "\n")
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    assert replay.main([str(path), "--window-size", "8", "--arm-at", "lesson"]) == 2
+    assert "no such segment" in capsys.readouterr().err

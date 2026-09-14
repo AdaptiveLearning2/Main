@@ -103,7 +103,10 @@ def build_session_charts(cognitive, face, heart) -> dict:
     """
     charts = {}
 
-    cog_points = _line_points(cognitive, ("focus", "engagement", "stress"))
+    # No `engagement`: it is the focus index under another name
+    # (signal_mapping.py), and this picture is permanent -- a second line of
+    # the same number would be baked into the archive as two measurements.
+    cog_points = _line_points(cognitive, ("focus", "stress"))
     charts["cognitive_timeline"] = (
         chart_render.line_svg(cog_points, "Cognitive signals") if cognitive else None
     )

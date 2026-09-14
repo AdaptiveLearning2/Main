@@ -38,7 +38,11 @@ class FeatureData(BaseModel):
     # Artifact gate: ticks held this session (delta jump, EMG gamma, spread
     # jump), and why this tick was held -- None when it was scored.
     samples_artifact: int | None = None
-    artifact_reason: Literal["delta_jump", "emg_gamma", "spread_jump"] | None = None
+    # A plain str, not a Literal of the three reasons: the processor writes
+    # them as unshared string literals, and a fourth would have made every
+    # /api/v1/state call 500 -- a harder failure than the silent key drop
+    # this model exists to guard against.
+    artifact_reason: str | None = None
     # The exponentially smoothed ratios the scores were scaled from.
     focus_log_ratio_smoothed: float | None = None
     calm_log_ratio_smoothed: float | None = None

@@ -67,9 +67,14 @@ def is_gap(row: dict[str, Any]) -> bool:
     signal_quality "no_signal" -- so a check on status or on null channels
     sees nothing and scores a zero-microvolt sample where the live path
     reset.
+
+    The label is deliberately not consulted. "no_signal" is the label the
+    engine *holds* through the persistence run after a gap, so it appears
+    on ticks carrying real bands; keyed on it, a capture with 25 gaps
+    replayed as 64, and each replay pass compounded the last.
     """
     return (row.get("status") != "ok" or row.get("tp9") is None
-            or row.get("signal_quality") == "no_signal" or row.get("label") == "no_signal")
+            or row.get("signal_quality") == "no_signal")
 
 
 def _capture_module():
@@ -96,6 +101,12 @@ def replay(rows: list[dict[str, Any]], *, window_size: int = 20,
     """
     if not rows:
         return []
+    if arm_at is not None and not any(r.get("segment") == arm_at for r in rows):
+        # Loud, not silent: an unknown segment replayed the un-armed
+        # Connect-time baseline while reporting normally, and the arm is
+        # the change the replay exists to score.
+        present = sorted({r.get("segment") for r in rows if r.get("segment")})
+        raise ValueError(f"--arm-at {arm_at!r}: no such segment; capture has {present}")
     t0 = _parse_t(rows[0]["t"])
     clock_now = [0.0]
     processor = SignalProcessor(window_size=window_size, clock=lambda: clock_now[0])
@@ -173,7 +184,11 @@ def main(argv: list[str] | None = None) -> int:
 
     capture = _capture_module()
     rows = capture.read_rows(args.path)
-    replayed = replay(rows, window_size=args.window_size, arm_at=args.arm_at)
+    try:
+        replayed = replay(rows, window_size=args.window_size, arm_at=args.arm_at)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     capture.print_summary(capture.summarize(replayed))
     if args.save:
         capture.refuse_if_inside_repo(pathlib.Path(args.save))

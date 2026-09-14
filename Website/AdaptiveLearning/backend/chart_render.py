@@ -50,7 +50,6 @@ STRESS_COLOURS = {
 # Line series, keyed by the payload field they draw.
 SERIES_COLOURS = {
     "focus": "#6366f1",
-    "engagement": "#10b981",
     "stress": "#f43f5e",
     "heart_rate_bpm": "#a855f7",
     "rmssd_ms": "#f59e0b",

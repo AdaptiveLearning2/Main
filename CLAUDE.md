@@ -1484,7 +1484,21 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   baseline latches on *covered* seconds (a gap counts as one), `reset()` keeps the time-windowed
   contact histories (a blip after a gap is smoothed against what preceded it), and the label's
   pending run survives a reset and ages out at 5 s instead — cleared, contact flapping every other
-  tick never reached four readings and read `no_signal` throughout.
+  tick never reached four readings and read `no_signal` throughout. The artifact gate's running
+  medians and the two session counters survive a reset for the same reason (cleared every fifth
+  tick, 0 of 20 blinks were held). **`stop()` calls `clear_session()`, not `reset()`**: a stop is
+  the end of a session, and through `reset()` the next student on a shared station was scored
+  against the previous one's baseline. Arming restarts the label engine beside the baseline, or the
+  lesson opens on a label formed during pairing.
+- **`engagement` is never drawn beside `focus`.** They are one number, so a second line, gauge,
+  archived series or prompt sentence reads as two measurements agreeing. The column stays; the
+  session review, class trend, teacher Live view, archived SVG and strategies prompt show focus
+  alone. **`raw.confidence` is dropped on a `contact_poor` row** along with the measurement
+  columns — kept, four poor rows beside one good one averaged focus 0.8 against confidence 0.36
+  and dropped the EEG channel — and the decider validates the value, not just the container,
+  since `raw` is client-supplied JSON on the push path: a string 500'd every question and `true`
+  claimed 1.0. `replay_eeg_capture.is_gap` reads `signal_quality`, never the label, which the
+  engine holds at `no_signal` on real ticks after a gap; `--arm-at` an absent segment is refused.
 - **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
   not the confidence — every Engagement tile was showing strap fit. `avg_engagement` in the rollup
   and term trend is discontinuous across the date Phase 1 merged.

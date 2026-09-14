@@ -244,6 +244,27 @@ class SignalProcessor:
         self._baseline_coverage = 0.0
         self._baseline_collecting = True
 
+    def clear_session(self) -> None:
+        """A session has ended: forget everything about it, the baseline and
+        the session counters included. reset() is for a gap *within* a
+        session and keeps both; on a shared station the next student must
+        not be scored against the previous one's resting spectrum until
+        their own baseline latches -- or for the whole lesson, if the arm
+        call fails."""
+        self.reset()
+        self._is_good_history.clear()
+        self._hsi_history.clear()
+        self._delta_history.clear()
+        self._spread_history.clear()
+        self._samples_rejected = 0
+        self._samples_artifact = 0
+        self.restart_baseline()
+        self._baseline_focus_mean = None
+        self._baseline_calm_mean = None
+        self._baseline_ready = False
+        self._baseline_latched = None
+        self._centre_from = {"focus": None, "calm": None}
+
     def reset(self) -> None:
         """Drop the sample window and the per-tick state after a signal-loss
         gap, so the scores warm back up rather than blending pre-gap and
@@ -257,11 +278,16 @@ class SignalProcessor:
         # judged on itself alone -- one blip reading is_good on every
         # electrode read contact 1.0 against a smoothed 0.0 a moment
         # before, and entered the baseline on the strength of it.
-        self._samples_rejected = 0
         self._ratio_history.clear()
-        self._delta_history.clear()
-        self._spread_history.clear()
-        self._samples_artifact = 0
+        # The artifact gate's running medians are kept for the reason the
+        # contact histories are: reset() runs on every no-sample tick, and
+        # cleared there the delta and spread gates never reached
+        # ARTIFACT_MIN_HISTORY on flapping contact -- 19 of 20 blinks held
+        # with no resets, 0 of 20 with a reset every fifth tick. The
+        # medians are of the last ARTIFACT_HISTORY usable ticks, so they
+        # refresh on their own. The held and rejected counts are session
+        # totals and are not zeroed here either; clear_session() is where
+        # a session ends.
         self._held_ratios = None
         self._ema_focus = None
         self._ema_calm = None
@@ -489,8 +515,14 @@ class SignalProcessor:
             start = midpoint
         if ts is None or self._baseline_latched is None:
             return baseline
-        fraction = self._clamp01(
-            (ts - self._baseline_latched).total_seconds() / self.BASELINE_RAMP_SECONDS)
+        since_latch = (ts - self._baseline_latched).total_seconds()
+        # A sample clock that went backwards -- a device that rebases on
+        # reconnect -- is not a tick before the latch. Left to the clamp, a
+        # negative age read as fraction 0 and held every later score at the
+        # ramp's start for the rest of the session.
+        if since_latch < 0.0:
+            return baseline
+        fraction = self._clamp01(since_latch / self.BASELINE_RAMP_SECONDS)
         return start + fraction * (baseline - start)
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
@@ -782,6 +814,9 @@ class SignalProcessor:
             "focus_log_ratio": band_focus_raw,
             "calm_log_ratio": band_calm_raw,
             # The smoothed ratios the scores were actually scaled from.
-            "focus_log_ratio_smoothed": self._ema_focus,
-            "calm_log_ratio_smoothed": self._ema_calm,
+            # None beside a None raw ratio: a tick with no bands has no
+            # smoothed value either, and reporting the last one made an
+            # absence read as a steady measurement.
+            "focus_log_ratio_smoothed": self._ema_focus if using_band_features else None,
+            "calm_log_ratio_smoothed": self._ema_calm if using_band_features else None,
         }

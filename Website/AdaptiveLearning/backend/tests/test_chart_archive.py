@@ -749,3 +749,19 @@ def test_a_bucket_that_never_stops_paging_raises_rather_than_looping():
     report = chart_archive.sweep_orphan_charts(client)
 
     assert report["refused"] and "did not terminate" in report["refused"]
+
+
+def test_the_archived_cognitive_chart_does_not_draw_engagement_beside_focus(monkeypatch):
+    """`engagement` is the focus index under another name. Drawn as a
+    second line it is baked into a permanent picture as two measurements
+    agreeing."""
+    seen = {}
+    real = chart_render.line_svg
+
+    def spy(points, title):
+        seen[title] = set(points)
+        return real(points, title)
+
+    monkeypatch.setattr(chart_render, "line_svg", spy)
+    chart_archive.build_session_charts(COG, FACE, HEART)
+    assert seen["Cognitive signals"] == {"focus", "stress"}

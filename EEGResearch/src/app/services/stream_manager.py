@@ -288,7 +288,12 @@ class DeviceSession:
             # (a duplicate stop, or one racing ahead of start()) so a session
             # that never started reports "idle" rather than a fabricated
             # zero reading.
-            self.processor.reset()
+            #
+            # clear_session(), not reset(): a stop is the end of a session,
+            # not a gap in one. reset() keeps the baseline (rightly, for a
+            # no-sample tick), and through here it kept it for the next
+            # student on a shared station.
+            self.processor.clear_session()
             self.adaptation.reset_for_signal_loss()
             self._reset_heart()
             self.latest_payload = self._no_signal_payload()
@@ -594,8 +599,11 @@ class StreamManager:
     def arm_baseline(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         """Recording has been armed for this device: gather the per-session
         baseline from now, not from stream start. See
-        SignalProcessor.restart_baseline."""
-        self.session(device_id).processor.restart_baseline()
+        SignalProcessor.restart_baseline. The label engine restarts with it,
+        or the lesson opens on a label formed during pairing."""
+        session = self.session(device_id)
+        session.processor.restart_baseline()
+        session.adaptation.restart()
 
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()

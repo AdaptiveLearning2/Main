@@ -227,3 +227,17 @@ def test_the_fusion_gate_reads_raw_confidence_not_engagement(monkeypatch):
                           "engagement": 0.9, "raw": {"confidence": 0.2}}]
     _install(monkeypatch, CONSENT_ALL, eeg=focused_bad_strap)
     assert decider.get_session_signal_state(SESSION, USER).label == "insufficient_signal"
+
+
+@pytest.mark.parametrize("bad", ["0.9", True, 7.0, -1.0, None])
+def test_a_garbage_raw_confidence_is_skipped_not_believed(monkeypatch, bad):
+    """`raw` is client-supplied JSON on the push path. A string here 500'd
+    every question until the row aged out; `true` claimed 1.0."""
+    rows = [{"session_id": SESSION, "focus": 0.9, "stress": 0.2,
+             "engagement": 0.9, "raw": {"confidence": bad}}]
+    _install(monkeypatch, CONSENT_ALL, eeg=rows)
+    with_garbage = decider.get_session_signal_state(SESSION, USER)
+    _install(monkeypatch, CONSENT_ALL, eeg=[{**rows[0], "raw": {}}])
+    without = decider.get_session_signal_state(SESSION, USER)
+    assert with_garbage.label == without.label
+    assert with_garbage.label != "focused", "a bool must not read as full confidence"

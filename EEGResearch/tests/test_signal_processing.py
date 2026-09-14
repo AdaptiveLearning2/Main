@@ -570,3 +570,96 @@ def test_good_is_reachable_on_a_bridge_that_reports_no_contact():
     f = Ticker().run(RELAXED, 30)  # no hsi / is_good at all, before the latch
     assert f["quality_basis"] == "heuristic"
     assert f["signal_quality"] == "good"
+
+
+# -- fifth review: what a gap keeps, and what a session end forgets ------------
+
+def test_a_gap_does_not_disarm_the_artifact_gate():
+    """The delta and spread gates need ARTIFACT_MIN_HISTORY usable ticks.
+    Cleared on every no-sample tick, flapping contact kept them from ever
+    reaching it: 0 of 20 blinks held with a reset every fifth tick."""
+    t = Ticker()
+    held = 0
+    for i in range(100):
+        if i % 5 == 4:
+            t.processor.reset()
+            continue
+        if i % 5 == 3 and i > 20:
+            f = t.tick({**RELAXED, "delta": RELAXED["delta"] + 0.6, **CONTACT_GOOD})
+            held += f["artifact_reason"] == "delta_jump"
+        else:
+            t.tick({**RELAXED, **CONTACT_GOOD})
+    assert held >= 12
+
+
+def test_the_held_and_rejected_counts_are_session_totals_across_gaps():
+    t = Ticker()
+    _warm(t)
+    t.tick({**RELAXED, "delta": 1.5, **CONTACT_GOOD})
+    t.tick({**RELAXED, "hsi": [4.0] * 4, "is_good": [0.0] * 4})
+    t.processor.reset()
+    f = t.tick({**RELAXED, **CONTACT_GOOD})
+    assert f["samples_artifact"] == 1 and f["samples_rejected"] == 1
+    t.processor.clear_session()
+    f = t.tick({**RELAXED, **CONTACT_GOOD})
+    assert f["samples_artifact"] == 0 and f["samples_rejected"] == 0
+
+
+def test_clear_session_forgets_the_baseline_where_reset_keeps_it():
+    """stop() is a real end of session; on a shared station the next
+    student must not be scored against the last one's resting spectrum."""
+    t = Ticker()
+    _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
+    t.processor.reset()
+    assert t.processor._baseline_ready
+    t.processor.clear_session()
+    assert not t.processor._baseline_ready
+    assert t.processor._baseline_focus_mean is None
+    assert t.processor._centre_from == {"focus": None, "calm": None}
+    assert len(t.processor._is_good_history) == 0
+    fresh = t.tick({**ENGAGED, **CONTACT_GOOD})
+    assert fresh["focus_score"] > 60.0, "scored against the population midpoint, not the old mean"
+
+
+def test_the_smoothed_ratios_are_null_on_a_tick_with_no_bands():
+    t = Ticker()
+    _warm(t)
+    f = t.tick(CONTACT_GOOD)  # contact only, no bands
+    assert f["focus_log_ratio"] is None
+    assert f["focus_log_ratio_smoothed"] is None and f["calm_log_ratio_smoothed"] is None
+
+
+def test_a_sample_clock_that_goes_backwards_does_not_freeze_the_ramp():
+    """A device clock that rebases on reconnect. The clamp read a negative
+    age as fraction 0 and held every later score at the ramp's start."""
+    t = Ticker()
+    _run_until_latched(t, {**ENGAGED, **CONTACT_GOOD})
+    p = t.processor
+    settled = p._centre("focus", p._baseline_latched + timedelta(seconds=60))
+    assert settled == pytest.approx(p._baseline_focus_mean)
+    assert p._centre("focus", p._baseline_latched - timedelta(seconds=600)) == pytest.approx(settled)
+
+
+def test_arming_restarts_the_label_engine_too():
+    """The label, its cooldown and its pending run were carried in from
+    pairing, so a lesson opened on a label formed while the strap was
+    being fitted, beside scores that had been re-centred."""
+    import inspect
+    from src.app.services.stream_manager import StreamManager
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    clock[0] = 10.0
+    for _ in range(4):
+        eng.infer_state(_feat("focused"))
+    assert eng.last_label == "focused"
+    eng.restart()
+    assert eng.last_label == "neutral" and eng.last_change_ts == float("-inf")
+    assert eng._pending_label is None and eng._pending_ts is None
+    assert "adaptation.restart()" in inspect.getsource(StreamManager.arm_baseline)
+
+
+def test_a_fourth_artifact_reason_survives_the_envelope():
+    from src.app.schemas import FeatureData
+    f = FeatureData(focus_score=50.0, calm_score=50.0, confidence=70.0,
+                    signal_quality="degraded", artifact_reason="something_new")
+    assert f.artifact_reason == "something_new"

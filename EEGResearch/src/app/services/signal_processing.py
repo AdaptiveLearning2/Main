@@ -56,8 +56,7 @@ class SignalProcessor:
     # settling period (60 of 60 ticks at 0.7 good electrodes, with nearly
     # half of them labelled stressed), so the whole session was scored
     # against a strap being adjusted. Time-based so a bursty stream cannot
-    # latch it early; the sample floor is a backstop against a stream that
-    # ticks once a minute. Fixed once latched, by decision: scores mean
+    # latch it early. Fixed once latched, by decision: scores mean
     # "relative to how this session started", and a session that starts
     # engaged still reads focus over the lesson. Once latched the centre
     # ramps from the population midpoint to the session mean over
@@ -67,9 +66,11 @@ class SignalProcessor:
     # the time since the previous admitted tick, capped at
     # BASELINE_TICK_CAP_SECONDS. Elapsed time let 21 ticks, a ten-minute
     # gap and one more tick latch on 22 samples while claiming a 45 s
-    # window; capped, a gap of any length is worth one second.
+    # window; capped, a gap of any length is worth one second. The cap is
+    # also the sample floor: 45 covered seconds at one second a tick is at
+    # least 45 admitted ticks, so a stream that ticks once a minute cannot
+    # latch early either.
     BASELINE_SECONDS = 45.0
-    BASELINE_MIN_SAMPLES = 20
     BASELINE_RAMP_SECONDS = 10.0
     BASELINE_TICK_CAP_SECONDS = 1.0
 
@@ -244,9 +245,11 @@ class SignalProcessor:
         self._baseline_collecting = True
 
     def reset(self) -> None:
-        """Drop all buffered samples (e.g. after a signal-loss gap) so the next
-        real reading warms back up cleanly instead of blending pre-gap and
-        post-gap samples."""
+        """Drop the sample window and the per-tick state after a signal-loss
+        gap, so the scores warm back up rather than blending pre-gap and
+        post-gap samples. Two things are deliberately kept: the session
+        baseline (below) and the contact histories (next comment), which
+        exist to be read across a gap."""
         self.window.clear()
         # The contact histories are kept: they are pruned by elapsed time
         # (CONTACT_SMOOTHING_SECONDS), so nothing stale outlives a gap on
@@ -441,8 +444,7 @@ class SignalProcessor:
         self._baseline_last_ts = ts
         self._baseline_focus.append(focus_raw)
         self._baseline_calm.append(calm_raw)
-        if (self._baseline_coverage >= self.BASELINE_SECONDS
-                and len(self._baseline_focus) >= self.BASELINE_MIN_SAMPLES):
+        if self._baseline_coverage >= self.BASELINE_SECONDS:
             # The ramp starts from wherever each score's centre is right now,
             # so a restart mid-session is as step-free as the first latch.
             self._centre_from = {which: self._centre(which, ts) for which in ("focus", "calm")}

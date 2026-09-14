@@ -73,6 +73,10 @@ def _raw(payload: dict, **derived: Any) -> dict:
 
 # The eight measurement columns. Nulled together: they all come from the same
 # electrodes in the same window, so a row can't vouch for some and not others.
+# Bumped whenever the sidecar's population bounds -- the scale every score is
+# measured on -- change. Written into `raw.score_scale` on each row.
+SCORE_SCALE_VERSION = 2
+
 _MEASUREMENT_COLUMNS = ("focus", "stress", "engagement",
                         "alpha", "beta", "theta", "delta", "gamma")
 
@@ -168,6 +172,13 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # fusion gate a focus threshold: a disengaged student on good
             # contact lost the whole EEG channel, ease-off included.
             confidence=confidence,
+            # Which population scale the scores were measured on. The
+            # sidecar's bounds were widened on 2026-09-14 (scale 2), which
+            # re-anchors every focus and stress value -- 14 to 30 points
+            # pre-latch, ~38% of gain after -- and no column records that.
+            # Rows without the key predate it. The rollup carries no `raw`,
+            # so there the boundary is the date in CLAUDE.md.
+            score_scale=SCORE_SCALE_VERSION,
         ),
     }
     if verdict == "contact_poor":

@@ -221,3 +221,13 @@ def test_an_untrusted_expression_is_rejected_before_its_confidence_is_read():
     `trusted`."""
     assert face_channel("sad", 0.99, False).label is None
     assert fuse(FOCUSED, ABSENT, face_channel("sad", 0.99, False)).label == "focused"
+
+
+def test_the_eeg_lines_match_the_sidecars_rescaled_literals():
+    """The sidecar's population spans were widened; the lines moved with
+    them so the Bels each label needs are unchanged. Both packages carry
+    the literals and neither can import the other."""
+    import signal_fusion
+    assert signal_fusion.EEG_FOCUSED_FOCUS_MIN == 0.624
+    assert signal_fusion.EEG_STRESSED_CALM_MAX == 0.376
+    assert signal_fusion.EEG_FOCUSED_CALM_MIN == 0.5

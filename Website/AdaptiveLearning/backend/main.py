@@ -5059,7 +5059,10 @@ def _class_signal_trend(student_ids: list[str], days: int,
 # Named once because the merge below has to re-weight every one of them the
 # same way, and a list that drifted from the RPC's columns would silently drop
 # a series from the chart.
-_COHORT_TREND_METRICS = ("avg_focus", "avg_stress", "avg_engagement",
+# No `avg_engagement`: it is served from `avg_focus` after the merge (see
+# `_merge_cohort_trend`), so fetching and weighting the stored column would
+# be work whose result is discarded.
+_COHORT_TREND_METRICS = ("avg_focus", "avg_stress",
                          "avg_heart_rate_bpm", "avg_rmssd_ms")
 
 

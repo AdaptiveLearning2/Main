@@ -618,6 +618,12 @@ class StreamManager:
         # student's, and inherited it confirms the next one's first window
         # at once -- the population the anchor exists to distrust.
         session._reset_heart()
+        # The adapter's optical buffer too, without dropping the link: the
+        # tracker reset alone left the previous student's 25 s of samples
+        # for the next one's first window to straddle.
+        clear = getattr(session.adapter, "clear_optics", None)
+        if callable(clear):
+            clear()
 
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()

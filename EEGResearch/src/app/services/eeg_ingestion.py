@@ -744,6 +744,17 @@ class TcpMuseBridgeAdapter:
             self._optics.clear()
         self._reader_stop.clear()
 
+    def clear_optics(self) -> None:
+        """Drop the buffered optical samples without touching the link.
+
+        For a session end that keeps the headband paired (push/stop): the
+        next student's first heart window must not straddle the previous
+        student's samples, and disconnecting to achieve that would cost a
+        12 s re-pair.
+        """
+        with self._optics_lock:
+            self._optics.clear()
+
     def drain_samples(self, max_batch: int) -> list[EegSample]:
         """Return every queued sample, up to max_batch. Blocks only when the
         queue is empty, then drains the rest without blocking."""

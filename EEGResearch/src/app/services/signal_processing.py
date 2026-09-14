@@ -48,9 +48,17 @@ class SignalProcessor:
     # bounds are the population scale every score is measured on, before
     # and after the latch, so they must bracket what a wearer produces. A
     # multi-subject capture should tighten them again.
+    #
+    # Calm is widened at *both* ends so its midpoint stays at -0.57: the
+    # midpoint is the pre-latch centre, and moving it by raising the
+    # ceiling alone put the capture's strap-settling segment (-0.87) under
+    # the stressed line, easing difficulty on the opening questions where
+    # it had not before. The label thresholds in adaptation.py and
+    # signal_fusion.py are rescaled with the spans (see there), so the
+    # Bels of movement each label needs is unchanged.
     FOCUS_LOG_RATIO_MIN = -1.897  # ln(0.15)
     FOCUS_LOG_RATIO_MAX = 0.693  # ln(2.00)
-    CALM_LOG_RATIO_MIN = -1.609  # ln(0.20)
+    CALM_LOG_RATIO_MIN = -1.833  # ln(0.16)
     CALM_LOG_RATIO_MAX = 0.693  # ln(2.00)
     EPSILON = 1e-6
 
@@ -378,6 +386,25 @@ class SignalProcessor:
             return (None, None)
         return (focus_log_ratio, calm_log_ratio)
 
+    @staticmethod
+    def _bands_malformed(bands: dict[str, Any] | None) -> bool:
+        """Bands were supplied and at least one is unusable: NaN, infinite,
+        or not a number. Distinct from "no bands" (an older bridge), which
+        takes the amplitude fallback -- a malformed tick must not be scored
+        on that path, where it lands above the fusion gate byte-identical
+        to a genuine no-bands tick."""
+        if not bands:
+            return False
+        for key in ("alpha", "beta", "theta", "gamma"):
+            if key not in bands:
+                continue
+            try:
+                if not isfinite(float(bands[key])):
+                    return True
+            except (TypeError, ValueError):
+                return True
+        return False
+
     def _smoothed(self, history: deque, now: float, value: float) -> float:
         """Append a contact reading and average it over a fixed time window.
 
@@ -576,7 +603,13 @@ class SignalProcessor:
             return
         if self._ramp_last_ts is not None:
             dt = (ts - self._ramp_last_ts).total_seconds()
-            self._ramp_elapsed += min(max(dt, 0.0), self.BASELINE_TICK_CAP_SECONDS)
+            if dt <= 0.0:
+                # A stalled or backwards clock is one nominal tick here as
+                # in the coverage, or a frozen clock latches a baseline the
+                # ramp never applies: latched, a real mean, every score
+                # still on the midpoint.
+                dt = self.NOMINAL_TICK_SECONDS
+            self._ramp_elapsed += min(dt, self.BASELINE_TICK_CAP_SECONDS)
         self._ramp_last_ts = ts
 
     def _smooth_ratios(self, focus_raw: float, calm_raw: float, ts: datetime) -> tuple[float, float]:
@@ -726,8 +759,13 @@ class SignalProcessor:
 
         frame_values = self._good_channel_values(sample, bands)
         frame_spread = (max(frame_values) - min(frame_values)) if len(frame_values) >= 2 else None
+        # Bands present but unusable (NaN, inf, garbage) are a held tick
+        # with their own reason -- neither scored on the amplitude fallback
+        # nor an exception the stream manager reads as a dead headband.
+        malformed = (not using_band_features) and self._bands_malformed(bands)
         artifact_reason = (self._artifact_reason(bands, frame_spread, now)
-                           if using_band_features else None)
+                           if using_band_features
+                           else ("malformed_bands" if malformed else None))
         if artifact_reason is not None:
             self._samples_artifact += 1
         # A tick is admitted -- to the window, the baseline and the spectral
@@ -817,6 +855,9 @@ class SignalProcessor:
                 # session that opens on a bad frame still has a number.
                 focus_ratio = self._score_against_baseline(band_focus_raw, "focus", sample.timestamp)
                 calm_ratio = self._score_against_baseline(band_calm_raw, "calm", sample.timestamp)
+        elif malformed:
+            # Hold, as for any artifact; with nothing held yet, the midpoint.
+            focus_ratio, calm_ratio = self._held_ratios or (0.5, 0.5)
         else:
             focus_ratio = focus_amp_ratio
             # Neutral rather than 1.0: no spread data is absence of evidence.
@@ -849,6 +890,10 @@ class SignalProcessor:
             + (self.CONFIDENCE_WEIGHT_BANDS if using_band_features else 0.0)
         )
         confidence_ratio = max(0.2, confidence_ratio)
+        if malformed:
+            # The floor, under the 0.45 gate: a tick whose bands could not
+            # be read is not one to act on, whatever the contact says.
+            confidence_ratio = 0.2
         focus_score = focus_ratio * 100.0
         calm_score = calm_ratio * 100.0
         confidence = confidence_ratio * 100.0

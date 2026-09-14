@@ -782,3 +782,77 @@ def test_the_artifact_window_is_twenty_seconds_at_sixteen_hertz_too():
     t.run({**RELAXED, **CONTACT_GOOD}, 16 * 10)  # 25 s in: pruned to 20 s
     t.tick({**RELAXED, **CONTACT_GOOD})
     assert 16 * 19 <= len(t.processor._delta_history) <= 16 * 20 + 1
+
+
+# -- eighth review: what push/stop may end, malformed bands, a frozen clock --
+
+def test_push_stop_ends_a_session_only_if_one_was_pushing():
+    """The route takes the learner token and the page fires it from
+    pagehide; unconditional, it wiped a live armed session's baseline
+    under pull."""
+    import inspect
+    from src.app import main as sidecar_main
+    src = inspect.getsource(sidecar_main.push_stop)
+    assert "push_client.session_id is not None" in src
+    assert src.index("was_pushing = ") < src.index("await push_client.stop()")
+    assert "if was_pushing:" in src and "stream_manager.end_session()" in src
+
+
+def test_a_malformed_band_is_a_held_tick_below_the_gate_not_a_no_bands_tick():
+    """Returning (None, None) sent a NaN tick down the amplitude fallback,
+    above the fusion gate and byte-identical to a genuine no-bands tick."""
+    t = Ticker()
+    before = _warm(t)
+    nan = t.tick({**RELAXED, "alpha": float("nan"), **CONTACT_GOOD})
+    assert nan["artifact_reason"] == "malformed_bands"
+    assert nan["focus_score"] == pytest.approx(before["focus_score"])
+    assert nan["confidence"] < 45.0
+    honest = Ticker().run(CONTACT_GOOD, 21)  # a bridge with no bands at all
+    assert honest["artifact_reason"] is None and honest["confidence"] >= 45.0
+
+
+def test_a_frozen_clock_latches_a_baseline_that_is_applied():
+    """The stalled-clock fix reached the coverage and not the ramp: latched,
+    a real mean, ramp elapsed zero, every score still on the midpoint."""
+    t = Ticker()
+    bands = {**ENGAGED, **CONTACT_GOOD}
+    sample = t.sample()
+    f = None
+    for _ in range(600):
+        f = t.processor.update(sample, bands)
+        t.now += 0.25
+    assert t.processor._baseline_ready
+    assert f["focus_score"] == pytest.approx(50.0, abs=1.0)
+
+
+def test_the_calm_midpoint_did_not_move_so_strap_settling_is_not_stressed():
+    """Widening calm at the ceiling alone moved the pre-latch centre and put
+    the capture's strap-settling segment (calm log-ratio -0.87) under the
+    stressed line, easing difficulty on the opening questions."""
+    lo, hi = SignalProcessor.CALM_LOG_RATIO_MIN, SignalProcessor.CALM_LOG_RATIO_MAX
+    assert (lo + hi) / 2.0 == pytest.approx(-0.57, abs=0.01)
+    p = SignalProcessor()
+    assert p._score_against_baseline(-0.87, "calm") >= 0.376
+
+
+def test_the_label_lines_are_the_same_bels_as_before_and_match_the_backend():
+    """0.322 Bels above centre for focused, 0.312 below for stressed, on the
+    old spans; the widened spans kept the Bels by moving the lines. The
+    backend's signal_fusion carries the same two literals."""
+    import inspect
+    from src.app.services.adaptation import AdaptationEngine
+    src = inspect.getsource(AdaptationEngine.infer_state)
+    assert "focus_ratio >= 0.624" in src and "calm_ratio < 0.376" in src
+    f_span = SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN
+    c_span = SignalProcessor.CALM_LOG_RATIO_MAX - SignalProcessor.CALM_LOG_RATIO_MIN
+    assert (0.624 - 0.5) * f_span == pytest.approx(0.322, abs=0.002)
+    assert (0.5 - 0.376) * c_span == pytest.approx(0.312, abs=0.002)
+
+
+def test_the_push_session_end_clears_the_optical_buffer_without_disconnecting():
+    import inspect
+    from src.app.services.eeg_ingestion import TcpMuseBridgeAdapter
+    from src.app.services.stream_manager import StreamManager
+    assert "clear_optics" in inspect.getsource(StreamManager.end_session)
+    assert hasattr(TcpMuseBridgeAdapter, "clear_optics")
+    assert "disconnect" not in inspect.getsource(StreamManager.end_session)

@@ -278,3 +278,19 @@ def test_a_derived_none_removes_the_clients_value_under_that_key():
                                  confidence=None, device_id="d1")
     assert "confidence" not in merged
     assert merged["note"] == "kept" and merged["device_id"] == "d1"
+
+
+def test_the_cohort_trend_no_longer_fetches_the_stored_engagement():
+    import main as backend_main
+    assert "avg_engagement" not in backend_main._COHORT_TREND_METRICS
+
+
+def test_every_cognitive_row_records_the_score_scale_it_was_measured_on():
+    """The bounds widening re-anchored every focus and stress value and
+    nothing recorded the boundary; rows without the key predate it."""
+    import signal_mapping
+    row = signal_mapping.map_eeg_to_cognitive(
+        {"timestamp": "t", "features": {"focus_score": 60.0, "calm_score": 50.0,
+                                        "confidence": 80.0, "signal_quality": "good",
+                                        "quality_basis": "contact"}}, "s", "u")
+    assert row["raw"]["score_scale"] == signal_mapping.SCORE_SCALE_VERSION == 2

@@ -1514,14 +1514,26 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
 - **The population bounds were widened against the capture** (2026-09-14): its focus log-ratios
   ran −1.53..−0.21 per segment and the floor was ln(0.40) = −0.92, above three of the four
   labelled segments, so eyes-closed replayed as focus 0 on every pre-latch tick. Now ln(0.15) to
-  ln(2.00) for focus and ln(0.20) to ln(2.00) for calm. The bounds are the population scale before
-  *and after* the latch, so they must bracket what a wearer produces; the replay figures quoted
-  above (37/60, 78/27, 50/42) were taken on the old bounds and will differ. A NaN or infinite band
-  value is a tick with no bands, not an exception: it escaped `update()` and the stream manager
-  read that as no data, publishing a dead-headband payload for a live one. A stalled sample clock
-  counts as a nominal tick for the baseline's coverage, and the baseline lists are capped.
-  The push session end resets the heart tracker as a stream stop does, or the next student's
-  first window is confirmed against the previous one's anchor.
+  ln(2.00) for focus and ln(0.16) to ln(2.00) for calm — calm widened at **both** ends so its
+  midpoint, the pre-latch centre, stays at −0.57; raising the ceiling alone put the strap-settling
+  segment under the stressed line and eased difficulty on the opening questions. **The label lines
+  moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.376, in both
+  `adaptation.py` and `signal_fusion.py`, so the Bels of movement each label needs are what they
+  were (0.322 above, 0.312 below); left at 0.7/0.35 the widening made `focused` 61% harder on a
+  capture where it was reached on zero ticks. Both remain unmeasured against a task. **This
+  re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30 points pre-latch,
+  ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every row and rows
+  without the key predate it; the rollup carries no `raw`, so there the boundary is this date. The
+  replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. A NaN or infinite
+  band value is a **held tick** with `artifact_reason: malformed_bands` and confidence at the
+  floor: as an exception it read as a dead headband, and as "no bands" it was scored on the
+  amplitude fallback above the gate, indistinguishable from an older bridge. A stalled sample clock
+  counts as a nominal tick for the baseline's coverage *and the ramp* (coverage alone latched a
+  baseline the ramp never applied), and the baseline lists are capped. The push session end resets
+  the heart tracker and clears the adapter's optical buffer without dropping the link, or the next
+  student's first window straddles the previous one's samples — and it runs only if push was
+  actually running, since the page fires `push/stop` from pagehide under pull too and unconditional
+  it wiped a live armed session's baseline.
 - **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
   not the confidence — every Engagement tile was showing strap fit. The stored `avg_engagement`
   is therefore two different quantities either side of the date Phase 1 merged, which is why no

@@ -975,7 +975,7 @@ def test_reset_keeps_the_session_baseline_and_only_arming_replaces_it():
     assert processor._baseline_focus_mean == mean
     assert len(processor.window) == 0
     processor.restart_baseline()
-    assert processor._baseline_collecting is True and processor._baseline_focus == []
+    assert processor._baseline_collecting is True and len(processor._baseline_focus) == 0
 
 
 def test_signal_processor_reset_clears_window():
@@ -1476,7 +1476,7 @@ def test_session_arm_restarts_the_baseline_and_is_admin_only_under_pull():
     processor._baseline_collecting = False
     r = client.post("/api/v1/session/arm", headers=admin_headers)
     assert r.status_code == 200 and r.json() == {"status": "armed"}
-    assert processor._baseline_focus == [] and processor._baseline_collecting is True
+    assert len(processor._baseline_focus) == 0 and processor._baseline_collecting is True
     assert client.post("/api/v1/session/arm", params={"device_id": "nope"}, headers=admin_headers).status_code == 404
     # Under pull the backend is the controller; the learner token gains nothing.
     assert client.post("/api/v1/session/arm", headers=learner_headers).status_code in (401, 403)

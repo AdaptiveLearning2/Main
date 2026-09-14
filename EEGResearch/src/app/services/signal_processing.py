@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
-from math import exp, log, log10
+from math import exp, isfinite, log, log10
 from time import monotonic
 from statistics import fmean, median, pstdev
 from typing import Any, Callable
@@ -37,15 +37,21 @@ class SignalProcessor:
     # would pin calm_band_ratio to 0 and make "not stressed" unreachable while
     # concentrating.
     #
-    # Calm spans ratio 0.20 (aroused/stressed) to 1.60 (clearly alpha-dominant,
-    # relaxed); focus spans 0.40 (drowsy, theta/alpha heavy) to 2.00 (strongly
-    # beta-dominant). These are physiology-informed heuristics, not values from
-    # a controlled study -- a clean multi-subject baseline capture (good
-    # contact on all four electrodes) should be used to tighten them.
-    FOCUS_LOG_RATIO_MIN = -0.916  # ln(0.40)
+    # Calm spans ratio 0.20 (aroused/stressed) to 2.00 (clearly alpha-dominant,
+    # relaxed); focus spans 0.15 (drowsy, theta/alpha heavy) to 2.00 (strongly
+    # beta-dominant). Physiology-informed heuristics, widened once against
+    # the reference capture (tests/fixtures/EEG_REFERENCE.md): its focus
+    # log-ratios ran -1.53..-0.21 per segment, so the original floor of
+    # ln(0.40) = -0.92 sat *above* three of the four labelled segments, and
+    # replaying eyes-closed scored focus exactly 0 on every pre-latch tick.
+    # Calm ran -0.87..+0.47, touching the old ceiling of ln(1.60). The
+    # bounds are the population scale every score is measured on, before
+    # and after the latch, so they must bracket what a wearer produces. A
+    # multi-subject capture should tighten them again.
+    FOCUS_LOG_RATIO_MIN = -1.897  # ln(0.15)
     FOCUS_LOG_RATIO_MAX = 0.693  # ln(2.00)
     CALM_LOG_RATIO_MIN = -1.609  # ln(0.20)
-    CALM_LOG_RATIO_MAX = 0.470  # ln(1.60)
+    CALM_LOG_RATIO_MAX = 0.693  # ln(2.00)
     EPSILON = 1e-6
 
     # The per-session baseline: how long, in seconds of the sample clock, the
@@ -73,6 +79,7 @@ class SignalProcessor:
     BASELINE_SECONDS = 45.0
     BASELINE_RAMP_SECONDS = 10.0
     BASELINE_TICK_CAP_SECONDS = 1.0
+    BASELINE_MAX_SAMPLES = 2000
 
     # Wall-clock window over which per-electrode contact readings are averaged.
     # Time-based rather than sample-based: a count-based window would silently
@@ -128,8 +135,9 @@ class SignalProcessor:
     # low score, and the three-state rule (rejected, no signal, low) holds
     # here as everywhere. Bounds are from tests/fixtures/EEG_REFERENCE.md:
     #   - delta doubles on blinks (0.76-0.95 vs 0.31-0.41 at rest) and rises
-    #     ~1.7x on fidgeting; rest p90 is ~2.1x the median, so 2.2x the
-    #     running median catches blinks at a cost of ~10% of rest ticks.
+    #     ~1.7x on fidgeting. Per-tick delta is noisy enough that 2.2x the
+    #     running median -- the segment means' separation -- held far more
+    #     rest than the means suggested; the grid below settled on 3.0x.
     #   - gamma exceeding beta by 0.5 Bels (3x in power) never happened at
     #     rest (gamma-beta sat at -0.15..-0.40) and did on a jaw clench with
     #     contact intact (gamma p90 +1.1 against beta 0.27).
@@ -153,7 +161,10 @@ class SignalProcessor:
     DELTA_JUMP_FACTOR = 3.0
     EMG_GAMMA_EXCESS = 0.5
     SPREAD_JUMP_FACTOR = 3.5
-    ARTIFACT_HISTORY = 80
+    # The entry cap is a backstop only, sized for ARTIFACT_HISTORY_SECONDS
+    # at 64 Hz: at 80 it equalled the window at 4 Hz and silently shrank it
+    # to 5 s on a faster stream.
+    ARTIFACT_HISTORY = 1280
     ARTIFACT_HISTORY_SECONDS = 20.0
     ARTIFACT_MIN_HISTORY = 8
 
@@ -214,8 +225,14 @@ class SignalProcessor:
         self._ema_ts: datetime | None = None
         # Per-session baseline: scores are relative to this learner's own
         # resting values rather than fixed population constants.
-        self._baseline_focus: list[float] = []
-        self._baseline_calm: list[float] = []
+        # Bounded: the latch needs ~BASELINE_SECONDS of covered time, and
+        # a stalled sample clock covers nothing, so an unbounded list grew
+        # without limit for as long as the bridge kept delivering with a
+        # frozen timestamp (115k entries over eight simulated hours). A
+        # stalled tick now counts as one nominal tick (see _collect_baseline)
+        # and the cap is the backstop behind that.
+        self._baseline_focus: deque[float] = deque(maxlen=self.BASELINE_MAX_SAMPLES)
+        self._baseline_calm: deque[float] = deque(maxlen=self.BASELINE_MAX_SAMPLES)
         self._baseline_focus_mean: float | None = None
         self._baseline_calm_mean: float | None = None
         self._baseline_ready = False
@@ -333,6 +350,12 @@ class SignalProcessor:
             beta = float(bands.get("beta", 0.0))
             theta = float(bands.get("theta", 0.0))
             gamma = float(bands.get("gamma", 0.0))
+            # NaN and infinity pass float() and the exponentiation, and
+            # raise (or poison every mean) further down update(). The stream
+            # manager's catch-all read that as no data, reset every tick,
+            # and published a dead-headband payload for a live one.
+            if not all(isfinite(v) for v in (alpha, beta, theta, gamma)):
+                return (None, None)
 
             # Bridge reports exact zeros across every band when it has no band
             # features yet. Must stay an all-zero check: libMuse band powers
@@ -482,7 +505,12 @@ class SignalProcessor:
             self._baseline_coverage = 0.0
         else:
             since_last = (ts - self._baseline_last_ts).total_seconds()
-            self._baseline_coverage += min(max(since_last, 0.0), self.BASELINE_TICK_CAP_SECONDS)
+            if since_last <= 0.0:
+                # A stalled or backwards sample clock: one nominal tick, as
+                # the smoother counts it, or the baseline never latches and
+                # the lists grow for as long as the bridge keeps delivering.
+                since_last = self.NOMINAL_TICK_SECONDS
+            self._baseline_coverage += min(since_last, self.BASELINE_TICK_CAP_SECONDS)
         self._baseline_last_ts = ts
         self._baseline_focus.append(focus_raw)
         self._baseline_calm.append(calm_raw)

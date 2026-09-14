@@ -614,6 +614,10 @@ class StreamManager:
         session = self.session(device_id)
         session.processor.clear_session()
         session.adaptation.end_session()
+        # And the heart channel: its continuity anchor is the previous
+        # student's, and inherited it confirms the next one's first window
+        # at once -- the population the anchor exists to distrust.
+        session._reset_heart()
 
     async def start(self, device_id: str = DEFAULT_DEVICE_ID) -> None:
         await self.session(device_id).start()

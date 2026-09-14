@@ -494,3 +494,48 @@ def schedule(client, session_id: str, user_id: str) -> None:
         _pool().submit(_run, client, session_id, user_id)
     except Exception as e:
         print(f"[charts] {session_id[:8]}: could not queue archive: {e}")
+
+
+# ── regenerating archives already written ───────────────────────────────────
+
+def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True) -> dict:
+    """Re-render and re-upload the charts of sessions already archived.
+
+    For a change to what a chart draws -- the `engagement` series was dropped
+    from the cognitive timeline, and every archive written before that keeps
+    it permanently, as a trace of electrode contact quality labelled as a
+    measurement. Archives are written once at close and nothing revisits
+    them, so this is the only path by which such a change reaches them.
+
+    **A session whose per-sample rows have expired is skipped, never
+    re-rendered.** `archive_session` draws from the raw tables, and after
+    `expire_signal_rows` those are empty: re-running it would upload four
+    empty charts over the only remaining picture of the session and null the
+    paths. That guard is the whole reason this is a function with a report
+    rather than a loop in a script. Sessions with no `chart_paths` are left
+    alone too -- the archive never ran on them and this is not the close
+    path. Dry run by default.
+    """
+    report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
+              "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
+              "would_rerender": []}
+    for row in sessions:
+        report["considered"] += 1
+        session_id, user_id = row.get("id"), row.get("user_id")
+        if not row.get("chart_paths") or not session_id or not user_id:
+            report["skipped_unarchived"] += 1
+            continue
+        cognitive, face, heart = _fetch(client, session_id)
+        if not (cognitive or face or heart):
+            report["skipped_expired"] += 1
+            continue
+        if dry_run:
+            report["would_rerender"].append(session_id)
+            continue
+        try:
+            archive_session(client, session_id, user_id)
+            report["rerendered"] += 1
+        except Exception as exc:  # noqa: BLE001 -- one failure must not stop the run
+            print(f"[rearchive] {session_id}: {exc}")
+            report["failed"] += 1
+    return report

@@ -1505,6 +1505,23 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   since `raw` is client-supplied JSON on the push path: a string 500'd every question and `true`
   claimed 1.0. `replay_eeg_capture.is_gap` reads `signal_quality`, never the label, which the
   engine holds at `no_signal` on real ticks after a gap; `--arm-at` an absent segment is refused.
+  The flat ingest shape stores `engagement` as the posted `focus` too, so no path can write a row
+  where the two differ; `_raw()` removes the client's value under a key the backend derived as
+  `None`, or a posted `raw.confidence` stood for a tick the sidecar reported none on. **Archives
+  written before the series was dropped keep it**, since nothing revisits an archive after close:
+  `rearchive_session_charts.py --apply` re-renders them, and skips any session whose raw rows have
+  expired, because there the archive is the last copy and re-rendering would replace it with nothing.
+- **The population bounds were widened against the capture** (2026-09-14): its focus log-ratios
+  ran −1.53..−0.21 per segment and the floor was ln(0.40) = −0.92, above three of the four
+  labelled segments, so eyes-closed replayed as focus 0 on every pre-latch tick. Now ln(0.15) to
+  ln(2.00) for focus and ln(0.20) to ln(2.00) for calm. The bounds are the population scale before
+  *and after* the latch, so they must bracket what a wearer produces; the replay figures quoted
+  above (37/60, 78/27, 50/42) were taken on the old bounds and will differ. A NaN or infinite band
+  value is a tick with no bands, not an exception: it escaped `update()` and the stream manager
+  read that as no data, publishing a dead-headband payload for a live one. A stalled sample clock
+  counts as a nominal tick for the baseline's coverage, and the baseline lists are capped.
+  The push session end resets the heart tracker as a stream stop does, or the next student's
+  first window is confirmed against the previous one's anchor.
 - **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
   not the confidence — every Engagement tile was showing strap fit. The stored `avg_engagement`
   is therefore two different quantities either side of the date Phase 1 merged, which is why no

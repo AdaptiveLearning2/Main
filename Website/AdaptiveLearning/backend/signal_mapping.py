@@ -56,10 +56,18 @@ def _raw(payload: dict, **derived: Any) -> dict:
 
     Derived keys win on a collision: they describe what this backend observed,
     and a client should not be able to overwrite that by choosing a key name.
-    Nulls are dropped so an absent field doesn't read as a recorded null.
+    That holds when the derived value is None too -- the client's value under
+    that key is removed, not kept. Filtering the None out and leaving the
+    client's in place let a posted `raw.confidence` stand for a tick the
+    sidecar reported none on, straight into the fusion gate. Nulls are still
+    not written, so an absent field doesn't read as a recorded null.
     """
     merged = dict(payload.get("raw") or {})
-    merged.update({k: v for k, v in derived.items() if v is not None})
+    for key, value in derived.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
     return merged
 
 

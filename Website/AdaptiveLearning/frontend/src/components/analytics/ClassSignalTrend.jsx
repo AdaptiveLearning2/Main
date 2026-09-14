@@ -27,7 +27,6 @@ function foldByDay(series) {
     if (r.channel === 'cognitive') {
       row.avg_focus = r.avg_focus
       row.avg_stress = r.avg_stress
-      row.avg_engagement = r.avg_engagement
     } else if (r.channel === 'heart') {
       row.avg_heart_rate_bpm = r.avg_heart_rate_bpm
       row.avg_rmssd_ms = r.avg_rmssd_ms

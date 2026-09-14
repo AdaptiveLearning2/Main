@@ -485,11 +485,11 @@ export function WeeklySignalReport({ report, title = 'Weekly EEG & Face Report' 
                     which rendered them identically and made the chart unreadable.
                     Matches the MiniMetric tones above. */}
                 {/* #6366f1, matching SessionReview.jsx. It was #10b981 here,
-                    which is the colour that file uses for *engagement* -- so one
-                    green line meant focus on this panel and engagement on session
-                    review, and a parent reading both was shown one colour for two
-                    things. The archived SVGs re-render the session charts, so
-                    those are the reference and this is the side that moved. */}
+                    which that file used for a different series at the time --
+                    so one green line meant two things across the two pages.
+                    The archived SVGs re-render the session charts, so those are
+                    the reference and this is the side that moved; a test in
+                    the backend pins the two palettes equal on shared series. */}
                 {/* Dots, not `dot={false}`. This chart holds at most seven
                     points, one per day, and a student who practised on a single
                     day gives every series exactly one -- which draws no segment

@@ -997,3 +997,17 @@ def test_a_poor_contact_row_carries_no_confidence_either():
     good = signal_mapping.map_eeg_to_cognitive(
         {**_LEGACY_POOR, "features": {**_LEGACY_POOR["features"], "confidence": 30.0}}, "s", "u")
     assert good["raw"]["confidence"] == pytest.approx(0.3)
+
+
+def test_the_flat_ingest_shape_stores_engagement_as_focus(monkeypatch):
+    """The flat branch bypasses the mapper, and replay_into_backend uses
+    exactly it; a client-supplied engagement broke the one-number rule."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40, "engagement": 0.11},
+    ]), None)
+    assert written[0]["engagement"] == pytest.approx(0.72)

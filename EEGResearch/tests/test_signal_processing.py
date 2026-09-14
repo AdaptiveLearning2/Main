@@ -544,12 +544,12 @@ def test_reset_keeps_the_contact_history_so_one_blip_after_a_gap_is_not_good_con
     every electrode good read contact 1.0 and entered the baseline."""
     t = Ticker()
     t.run({**RELAXED, **CONTACT_POOR}, 20)
-    assert t.processor._baseline_focus == []
+    assert len(t.processor._baseline_focus) == 0
     t.processor.reset()
     blip = t.tick({**RELAXED, **CONTACT_GOOD})
     assert blip["contact_ratio"] < SignalProcessor.CONTACT_DEGRADED
     assert blip["signal_quality"] == "poor"
-    assert t.processor._baseline_focus == []
+    assert len(t.processor._baseline_focus) == 0
 
 
 def test_degraded_contact_clears_the_gate_whatever_the_spectrum_does():
@@ -720,3 +720,65 @@ def test_the_artifact_medians_expire_by_wall_clock_not_by_count():
     held = sum(t.tick({**RELAXED, **CONTACT_GOOD}, spread=80.0)["artifact_reason"] == "spread_jump"
                for _ in range(8))
     assert held == 0
+
+
+# -- seventh review: bounds, NaN, a stalled clock, and a faster stream ---------
+
+def test_a_nan_band_is_a_tick_with_no_bands_not_a_dead_headband():
+    """NaN and inf pass float() and the exponentiation and raise further
+    down update(); the stream manager read that as no data, reset every
+    tick and published a dead-headband payload for a live one."""
+    t = Ticker()
+    _warm(t)
+    for bad in (float("nan"), float("inf"), -float("inf")):
+        f = t.tick({**RELAXED, "alpha": bad, **CONTACT_GOOD})
+        assert f["focus_log_ratio"] is None
+        assert 0.0 <= f["focus_score"] <= 100.0
+
+
+def test_the_population_bounds_bracket_the_reference_capture():
+    """Focus log-ratios on the capture ran -1.53..-0.21 per segment. The old
+    floor of ln(0.40) = -0.92 sat above three of its four labelled
+    segments, so eyes-closed replayed as focus exactly 0 on every pre-latch
+    tick. The bounds are the population scale before and after the latch."""
+    lo, hi = SignalProcessor.FOCUS_LOG_RATIO_MIN, SignalProcessor.FOCUS_LOG_RATIO_MAX
+    for segment_ratio in (-1.53, -1.37, -0.91, -0.83, -0.21):
+        assert lo < segment_ratio < hi
+    clo, chi = SignalProcessor.CALM_LOG_RATIO_MIN, SignalProcessor.CALM_LOG_RATIO_MAX
+    for segment_ratio in (-0.87, -0.18, 0.29, 0.47):
+        assert clo < segment_ratio < chi
+    # Scored, not just bracketed: an eyes-closed-like spectrum before the
+    # latch is a low number, not the floor.
+    eyes_closed = {"delta": 0.5, "theta": 0.2, "alpha": 0.15, "beta": -0.2, "gamma": -0.4}
+    f = Ticker().run({**eyes_closed, **CONTACT_GOOD}, 30)
+    assert 0.0 < f["focus_score"] < 40.0
+
+
+def test_the_push_session_end_resets_the_heart_channel_too():
+    import inspect
+    from src.app.services.stream_manager import StreamManager
+    assert "_reset_heart()" in inspect.getsource(StreamManager.end_session)
+
+
+def test_a_stalled_sample_clock_still_latches_and_the_lists_stay_bounded():
+    """A bridge delivering with a frozen timestamp covered nothing, so the
+    baseline never latched and the lists grew for as long as it ran."""
+    t = Ticker()
+    bands = {**RELAXED, **CONTACT_GOOD}
+    sample = t.sample()
+    for _ in range(3000):
+        t.processor.update(sample, bands)  # the same timestamp every tick
+        t.now += 0.25
+    assert t.processor._baseline_ready
+    assert len(t.processor._baseline_focus) <= SignalProcessor.BASELINE_MAX_SAMPLES
+
+
+def test_the_artifact_window_is_twenty_seconds_at_sixteen_hertz_too():
+    """At 80 entries the cap equalled the window at 4 Hz and silently
+    shrank it to 5 s on a faster stream."""
+    t = Ticker(hz=16.0)
+    t.run({**RELAXED, **CONTACT_GOOD}, 16 * 15)  # 15 s
+    assert len(t.processor._delta_history) == 16 * 15
+    t.run({**RELAXED, **CONTACT_GOOD}, 16 * 10)  # 25 s in: pruned to 20 s
+    t.tick({**RELAXED, **CONTACT_GOOD})
+    assert 16 * 19 <= len(t.processor._delta_history) <= 16 * 20 + 1

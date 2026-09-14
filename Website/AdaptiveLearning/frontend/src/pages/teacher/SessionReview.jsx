@@ -248,7 +248,6 @@ function SessionReviewBody({ sessionId }) {
       return {
         t,
         focus:      typeof c?.focus      === 'number' ? c.focus      : null,
-        engagement: typeof c?.engagement === 'number' ? c.engagement : null,
         stress:     typeof c?.stress     === 'number' ? c.stress     : null,
       }
     })

@@ -255,3 +255,26 @@ def test_engagement_is_served_from_focus_never_from_the_stored_column():
     src = inspect.getsource(backend_main)
     assert 'r.get("engagement")' not in src and 't.get("avg_engagement")' not in src
     assert 'cog_roll.get("avg_engagement")' not in src
+
+
+def test_the_cohort_trend_serves_engagement_from_focus_too():
+    """The roster half of the endpoint was corrected and this half was not,
+    so the class trend blended strap fit and the focus index across the
+    merge date."""
+    import main as backend_main
+    part = [{"day": "2026-06-10", "channel": "cognitive", "avg_focus": 0.8,
+             "avg_stress": 0.3, "avg_engagement": 0.2,
+             "sample_count": 10, "trusted_sample_count": 10, "student_count": 2}]
+    merged = backend_main._merge_cohort_trend([part])
+    assert merged[0]["avg_engagement"] == pytest.approx(0.8)
+
+
+def test_a_derived_none_removes_the_clients_value_under_that_key():
+    """Filtering the None out left the client's `raw.confidence` standing
+    for a tick the sidecar reported none on, straight into the fusion
+    gate."""
+    import signal_mapping
+    merged = signal_mapping._raw({"raw": {"confidence": "0.99", "note": "kept"}},
+                                 confidence=None, device_id="d1")
+    assert "confidence" not in merged
+    assert merged["note"] == "kept" and merged["device_id"] == "d1"

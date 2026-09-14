@@ -5109,6 +5109,11 @@ def _merge_cohort_trend(parts: list[list]) -> list:
         "day": b["day"],
         "channel": b["channel"],
         **{k: _mean(v) for k, v in b["sums"].items()},
+        # From focus, not the stored column -- see `_shape_summary`. The
+        # roster half of this endpoint was corrected first and this half was
+        # not, so the class trend blended strap fit and the focus index
+        # across the merge date.
+        "avg_engagement": _mean(b["sums"]["avg_focus"]),
         "sample_count": b["sample_count"],
         "trusted_sample_count": b["trusted_sample_count"],
         "student_count": b["student_count"],
@@ -6147,7 +6152,11 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
             "session_id": payload.session_id,
             "user_id":    user["id"],
             "ts":         s.ts or _utc_now().isoformat(),
-            "focus":      s.focus, "stress": s.stress, "engagement": s.engagement,
+            # `engagement` is the focus index (signal_mapping.py), on this
+            # path as on the mapped one; the client's own value is accepted
+            # by the model and ignored, so a hand-posted batch cannot store
+            # a row where the two differ.
+            "focus":      s.focus, "stress": s.stress, "engagement": s.focus,
             "alpha":      s.alpha, "beta":   s.beta,   "theta":      s.theta,
             "delta":      s.delta, "gamma":  s.gamma,  "raw":        s.raw,
         }

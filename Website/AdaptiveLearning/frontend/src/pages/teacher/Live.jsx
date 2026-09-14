@@ -208,7 +208,7 @@ export default function Live() {
   const [error, setError]         = useState(null)
   // Separate from classes.length === 0, so loading doesn't briefly show "no classes yet".
   const [loadingClasses, setLoadingClasses] = useState(true)
-  const historyRef = useRef({}) // user_id -> [{focus, engagement, stress}]
+  const historyRef = useRef({}) // user_id -> [{focus, stress, bpm}]
   // One clock for every card's "Xs ago", ticking whether or not a poll
   // landed -- a reading's age grows while the endpoint is failing too, and
   // that is exactly when a teacher needs to see it.
@@ -271,7 +271,6 @@ export default function Live() {
           // rejected -- recharts leaves a gap for null instead of drawing a fake reading.
           const point = {
             focus:      c?.focus ?? null,
-            engagement: c?.engagement ?? null,
             stress:     c?.stress ?? null,
             bpm:        typeof h?.heart_rate_bpm === 'number' ? h.heart_rate_bpm : null,
           }

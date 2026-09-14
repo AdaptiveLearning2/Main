@@ -137,6 +137,9 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
     focus = _ratio(f.get("focus_score"))
     calm = _ratio(f.get("calm_score"))
     confidence = _ratio(f.get("confidence"))
+    # Client-supplied on the push path. Only a string names a source; a
+    # dict or list here was a dict key and 500'd the ingest request.
+    calm_source = f.get("calm_source") if isinstance(f.get("calm_source"), str) else None
 
     row = {
         "session_id": session_id,
@@ -183,7 +186,7 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # sidecars on one class writing calm on two scales into one
             # rollup is the gap the score-scale version exists to close --
             # so the version is per source too (SCORE_SCALE_BY_CALM_SOURCE).
-            calm_source=f.get("calm_source"),
+            calm_source=calm_source,
             calm_measured=f.get("calm_measured"),
             calm_held_seconds=f.get("calm_held_seconds"),
             ingestion=eeg.get("ingestion"),
@@ -200,7 +203,7 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # pre-latch, ~38% of gain after -- and no column records that.
             # Rows without the key predate it. The rollup carries no `raw`,
             # so there the boundary is the date in CLAUDE.md.
-            score_scale=SCORE_SCALE_BY_CALM_SOURCE.get(f.get("calm_source") or "sdk",
+            score_scale=SCORE_SCALE_BY_CALM_SOURCE.get(calm_source or "sdk",
                                                        SCORE_SCALE_VERSION),
         ),
     }

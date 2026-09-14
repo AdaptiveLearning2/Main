@@ -1350,6 +1350,18 @@ BEGIN
                         'garbage is skipped, a nulled measurement does not count', lo, hi;
     END IF;
 
+    -- Stress is counted on its own column (20260918000000): a held calm
+    -- nulls stress and keeps focus, so the focus count is not its weight.
+    -- Four rows carry a focus; give two of them a stress.
+    UPDATE cognitive_signals SET stress = 0.4
+     WHERE user_id = owner_id AND ts IN ('2026-03-12T18:00:01Z', '2026-03-12T18:00:02Z');
+    PERFORM public.rollup_signal_day(owner_id, DATE '2026-03-12', 'UTC');
+    SELECT stress_sample_count INTO n FROM signal_daily_rollup
+     WHERE user_id = owner_id AND channel = 'cognitive';
+    IF n IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION 'stress_sample_count is %, expected 2 of 4 rows', n;
+    END IF;
+
     IF public.score_scale_of('{"score_scale": "oops"}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 99999}'::jsonb) IS NOT NULL
        OR public.score_scale_of('{"score_scale": 2}'::jsonb) <> 2 THEN

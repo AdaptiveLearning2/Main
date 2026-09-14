@@ -1496,6 +1496,21 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 _TREND_MAX_WEEKS = 26
 
 
+def _stress_weight(rollup_row: dict) -> int:
+    """The rows a cognitive rollup row's `avg_stress` was averaged over.
+
+    `trusted_sample_count` counts rows with a focus, and stress is absent
+    while focus stands whenever the calm is a placeholder or has been held
+    past the cap -- the ordinary case on the local source. `stress_sample_count`
+    (20260918000000) is the true denominator; a row rolled before that
+    column has none and takes the focus count, the old approximation on the
+    rows it was always applied to."""
+    n = rollup_row.get("stress_sample_count")
+    if isinstance(n, (int, float)) and not isinstance(n, bool):
+        return int(n)
+    return int(rollup_row.get("trusted_sample_count") or 0)
+
+
 def _scale_range(rollup_rows) -> dict | None:
     """`{"min", "max"}` of the score scale over cognitive rollup rows, or None
     when no row recorded one.
@@ -1673,9 +1688,10 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
             # A null average is a day the channel recorded nothing usable, not
             # a zero. Contributing 0 would drag the week down by exactly the
             # days that measured nothing.
-            if isinstance(value, (int, float)) and n > 0:
-                b["sums"][key][0] += float(value) * n
-                b["sums"][key][1] += n
+            weight = _stress_weight(r) if key == "stress" else n
+            if isinstance(value, (int, float)) and weight > 0:
+                b["sums"][key][0] += float(value) * weight
+                b["sums"][key][1] += weight
 
     def _mean(pair):
         total, n = pair
@@ -1992,9 +2008,10 @@ def _weekly_signal_report(student_id: str, days: int = 7, include_heart: bool = 
             for key, col in (("focus", "avg_focus"), ("stress", "avg_stress"),
                              ("engagement", "avg_focus")):  # see `_shape_summary`
                 value = cog_roll.get(col)
-                if value is not None and n:
-                    rolled_totals[key][0] += float(value) * n
-                    rolled_totals[key][1] += n
+                weight = _stress_weight(cog_roll) if key == "stress" else n
+                if value is not None and weight:
+                    rolled_totals[key][0] += float(value) * weight
+                    rolled_totals[key][1] += weight
         if heart_roll:
             n = heart_roll.get("trusted_sample_count") or 0
             for key, col in (("heart_rate_bpm", "avg_heart_rate_bpm"),
@@ -5146,9 +5163,12 @@ def _merge_cohort_trend(parts: list[list]) -> list:
             b["student_count"] += r.get("student_count") or 0
             for metric in _COHORT_TREND_METRICS:
                 value = r.get(metric)
-                if isinstance(value, (int, float)) and n > 0:
-                    b["sums"][metric][0] += float(value) * n
-                    b["sums"][metric][1] += n
+                # The RPC sums its stress weight over the rows that carried
+                # a stress average, on the same denominator this uses.
+                weight = _stress_weight(r) if metric == "avg_stress" else n
+                if isinstance(value, (int, float)) and weight > 0:
+                    b["sums"][metric][0] += float(value) * weight
+                    b["sums"][metric][1] += weight
 
     def _mean(pair):
         total, count = pair

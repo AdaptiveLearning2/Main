@@ -138,13 +138,20 @@ def eeg_channel(
     predating the field was scored on."""
     if revoked:
         return ChannelState(None, "eeg revoked", cause="revoked")
-    if focus is None or calm is None or confidence is None:
+    if focus is None or confidence is None:
         return ChannelState(None, "no eeg samples", cause="no_samples")
     stressed_line = EEG_STRESSED_CALM_MAX_BY_SOURCE.get(calm_source, EEG_STRESSED_CALM_MAX)
     if confidence < EEG_MIN_CONFIDENCE:
         # Poor electrode contact, not a calm student.
         return ChannelState(None, f"eeg confidence {confidence:.2f} below "
                                   f"{EEG_MIN_CONFIDENCE}", cause="low_confidence")
+    if calm is None:
+        # Focus and contact were read; calm was not -- a placeholder or a
+        # stale local calm nulled the stress column, or the window holds
+        # calm on two scales. The channel has been read, so it is neutral
+        # and not absent: it cannot be focused (calm is in that test) and
+        # cannot be stressed, but its confidence gate still applies.
+        return ChannelState("neutral", "eeg read, calm unmeasured", cause="no_calm")
     if focus >= EEG_FOCUSED_FOCUS_MIN and calm >= EEG_FOCUSED_CALM_MIN:
         return ChannelState("focused", "eeg focused and calm")
     if calm < stressed_line:

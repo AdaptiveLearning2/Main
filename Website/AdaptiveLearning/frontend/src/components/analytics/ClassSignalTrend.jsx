@@ -98,7 +98,7 @@ export default function ClassSignalTrend({ data, loading, onRetry, hideSensors =
           a week of poor contact would otherwise caption series the chart
           does not draw. */}
       {hasCognitive && (
-        <ScaleNote scale={data?.score_scale} what="This class's focus and stress averages" />
+        <ScaleNote scale={data?.score_scale} what="This class's averages" />
       )}
       <div className="h-64">
         <AccessibleChart

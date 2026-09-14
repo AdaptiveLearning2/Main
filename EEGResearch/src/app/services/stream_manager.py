@@ -459,9 +459,13 @@ class DeviceSession:
                 else:
                     spectrum = self.spectrum.latest()
                 features = self.processor.update(sample, raw_meta, spectrum=spectrum)
-                if features.get("artifact_reason"):
+                if features.get("artifact_reason") not in (None, "malformed_bands"):
                     # The gate held this tick; the window still holds the
                     # blink. No estimate until those samples have left it.
+                    # Not on malformed_bands: that is a fault in the SDK's
+                    # band dict, not in the raw samples, and poisoning on it
+                    # cost 31 ticks (3.88 s) of estimates the buffer could
+                    # have given -- on the local source, ticks with no calm.
                     self.spectrum.poison()
                 features["batch_size"] = len(samples)
                 state = self.adaptation.infer_state(features)

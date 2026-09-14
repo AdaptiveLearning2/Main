@@ -760,4 +760,22 @@ describe('the score-scale caption on the class panels', () => {
       [student('a', { min: 2, max: 2 }), student('b', null)])} />)
     expect(screen.queryByRole('note')).not.toBeInTheDocument()
   })
+
+  it('captions a roster where one student is on the local calm scale beside sdk classmates', () => {
+    // 3..3 on its own is one scale; beside a 2..2 classmate the outlier flag
+    // compares stress values on two scales, and the caption says stress only.
+    const student = (id, score_scale) => ({
+      student_id: id, display_name: id,
+      summary: { focus: 0.6, stress: 0.3, cognitive_samples: 10, days_recorded: 2,
+                 heart_included: false, emotion_included: false, eeg_enabled: true,
+                 consent_retrieved: true, retrieved: true, score_scale },
+    })
+    render(<ClassSignalRoster data={{
+      retrieved: true, summaries_retrieved: true, class_size: 5, min_students: 5,
+      score_scale: { min: 2, max: 2 },
+      per_student: [student('a', { min: 2, max: 2 }), student('b', { min: 3, max: 3 })],
+    }} />)
+    expect(screen.getByRole('note')).toHaveTextContent(/two different ways/)
+    expect(screen.getByRole('note')).not.toHaveTextContent(/focus/)
+  })
 })

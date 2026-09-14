@@ -149,8 +149,10 @@ class SpectrumEstimator:
         artifact gate holds one tick; the window would otherwise carry the
         blink for four seconds of estimates."""
         self._clean_after = self._pushed + self.capacity
-        if self._latest.get("ready"):
-            self._latest = self._empty("artifact")
+        # Whatever the buffer was doing -- ready, or still filling -- the
+        # reason an estimate is absent from here on is the artifact; a poison
+        # while filling reported "filling" for up to 8 s.
+        self._latest = self._empty("artifact")
 
     def push(self, samples: list[Any], meta: dict[str, Any] | None) -> dict[str, Any]:
         """Append the tick's samples and recompute. Returns the estimate."""
@@ -179,11 +181,14 @@ class SpectrumEstimator:
         """Whether the buffer's timestamp span is what a 256 Hz stream gives.
         The stamps are bursty (BLE delivery), but over a full buffer the span
         averages out; a stream delivering one sample per tick spans minutes."""
-        stamps = [t for t in self._ts if isinstance(t, datetime)]
-        if len(stamps) < 2:
+        idx = [i for i, t in enumerate(self._ts) if isinstance(t, datetime)]
+        if len(idx) < 2:
             return True  # nothing to judge by; the sidecar's adapters stamp every sample
-        span = (stamps[-1] - stamps[0]).total_seconds()
-        expected = (len(stamps) - 1) / self.sample_rate_hz
+        span = (self._ts[idx[-1]] - self._ts[idx[0]]).total_seconds()
+        # Expected from the *positions* of the two stamps, not from how many
+        # stamps there are: push() admits an unstamped sample, and counting
+        # stamps refused a genuine 256 Hz buffer with half of them absent.
+        expected = (idx[-1] - idx[0]) / self.sample_rate_hz
         return abs(span - expected) <= RATE_TOLERANCE * expected
 
     def _seated(self, meta: dict[str, Any]) -> dict[str, bool]:
@@ -213,10 +218,12 @@ class SpectrumEstimator:
         return out
 
     def _estimate(self, meta: dict[str, Any]) -> dict[str, Any]:
-        if any(len(self._buf[c]) < self.capacity for c in TEMPORAL):
-            return self._empty("filling")
+        # Artifact before filling: a poison during the fill is the reason
+        # the estimate is absent, and the fill is merely also true.
         if self._pushed < self._clean_after:
             return self._empty("artifact")
+        if any(len(self._buf[c]) < self.capacity for c in TEMPORAL):
+            return self._empty("filling")
         if not self._rate_plausible():
             return self._empty("sample_rate")
         seated = self._seated(meta)

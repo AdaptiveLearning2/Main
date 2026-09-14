@@ -1666,7 +1666,21 @@ fill, and after every gap, both write the same 50 a genuine residual of zero pro
 engine labels neither stressed nor focused on one; `calm_held_seconds` says how long a local calm
 has been carried, and past `CALM_HOLD_MAX_SECONDS` the mapper nulls `stress`. The row records
 `calm_source`, and **the local source is score scale 3** (`SCORE_SCALE_BY_CALM_SOURCE`), so two
-sidecars on one class cannot write calm on two scales under one version.
+sidecars on one class cannot write calm on two scales under one version. **Scale 3 is a different
+unit, not a later version**: it moves stress and not focus, and it runs on one student's headband
+beside a classmate's on scale 2 at the same time, so `ScaleNote` (via `describeScaleChange`) names
+which figures a range moves and whether the split is a step in time (1→2) or two sources side by
+side (any range reaching 3). **`calm_source` is client-supplied on the push path and is only ever
+a string** — the mapper and the decider type-check it before it is a dict key or a set element, or
+a posted list 500'd the ingest and then every question until it aged out. **A window whose calm is
+withdrawn — two scales, or every stress nulled by the hold rule — keeps its EEG channel**:
+`eeg_channel` reads focus and confidence, applies the contact gate, and answers `neutral` with
+cause `no_calm`; withdrawing the whole channel on `calm is None` lost the read with it. On the
+sidecar, `malformed_bands` does **not** poison the spectrum buffer (a fault in the SDK band dict,
+not the raw samples; poisoning cost 3.9 s of estimates), the rate check compares the span between
+two stamps against the sample *positions* between them (push admits an unstamped sample; counting
+stamps refused a real 256 Hz buffer with half of them absent), and a poison while the buffer is
+still filling reports `artifact`, not `filling`.
 
 `SignalProcessor` and `AdaptationEngine` take an injectable `clock` for the replay; a diagnostic key
 added to `update()`'s dict still has to be declared on `schemas.FeatureData` or the envelope drops it.
@@ -2238,16 +2252,18 @@ skips nulls, so both stored averages already have the trusted count as their den
 by `sample_count` would divide by rows the average never saw. A mean of daily means is the other
 wrong answer — it weights a 4-sample day like a 4000-sample one.
 
-**Three of the five averages carry the same approximation**, because the rollup stores one count per
-channel and any column whose nulls do not follow that count's is weighted slightly wrongly.
-`avg_rmssd_ms` — about one trusted window in five is gated out of RMSSD while the heart count counts
-trusted rows. `avg_stress` — the cognitive `trusted_sample_count` is
-`count(*) FILTER (WHERE focus IS NOT NULL)`, and `map_eeg_to_cognitive` derives focus and stress
-from `focus_score` and `calm_score` **independently**; only `contact_poor` nulls both together, so
-an ordinary row can carry focus without calm. `avg_focus`, `avg_heart_rate_bpm` and `engagement`
-(served from `avg_focus`, see the Phase 1 section) are exact. The error is between days, never
-within one, and closing it needs a per-column count the
-schema lacks plus a backfill that deleted rows cannot supply.
+**`avg_rmssd_ms` carries an approximation**, because the rollup stores one count per channel and a
+column whose nulls do not follow that count's is weighted slightly wrongly: about one trusted window
+in five is gated out of RMSSD while the heart count counts trusted rows. **`avg_stress` carried the
+same one until `20260918000000`** — the cognitive `trusted_sample_count` is
+`count(*) FILTER (WHERE focus IS NOT NULL)`, focus and stress are derived independently, and the
+local calm's hold rule made stress-absent-focus-present the *ordinary* row: a day of 4000 focus rows
+with 200 fresh calms weighed its stress as 4000 and read 0.32 against 0.70. The rollup now records
+`stress_sample_count`, and every reader weights stress on it through `_stress_weight` in `main.py`
+and `COALESCE(stress_sample_count, trusted_sample_count)` in the two cohort RPCs — the fallback is
+per row, for rows rolled before the column, and is the old approximation on exactly the rows it
+always applied to. `avg_focus`, `avg_heart_rate_bpm` and `engagement` (served from `avg_focus`, see
+the Phase 1 section) are exact. The error is between days, never within one.
 
 **A week with nothing recorded is a gap, not a missing bar** — dropped, a fortnight off school renders
 as the weeks either side sitting adjacent. Weeks are whole and Monday-anchored for the same class of

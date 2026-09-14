@@ -127,7 +127,7 @@ export default function ClassSignalRoster({ data, loading, onRetry, hideSensors 
       className="lg:col-span-2"
     >
       <div className="overflow-x-auto">
-        <ScaleNote scale={scale} what="These per-student focus and stress figures" />
+        <ScaleNote scale={scale} what="These per-student figures" />
         <table className="w-full text-sm">
           <caption className="sr-only">
             Per-student signal averages for this class over the last {data?.days} days.

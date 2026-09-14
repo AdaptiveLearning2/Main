@@ -16,6 +16,10 @@ describe('ScaleNote', () => {
     expect(combineScales([{ score_scale: { min: 1, max: 1 } }, { score_scale: { min: 2, max: 2 } }]))
       .toEqual({ min: 1, max: 2 })
     expect(combineScales([{}, { score_scale: null }])).toBeNull()
+    // A half-populated row is unknown, not a change: filtered on `min`
+    // alone it yielded a NaN maximum that the mixed check accepted.
+    expect(combineScales([{ score_scale: { min: 1 } }])).toBeNull()
+    expect(isMixedScale(combineScales([{ score_scale: { min: 1 } }, { score_scale: { min: 1, max: 1 } }]))).toBe(false)
     expect(isMixedScale(combineScales([{ score_scale: { min: 2, max: 2 } }]))).toBe(false)
   })
 })

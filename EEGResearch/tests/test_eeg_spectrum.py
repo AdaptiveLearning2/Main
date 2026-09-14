@@ -56,9 +56,11 @@ def test_a_10hz_rhythm_reads_as_alpha_above_the_background_and_pink_noise_does_n
     r_quiet, s_quiet = alpha_residual(f, quiet)
     r_loud, s_loud = alpha_residual(f, loud)
     assert abs(r_quiet) < 0.15, "pink noise alone is on the 1/f fit"
-    assert r_loud > 0.4, "a rhythm is a residual above it"
-    # The fit excludes the alpha band, so the peak does not steal the slope.
-    assert s_loud == pytest.approx(s_quiet, abs=0.3)
+    assert r_loud > 0.7, "a rhythm is a residual above it"
+    # The fit excludes the alpha band, so the peak does not steal the slope:
+    # measured, the two slopes agree to 1e-5 with the exclusion and differ
+    # by 0.21 without it, which also costs the residual 0.14.
+    assert s_loud == pytest.approx(s_quiet, abs=0.02)
 
 
 def test_the_estimator_needs_a_full_epoch_then_reads_the_temporal_pair_only():
@@ -90,10 +92,14 @@ def test_an_unseated_or_non_finite_temporal_channel_is_left_out_not_averaged_in(
     chans["tp9"] = with_alpha(chans["tp9"], 15.0)
     chans["tp10"] = 800.0 + 300.0 * np.random.default_rng(5).standard_normal(n)  # white: no alpha
     both = est.push(samples_from(chans), GOOD)
-    tp10_out = SpectrumEstimator().push(samples_from(chans),
-                                        {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": [1.0, 1.0, 1.0, 0.0]})
-    assert tp10_out["channels_used"] == 1
-    assert tp10_out["alpha_residual_temporal"] > both["alpha_residual_temporal"]
+    # Each contact signal excludes on its own, so neither can mask the other.
+    by_hsi = SpectrumEstimator().push(samples_from(chans),
+                                      {"hsi": [1.0, 1.0, 1.0, 4.0], "is_good": [1.0, 1.0, 1.0, 1.0]})
+    by_is_good = SpectrumEstimator().push(samples_from(chans),
+                                          {"hsi": [1.0, 1.0, 1.0, 1.0], "is_good": [1.0, 1.0, 1.0, 0.0]})
+    for tp10_out in (by_hsi, by_is_good):
+        assert tp10_out["channels_used"] == 1
+        assert tp10_out["alpha_residual_temporal"] > both["alpha_residual_temporal"]
     chans["tp10"][100] = float("nan")
     nan_out = SpectrumEstimator().push(samples_from(chans), GOOD)
     assert nan_out["channels_used"] == 1

@@ -948,9 +948,11 @@ class SignalProcessor:
                 if calm_smooth is not None:
                     calm_ratio = self._score_against_baseline(calm_smooth, "calm", sample.timestamp)
                 else:
-                    # Local source, buffer not yet full: hold the last calm,
-                    # or the midpoint if there is none. Focus is scored.
-                    calm_ratio = self._held_ratios[1] if self._held_ratios else 0.5
+                    # Local source and no tick has had a calm value yet (the
+                    # smoother carries the last one across a tick without,
+                    # so this is only the opening buffer fill): the midpoint.
+                    # Focus is scored.
+                    calm_ratio = 0.5
                 self._held_ratios = (focus_ratio, calm_ratio)
             elif self._held_ratios is not None:
                 # Hold the last admitted scores: a blink is not a change in

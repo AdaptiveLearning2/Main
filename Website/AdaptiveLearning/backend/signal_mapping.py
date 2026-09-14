@@ -153,6 +153,13 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # row can still be explained later.
             quality_basis=f.get("quality_basis"),
             ingestion=eeg.get("ingestion"),
+            # The EEG signal-quality number, 0..1. No column carries it --
+            # `engagement` did until it became the focus index -- and it is
+            # what `signal_fusion.eeg_channel` gates on, so it rides in `raw`
+            # for `LLM_topic_decider` to read back. Dropping it made the
+            # fusion gate a focus threshold: a disengaged student on good
+            # contact lost the whole EEG channel, ease-off included.
+            confidence=confidence,
         ),
     }
     if verdict == "contact_poor":

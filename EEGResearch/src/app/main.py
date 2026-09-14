@@ -177,7 +177,15 @@ async def push_start(body: PushStartBody, _: str = Depends(require_learner_token
     await push_client.start(body.session_id, body.access_token)
     stream_manager.set_payload_consumer(push_client.submit_payload)
     if new_session:
-        stream_manager.arm_baseline()
+        # Best effort, after push has started: on a registry with no default
+        # device this must not turn a working push into a 500 the browser
+        # reads as failure. The poller's arm is best effort for the same
+        # reason.
+        try:
+            stream_manager.arm_baseline()
+        except UnknownDeviceError:
+            logger.warning("push/start: no default device to arm the baseline on; "
+                           "scores stay relative to stream start")
     return JSONResponse({"status": "pushing", "session_id": body.session_id})
 
 

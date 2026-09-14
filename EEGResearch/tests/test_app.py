@@ -955,14 +955,22 @@ def test_baseline_falls_back_to_population_bounds_before_it_is_ready():
     assert 0.0 <= features["focus_score"] <= 100.0
 
 
-def test_reset_clears_the_session_baseline():
+def test_reset_keeps_the_session_baseline_and_only_arming_replaces_it():
+    """The stream manager calls reset() on every tick with no sample, which
+    flapping contact does repeatedly. Clearing the baseline there made a
+    strap slipping at minute 20 the session's new zero point, through a
+    path nothing arms. The baseline belongs to the session."""
     processor = SignalProcessor(window_size=8)
     steady = {**_ENGAGED_BANDS, "is_good": [1, 1, 1, 1]}
     _until_baseline(processor, lambda i: (740.0, steady))
     assert processor._baseline_ready is True
+    mean = processor._baseline_focus_mean
     processor.reset()
-    assert processor._baseline_ready is False
-    assert processor._baseline_focus_mean is None
+    assert processor._baseline_ready is True
+    assert processor._baseline_focus_mean == mean
+    assert len(processor.window) == 0
+    processor.restart_baseline()
+    assert processor._baseline_collecting is True and processor._baseline_focus == []
 
 
 def test_signal_processor_reset_clears_window():

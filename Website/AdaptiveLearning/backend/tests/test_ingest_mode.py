@@ -973,3 +973,13 @@ def test_the_push_endpoint_nulls_measurements_on_bad_contact(monkeypatch):
 
     assert written[0]["focus"] is None
     assert written[0]["alpha"] is None, "a band computed from bad electrodes was stored"
+
+
+def test_the_eeg_confidence_rides_in_raw_for_the_fusion_gate():
+    """No column carries it -- `engagement` did, and is the focus index now
+    -- so the signal-quality number the fusion gate reads lives in raw."""
+    row = signal_mapping.map_eeg_to_cognitive(
+        {"features": {"focus_score": 72.0, "calm_score": 60.0, "confidence": 90.0},
+         "timestamp": "2026-08-09T10:00:00Z"},
+        "session-1", "user-1")
+    assert row["raw"]["confidence"] == pytest.approx(0.90)

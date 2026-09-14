@@ -1506,7 +1506,15 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   the first protocol segment, run b reads eyes-closed 37/60 (focus/calm), eyes-open 78/27,
   arithmetic 50/42 — the right directions, centred where the lesson began. A rolling reference was
   considered and rejected: a sustained state would decay to 50. `replay_eeg_capture.py --arm-at
-  SEGMENT` stands in for the first question.
+  SEGMENT` stands in for the first question. **`reset()` keeps the baseline.** The stream manager
+  calls it on every tick with no sample, which flapping contact does repeatedly, so clearing it there
+  made a strap slipping at minute 20 the session's new zero point through a path nothing arms — the
+  failure the arm exists to prevent. Only `restart_baseline()` replaces it.
+- **The confidence rides in `raw.confidence` on `cognitive_signals`, and the fusion gate reads it
+  there.** No column carries it; `engagement` did, and once `engagement` became the focus index the
+  decider was still averaging it into the `eeg_channel` gate — a focus threshold, so a disengaged
+  student on good contact lost the whole EEG channel, ease-off included, while a focused one on a
+  bad strap passed. The decider selects `focus, stress, raw` and never `engagement` for that.
 - **A label needs four consecutive readings** before the 3 s cooldown protects it. 90 of 133
   `focused` readings on the captures were the cooldown holding one spurious tick.
 

@@ -123,3 +123,20 @@ def test_arm_at_restarts_the_baseline_at_that_segment():
     # segment boundary that separates the two.
     assert [r["focus_log_ratio"] for r in plain] == [r["focus_log_ratio"] for r in armed]
     assert plain[:20] == armed[:20]
+
+
+def test_a_real_gap_is_an_ok_row_with_the_no_signal_payload():
+    """The sidecar answers a no-data tick with status ok and its no-signal
+    payload -- zeroed scores and channels, signal_quality "no_signal" --
+    not an error row. The replay must reset there, or it scores a
+    zero-microvolt sample the live path never scored."""
+    rows = _synthetic_capture(n=12)
+    gap = dict(rows[6], status="ok", tp9=0.0, af7=0.0, af8=0.0, tp10=0.0,
+               focus_score=0.0, calm_score=0.0, confidence=0.0,
+               signal_quality="no_signal", label="no_signal",
+               delta=0.0, theta=0.0, alpha=0.0, beta=0.0, gamma=0.0)
+    rows[6] = gap
+    assert replay.is_gap(gap)
+    out = replay.replay(rows, window_size=8)
+    assert out[6]["label"] == "no_signal" and out[6]["focus_score"] is None
+    assert out[7]["samples_rejected"] == 0

@@ -421,3 +421,22 @@ def test_a_sidecar_that_cannot_be_armed_does_not_stop_recording(monkeypatch, cap
     out = eeg_poller.start(db, "user-a", "session-1", "station-a", record=True)
     assert out["running"] is True and out["recording"] is True
     assert "could not arm the sidecar baseline" in capsys.readouterr().out
+
+
+def test_the_sidecar_arm_runs_outside_the_poller_lock(monkeypatch):
+    """The arm is a blocking POST. Every other taker of _lock does dictionary
+    work, and stop_all takes it from shutdown; a socket wait under it
+    stalls them all."""
+    held_during_arm = []
+
+    def arm(device_id=eeg_client.DEFAULT_DEVICE_ID):
+        got = eeg_poller._lock.acquire(blocking=False)
+        held_during_arm.append(not got)
+        if got:
+            eeg_poller._lock.release()
+        return {"status": "armed"}
+    monkeypatch.setattr(eeg_client, "arm_session", arm)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=False)
+    eeg_poller.start(_FakeSupabase(), "user-a", "session-1", "station-a", record=True)
+    eeg_poller.start(_FakeSupabase(), "user-b", "session-2", "station-b")
+    assert held_during_arm == [False, False]

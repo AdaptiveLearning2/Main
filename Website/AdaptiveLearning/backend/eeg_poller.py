@@ -672,17 +672,30 @@ def start(supabase, user_id: str, session_id: str, device_id: str,
             "EEG recording is switched off for this student. A parent can turn "
             "it back on in Settings."
         ))
+    # The sidecar arm is a blocking POST and must not run under _lock, which
+    # every other taker uses for dictionary work only (stop_all runs from
+    # shutdown and the test fixture). Decided inside, called after.
+    result = _start_locked(supabase, user_id, session_id, device_id, record)
+    if result.pop("_arm", False):
+        _arm_sidecar_baseline(device_id)
+    return result
+
+
+def _start_locked(supabase, user_id: str, session_id: str, device_id: str,
+                  record: bool) -> dict:
     with _lock:
         if session_id in _active and _active[session_id].is_alive():
             p = _active[session_id]
-            if p.recording != record:
+            flipped = p.recording != record
+            if flipped:
                 print(f"=== already running for this session; recording -> {record}", flush=True)
                 p.recording = record
-                if record:
-                    _arm_sidecar_baseline(device_id)
             else:
                 print(f"=== already running for this session", flush=True)
-            return {"running": True, "already": True, "recording": record}
+            # Arm only on the flip to recording -- a repeat with record
+            # already true is not a new question.
+            return {"running": True, "already": True, "recording": record,
+                    "_arm": flipped and record}
         # The sidecar is a single shared stream: two different users polling
         # it concurrently would each attribute the same physical device's
         # readings to their own session. Same-user restarts are fine, but a
@@ -712,13 +725,11 @@ def start(supabase, user_id: str, session_id: str, device_id: str,
         p.recording = record
         p.start()
         _active[session_id] = p
-        if record:
-            _arm_sidecar_baseline(device_id)
         # The reservation's job ends here: ownership has moved to something
         # stronger, so leaving the entry around just wastes a dict slot until
         # it expires.
         _reservations.pop(device_id, None)
-        return {"running": True, "already": False, "recording": record}
+        return {"running": True, "already": False, "recording": record, "_arm": record}
 
 
 def can_use_device(user_id: str, device_id: str) -> bool:

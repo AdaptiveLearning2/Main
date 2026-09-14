@@ -19,7 +19,10 @@ USER = "user-1"
 
 CONSENT_ALL = {"eeg_enabled": True, "headband_optical_enabled": True,
                "camera_enabled": True, "user_id": USER}
-EEG_CALM = [{"session_id": SESSION, "focus": 0.8, "stress": 0.3, "engagement": 0.9}]
+# `raw.confidence` is the signal-quality number the fusion gate reads;
+# `engagement` is the focus index and is not consulted by the gate.
+EEG_CALM = [{"session_id": SESSION, "focus": 0.8, "stress": 0.3, "engagement": 0.8,
+             "raw": {"confidence": 0.9}}]
 HEART_HIGH = [{"session_id": SESSION, "stress_category": "high",
                "trusted": True, "source": "muse_optics"}]
 
@@ -116,7 +119,7 @@ def test_no_signals_at_all_behaves_as_it_did_before_fusion(monkeypatch):
 
     _install(monkeypatch, CONSENT_ALL,
              eeg=[{"session_id": SESSION, "focus": 0.4, "stress": 0.8,
-                   "engagement": 0.9}])
+                   "engagement": 0.4, "raw": {"confidence": 0.9}}])
     assert decider.get_session_signal_state(SESSION, USER).label == "stressed"
 
 
@@ -209,3 +212,18 @@ def test_a_trusted_confident_negative_emotion_does_withhold(monkeypatch):
     state = decider.get_session_signal_state(SESSION, USER)
     assert state.label == "neutral"
     assert "withholding" in state.reason
+
+
+def test_the_fusion_gate_reads_raw_confidence_not_engagement(monkeypatch):
+    """`engagement` is the focus index. Read as the confidence, a disengaged
+    student on good contact lost the whole EEG channel -- and with it the
+    stressed ease-off, since the gate returns before the calm branch."""
+    disengaged_good_contact = [{"session_id": SESSION, "focus": 0.2, "stress": 0.8,
+                                "engagement": 0.2, "raw": {"confidence": 0.9}}]
+    _install(monkeypatch, CONSENT_ALL, eeg=disengaged_good_contact)
+    assert decider.get_session_signal_state(SESSION, USER).label == "stressed"
+
+    focused_bad_strap = [{"session_id": SESSION, "focus": 0.9, "stress": 0.2,
+                          "engagement": 0.9, "raw": {"confidence": 0.2}}]
+    _install(monkeypatch, CONSENT_ALL, eeg=focused_bad_strap)
+    assert decider.get_session_signal_state(SESSION, USER).label == "insufficient_signal"

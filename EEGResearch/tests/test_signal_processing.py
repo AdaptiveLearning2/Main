@@ -422,3 +422,27 @@ def test_a_tick_with_no_delta_still_scores_and_does_not_feed_the_gate():
         assert 0.0 <= f["focus_score"] <= 100.0
         assert f["artifact_reason"] is None
     assert len(t.processor._delta_history) == 12
+
+
+def test_a_stream_with_no_delta_still_holds_a_clench_and_a_spread_jump():
+    """Each gate waits for its own history. Keyed on delta's, a stream that
+    never reports delta disabled all three and reported zero artifacts."""
+    no_delta = {k: v for k, v in RELAXED.items() if k != "delta"}
+    t = Ticker()
+    t.run({**no_delta, **CONTACT_GOOD}, 20, spread=20.0)
+    clench = t.tick({**no_delta, "beta": 0.3, "gamma": 1.0, **CONTACT_GOOD}, spread=20.0)
+    assert clench["artifact_reason"] == "emg_gamma"
+    jump = t.tick({**no_delta, **CONTACT_GOOD}, spread=90.0)
+    assert jump["artifact_reason"] == "spread_jump"
+
+
+def test_a_signal_gap_does_not_rebaseline_from_the_recovery_stretch():
+    """reset() is what the stream manager calls on a no-sample tick. After
+    a latch, a gap followed by a muscle-heavy re-fitting stretch must leave
+    the reference where the session put it."""
+    t = Ticker()
+    _run_until_latched(t, {**RELAXED, **CONTACT_GOOD})
+    before = t.processor._baseline_focus_mean
+    t.processor.reset()
+    t.run({**ENGAGED, **CONTACT_GOOD}, 4 * int(SignalProcessor.BASELINE_SECONDS) + 20)
+    assert t.processor._baseline_focus_mean == before

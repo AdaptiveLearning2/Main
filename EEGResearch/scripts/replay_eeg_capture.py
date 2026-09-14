@@ -54,7 +54,22 @@ CONTACT_KEYS = ("hsi", "is_good", "band_channels_used")
 REPLAYED_KEYS = (
     "focus_log_ratio", "calm_log_ratio", "focus_score", "calm_score", "confidence",
     "signal_quality", "quality_basis", "samples_rejected", "label", "reason",
+    "contact_ratio", "samples_artifact", "artifact_reason",
+    "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
 )
+
+
+def is_gap(row: dict[str, Any]) -> bool:
+    """Whether the sidecar had no data on this tick.
+
+    A real gap is *not* an error row: the sidecar answers status "ok" with
+    its no-signal payload -- zeroed scores, zeroed channels,
+    signal_quality "no_signal" -- so a check on status or on null channels
+    sees nothing and scores a zero-microvolt sample where the live path
+    reset.
+    """
+    return (row.get("status") != "ok" or row.get("tp9") is None
+            or row.get("signal_quality") == "no_signal" or row.get("label") == "no_signal")
 
 
 def _capture_module():
@@ -93,7 +108,7 @@ def replay(rows: list[dict[str, Any]], *, window_size: int = 20,
             processor.restart_baseline()
             armed = True
         replayed = dict(row)
-        if row.get("status") != "ok" or row.get("tp9") is None:
+        if is_gap(row):
             processor.reset()
             adaptation.reset_for_signal_loss()
             for k in REPLAYED_KEYS:

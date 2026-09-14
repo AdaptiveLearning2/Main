@@ -161,3 +161,13 @@ def test_the_header_records_method_and_no_identity():
     assert h["source"] == "sidecar"
     assert h["protocol"][0] == {"segment": "eyes_closed_rest", "seconds": 120}
     assert not any(k in h for k in ("subject", "name", "user", "email"))
+
+
+def test_the_flattened_row_carries_every_feature_field_the_sidecar_declares():
+    """A field added to schemas.FeatureData must reach the capture, or the
+    next hardware recording has no column for the thing it was added to
+    tune. Derived from the model, not from a list here."""
+    from src.app.schemas import FeatureData
+    row = capture.flatten_state(_envelope(), segment="x", t="2026-09-13T00:00:00+00:00")
+    missing = [f for f in FeatureData.model_fields if f not in row]
+    assert missing == [], f"flatten_state does not carry {missing}"

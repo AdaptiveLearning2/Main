@@ -242,18 +242,13 @@ class SignalProcessor:
         self._ema_focus = None
         self._ema_calm = None
         self._ema_ts = None
-        # Baseline is per-session: a gap long enough to reset the window means
-        # contact conditions likely changed, so the old baseline no longer
-        # describes the signal it would be scored against.
-        self._baseline_focus.clear()
-        self._baseline_calm.clear()
-        self._baseline_focus_mean = None
-        self._baseline_calm_mean = None
-        self._baseline_ready = False
-        self._baseline_started = None
-        self._baseline_latched = None
-        self._baseline_collecting = True
-        self._centre_from = {"focus": None, "calm": None}
+        # The baseline is deliberately NOT cleared here. The stream manager
+        # calls reset() on every tick with no sample, which flapping contact
+        # does repeatedly, so a strap slipping at minute 20 would otherwise
+        # make the next 45 s of re-fitting the session's new zero point --
+        # the failure restart_baseline() exists to prevent, arriving through
+        # a path nothing arms. The baseline belongs to the session, not to
+        # the stream's continuity; only restart_baseline() replaces it.
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -491,10 +486,14 @@ class SignalProcessor:
         history exists; the first ticks of a session are admitted as they
         come, and the baseline's own contact gate is what protects those.
         """
-        if len(self._delta_history) < self.ARTIFACT_MIN_HISTORY:
-            return None
+        # Each gate waits for its own history, not for delta's: a stream
+        # that never reports delta must still catch a clench and a spread
+        # jump, or it reports zero artifacts and reads as clean.
         try:
-            delta = float(bands.get("delta", 0.0))
+            delta = float(bands.get("delta"))
+        except (TypeError, ValueError):
+            delta = None
+        try:
             beta = float(bands.get("beta", 0.0))
             gamma = float(bands.get("gamma", 0.0))
         except (TypeError, ValueError):
@@ -502,7 +501,8 @@ class SignalProcessor:
         # Bels are logs, and the medians are of log values, so "N times the
         # running median" is log10(N) above it -- delta near 0 Bels at rest
         # would make a ratio of the raw numbers meaningless.
-        if delta - median(self._delta_history) > log10(self.DELTA_JUMP_FACTOR):
+        if (delta is not None and len(self._delta_history) >= self.ARTIFACT_MIN_HISTORY
+                and delta - median(self._delta_history) > log10(self.DELTA_JUMP_FACTOR)):
             return "delta_jump"
         if gamma - beta > self.EMG_GAMMA_EXCESS:
             return "emg_gamma"

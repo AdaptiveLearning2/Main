@@ -572,23 +572,27 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
                                      "a failed read is indistinguishable from an expired session")
                 break
             continue
-        # The cursor: a run that hits the cap resumes with `--after` this,
-        # or every run repeats the same oldest batch and a backfill larger
-        # than the cap never finishes. Set only once the read succeeded --
-        # recorded before it, a session whose read failed was passed over by
-        # the resume and dropped from the backfill for good.
-        report["last_ended_at"] = row.get("ended_at")
         present = {name for name, rows in CHART_SOURCES.items()
                    if {"cognitive": cognitive, "face": face, "heart": heart}[rows]}
+        # The cursor: a run that hits the cap resumes with `--after` this, or
+        # every run repeats the same oldest batch and a backfill larger than
+        # the cap never finishes. Set only once the session is *handled* --
+        # skipped by decision, listed by a dry run, or re-rendered. Set before
+        # the read, a failed read was passed over by the resume; set after the
+        # read but before the render, a failed render was passed over the
+        # same way. A session this run did not finish stays ahead of the cursor.
         if not wanted <= present:
             report["skipped_expired"] += 1
+            report["last_ended_at"] = row.get("ended_at")
             continue
         if dry_run:
             report["would_rerender"].append(session_id)
+            report["last_ended_at"] = row.get("ended_at")
             continue
         try:
             archive_session(client, session_id, user_id, only=wanted, existing_paths=recorded)
             report["rerendered"] += 1
+            report["last_ended_at"] = row.get("ended_at")
         except Exception as exc:  # noqa: BLE001 -- one failure must not stop the run
             print(f"[rearchive] {session_id}: {exc}")
             report["failed"] += 1

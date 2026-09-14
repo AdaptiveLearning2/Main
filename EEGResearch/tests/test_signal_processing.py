@@ -955,3 +955,17 @@ def test_ticks_the_blink_gate_had_no_delta_for_are_counted():
     assert f["samples_no_delta"] == 2 and f["samples_artifact"] == 0
     t.processor.clear_session()
     assert t.tick({**RELAXED, **CONTACT_GOOD})["samples_no_delta"] == 0
+
+
+def test_ticks_the_spread_gate_had_no_spread_for_are_counted():
+    """The delta counter's sibling: a non-finite channel drops the spread,
+    and silently the gate lost its reference while the diagnostics read
+    flawless. A single-electrode frame is a contact fact, not counted here."""
+    t = Ticker()
+    _warm(t)
+    f = t.tick({**RELAXED, **CONTACT_GOOD}, spread=float("nan"))
+    assert f["samples_no_spread"] == 1 and f["artifact_reason"] is None
+    one_electrode = t.tick({**RELAXED, "hsi": [1.0, 4.0, 4.0, 4.0], "is_good": [1.0, 0.0, 0.0, 0.0]})
+    assert one_electrode["samples_no_spread"] == 1
+    t.processor.clear_session()
+    assert t.tick({**RELAXED, **CONTACT_GOOD})["samples_no_spread"] == 0

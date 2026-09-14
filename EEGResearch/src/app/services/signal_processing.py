@@ -232,6 +232,10 @@ class SignalProcessor:
         # Usable ticks whose delta could not be read (absent, non-numeric or
         # NaN), so the blink gate had no reference for them. A session total.
         self._samples_no_delta = 0
+        # Usable ticks with two or more electrodes whose spread could not be
+        # taken (a non-finite channel), so the spread gate had no reference
+        # for them. The sibling of _samples_no_delta; a session total.
+        self._samples_no_spread = 0
         self._held_ratios: tuple[float, float] | None = None
         # Smoothed raw log ratios and the timestamp they were last advanced
         # to. None until the first admitted tick, which seeds them.
@@ -304,6 +308,7 @@ class SignalProcessor:
         self._samples_rejected = 0
         self._samples_artifact = 0
         self._samples_no_delta = 0
+        self._samples_no_spread = 0
         self.restart_baseline()
         self._baseline_focus_mean = None
         self._baseline_calm_mean = None
@@ -838,6 +843,12 @@ class SignalProcessor:
             # tick now, band or not, so the raw channels are the only input.
             if frame_spread is not None and isfinite(frame_spread):
                 self._spread_history.append((now, frame_spread))
+            elif len(frame_values) >= 2:
+                # Two or more electrodes and still no spread: a non-finite
+                # channel. Counted, as for delta, or the gate loses its
+                # reference silently. A single-electrode frame is not counted
+                # here -- that is a contact fact the quality verdict reports.
+                self._samples_no_spread += 1
 
         if self.window and not admit:
             if not usable:
@@ -973,6 +984,9 @@ class SignalProcessor:
             # reads flawless with this climbing is one whose blink detector
             # never armed.
             "samples_no_delta": self._samples_no_delta,
+            # Its sibling for the spread gate: usable multi-electrode ticks
+            # whose spread could not be taken.
+            "samples_no_spread": self._samples_no_spread,
             # Raw, pre-baseline log ratios -- diagnostics for the accuracy
             # capture (HANDOFF.md Phase 0). None on a frame with no usable
             # bands, distinct from a real ratio of 0.

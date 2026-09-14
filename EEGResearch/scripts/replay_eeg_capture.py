@@ -55,6 +55,7 @@ REPLAYED_KEYS = (
     "focus_log_ratio", "calm_log_ratio", "focus_score", "calm_score", "confidence",
     "signal_quality", "quality_basis", "samples_rejected", "label", "reason",
     "contact_ratio", "samples_artifact", "artifact_reason", "samples_no_delta",
+    "samples_no_spread",
     "focus_log_ratio_smoothed", "calm_log_ratio_smoothed",
 )
 

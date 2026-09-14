@@ -198,3 +198,20 @@ def test_the_cursor_does_not_pass_a_session_whose_read_failed(monkeypatch):
     only_failed = chart_archive.rearchive_sessions(object(), rows[:1], dry_run=False,
                                                    max_read_failures=5)
     assert only_failed["last_ended_at"] is None
+
+
+def test_the_cursor_does_not_pass_a_session_whose_render_failed(monkeypatch):
+    """Moved below the read, the cursor still sat above the archive call, so
+    a failed re-render was passed over by the resume the same way."""
+    monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
+
+    def flaky(_c, sid, _u, **_k):
+        if sid == "s1":
+            raise RuntimeError("storage down")
+        return {}
+
+    monkeypatch.setattr(chart_archive, "archive_session", flaky)
+    rows = [{**_session(f"s{i}"), "ended_at": f"2026-09-0{i + 1}T10:00:00+00:00"} for i in range(2)]
+    report = chart_archive.rearchive_sessions(object(), rows, dry_run=False)
+    assert report["failed"] == 1 and report["rerendered"] == 1
+    assert report["last_ended_at"] == "2026-09-01T10:00:00+00:00"

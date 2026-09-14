@@ -1543,8 +1543,11 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   included, because it is the only place the function runs. The rollup read behind the labels is
   the one stated exception to the cohort endpoint's consent bucketing: it selects no reading. The
   replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. `samples_no_delta`
-  counts the usable ticks the blink gate had no delta for, so a recording whose detector never
-  armed does not read as flawless.
+  and `samples_no_spread` count the usable ticks the blink and spread gates had no reference for
+  (an unreadable delta; a non-finite channel on a multi-electrode frame), so a recording whose
+  detector never armed does not read as flawless. The rearchive cursor advances only past a
+  session the run *finished* — skipped by decision, listed by a dry run, or re-rendered — since set
+  before the render a failed render was passed over by the resume exactly as a failed read was.
   A NaN or infinite value in a **ratio** band, or a **partial** band dict, is a **held tick** with
   `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
   dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a

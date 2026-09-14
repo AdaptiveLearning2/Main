@@ -41,6 +41,9 @@ class FeatureData(BaseModel):
     # Usable ticks whose delta could not be read, so the blink gate had no
     # reference for them. Distinct from an artifact count of zero.
     samples_no_delta: int | None = None
+    # Its sibling for the spread gate: usable multi-electrode ticks whose
+    # spread could not be taken (a non-finite channel).
+    samples_no_spread: int | None = None
     # A plain str, not a Literal of the three reasons: the processor writes
     # them as unshared string literals, and a fourth would have made every
     # /api/v1/state call 500 -- a harder failure than the silent key drop

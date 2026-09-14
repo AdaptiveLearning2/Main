@@ -62,9 +62,16 @@ class SignalProcessor:
     # engaged still reads focus over the lesson. Once latched the centre
     # ramps from the population midpoint to the session mean over
     # BASELINE_RAMP_SECONDS, so the latch is not a step in the scores.
+    #
+    # The 45 s are *covered* seconds, not elapsed: each admitted tick adds
+    # the time since the previous admitted tick, capped at
+    # BASELINE_TICK_CAP_SECONDS. Elapsed time let 21 ticks, a ten-minute
+    # gap and one more tick latch on 22 samples while claiming a 45 s
+    # window; capped, a gap of any length is worth one second.
     BASELINE_SECONDS = 45.0
     BASELINE_MIN_SAMPLES = 20
     BASELINE_RAMP_SECONDS = 10.0
+    BASELINE_TICK_CAP_SECONDS = 1.0
 
     # Wall-clock window over which per-electrode contact readings are averaged.
     # Time-based rather than sample-based: a count-based window would silently
@@ -91,16 +98,22 @@ class SignalProcessor:
     # (tests/fixtures/EEG_REFERENCE.md).
     #
     # Weights are provisional -- set so that poor contact alone takes a
-    # steady signal below the 0.45 gate and degraded contact does not. The
-    # contact term is 0 anywhere below CONTACT_DEGRADED and rises linearly
-    # to 1 at full contact, rather than the raw ratio: with a linear ratio
-    # no weighting puts every "poor" reading under the gate while keeping
-    # "degraded" above it, since the two meet at 0.4. The other three terms
-    # sum to 0.40, so nothing but contact can lift a poor reading past 0.45.
+    # steady signal below the 0.45 gate and degraded contact clears it
+    # whatever the spectrum does. The contact term is 0 anywhere below
+    # CONTACT_DEGRADED, steps to CONTACT_TERM_AT_DEGRADED on that line and
+    # rises linearly to 1 at CONTACT_GOOD. A step, not a ramp from zero:
+    # with a linear ratio no weighting puts every "poor" reading under the
+    # gate while keeping "degraded" above it, since the two meet at 0.4,
+    # and a ramp from zero at 0.4 put two-of-four electrodes -- the
+    # ordinary state -- at exactly 0.50 on a constant spectrum and under
+    # the gate on any jitter at all. With the step, two of four on a
+    # spectrum with zero stability reads 0.555. The other three terms sum
+    # to 0.40, so nothing but contact can lift a poor reading past 0.45.
     CONFIDENCE_WEIGHT_WARMUP = 0.10
     CONFIDENCE_WEIGHT_CONTACT = 0.60
     CONFIDENCE_WEIGHT_STABILITY = 0.22
     CONFIDENCE_WEIGHT_BANDS = 0.08
+    CONTACT_TERM_AT_DEGRADED = 0.5
     # pstdev of the raw focus log-ratio over the window at which spectral
     # stability reads 0. Tick-level sd at rest on the reference capture was
     # 0.5-0.9 on poor contact; 1.0 puts a steady degraded signal near 0.5.
@@ -199,6 +212,8 @@ class SignalProcessor:
         self._baseline_calm_mean: float | None = None
         self._baseline_ready = False
         self._baseline_started: datetime | None = None
+        self._baseline_last_ts: datetime | None = None
+        self._baseline_coverage = 0.0
         self._baseline_latched: datetime | None = None
         # Whether ticks are being gathered for a (re)latch, and the centre
         # each score was using when the current baseline latched -- the ramp
@@ -224,6 +239,8 @@ class SignalProcessor:
         self._baseline_focus.clear()
         self._baseline_calm.clear()
         self._baseline_started = None
+        self._baseline_last_ts = None
+        self._baseline_coverage = 0.0
         self._baseline_collecting = True
 
     def reset(self) -> None:
@@ -231,8 +248,12 @@ class SignalProcessor:
         real reading warms back up cleanly instead of blending pre-gap and
         post-gap samples."""
         self.window.clear()
-        self._is_good_history.clear()
-        self._hsi_history.clear()
+        # The contact histories are kept: they are pruned by elapsed time
+        # (CONTACT_SMOOTHING_SECONDS), so nothing stale outlives a gap on
+        # its own, and clearing them let the first frame after a gap be
+        # judged on itself alone -- one blip reading is_good on every
+        # electrode read contact 1.0 against a smoothed 0.0 a moment
+        # before, and entered the baseline on the strength of it.
         self._samples_rejected = 0
         self._ratio_history.clear()
         self._delta_history.clear()
@@ -365,7 +386,13 @@ class SignalProcessor:
         older bridge without contact data would silently disable a session.
         """
         if contact is None:
-            if confidence_ratio >= 0.75 and calm_ratio >= 0.55:
+            # 0.65, not 0.75: with no contact data the contact term is
+            # CONTACT_UNKNOWN and confidence tops out at 0.70 (0.10 + 0.30 +
+            # 0.22 + 0.08), so 0.75 made "good" unreachable on this path.
+            # Once the baseline latches calm centres on 0.5 and the calm
+            # condition alone withholds it -- the under-reporting the
+            # docstring describes, left as it is.
+            if confidence_ratio >= 0.65 and calm_ratio >= 0.55:
                 return ("good", "heuristic")
             if confidence_ratio >= 0.45 and calm_ratio >= 0.3:
                 return ("degraded", "heuristic")
@@ -407,10 +434,15 @@ class SignalProcessor:
             return
         if self._baseline_started is None:
             self._baseline_started = ts
+            self._baseline_coverage = 0.0
+        else:
+            since_last = (ts - self._baseline_last_ts).total_seconds()
+            self._baseline_coverage += min(max(since_last, 0.0), self.BASELINE_TICK_CAP_SECONDS)
+        self._baseline_last_ts = ts
         self._baseline_focus.append(focus_raw)
         self._baseline_calm.append(calm_raw)
-        elapsed = (ts - self._baseline_started).total_seconds()
-        if elapsed >= self.BASELINE_SECONDS and len(self._baseline_focus) >= self.BASELINE_MIN_SAMPLES:
+        if (self._baseline_coverage >= self.BASELINE_SECONDS
+                and len(self._baseline_focus) >= self.BASELINE_MIN_SAMPLES):
             # The ramp starts from wherever each score's centre is right now,
             # so a restart mid-session is as step-free as the first latch.
             self._centre_from = {which: self._centre(which, ts) for which in ("focus", "calm")}
@@ -700,10 +732,15 @@ class SignalProcessor:
             # steadiness is the only stability there is.
             stability_std = pstdev(per_sample_means) if len(per_sample_means) > 1 else 0.0
             stability_factor = self._clamp01(1.0 - (stability_std / self.STABILITY_STD_MAX))
-        contact_term = (
-            self.CONTACT_UNKNOWN if contact is None
-            else self._clamp01((contact - self.CONTACT_DEGRADED) / (1.0 - self.CONTACT_DEGRADED))
-        )
+        if contact is None:
+            contact_term = self.CONTACT_UNKNOWN
+        elif contact < self.CONTACT_DEGRADED:
+            contact_term = 0.0
+        else:
+            above = self._clamp01(
+                (contact - self.CONTACT_DEGRADED) / (self.CONTACT_GOOD - self.CONTACT_DEGRADED))
+            contact_term = (self.CONTACT_TERM_AT_DEGRADED
+                            + (1.0 - self.CONTACT_TERM_AT_DEGRADED) * above)
         confidence_ratio = self._clamp01(
             (self.CONFIDENCE_WEIGHT_WARMUP * warmup_factor)
             + (self.CONFIDENCE_WEIGHT_CONTACT * contact_term)

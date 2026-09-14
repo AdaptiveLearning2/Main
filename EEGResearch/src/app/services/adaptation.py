@@ -25,8 +25,15 @@ class AdaptationEngine:
         # tick (tests/fixtures/EEG_REFERENCE.md, finding 7). Four ticks is
         # 1 s at the 4 Hz stream rate.
         self.persist_ticks = 4
+        # A pending run survives a signal-loss reset -- a gap tick is not a
+        # reading, so it neither agrees nor disagrees -- but not for long:
+        # a run whose last reading is older than this is discarded, so
+        # three readings before a long gap cannot commit on one after it.
+        # Four ticks span 1 s; contact flapping every other tick spans 2 s.
+        self.pending_max_age_seconds = 5.0
         self._pending_label: str | None = None
         self._pending_count = 0
+        self._pending_ts: float | None = None
         # Injectable for replaying a capture at its own pace; see
         # SignalProcessor.__init__.
         self._clock = clock
@@ -35,11 +42,15 @@ class AdaptationEngine:
         """After a data gap, the next label is not held under the cooldown --
         there is no prior state worth holding -- but it still needs
         persist_ticks readings to agree, since this runs on every no-sample
-        tick and one tick after a gap is not a state."""
+        tick and one tick after a gap is not a state.
+
+        The pending run is left alone. Clearing it here meant contact
+        flapping every other tick -- gap, reading, gap, reading -- never
+        accumulated four readings and a clearly focused student read
+        no_signal for as long as it lasted. The run ages out on its own
+        (pending_max_age_seconds)."""
         self.last_label = "no_signal"
         self.last_change_ts = float("-inf")
-        self._pending_label = None
-        self._pending_count = 0
 
     def infer_state(self, features: dict[str, float]) -> LearnerState:
         focus = features["focus_score"]
@@ -62,6 +73,7 @@ class AdaptationEngine:
         if target.label == self.last_label:
             self._pending_label = None
             self._pending_count = 0
+            self._pending_ts = None
             return target
         # A change of label. Two rules, applied in this order:
         #
@@ -82,11 +94,14 @@ class AdaptationEngine:
         # no prior state worth holding, and not on the way into
         # insufficient_signal, for the reason above.
         if target.label != "insufficient_signal":
-            if target.label == self._pending_label:
+            stale = (self._pending_ts is not None
+                     and (now - self._pending_ts) > self.pending_max_age_seconds)
+            if target.label == self._pending_label and not stale:
                 self._pending_count += 1
             else:
                 self._pending_label = target.label
                 self._pending_count = 1
+            self._pending_ts = now
             if self._pending_count < self.persist_ticks:
                 return LearnerState(self.last_label, confidence, focus, calm,
                                     "Awaiting persistence: hold prior state")
@@ -97,4 +112,5 @@ class AdaptationEngine:
         self.last_change_ts = now
         self._pending_label = None
         self._pending_count = 0
+        self._pending_ts = None
         return target

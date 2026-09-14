@@ -487,3 +487,86 @@ def test_a_signal_gap_does_not_rebaseline_from_the_recovery_stretch():
     t.processor.reset()
     t.run({**ENGAGED, **CONTACT_GOOD}, 4 * int(SignalProcessor.BASELINE_SECONDS) + 20)
     assert t.processor._baseline_focus_mean == before
+
+
+# -- third review: gaps, coverage, and the degraded regime ---------------------
+
+def test_contact_flapping_every_other_tick_still_commits_a_label():
+    """A gap tick is not a reading. Clearing the pending run on every
+    signal-loss reset meant gap, reading, gap, reading never reached four
+    and a focused student read no_signal for as long as it lasted."""
+    eng, clock = _engine()
+    labels = []
+    for _ in range(6):
+        eng.reset_for_signal_loss()
+        clock[0] += 0.25
+        labels.append(eng.infer_state(_feat("focused")).label)
+        clock[0] += 0.25
+    assert labels[:3] == ["no_signal"] * 3
+    assert labels[3] == "focused"
+
+
+def test_a_pending_run_does_not_survive_a_long_gap():
+    """Three readings, a minute of nothing, one reading: that one is a
+    first reading, not a fourth."""
+    eng, clock = _engine()
+    eng.infer_state(_feat("neutral"))
+    for _ in range(3):
+        clock[0] += 0.25
+        assert eng.infer_state(_feat("focused")).label == "neutral"
+    eng.reset_for_signal_loss()
+    clock[0] += 60.0
+    assert eng.infer_state(_feat("focused")).label == "no_signal"
+
+
+def test_the_baseline_counts_covered_seconds_so_a_gap_is_worth_one():
+    """21 ticks, a ten-minute gap, one tick: elapsed time said 45 s had
+    passed and latched on 22 samples. Covered time says 6 s have."""
+    t = Ticker()
+    bands = {**RELAXED, "hsi": [1.0, 1.0, 4.0, 4.0], "is_good": [1.0, 1.0, 0.0, 0.0]}
+    t.run(bands, 21)
+    t.now += 600.0
+    t.tick(bands)
+    assert not t.processor._baseline_ready
+    assert t.processor._baseline_coverage == pytest.approx(5.0 + SignalProcessor.BASELINE_TICK_CAP_SECONDS)
+    n = _run_until_latched(t, bands)
+    assert n >= 4 * (SignalProcessor.BASELINE_SECONDS - 6.0) - 2
+
+
+def test_reset_keeps_the_contact_history_so_one_blip_after_a_gap_is_not_good_contact():
+    """The histories are time-windowed and prune themselves. Cleared on
+    reset, the first frame after a gap was judged on itself: one blip with
+    every electrode good read contact 1.0 and entered the baseline."""
+    t = Ticker()
+    t.run({**RELAXED, **CONTACT_POOR}, 20)
+    assert t.processor._baseline_focus == []
+    t.processor.reset()
+    blip = t.tick({**RELAXED, **CONTACT_GOOD})
+    assert blip["contact_ratio"] < SignalProcessor.CONTACT_DEGRADED
+    assert blip["signal_quality"] == "poor"
+    assert t.processor._baseline_focus == []
+
+
+def test_degraded_contact_clears_the_gate_whatever_the_spectrum_does():
+    """Two of four electrodes is the ordinary state. On a ramp from zero
+    at the degraded line it sat at exactly 50 on a constant spectrum and
+    fell under 45 on any jitter -- the operating regime gated on luck."""
+    degraded = {"hsi": [1.0, 1.0, 4.0, 4.0], "is_good": [1.0, 1.0, 0.0, 0.0]}
+    t = Ticker()
+    for i in range(30):
+        f = t.tick({**(RELAXED if i % 2 else ENGAGED), **degraded})
+    assert f["contact_ratio"] == pytest.approx(0.5)
+    assert f["signal_quality"] == "degraded"
+    assert f["confidence"] >= 45.0
+    poor = Ticker()
+    for i in range(30):
+        p = poor.tick({**(RELAXED if i % 2 else ENGAGED), **CONTACT_POOR})
+    assert p["confidence"] < 45.0
+
+
+def test_good_is_reachable_on_a_bridge_that_reports_no_contact():
+    """With no contact data confidence tops out at 0.70, and the heuristic
+    asked for 0.75, so good was unreachable on that path."""
+    f = Ticker().run(RELAXED, 30)  # no hsi / is_good at all, before the latch
+    assert f["quality_basis"] == "heuristic"
+    assert f["signal_quality"] == "good"

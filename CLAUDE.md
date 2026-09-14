@@ -1475,9 +1475,16 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
 - **Confidence is a signal-quality number, and calm is not in it.** It was 32% calm, so a stressed
   student was the one most likely to be discarded as `insufficient_signal`; on hardware it never
   left 40–98 and crossed the 0.45 gate on 2 ticks in ~5000. It is now warm-up, contact, spectral
-  stability and band presence, with a contact term that is 0 below the degraded line — no linear
-  weighting puts every `poor` reading under the gate while keeping `degraded` above it, since the
-  two meet at 0.4. `contact_ratio` rides on the payload.
+  stability and band presence, with a contact term that is 0 below the degraded line and **steps
+  to 0.5 on it** — no linear weighting puts every `poor` reading under the gate while keeping
+  `degraded` above it, since the two meet at 0.4, and a ramp from zero at 0.4 put two-of-four
+  electrodes at exactly 0.50 on a constant spectrum and under the gate on any jitter. With the step
+  the degraded regime clears the gate at zero spectral stability. `contact_ratio` rides on the
+  payload. Three gap rules follow from the stream manager resetting on every no-sample tick: the
+  baseline latches on *covered* seconds (a gap counts as one), `reset()` keeps the time-windowed
+  contact histories (a blip after a gap is smoothed against what preceded it), and the label's
+  pending run survives a reset and ages out at 5 s instead — cleared, contact flapping every other
+  tick never reached four readings and read `no_signal` throughout.
 - **`engagement` is the focus index** (`signal_mapping.py`, beta/(alpha+theta), Pope's engagement),
   not the confidence — every Engagement tile was showing strap fit. `avg_engagement` in the rollup
   and term trend is discontinuous across the date Phase 1 merged.

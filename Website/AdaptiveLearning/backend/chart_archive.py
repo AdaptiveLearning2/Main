@@ -544,16 +544,16 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
     report = {"dry_run": dry_run, "considered": 0, "rerendered": 0,
               "skipped_expired": 0, "skipped_unarchived": 0, "failed": 0,
               "read_failures": 0, "refused": None, "hit_cap": False,
-              "would_rerender": []}
+              "last_ended_at": None, "would_rerender": []}
     for row in sessions:
-        if report["read_failures"] > max_read_failures:
-            report["refused"] = (f"{report['read_failures']} session reads failed; "
-                                 "a failed read is indistinguishable from an expired session")
-            break
         if len(report["would_rerender"]) + report["rerendered"] >= max_rerenders:
             report["hit_cap"] = True
             break
         report["considered"] += 1
+        # The cursor: a run that hits the cap resumes with `--after` this,
+        # or every run repeats the same oldest batch and a backfill larger
+        # than the cap never finishes. Nothing on the row marks it done.
+        report["last_ended_at"] = row.get("ended_at")
         session_id, user_id = row.get("id"), row.get("user_id")
         recorded = row.get("chart_paths") or {}
         wanted = {name for name in chart_render.CHART_NAMES if recorded.get(name)}
@@ -565,6 +565,14 @@ def rearchive_sessions(client, sessions: list[dict], *, dry_run: bool = True,
         except Exception as exc:  # noqa: BLE001 -- counted, and refused past the cap
             print(f"[rearchive] {session_id}: read failed: {exc}")
             report["read_failures"] += 1
+            # At the cap, not past it: checked only at the top of the next
+            # iteration with `>`, five failures in five sessions returned
+            # `refused` unset and exit 0 -- exactly what a run with no work
+            # returns.
+            if report["read_failures"] >= max_read_failures:
+                report["refused"] = (f"{report['read_failures']} session reads failed; "
+                                     "a failed read is indistinguishable from an expired session")
+                break
             continue
         present = {name for name, rows in CHART_SOURCES.items()
                    if {"cognitive": cognitive, "face": face, "heart": heart}[rows]}

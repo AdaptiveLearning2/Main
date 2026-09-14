@@ -132,7 +132,9 @@ def test_a_failed_read_is_counted_and_refuses_the_run_past_the_cap(monkeypatch):
                                               max_read_failures=2)
     assert calls == []
     assert report["skipped_expired"] == 0
-    assert report["read_failures"] == 3 and report["refused"]
+    # Refused *at* the cap: five failing reads against a cap of five used to
+    # return refused unset and exit 0, exactly what a run with no work does.
+    assert report["read_failures"] == 2 and report["refused"]
 
 
 def test_one_render_failure_does_not_stop_the_run(monkeypatch):
@@ -166,3 +168,15 @@ def test_the_tool_takes_the_oldest_sessions_first_and_names_its_target():
     src = inspect.getsource(tool.main)
     assert 'order("ended_at", desc=False)' in src
     assert "target:" in src and "netloc" in src
+
+
+def test_a_capped_run_reports_its_cursor_and_the_tool_resumes_from_it(monkeypatch):
+    monkeypatch.setattr(chart_archive, "_fetch", lambda _c, _s: (COG, [], HEART))
+    _spy_archive(monkeypatch)
+    rows = [{**_session(f"s{i}"), "ended_at": f"2026-09-0{i + 1}T10:00:00+00:00"} for i in range(4)]
+    report = chart_archive.rearchive_sessions(object(), rows, dry_run=False, max_rerenders=2)
+    assert report["hit_cap"] and report["last_ended_at"] == "2026-09-02T10:00:00+00:00"
+    import inspect
+    import rearchive_session_charts as tool
+    src = inspect.getsource(tool.main)
+    assert 'query.gt("ended_at", args.after)' in src and "--after" in src

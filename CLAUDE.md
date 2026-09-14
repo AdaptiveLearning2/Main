@@ -1520,14 +1520,21 @@ What the captures settled, and what Phase 1 (`eeg-accuracy-phase1`) did about ea
   moved with the spans**: `focused` is focus ≥ 0.624 and `stressed` calm < 0.376, in both
   `adaptation.py` and `signal_fusion.py`, so the Bels of movement each label needs are what they
   were (0.322 above, 0.312 below); left at 0.7/0.35 the widening made `focused` 61% harder on a
-  capture where it was reached on zero ticks. Both remain unmeasured against a task. **This
-  re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30 points pre-latch,
-  ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every row and rows
-  without the key predate it; the rollup carries no `raw`, so there the boundary is this date. The
-  replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale. A NaN or infinite
-  band value is a **held tick** with `artifact_reason: malformed_bands` and confidence at the
-  floor: as an exception it read as a dead headband, and as "no bands" it was scored on the
-  amplitude fallback above the gate, indistinguishable from an older bridge. A stalled sample clock
+  capture where it was reached on zero ticks. Both remain unmeasured against a task. Focus's
+  midpoint deliberately moved down 0.49 Bels (the capture sat below the old one); only calm's is
+  held. **This re-anchors every stored focus and stress value across 2026-09-14** — 14 to 30
+  points pre-latch, ~38% of gain after — so `signal_mapping` writes `raw.score_scale` (2) on every
+  row and rows without the key predate it; the rollup carries no `raw`, so the term trend and the
+  cohort trend label each week and day with a `score_scale` derived from `_SCORE_SCALE_2_SINCE`
+  in `main.py`. The replay figures quoted above (37/60, 78/27, 50/42) were taken on the old scale.
+  A NaN or infinite band value, a NaN delta, or a **partial** band dict is a **held tick** with
+  `artifact_reason: malformed_bands` and confidence at the floor: as an exception it read as a
+  dead headband, as "no bands" it was scored on the amplitude fallback above the gate, and a
+  missing band defaulted to 0 Bels and scored. The snapshot serialises such a band as `null`
+  (`BandData` fields are optional) or `/api/v1/state` 500'd on exactly that tick, and the mapper
+  stores the row with its measurement columns nulled and the reason in `raw` — a held score is
+  the previous tick's, not a measurement. A push batch validates each sample on its own and
+  reports `malformed`, since a typed list 422'd every valid sample beside one bad one. A stalled sample clock
   counts as a nominal tick for the baseline's coverage *and the ramp* (coverage alone latched a
   baseline the ramp never applied), and the baseline lists are capped. The push session end resets
   the heart tracker and clears the adapter's optical buffer without dropping the link, or the next

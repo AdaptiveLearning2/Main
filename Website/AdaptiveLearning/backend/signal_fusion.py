@@ -55,12 +55,13 @@ from dataclasses import dataclass, field
 EEG_MIN_CONFIDENCE = 0.45
 # Rescaled with the sidecar's population spans (signal_processing.py) so the
 # Bels of movement each label needs are unchanged: focused was 0.20 of a
-# 1.609 span and is 0.124 of 2.590; stressed was 0.15 of 2.079 and is 0.124
-# of 2.526. Must equal the literals in the sidecar's adaptation.py; a test on
-# each side pins them. Still unmeasured against a task (CLAUDE.md, step 1.7).
+# 1.609 span and is 0.124 of 2.590; stressed was 0.15 of 2.079 and is 0.123
+# of 2.526 (its own fraction, not focus's). Must equal the literals in the
+# sidecar's adaptation.py; a test on each side pins them. Still unmeasured
+# against a task (CLAUDE.md, step 1.7).
 EEG_FOCUSED_FOCUS_MIN = 0.624
 EEG_FOCUSED_CALM_MIN = 0.5
-EEG_STRESSED_CALM_MAX = 0.376
+EEG_STRESSED_CALM_MAX = 0.377
 
 # Facial thresholds. Unvalidated on this user group -- see the module
 # docstring. Only ever used to withhold an increase.

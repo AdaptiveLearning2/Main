@@ -229,5 +229,5 @@ def test_the_eeg_lines_match_the_sidecars_rescaled_literals():
     the literals and neither can import the other."""
     import signal_fusion
     assert signal_fusion.EEG_FOCUSED_FOCUS_MIN == 0.624
-    assert signal_fusion.EEG_STRESSED_CALM_MAX == 0.376
+    assert signal_fusion.EEG_STRESSED_CALM_MAX == 0.377
     assert signal_fusion.EEG_FOCUSED_CALM_MIN == 0.5

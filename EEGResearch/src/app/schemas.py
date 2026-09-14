@@ -57,11 +57,15 @@ class StateData(BaseModel):
 
 
 class BandData(BaseModel):
-    delta: float
-    theta: float
-    alpha: float
-    beta: float
-    gamma: float
+    # None for a band the bridge reported as NaN or infinite: the renderer
+    # refuses non-finite floats, so a malformed band made /api/v1/state 500
+    # on exactly the tick the processor had correctly held -- under pull the
+    # poller then recorded nothing, indistinguishable from a sidecar down.
+    delta: float | None
+    theta: float | None
+    alpha: float | None
+    beta: float | None
+    gamma: float | None
 
 
 class InterpretedEegData(BaseModel):

@@ -294,3 +294,17 @@ def test_every_cognitive_row_records_the_score_scale_it_was_measured_on():
                                         "confidence": 80.0, "signal_quality": "good",
                                         "quality_basis": "contact"}}, "s", "u")
     assert row["raw"]["score_scale"] == signal_mapping.SCORE_SCALE_VERSION == 2
+
+
+def test_rollup_backed_series_carry_the_score_scale_by_date():
+    """`raw.score_scale` is per sample and the rollup has no raw, so the
+    trend and cohort rows are labelled by the change date."""
+    import main as backend_main
+    assert backend_main._score_scale_for("2026-09-13") == 1
+    assert backend_main._score_scale_for("2026-09-14") == 2
+    part = [{"day": "2026-09-07", "channel": "cognitive", "avg_focus": 0.8,
+             "avg_stress": 0.3, "sample_count": 10, "trusted_sample_count": 10,
+             "student_count": 2}]
+    assert backend_main._merge_cohort_trend([part])[0]["score_scale"] == 1
+    import inspect
+    assert '"score_scale": _score_scale_for(b["week_start"])' in inspect.getsource(backend_main._signal_trend)

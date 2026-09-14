@@ -833,20 +833,21 @@ def test_unstorable_band_values_are_rejected_at_the_boundary(bad):
     """The flat fields are typed, and Pydantic rejects these. `features`/`bands`
     used to be free-form dicts, so the same bad values reached the numeric
     columns and failed at PostgREST, taking the whole batch down (valid samples
-    included) as a 500 the client would retry."""
+    included) as a 500 the client would retry. The check is on the sample:
+    the batch no longer validates its list, so one bad sample is dropped and
+    counted rather than failing every valid sample beside it."""
     with pytest.raises(Exception):
-        main.CognitiveBatch(session_id="s", samples=[{"bands": {"alpha": bad}}])
+        main.CognitiveSample.model_validate({"bands": {"alpha": bad}})
 
 
 def test_non_column_keys_are_still_free_form():
     """Only keys that become columns are checked. The rest is metadata bound for
     `raw` (jsonb), so a sidecar gaining a feature doesn't need this model
     changed in lockstep just to keep posting."""
-    batch = main.CognitiveBatch(session_id="s", samples=[
+    sample = main.CognitiveSample.model_validate(
         {"features": {"focus_score": 50.0, "signal_quality": "good",
-                      "quality_basis": "contact", "batch_size": 3}},
-    ])
-    assert batch.samples[0].features["signal_quality"] == "good"
+                      "quality_basis": "contact", "batch_size": 3}})
+    assert sample.features["signal_quality"] == "good"
 
 
 def test_status_does_not_touch_the_sidecar_under_push(push_mode, monkeypatch):
@@ -1011,3 +1012,39 @@ def test_the_flat_ingest_shape_stores_engagement_as_focus(monkeypatch):
         {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40, "engagement": 0.11},
     ]), None)
     assert written[0]["engagement"] == pytest.approx(0.72)
+
+
+def test_a_malformed_tick_stores_no_measurement_and_says_why():
+    """Contact is fine on such a tick, so the verdict is ok and nothing
+    nulled it; the rollup averaged a held score as a trusted measurement."""
+    held = {"timestamp": "t", "bands": {"alpha": 0.3},
+            "features": {"signal_quality": "good", "quality_basis": "contact",
+                         "focus_score": 50.0, "calm_score": 50.0, "confidence": 20.0,
+                         "artifact_reason": "malformed_bands"}}
+    row = signal_mapping.map_eeg_to_cognitive(held, "s", "u")
+    assert row is not None
+    assert row["focus"] is None and row["stress"] is None
+    assert row["raw"]["artifact_reason"] == "malformed_bands"
+    assert "confidence" not in row["raw"]
+    blink = signal_mapping.map_eeg_to_cognitive(
+        {**held, "features": {**held["features"], "artifact_reason": "delta_jump"}}, "s", "u")
+    assert blink["focus"] == pytest.approx(0.5), "a held-on-blink score is still stored"
+    assert blink["raw"]["artifact_reason"] == "delta_jump"
+
+
+def test_one_malformed_sample_does_not_fail_the_batch(monkeypatch):
+    """As a typed list one bad value 422'd the batch and the retry lost every
+    valid sample travelling with it once the queue evicted them."""
+    monkeypatch.setattr(main, "get_user", lambda _r: {"id": "u"})
+    monkeypatch.setattr(main, "_verify_session_owner", lambda *_a: None)
+    monkeypatch.setattr(main, "_consent", lambda _u: {"eeg_enabled": True, "retrieved": True})
+    monkeypatch.setattr(eeg_poller, "claim_double_write_warning", lambda _s: False)
+    written = _capture_inserts(monkeypatch)
+    out = main.ingest_cognitive(main.CognitiveBatch(session_id="s1", samples=[
+        {"ts": "2026-08-10T10:00:00Z", "focus": 0.72, "stress": 0.40},
+        {"ts": "2026-08-10T10:00:01Z", "focus": float("nan"), "stress": 0.40},
+        "not even a dict",
+        {"ts": "2026-08-10T10:00:02Z", "focus": 0.70, "stress": 0.41},
+    ]), None)
+    assert [w["ts"] for w in written] == ["2026-08-10T10:00:00Z", "2026-08-10T10:00:02Z"]
+    assert out["malformed"] == 2 and out["inserted"] == 2

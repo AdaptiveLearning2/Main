@@ -36,6 +36,9 @@ def main(argv=None) -> int:
                     help="actually re-render and upload; without it nothing changes")
     ap.add_argument("--before", metavar="YYYY-MM-DD",
                     help="only sessions that ended before this date (the change date)")
+    ap.add_argument("--after", metavar="ISO-TIMESTAMP",
+                    help="resume: only sessions that ended after this instant -- the "
+                         "value a capped run printed as its cursor")
     ap.add_argument("--limit", type=int, default=1000,
                     help="most sessions to consider in one run (oldest first)")
     ap.add_argument("--max-rerenders", type=int, default=200,
@@ -55,6 +58,8 @@ def main(argv=None) -> int:
              .not_.is_("chart_paths", "null").not_.is_("ended_at", "null"))
     if args.before:
         query = query.lt("ended_at", args.before)
+    if args.after:
+        query = query.gt("ended_at", args.after)
     sessions = query.order("ended_at", desc=False).limit(args.limit).execute().data or []
     report = chart_archive.rearchive_sessions(client, sessions, dry_run=not args.apply,
                                               max_rerenders=args.max_rerenders)
@@ -68,7 +73,8 @@ def main(argv=None) -> int:
         print(f"REFUSED: {report['refused']}", file=sys.stderr)
         return 1
     if report["hit_cap"]:
-        print(f"stopped at --max-rerenders {args.max_rerenders}; re-run to continue")
+        print(f"stopped at --max-rerenders {args.max_rerenders}; "
+              f"continue with --after {report['last_ended_at']}")
     if report["dry_run"]:
         print(f"would re-render:     {len(report['would_rerender'])}")
         print("\nDry run. Re-run with --apply to re-render.")

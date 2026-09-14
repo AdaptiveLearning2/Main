@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -28,6 +29,16 @@ CONTRACT_VERSION = "1.3.0"
 
 class UnknownDeviceError(KeyError):
     """Raised when a device_id doesn't match any device in the registry."""
+
+
+def _finite_or_none(value) -> float | None:
+    """A float, or None when the value is NaN, infinite or not a number.
+    For the snapshot's band block; see BandData."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
 
 
 class DeviceSession:
@@ -513,12 +524,12 @@ class DeviceSession:
                 # already zeroed for the same no-signal condition.
                 out["bands"] = {"delta": 0.0, "theta": 0.0, "alpha": 0.0, "beta": 0.0, "gamma": 0.0}
             else:
+                # A band the bridge reported as NaN, infinite or unparseable
+                # is None here: the state model refuses non-finite floats,
+                # and the processor has already held the tick for it.
                 out["bands"] = {
-                    "delta": float(raw_meta.get("delta", 0.0)),
-                    "theta": float(raw_meta.get("theta", 0.0)),
-                    "alpha": float(raw_meta.get("alpha", 0.0)),
-                    "beta": float(raw_meta.get("beta", 0.0)),
-                    "gamma": float(raw_meta.get("gamma", 0.0)),
+                    name: _finite_or_none(raw_meta.get(name, 0.0))
+                    for name in ("delta", "theta", "alpha", "beta", "gamma")
                 }
         return out
 

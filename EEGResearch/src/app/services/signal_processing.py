@@ -49,8 +49,12 @@ class SignalProcessor:
     # and after the latch, so they must bracket what a wearer produces. A
     # multi-subject capture should tighten them again.
     #
-    # Calm is widened at *both* ends so its midpoint stays at -0.57: the
-    # midpoint is the pre-latch centre, and moving it by raising the
+    # The two are not treated alike, deliberately. Focus is widened at the
+    # floor only, so its midpoint -- the pre-latch centre -- moves down
+    # 0.49 Bels, from -0.11 to -0.60: that is the point, since the whole
+    # capture sat below the old midpoint and read as 0 before the latch;
+    # pre-latch focus now reads ~19 points higher for the same input. Calm
+    # is widened at *both* ends so its midpoint stays at -0.57: raising the
     # ceiling alone put the capture's strap-settling segment (-0.87) under
     # the stressed line, easing difficulty on the opening questions where
     # it had not before. The label thresholds in adaptation.py and
@@ -395,15 +399,29 @@ class SignalProcessor:
         to a genuine no-bands tick."""
         if not bands:
             return False
-        for key in ("alpha", "beta", "theta", "gamma"):
-            if key not in bands:
-                continue
+        ratio_keys = ("alpha", "beta", "theta", "gamma")
+        present = [k for k in ratio_keys if k in bands]
+        # A partial dict is malformed too: the extractor defaults a missing
+        # band to 0 Bels, which scored a materially different ratio with
+        # nothing marking it. No ratio band at all is an older bridge.
+        if present and len(present) < len(ratio_keys):
+            return True
+        for key in present:
             try:
                 if not isfinite(float(bands[key])):
                     return True
             except (TypeError, ValueError):
                 return True
-        return False
+        # delta is read by the artifact gate, not the ratios. Absent or
+        # non-numeric it costs the gate its reference for the tick and
+        # nothing else (an older bridge reports none); a *number* that is
+        # NaN or infinite is malformed, since NaN has no ordering and its
+        # effect on the running median depends on where it happens to sort.
+        try:
+            delta = float(bands["delta"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return not isfinite(delta)
 
     def _smoothed(self, history: deque, now: float, value: float) -> float:
         """Append a contact reading and average it over a fixed time window.
@@ -762,7 +780,11 @@ class SignalProcessor:
         # Bands present but unusable (NaN, inf, garbage) are a held tick
         # with their own reason -- neither scored on the amplitude fallback
         # nor an exception the stream manager reads as a dead headband.
-        malformed = (not using_band_features) and self._bands_malformed(bands)
+        # Checked whether or not the ratios parsed: a NaN in delta leaves
+        # the four ratio bands readable and would otherwise reach the
+        # artifact median, where NaN has no ordering.
+        malformed = self._bands_malformed(bands)
+        using_band_features = using_band_features and not malformed
         artifact_reason = (self._artifact_reason(bands, frame_spread, now)
                            if using_band_features
                            else ("malformed_bands" if malformed else None))
@@ -825,9 +847,11 @@ class SignalProcessor:
                 # default does not catch an explicit None, and an unguarded
                 # float() here would fail the whole tick.
                 try:
-                    self._delta_history.append((now, float(bands.get("delta"))))
+                    delta_value = float(bands.get("delta"))
                 except (TypeError, ValueError):
-                    pass
+                    delta_value = None
+                if delta_value is not None and isfinite(delta_value):
+                    self._delta_history.append((now, delta_value))
                 if frame_spread is not None:
                     self._spread_history.append((now, frame_spread))
             # The spectral terms take full weight. They used to be blended

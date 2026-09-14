@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from supabase import create_client
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import LLM_topic_decider
 import chart_archive
@@ -1486,6 +1486,20 @@ def _signal_summaries(student_ids: list[str], days: int = 7,
 _TREND_MAX_WEEKS = 26
 
 
+# The school day on which the sidecar's population bounds -- the scale every
+# focus and stress value is measured on -- were widened (signal_mapping.
+# SCORE_SCALE_VERSION 2). Per-sample rows carry `raw.score_scale`; the rollup
+# carries no `raw`, so a rollup-backed series is labelled by date, and this is
+# the only way the step reaches the surfaces it shows on.
+_SCORE_SCALE_2_SINCE = date(2026, 9, 14)
+
+
+def _score_scale_for(day_or_iso) -> int:
+    """Which score scale a rollup-backed day or week belongs to."""
+    day = day_or_iso if isinstance(day_or_iso, date) else date.fromisoformat(str(day_or_iso)[:10])
+    return 2 if day >= _SCORE_SCALE_2_SINCE else 1
+
+
 def _week_start(day: date) -> date:
     """The Monday of `day`'s week.
 
@@ -1648,6 +1662,9 @@ def _signal_trend(student_id: str, weeks: int = 8, include_heart: bool = True,
         b = buckets[monday]
         out.append({
             "week_start": b["week_start"],
+            # A week straddling the change is labelled by its Monday; the
+            # step inside it is one the label cannot resolve.
+            "score_scale": _score_scale_for(b["week_start"]),
             **{k: _mean(v) for k, v in b["sums"].items()},
             "cognitive_samples": b["cognitive_samples"],
             "heart_samples": b["heart_samples"],
@@ -5111,6 +5128,7 @@ def _merge_cohort_trend(parts: list[list]) -> list:
     return [{
         "day": b["day"],
         "channel": b["channel"],
+        "score_scale": _score_scale_for(b["day"]),
         **{k: _mean(v) for k, v in b["sums"].items()},
         # From focus, not the stored column -- see `_shape_summary`. The
         # roster half of this endpoint was corrected first and this half was
@@ -5920,7 +5938,11 @@ class CognitiveBatch(BaseModel):
     # Bounded like the other two ingest batches. Under push the writer is an
     # untrusted local process on a student's machine, so this endpoint is the
     # trust boundary and needs the cap.
-    samples:    list[CognitiveSample] = Field(max_length=_INGEST_MAX_BATCH)
+    # `Any`, validated per sample in the endpoint, not `list[CognitiveSample]`:
+    # as a typed list one malformed value 422'd the whole batch, and the push
+    # client's retry then lost every valid sample travelling with it once the
+    # queue evicted them. A bad sample is now dropped and counted on its own.
+    samples:    list[Any] = Field(max_length=_INGEST_MAX_BATCH)
 
 class FaceSample(BaseModel):
     ts:                  str | None = None
@@ -6167,7 +6189,16 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # `None` from the mapper means a disconnected headband reporting zeroed
     # scores, not a real reading of zero. Dropped and counted, so a caller
     # can tell "sent 50, recorded 0" from "sent nothing".
-    rows = [r for r in (_row(s) for s in payload.samples) if r is not None]
+    # Each sample validated on its own: a malformed one is dropped and
+    # counted, never allowed to fail the batch (see CognitiveBatch.samples).
+    samples: list[CognitiveSample] = []
+    malformed = 0
+    for raw_sample in payload.samples:
+        try:
+            samples.append(CognitiveSample.model_validate(raw_sample))
+        except Exception:  # noqa: BLE001 -- pydantic's ValidationError, plus a non-dict entry
+            malformed += 1
+    rows = [r for r in (_row(s) for s in samples) if r is not None]
     # Upsert on `cog_session_ts_key` (20260914000000), matching the heart
     # endpoint below. A replayed batch is then a no-op rather than a second
     # copy of every sample -- and a deployment left on `pull` whose sidecar
@@ -6192,7 +6223,8 @@ def ingest_cognitive(payload: CognitiveBatch, request: Request):
     # not the same as saying it: three states share the value 0 here, and a
     # reader with two numbers has to know which subtraction means which.
     return {"ok": True, "inserted": inserted,
-            "dropped": len(payload.samples) - len(rows),
+            "dropped": len(samples) - len(rows),
+            "malformed": malformed,
             "duplicates": len(rows) - inserted}
 
 @app.post("/api/signals/face")

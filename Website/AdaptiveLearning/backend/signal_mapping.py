@@ -164,6 +164,9 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
             # where the legacy heuristic just said "poor", so a null-measurement
             # row can still be explained later.
             quality_basis=f.get("quality_basis"),
+            # Why this tick was held, when it was: a held score is the
+            # previous tick's, and a row must be able to say so.
+            artifact_reason=f.get("artifact_reason"),
             ingestion=eeg.get("ingestion"),
             # The EEG signal-quality number, 0..1. No column carries it --
             # `engagement` did until it became the focus index -- and it is
@@ -193,6 +196,16 @@ def map_eeg_to_cognitive(eeg: dict, session_id: str, user_id: str) -> dict | Non
         # capped under the gate -- four such rows beside one good one
         # averaged focus 0.8 against confidence 0.36 and dropped the whole
         # EEG channel, ease-off included. An unmeasured row has no opinion.
+        row["raw"].pop("confidence", None)
+    if f.get("artifact_reason") == "malformed_bands":
+        # A tick whose bands could not be read carries a *held* score, or
+        # the midpoint if nothing was held -- not a measurement. Contact is
+        # fine on such a tick, so the quality verdict is `ok` and nothing
+        # above nulls it; stored, the rollup averaged a value never measured
+        # and counted it as trusted. Same shape as contact_poor: keep the
+        # row, null what was not measured, keep the reason in `raw`.
+        for column in _MEASUREMENT_COLUMNS:
+            row[column] = None
         row["raw"].pop("confidence", None)
     return row
 

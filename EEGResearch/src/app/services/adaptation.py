@@ -89,14 +89,15 @@ class AdaptationEngine:
         # signal_processing.py so the *Bels* of movement each label needs
         # are what they were: focused was 0.20 of a 1.609 span (0.322 Bels
         # above the centre) and is 0.124 of 2.590; stressed was 0.15 of
-        # 2.079 below (0.312 Bels) and is 0.124 of 2.526. Widening the
+        # 2.079 below (0.312 Bels) and is 0.123 of 2.526 -- its own
+        # fraction, not focus's reused, which made it 0.44% harder. Widening the
         # bounds without this made focused 61% harder to reach on a capture
         # where it was reached on zero ticks. Same numbers as
         # signal_fusion.EEG_FOCUSED_FOCUS_MIN / EEG_STRESSED_CALM_MAX; both
         # remain unmeasured against a task (CLAUDE.md, step 1.7).
         elif focus_ratio >= 0.624 and calm_ratio >= 0.5:
             target = LearnerState("focused", confidence, focus, calm, "Sustained focus")
-        elif calm_ratio < 0.376:
+        elif calm_ratio < 0.377:
             target = LearnerState("stressed", confidence, focus, calm, "High variation detected")
 
         now = self._clock()

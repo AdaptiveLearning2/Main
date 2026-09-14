@@ -832,7 +832,7 @@ def test_the_calm_midpoint_did_not_move_so_strap_settling_is_not_stressed():
     lo, hi = SignalProcessor.CALM_LOG_RATIO_MIN, SignalProcessor.CALM_LOG_RATIO_MAX
     assert (lo + hi) / 2.0 == pytest.approx(-0.57, abs=0.01)
     p = SignalProcessor()
-    assert p._score_against_baseline(-0.87, "calm") >= 0.376
+    assert p._score_against_baseline(-0.87, "calm") >= 0.377
 
 
 def test_the_label_lines_are_the_same_bels_as_before_and_match_the_backend():
@@ -842,11 +842,11 @@ def test_the_label_lines_are_the_same_bels_as_before_and_match_the_backend():
     import inspect
     from src.app.services.adaptation import AdaptationEngine
     src = inspect.getsource(AdaptationEngine.infer_state)
-    assert "focus_ratio >= 0.624" in src and "calm_ratio < 0.376" in src
+    assert "focus_ratio >= 0.624" in src and "calm_ratio < 0.377" in src
     f_span = SignalProcessor.FOCUS_LOG_RATIO_MAX - SignalProcessor.FOCUS_LOG_RATIO_MIN
     c_span = SignalProcessor.CALM_LOG_RATIO_MAX - SignalProcessor.CALM_LOG_RATIO_MIN
     assert (0.624 - 0.5) * f_span == pytest.approx(0.322, abs=0.002)
-    assert (0.5 - 0.376) * c_span == pytest.approx(0.312, abs=0.002)
+    assert (0.5 - 0.377) * c_span == pytest.approx(0.312, abs=0.002)
 
 
 def test_the_push_session_end_clears_the_optical_buffer_without_disconnecting():
@@ -856,3 +856,43 @@ def test_the_push_session_end_clears_the_optical_buffer_without_disconnecting():
     assert "clear_optics" in inspect.getsource(StreamManager.end_session)
     assert hasattr(TcpMuseBridgeAdapter, "clear_optics")
     assert "disconnect" not in inspect.getsource(StreamManager.end_session)
+
+
+# -- ninth review: what a malformed tick may reach, and what counts as one ------
+
+def test_a_nan_band_serialises_out_of_the_state_endpoint():
+    """The renderer refuses non-finite floats, so the held tick, its reason
+    and the confidence floor were all correct inside the sidecar and
+    500'd on the way out; under pull the poller recorded nothing."""
+    from src.app.schemas import BandData
+    from src.app.services.stream_manager import _finite_or_none
+    assert _finite_or_none(float("nan")) is None
+    assert _finite_or_none(float("inf")) is None
+    assert _finite_or_none("x") is None
+    assert _finite_or_none(0.25) == 0.25
+    bands = BandData(delta=None, theta=0.1, alpha=0.5, beta=0.1, gamma=0.05)
+    assert bands.model_dump()["delta"] is None
+
+
+def test_a_nan_in_delta_is_malformed_and_never_reaches_the_median():
+    """The four ratio bands were readable, so the guard was never consulted
+    and NaN reached the delta history, where it has no ordering."""
+    t = Ticker()
+    _warm(t)
+    n = len(t.processor._delta_history)
+    f = t.tick({**RELAXED, "delta": float("nan"), **CONTACT_GOOD})
+    assert f["artifact_reason"] == "malformed_bands"
+    assert len(t.processor._delta_history) == n
+    assert all(isinstance(v, float) and v == v for _, v in t.processor._delta_history)
+
+
+def test_a_partial_band_dict_is_malformed_not_zero_bels():
+    """The extractor defaulted a missing band to 0 Bels and scored it."""
+    t = Ticker()
+    before = _warm(t)
+    partial = {k: v for k, v in RELAXED.items() if k != "alpha"}
+    f = t.tick({**partial, **CONTACT_GOOD})
+    assert f["artifact_reason"] == "malformed_bands"
+    assert f["focus_score"] == pytest.approx(before["focus_score"])
+    # And a bridge with no ratio bands at all is still the fallback, not malformed.
+    assert Ticker().run(CONTACT_GOOD, 5)["artifact_reason"] is None
